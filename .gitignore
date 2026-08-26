@@ -1,0 +1,15 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+## Build artifacts
+[Bb]uild/
+[Aa]rtifacts/
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
