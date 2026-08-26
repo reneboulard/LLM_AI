@@ -3,6 +3,23 @@
 <head>
     <meta charset="utf-8" />
     <title>LLM AI</title>
+    <style>
+        /* Fond opaque : la page de config du plugin n'héritait d'aucun fond
+           et apparaissait transparente par-dessus le dashboard. */
+        #LLMAIConfigPage {
+            background-color: #101010 !important;
+        }
+        /* Panneau de contenu opaque (carte légèrement plus claire). */
+        #LLMAIConfigPage .content-primary {
+            background-color: #181818 !important;
+            padding: 1.5em !important;
+            border-radius: 6px !important;
+        }
+        /* Lisibilité des libellés/descriptions sur fond sombre. */
+        #LLMAIConfigPage .fieldDescription {
+            color: #9a9a9a;
+        }
+    </style>
 </head>
 <body>
     <div id="LLMAIConfigPage"
