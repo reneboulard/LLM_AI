@@ -19,7 +19,7 @@ namespace MonPlugin
         }
 
         /// <summary>Nom affiché du plugin dans l'interface Emby.</summary>
-        public override string Name => "Mon Plugin";
+        public override string Name => "LLM_AI";
 
         /// <summary>Description courte du plugin.</summary>
         public override string Description => "Un plugin d'exemple pour Emby.";
