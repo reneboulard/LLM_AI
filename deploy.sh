@@ -14,7 +14,7 @@ PLUGIN_DLL="${PLUGIN_NAME}.dll"
 # éviter qu'Emby ne charge les deux versions en doublon.
 PREVIOUS_DLL="mon-plugin.dll"
 CONFIGURATION="Release"
-TARGETFramework="netstandard2.0"
+TARGETFramework="net8.0"
 BUILD_OUT="bin/${CONFIGURATION}/${TARGETFramework}"
 
 DEPLOY_DIR="/var/lib/emby/plugins"

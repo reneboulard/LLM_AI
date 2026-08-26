@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8" />
+    <title>LLM AI</title>
+</head>
+<body>
+    <div id="LLMAIConfigPage"
+         data-role="page"
+         class="page type-interior pluginConfigurationPage LLMAIConfigPage"
+         data-require="emby-button,emby-input,emby-textarea">
+
+        <div class="content-primary">
+            <form class="LLMAIConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">LLM AI — Configuration</h2>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="txtLlmUrl"
+                               label="URL du LLM (Ollama)"
+                               placeholder="http://192.168.11.2:11434" />
+                        <div class="fieldDescription">Adresse de l'API Ollama (ex. http://192.168.11.2:11434).</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <input is="emby-input" type="text" id="txtModelName"
+                               label="Nom du modèle"
+                               placeholder="gemma4:latest" />
+                        <div class="fieldDescription">Modèle à utiliser (ex. gemma4:latest).</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <textarea is="emby-textarea" id="txtRagDirectives"
+                                  label="RAG Directives (system prompt)"
+                                  rows="4"></textarea>
+                        <div class="fieldDescription">Prompt système envoyé au LLM (role: system) à chaque appel.</div>
+                    </div>
+
+                    <div class="inputContainer">
+                        <textarea is="emby-textarea" id="txtScheduleTask"
+                                  label="Schedule Task"
+                                  rows="3"
+                                  placeholder="Daily 03:00 | Résume les nouveaux médias ajoutés cette semaine"></textarea>
+                        <div class="fieldDescription">
+                            Format : « &lt;planification&gt; | &lt;prompt de tâche&gt; ».
+                            Planification : Daily HH:MM, Hourly, Weekly &lt;Day&gt; HH:MM, Interval &lt;heures&gt;.
+                            La partie après le « | » est le prompt utilisateur envoyé au LLM.
+                            Déclenchable manuellement dans « Tâches planifiées ».
+                        </div>
+                    </div>
+
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            Enregistrer
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            'use strict';
+
+            var pluginId = 'e7d3dee6-ef19-46a9-985f-06318b682e60';
+            var page = null;
+            var cfg = null;
+            var wired = false;
+
+            function init(root) {
+                page = root;
+                loadConfig();
+                if (!wired) {
+                    $('form.LLMAIConfigForm', page).on('submit', function (e) {
+                        e.preventDefault();
+                        saveConfig();
+                        return false;
+                    });
+                    wired = true;
+                }
+            }
+
+            function loadConfig() {
+                ApiClient.getPluginConfiguration(pluginId).then(function (c) {
+                    cfg = c || {};
+                    $('#txtLlmUrl', page).val(cfg.LlmUrl || '');
+                    $('#txtModelName', page).val(cfg.ModelName || '');
+                    $('#txtRagDirectives', page).val(cfg.RagDirectives || '');
+                    $('#txtScheduleTask', page).val(cfg.ScheduleTask || '');
+                });
+            }
+
+            function saveConfig() {
+                if (!cfg) { cfg = {}; }
+                cfg.LlmUrl = $('#txtLlmUrl', page).val();
+                cfg.ModelName = $('#txtModelName', page).val();
+                cfg.RagDirectives = $('#txtRagDirectives', page).val();
+                cfg.ScheduleTask = $('#txtScheduleTask', page).val();
+
+                ApiClient.updatePluginConfiguration(pluginId, cfg).then(function () {
+                    if (typeof Dashboard !== 'undefined' && Dashboard.processPluginConfigurationUpdateResult) {
+                        Dashboard.processPluginConfigurationUpdateResult(cfg);
+                    }
+                    if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
+                        Dashboard.alert('Configuration enregistrée.');
+                    }
+                }, function (err) {
+                    if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
+                        Dashboard.alert('Erreur lors de l\\'enregistrement : ' + (err && err.statusText ? err.statusText : err));
+                    }
+                });
+            }
+
+            function findPage() { return document.querySelector('.LLMAIConfigPage'); }
+
+            // Branche dès que la page est présente, + repli sur les événements
+            // de cycle de vie Emby/jQuery si injection différée.
+            var root = findPage();
+            if (root) { init(root); }
+
+            $(document).on('pageshow viewshow', '#LLMAIConfigPage', function () { init(this); });
+        })();
+    </script>
+</body>
+</html>

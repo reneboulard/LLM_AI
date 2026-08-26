@@ -13,9 +13,16 @@ namespace LLM_AI
     /// </summary>
     public class Plugin : BasePlugin<PluginConfiguration>
     {
+        /// <summary>
+        /// Singleton exposant le plugin à la page de configuration et à la
+        /// tâche planifiée (qui n'ont pas accès à l'instance via DI).
+        /// </summary>
+        public static Plugin Instance { get; private set; }
+
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
             : base(applicationPaths, xmlSerializer)
         {
+            Instance = this;
         }
 
         /// <summary>Nom affiché du plugin dans l'interface Emby.</summary>

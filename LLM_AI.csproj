@@ -2,7 +2,13 @@
   <PropertyGroup>
     <AssemblyName>LLM_AI</AssemblyName>
     <RootNamespace>LLM_AI</RootNamespace>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- L'hôte Emby de ce système tourne sur .NET 8 (System.Private.CoreLib 8.0,
+         System.Memory 4.0.2.0). On cible net8.0 pour aligner les assemblies de
+         référence : ReadOnlyMemory<char> (utilisé par ILogger de MediaBrowser.Model)
+         provient du framework, sans paquet ni décalage de version.
+         Un assembly net8.0 se charge normalement dans l'hôte .NET 8 d'Emby. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Version du plugin : BasePlugin.Version est sealed et renseignée par
          l'hôte Emby depuis la version de l'assembly au chargement. -->
@@ -21,5 +27,10 @@
     <Reference Include="MediaBrowser.Controller">
       <HintPath>/opt/emby-server/system/MediaBrowser.Controller.dll</HintPath>
     </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Page de configuration servie par IPluginConfigurationPage.GetHtmlStream() -->
+    <EmbeddedResource Include="config.html" />
   </ItemGroup>
 </Project>
