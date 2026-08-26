@@ -4,7 +4,7 @@ using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
-namespace MonPlugin
+namespace LLM_AI
 {
     /// <summary>
     /// Point d'entrée principal du plugin.

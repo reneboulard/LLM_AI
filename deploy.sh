@@ -8,8 +8,11 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-PLUGIN_NAME="mon-plugin"
+PLUGIN_NAME="LLM_AI"
 PLUGIN_DLL="${PLUGIN_NAME}.dll"
+# Ancien nom de DLL avant renommage : à retirer du dossier plugins pour
+# éviter qu'Emby ne charge les deux versions en doublon.
+PREVIOUS_DLL="mon-plugin.dll"
 CONFIGURATION="Release"
 TARGETFramework="netstandard2.0"
 BUILD_OUT="bin/${CONFIGURATION}/${TARGETFramework}"
@@ -61,6 +64,11 @@ ok "Build réussi : ${BUILT}"
 #     les dupliquer causerait des conflits de version au chargement).
 # ---------------------------------------------------------------------------
 log "Copie de ${PLUGIN_DLL} vers ${DEPLOY_DIR}/"
+# Retire l'éventuelle ancienne DLL (avant renommage) pour éviter un doublon.
+if [ -f "${DEPLOY_DIR}/${PREVIOUS_DLL}" ]; then
+    log "Suppression de l'ancienne ${PREVIOUS_DLL}…"
+    rm -f "${DEPLOY_DIR}/${PREVIOUS_DLL}"
+fi
 install -m 0644 -o emby -g emby "${BUILT}" "${DEPLOY_DIR}/${PLUGIN_DLL}"
 ok "DLL déployée"
 

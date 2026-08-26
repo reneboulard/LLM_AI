@@ -1,6 +1,6 @@
 using MediaBrowser.Model.Plugins;
 
-namespace MonPlugin
+namespace LLM_AI
 {
     /// <summary>
     /// Configuration simple et sérialisable du plugin.
