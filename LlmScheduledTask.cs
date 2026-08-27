@@ -189,6 +189,25 @@ namespace LLM_AI
                 var merged = LlmRunner.MergeJsonArrays(p1, p2);
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
+
+                // Auto-programmation (opt-in) : si cfg.AutoProgram est coché,
+                // crée les timers Emby du record bucket (recos EPG à venir non
+                // possédées, non déjà programmées, hors drop list) → les recos
+                // ressortent dans le guide EPG natif (badge d'enregistrement)
+                // sur tous les clients, y compris Android / Android TV. GATING
+                // ABSOLU : aucun timer tant que AutoProgram == false.
+                if (cfg.AutoProgram)
+                {
+                    try
+                    {
+                        var ap = new AutoProgrammer(_liveTv, _library, _logger);
+                        await ap.Program(merged, null, cfg, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.ErrorException("[LLM_AI] Auto-program (tâche planifiée) : {0}", ex, ex.Message);
+                    }
+                }
             }
             catch (OperationCanceledException)
             {

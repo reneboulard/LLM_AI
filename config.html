@@ -458,6 +458,45 @@
                             </div>
                         </div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.autoprog.h">Auto-programmation &amp; popup au login</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.desc">
+                            Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML :
+                            les recommandations ne sont visibles que sur la page web. L'<b>auto-programmation</b>
+                            crée les timers Emby des recos à enregistrer → elles ressortent dans le guide EPG
+                            natif (badge d'enregistrement) sur tous les clients. Le <b>popup au login</b>
+                            signale ce soir ce que l'usager peut regarder (bibliothèque / enregistrements).
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkAutoProgram" />
+                            <span class="checkboxLabel" data-i18n="cfg.autoprog.flag">Auto-programmer les recommandations (créer les timers d'enregistrement)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.flag.desc">
+                            Option <b>opt-in</b> (décochée par défaut). Si cochée, après chaque run (tâche planifiée
+                            ET login), les recommandations à enregistrer (programmes EPG à venir, non déjà
+                            possédées, non déjà programmées, hors drop list) sont programmées en enregistrement
+                            (SeriesTimer pour une série, Timer unique pour un film). Aucune programmation tant
+                            que décochée. L'utilisateur peut annuler un timer indésirable dans Emby.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkLoginPopup" />
+                            <span class="checkboxLabel" data-i18n="cfg.loginpopup.flag">Popup au login (suggestions « à regarder ce soir »)</span>
+                        </label>
+                        <div class="inputContainer" style="max-width:200px;margin-top:0.4em;">
+                            <input is="emby-input" type="number" id="numLoginPopupSeconds"
+                                   label="Durée du toast (secondes)"
+                                   data-i18n-label="cfg.loginpopup.seconds"
+                                   min="2" max="60" />
+                            <div class="fieldDescription" data-i18n-html="cfg.loginpopup.desc">
+                                Indépendant de l'auto-programmation : le popup liste ce soir ce que l'usager peut
+                                regarder (enregistrements non visionnés, bibliothèque). Toast sur le client qui
+                                se connecte (si <c>DisplayMessage</c> supporté) + notification cloche persistante
+                                (deep-link) en repli. La cloche reste même si la session ferme avant la fin du run
+                                LLM (~30–60 s) ou si le client ne supporte pas le toast.
+                            </div>
+                        </div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

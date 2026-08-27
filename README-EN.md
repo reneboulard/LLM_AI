@@ -21,10 +21,11 @@ loop).
 4. [Components](#components)
 5. [LLM tools](#llm-tools)
 6. [Watch tonight](#watch-tonight)
-7. [HTTP API](#http-api)
-8. [i18n (FR / EN)](#i18n-fr--en)
-9. [Troubleshooting](#troubleshooting)
-10. [Changelog](#changelog)
+7. [Auto-programming & login popup](#auto-programming--login-popup)
+8. [HTTP API](#http-api)
+9. [i18n (FR / EN)](#i18n-fr--en)
+10. [Troubleshooting](#troubleshooting)
+11. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -138,6 +139,27 @@ is empty):
 - `TonightRecordingsDays` (default 7) — "recorded within the last N days" window.
 - `TonightMinRecommendations` (default 3) — guaranteed minimum (see [Watch tonight](#watch-tonight)).
 
+### Auto-programming & login popup
+
+Native **Android / Android TV** clients don't render plugin HTML pages:
+recommendations are only visible on the web page. Two levers make recos
+**discoverable on the TV**:
+
+- `AutoProgram` (bool, **default `false` — explicit opt-in**): when checked,
+  after each run (scheduled task **and** login), the **record bucket** (upcoming
+  EPG programs not already owned, not already scheduled, outside `DroppedTitles`)
+  is **automatically scheduled as recordings** (SeriesTimer for a series, single
+  Timer for a movie). They then show up in the **native EPG guide** with a record
+  badge on every client, including TV. **No scheduling while unchecked.**
+- `LoginPopup` (bool, default `true` — independent of `AutoProgram`): on user
+  login, a **toast** surfaces what to watch tonight (unwatched recordings,
+  library), plus a persistent **bell notification** (deep-link) as fallback.
+  `LoginPopupSeconds` (default 8) sets the toast duration.
+
+> ⚠️ Auto-programming occupies tuners/disk: it's an opt-in action. The user can
+> cancel an unwanted timer in Emby. The login popup shows even without
+> auto-programming (watch suggestions only).
+
 ### Misc
 
 `TmdbLanguage`, `SearXngUrl` (self-hosted web search), `WebFetchDirect`,
@@ -153,7 +175,10 @@ prompt), `ScheduleTask` / `ScheduleTaskMovies` (scheduled-task cron), `DebugVerb
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Entry point. Name `LLM_AI`, Id `e7d3…2e60`. Registers web pages (config, recommendations, i18n). Version driven by `<AssemblyVersion>` in the `.csproj`. |
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | All persisted config + multi-source backends. |
 | `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Global (admin) scheduled task: produces **Series / Movies** recos by scanning the EPG, stores them in `Recommendations`, sends notifications. Delegates orchestration to `LlmRunner`. |
-| `TonightApiService.cs` | `TonightApiService : BaseApiService` | **Per-user, on-demand** HTTP endpoint `GET /Plugins/LLMAI/Tonight`. Builds the taste profile, unwatched recordings, library reserve, runs the LLM, enriches, caches. |
+| `TonightApiService.cs` | `TonightApiService : BaseApiService` | **Per-user, on-demand** HTTP endpoint `GET /Plugins/LLMAI/Tonight`. Thin HTTP layer: resolves the user then delegates to `TonightService`. |
+| `TonightService.cs` | `TonightService` (internal) | **Shared generation** for "Watch tonight": taste profile, unwatched recordings, library reserve, LLM run, enrichment, **per-user cache** (static, shared by endpoint + login). Used by `TonightApiService` and `TonightLoginService`. |
+| `AutoProgrammer.cs` | `AutoProgrammer` (internal) | Auto-programming: creates the Emby timers (SeriesTimer / single Timer) for the **record bucket** — recos to record not owned / not already scheduled / outside drop list. Server-side port of the "Schedule" logic from `recommendations.js`. |
+| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, env-based key resolution. Used by both `LlmScheduledTask` and `TonightApiService`. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. |
 | `LlmClient.cs` | `LlmClient` (static) | Raw HTTP calls to Ollama / Gemini (no keys logged in the clear). |
@@ -232,6 +257,59 @@ limited context). Cloud backends receive the full context.
 **Playback** — The **Watch** button plays via Emby's AMD `playbackManager` module
 (`require(["playbackManager"], pm => pm.play({ids:[id], serverId: ApiClient.serverId()}))`),
 not via `ApiClient.play` (which doesn't exist).
+
+---
+
+## Auto-programming & login popup
+
+LLM_AI recommendations show by default only on the **web** page
+`recommendations.html`. Native clients (Android / Android TV) don't render
+plugin HTML pages — the reco isn't "discoverable" there. Two levers, both
+**configurable** (see [Configuration](#auto-programming--login-popup)):
+
+### Record bucket → native EPG badge (auto-programming)
+
+If `AutoProgram` is checked, after each run the **to-record** recommendations
+(upcoming EPG programs, not already owned, not already scheduled, outside the
+drop list) are scheduled as recordings:
+
+- **Series** → `SeriesTimerInfo` (RecordNewOnly, SkipEpisodesInLibrary) via
+  `ILiveTvManager.CreateSeriesTimer`.
+- **Movie / one-off** → `TimerInfoDto` via `ILiveTvManager.CreateTimer`.
+
+Default values (Start/End/Channel/paddings) are derived from the program via
+`GetNewTimerDefaults(programId)` — a minimal timer is never posted (missing
+required fields: the server then creates nothing). Dedup via
+`GetTimers`/`GetSeriesTimers` (ProgramId + normalized name, with article
+removal — consistent with the EPG exclusion in `get_emby_info`).
+
+Result: the recos carry the **record badge** in the **native** EPG guide —
+the only reliable highlight across all TV clients. The user rarely watches
+live (records + skips ads): scheduling is the right action; they can cancel
+a timer if needed.
+
+### Watch bucket → login popup
+
+On user login, `TonightLoginService` (`IServerEntryPoint`,
+`Emby.ComSkipper` pattern) hooks `SessionManager.SessionStarted`:
+
+1. **Fresh cache** → immediate toast (no LLM run).
+2. **Cold cache** → run `TonightService` (~30–60 s), then toast + bell.
+3. **In-flight** guard: a single run per user even across several devices
+   logged in at once (shared endpoint + login cache).
+
+The **toast** (`SendMessageCommand`, gated `DisplayMessage` in
+`SupportedCommands`) lists the watch-bucket titles (unwatched recordings /
+library). The persistent **bell** (`INotificationManager`) deep-links to
+the Recommendations page and survives if the session closes before the run
+finishes. `LoginPopup` is **independent** of `AutoProgram`: watch
+suggestions show at login even without auto-programming.
+
+> **Gating `AutoProgram` (absolute rule)**: no timer is created while
+> `cfg.AutoProgram == false`. The flag is checked in both paths
+> (`LlmScheduledTask`, `TonightLoginService`) before any call to
+> `AutoProgrammer.Program`. The popup (`LoginPopup`) is **not** gated by
+> `AutoProgram`.
 
 ---
 

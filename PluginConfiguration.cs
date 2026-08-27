@@ -403,5 +403,52 @@ namespace LLM_AI
         /// Garantit une sélection exploitable même quand l'EPG est vide. Défaut 3.
         /// </summary>
         public int TonightMinRecommendations { get; set; } = 3;
+
+        // ------------------------------------------------------------------
+        //  Auto-programmation + popup au login (visibilité native TV).
+        //  Les recommandations LLM_AI ne s'affichent que sur la page web ; les
+        //  clients natifs (Android / Android TV) ne rendent pas les pages
+        //  plugin HTML. L'auto-programmation crée les timers Emby des recos à
+        //  enregistrer → elles ressortent dans le guide EPG natif (badge
+        //  d'enregistrement) sur tous les clients. Le popup au login signale
+        //  ce soir ce que l'usager peut regarder depuis sa bibliothèque.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, les
+        /// recommandations du <b>record bucket</b> (programmes EPG à venir non
+        /// déjà possédés, non déjà programmés, hors drop list) sont
+        /// automatiquement programmées en enregistrement (SeriesTimer pour une
+        /// série, Timer unique pour un film) après chaque run — tâche planifiée
+        /// ET déclencheur de login. C'est ce qui fait ressortir les recos dans
+        /// le guide EPG natif (badge d'enregistrement) sur Android / Android TV.
+        /// <b>Règle absolue</b> : aucun timer n'est créé tant que ce flag est
+        /// décoché — vérifié dans les deux chemins
+        /// (<c>LlmScheduledTask</c>, <c>TonightLoginService</c>) avant tout
+        /// appel à <c>AutoProgrammer.Program</c>. Le popup au login
+        /// (<see cref="LoginPopup"/>) est indépendant de ce flag.
+        /// <para>Auto-programmer occupe des tuners/disque : c'est une action
+        /// opt-in. L'utilisateur peut annuler un timer indésirable dans Emby.</para>
+        /// </summary>
+        public bool AutoProgram { get; set; } = false;
+
+        /// <summary>
+        /// Active le popup (toast) au login + la notification cloche persistante
+        /// qui signale ce soir ce que l'usager peut regarder (watch bucket :
+        /// enregistrements non visionnés, bibliothèque). Indépendant de
+        /// <see cref="AutoProgram"/> : le popup des suggestions à regarder
+        /// s'affiche au login même sans auto-programmation. Défaut <c>true</c>.
+        /// La cloche (deep-link) reste même si le toast échoue (session fermée
+        /// avant la fin du run LLM) ou si le client ne supporte pas
+        /// <c>DisplayMessage</c>.
+        /// </summary>
+        public bool LoginPopup { get; set; } = true;
+
+        /// <summary>
+        /// Durée d'affichage (secondes) du toast au login. Le toast est texte
+        /// seul (pas de bouton) — d'où la cloche deep-link en complément. Défaut
+        /// 8. Ne s'applique qu'aux clients supportant <c>DisplayMessage</c>.
+        /// </summary>
+        public int LoginPopupSeconds { get; set; } = 8;
     }
 }

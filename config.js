@@ -349,6 +349,10 @@ define(["loading"], function (loading) {
         view.querySelector("#numTonightRecDays").value = isNaN(trd) ? 7 : trd;
         var tmr = parseInt(cfg.TonightMinRecommendations, 10);
         view.querySelector("#numTonightMinRec").value = isNaN(tmr) ? 3 : tmr;
+        view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
+        view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
+        var lps = parseInt(cfg.LoginPopupSeconds, 10);
+        view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -389,6 +393,9 @@ define(["loading"], function (loading) {
             TonightCacheHours: parseInt(view.querySelector("#numTonightCache").value, 10) || 4,
             TonightRecordingsDays: parseInt(view.querySelector("#numTonightRecDays").value, 10) || 7,
             TonightMinRecommendations: parseInt(view.querySelector("#numTonightMinRec").value, 10) || 3,
+            AutoProgram: view.querySelector("#chkAutoProgram").checked,
+            LoginPopup: view.querySelector("#chkLoginPopup").checked,
+            LoginPopupSeconds: parseInt(view.querySelector("#numLoginPopupSeconds").value, 10) || 8,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),

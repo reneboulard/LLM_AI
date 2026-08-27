@@ -21,10 +21,11 @@ d'outils à effectuer (boucle d'agent / tool-calling).
 4. [Composants](#composants)
 5. [Outils LLM](#outils-llm)
 6. [« À regarder ce soir »](#à-regarder-ce-soir)
-7. [API HTTP](#api-http)
-8. [i18n (FR / EN)](#i18n-fr--en)
-9. [Dépannage](#dépannage)
-10. [Changelog](#changelog)
+7. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
+8. [API HTTP](#api-http)
+9. [i18n (FR / EN)](#i18n-fr--en)
+10. [Dépannage](#dépannage)
+11. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -139,6 +140,29 @@ Les clés API sont stockées dans la config **OU** lues dans des variables d'env
 - `TonightRecordingsDays` (défaut 7) — fenêtre « enregistrés il y a moins de N jours ».
 - `TonightMinRecommendations` (défaut 3) — minimum garanti (voir [À regarder ce soir](#à-regarder-ce-soir)).
 
+### Auto-programmation & popup au login
+
+Les clients natifs **Android / Android TV** ne rendent pas les pages plugin
+HTML : les recommandations ne sont visibles que sur la page web. Deux leviers
+rendent les recos **discoverables sur la TV** :
+
+- `AutoProgram` (bool, **défaut `false` — opt-in explicite**) : si coché, après
+  chaque run (tâche planifiée **et** login), les recommandations du **record
+  bucket** (programmes EPG à venir, non déjà possédés, non déjà programmés,
+  hors `DroppedTitles`) sont **automatiquement programmées en enregistrement**
+  (SeriesTimer pour une série, Timer unique pour un film). Elles ressortent
+  alors dans le **guide EPG natif** (badge d’enregistrement) sur tous les
+  clients, TV comprise. **Aucune programmation tant que décoché.**
+- `LoginPopup` (bool, défaut `true` — indépendant de `AutoProgram`) : à la
+  connexion d’un usager, un **toast** signale ce soir ce qu’il peut regarder
+  (enregistrements non visionnés, bibliothèque), + une **notification cloche**
+  persistante (deep-link) en repli. `LoginPopupSeconds` (défaut 8) règle la
+  durée du toast.
+
+> ⚠️ L’auto-programmation occupe des tuners/disque : c’est une action opt-in.
+> L’utilisateur peut annuler un timer indésirable dans Emby. Le popup au login
+> s’affiche même sans auto-programmation (suggestions à regarder seulement).
+
 ### Divers
 
 `TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée), `WebFetchDirect`,
@@ -155,7 +179,10 @@ dans le prompt), `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planif
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Point d'entrée. Nom `LLM_AI`, Id `e7d3…2e60`. Enregistre les pages web (config, recommandations, i18n). Version pilotée par `<AssemblyVersion>` du `.csproj`. |
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + backends multi-source. |
 | `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, stocke dans `Recommendations`, envoie des notifications. Délègue l'orchestration à `LlmRunner`. |
-| `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Construit le profil de goût, les enregistrements non visionnés, la réserve bibliothèque, lance le LLM, enrichit, cache. |
+| `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
+| `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, run LLM, enrichissement, **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
+| `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. |
+| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Utilisé par `LlmScheduledTask` **et** `TonightApiService`. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. |
 | `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). |
@@ -232,9 +259,56 @@ contexte complet.
 **Cache par usager** — `Dictionary<userId, CacheEntry>` + verrou, TTL
 `TonightCacheHours`. `Refresh=1` force un nouveau run (bouton **Rafraîchir**).
 
-**Lecture** — Le bouton **Regarder** lance la lecture via le module AMD `playbackManager`
-d'Emby (`require(["playbackManager"], pm => pm.play({ids:[id], serverId:
-ApiClient.serverId()}))`), pas via `ApiClient.play` (inexistant).
+## Auto-programmation & popup au login
+
+Les recommandations LLM_AI ne s’affichent par défaut que sur la **page web**
+`recommendations.html`. Les clients natifs (Android / Android TV) ne rendent
+pas les pages plugin HTML — la reco n’y est pas « discoverable ». Deux leviers,
+tous deux **configurables** (voir [Configuration](#auto-programmation--popup-au-login)) :
+
+### Record bucket → badge EPG natif (auto-programmation)
+
+Si `AutoProgram` est coché, après chaque run les recommandations **à enregistrer**
+(programmes EPG à venir, non déjà possédées, non déjà programmées, hors drop
+list) sont programmées en enregistrement :
+
+- **Série** → `SeriesTimerInfo` (RecordNewOnly, SkipEpisodesInLibrary) via
+  `ILiveTvManager.CreateSeriesTimer`.
+- **Film / one-off** → `TimerInfoDto` via `ILiveTvManager.CreateTimer`.
+
+Les valeurs par défaut (Start/End/Channel/paddings) sont dérivées du programme
+via `GetNewTimerDefaults(programId)` — on ne poste jamais un timer minimal
+(champs requis manquants : le serveur ne crée alors rien). Déduplication par
+`GetTimers`/`GetSeriesTimers` (ProgramId + nom normalisé, avec retrait
+d’article — cohérent avec l’exclusion EPG de `get_emby_info`).
+
+Résultat : les recos portent le **badge d’enregistrement** dans le guide EPG
+**natif** — le seul highlight fiable sur tous les clients TV. L’utilisateur
+regarre rarement en direct (il enregistre + zappe les pubs) : programmer est
+l’action juste ; il peut annuler un timer au besoin.
+
+### Watch bucket → popup au login
+
+À la connexion d’un usager, `TonightLoginService` (`IServerEntryPoint`,
+pattern `Emby.ComSkipper`) branche `SessionManager.SessionStarted` :
+
+1. **Cache frais** → toast immédiat (pas de run LLM).
+2. **Cache froid** → run `TonightService` (~30–60 s), puis toast + cloche.
+3. Garde-fou **in-flight** : un seul run par usager même sur plusieurs appareils
+   connectés à la fois (cache partagé endpoint + login).
+
+Le **toast** (`SendMessageCommand`, gated `DisplayMessage` dans
+`SupportedCommands`) liste les titres du watch bucket (enregistrements non
+visionnés / bibliothèque). La **cloche** persistante (`INotificationManager`)
+deep-link vers la page Recommandations et survive si la session ferme avant la
+fin du run. `LoginPopup` est **indépendant** de `AutoProgram` : les suggestions
+à regarder s’affichent au login même sans auto-programmation.
+
+> **Gating `AutoProgram` (règle absolue)** : aucun timer n’est créé tant que
+> `cfg.AutoProgram == false`. Le flag est vérifié dans les deux chemins
+> (`LlmScheduledTask`, `TonightLoginService`) avant tout appel à
+> `AutoProgrammer.Program`. Le popup (`LoginPopup`) n’est pas gatingé par
+> `AutoProgram`.
 
 ---
 

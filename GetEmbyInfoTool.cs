@@ -828,7 +828,7 @@ namespace LLM_AI
         /// de recommandations et par le champ éditable de la page de config.
         /// Tolère un JSON mal formé (renvoie un ensemble vide).
         /// </summary>
-        private static HashSet<string> DroppedTitlesSet()
+        internal static HashSet<string> DroppedTitlesSet()
         {
             var set = new HashSet<string>();
             var raw = Plugin.Instance?.Configuration?.DroppedTitles;
@@ -1157,7 +1157,7 @@ namespace LLM_AI
         }
 
         /// <summary>Normalise un titre pour la comparaison (lower + [^a-z0-9] retiré).</summary>
-        private static string Norm(string s)
+        internal static string Norm(string s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
             var lower = s.ToLowerInvariant();

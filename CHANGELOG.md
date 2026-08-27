@@ -10,6 +10,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Ajouté / Added
+- **Auto-programmation** (`AutoProgrammer`, option `AutoProgram` — défaut `false`, opt-in
+  explicite) : après chaque run (tâche planifiée **et** login), les recommandations du
+  **record bucket** (programmes EPG à venir non possédés, non déjà programmés, hors
+  `DroppedTitles`) sont automatiquement programmées en enregistrement (SeriesTimer pour
+  une série, Timer unique pour un film). Elles ressortent dans le **guide EPG natif** avec
+  un badge d'enregistrement — le seul highlight fiable sur tous les clients TV.
+  **Auto-programming** (`AutoProgrammer`, `AutoProgram` option — default `false`, explicit
+  opt-in): after each run (scheduled task **and** login), the **record bucket** (upcoming
+  EPG programs not owned, not already scheduled, outside `DroppedTitles`) is auto-scheduled
+  as recordings (SeriesTimer for series, single Timer for movies). They surface in the
+  **native EPG guide** with a record badge — the only reliable highlight across TV clients.
+- **Popup au login** (`TonightLoginService : IServerEntryPoint`, option `LoginPopup` —
+  défaut `true`, **indépendant** de `AutoProgram`) : à la connexion d'un usager, un **toast**
+  (`SendMessageCommand`, gated `DisplayMessage`) signale ce qu'il peut regarder ce soir
+  (enregistrements non visionnés / bibliothèque), + une **cloche** persistante (deep-link)
+  en repli. Pattern `Emby.ComSkipper`. Garde-fou **in-flight** : un seul run par usager
+  même sur plusieurs appareils.
+  **Login popup** (`TonightLoginService : IServerEntryPoint`, `LoginPopup` option — default
+  `true`, **independent** of `AutoProgram`): on user login, a **toast** (`SendMessageCommand`,
+  gated `DisplayMessage`) surfaces tonight's watch-bucket (unwatched recordings / library),
+  + a persistent **bell** (deep-link) fallback. `Emby.ComSkipper` pattern. **In-flight**
+  guard: a single run per user even across multiple devices.
+  - `LoginPopupSeconds` (défaut 8) règle la durée du toast. / Sets the toast duration.
+- **Gating `AutoProgram` (règle absolue)** : aucun timer n'est créé tant que
+  `cfg.AutoProgram == false` (vérifié dans les deux chemins avant tout appel à
+  `AutoProgrammer.Program`). / No timer is created while `AutoProgram == false` (checked in
+  both paths before any `AutoProgrammer.Program` call).
+
+### Modifié / Changed
+- Extraction de la génération « À regarder ce soir » dans `TonightService` (interne),
+  partagée par `TonightApiService` (endpoint HTTP) et `TonightLoginService` (déclencheur
+  login), avec cache par usager statique commun. `TonightApiService` devient une couche HTTP
+  fine.
+  "Watch tonight" generation extracted into `TonightService` (internal), shared by
+  `TonightApiService` (HTTP endpoint) and `TonightLoginService` (login trigger), with a
+  shared static per-user cache. `TonightApiService` becomes a thin HTTP layer.
+- `GetEmbyInfoTool.DroppedTitlesSet` / `Norm` élargis à `internal` pour réutilisation par
+  `AutoProgrammer` (matching de déduplication cohérent avec l'exclusion EPG).
+  `GetEmbyInfoTool.DroppedTitlesSet` / `Norm` widened to `internal` for reuse by
+  `AutoProgrammer` (dedup matching consistent with the EPG exclusion).
+
+---
+
 ## [1.0.0.0] — 2026-08-27
 
 ### Ajouté / Added

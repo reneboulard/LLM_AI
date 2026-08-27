@@ -103,6 +103,13 @@ define([], function () {
             "cfg.tonight.recDays.desc": "Fenêtre de recherche des enregistrements récents non visionnés (candidats « à regarder ce soir »). Défaut 7.",
             "cfg.tonight.minRec": "Min recommandations",
             "cfg.tonight.minRec.desc": "Si l'EPG + les enregistrements donnent moins de recommandations, complète avec des titres non visionnés de la bibliothèque. Défaut 3.",
+            "cfg.autoprog.h": "Auto-programmation & popup au login",
+            "cfg.autoprog.desc": "Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML : les recommandations ne sont visibles que sur la page web. L'auto-programmation crée les timers Emby des recos à enregistrer → elles ressortent dans le guide EPG natif (badge d'enregistrement) sur tous les clients. Le popup au login signale ce soir ce que l'usager peut regarder (bibliothèque / enregistrements).",
+            "cfg.autoprog.flag": "Auto-programmer les recommandations (créer les timers d'enregistrement)",
+            "cfg.autoprog.flag.desc": "Option opt-in (décochée par défaut). Si cochée, après chaque run (tâche planifiée ET login), les recommandations à enregistrer (programmes EPG à venir, non déjà possédées, non déjà programmées, hors drop list) sont programmées en enregistrement (SeriesTimer pour une série, Timer unique pour un film). Aucune programmation tant que décochée. L'utilisateur peut annuler un timer indésirable dans Emby.",
+            "cfg.loginpopup.flag": "Popup au login (suggestions « à regarder ce soir »)",
+            "cfg.loginpopup.seconds": "Durée du toast (secondes)",
+            "cfg.loginpopup.desc": "Indépendant de l'auto-programmation : le popup liste ce soir ce que l'usager peut regarder (enregistrements non visionnés, bibliothèque). Toast sur le client qui se connecte (si DisplayMessage supporté) + notification cloche persistante (deep-link) en repli. La cloche reste même si la session ferme avant la fin du run LLM (~30–60 s) ou si le client ne supporte pas le toast.",
             "cfg.save": "Enregistrer",
 
             // -- config.js : chaînes dynamiques ----------------------------
@@ -235,6 +242,13 @@ define([], function () {
             "cfg.tonight.recDays.desc": "Lookback window for recent unwatched recordings (candidates for \"watch tonight\"). Default 7.",
             "cfg.tonight.minRec": "Min recommendations",
             "cfg.tonight.minRec.desc": "If EPG + recordings yield fewer recommendations, fill with unwatched library titles. Default 3.",
+            "cfg.autoprog.h": "Auto-programming & login popup",
+            "cfg.autoprog.desc": "Native Android / Android TV clients don't render plugin HTML pages: recommendations are only visible on the web page. Auto-programming creates the Emby timers for recommendations to record → they stand out in the native EPG guide (record badge) on every client. The login popup surfaces what to watch tonight (library / recordings).",
+            "cfg.autoprog.flag": "Auto-program recommendations (create recording timers)",
+            "cfg.autoprog.flag.desc": "Opt-in (off by default). When checked, after each run (scheduled task AND login), recommendations to record (upcoming EPG programs not already owned, not already scheduled, outside the drop list) are programmed as recordings (SeriesTimer for a series, single Timer for a movie). No programming while unchecked. The user can cancel an unwanted timer in Emby.",
+            "cfg.loginpopup.flag": "Login popup (\"watch tonight\" suggestions)",
+            "cfg.loginpopup.seconds": "Toast duration (seconds)",
+            "cfg.loginpopup.desc": "Independent of auto-programming: the popup lists what to watch tonight (unwatched recordings, library). Toast on the connecting client (if DisplayMessage is supported) + persistent bell notification (deep-link) as fallback. The bell survives even if the session closes before the LLM run finishes (~30–60 s) or the client doesn't support toasts.",
             "cfg.save": "Save",
 
             "cfg.wl.empty": "(no items available)",
