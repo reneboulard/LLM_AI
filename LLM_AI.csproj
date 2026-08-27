@@ -19,13 +19,16 @@
 
   <ItemGroup>
     <Reference Include="MediaBrowser.Model">
-      <HintPath>/opt/emby-server/system/MediaBrowser.Model.dll</HintPath>
+      <HintPath>libs/MediaBrowser.Model.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="MediaBrowser.Common">
-      <HintPath>/opt/emby-server/system/MediaBrowser.Common.dll</HintPath>
+      <HintPath>libs/MediaBrowser.Common.dll</HintPath>
+      <Private>false</Private>
     </Reference>
     <Reference Include="MediaBrowser.Controller">
-      <HintPath>/opt/emby-server/system/MediaBrowser.Controller.dll</HintPath>
+      <HintPath>libs/MediaBrowser.Controller.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
 
