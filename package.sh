@@ -8,7 +8,7 @@
 # Sortie : dist/LLM_AI-<version>.zip contenant
 #   - LLM_AI.dll                 (la DLL, toutes les ressources web embarquées)
 #   - install.sh                 (script d'installation pour l'utilisateur final)
-#   - README-FR.md / README-EN.md (documentation)
+#   - README.md / README-EN.md (documentation FR/EN)
 #
 # La version est lue depuis <AssemblyVersion> dans LLM_AI.csproj.
 #
@@ -52,7 +52,7 @@ mkdir -p "${STAGE}"
 
 install -m 0644 "${DLL}"        "${STAGE}/${PLUGIN_NAME}.dll"
 install -m 0755 install.sh      "${STAGE}/install.sh"
-install -m 0644 README-FR.md    "${STAGE}/README-FR.md"
+install -m 0644 README.md       "${STAGE}/README.md"
 install -m 0644 README-EN.md    "${STAGE}/README-EN.md"
 install -m 0644 LICENSE         "${STAGE}/LICENSE"
 install -m 0644 CHANGELOG.md    "${STAGE}/CHANGELOG.md"
@@ -90,7 +90,7 @@ cat <<EOF
 Contenu de l'archive (${STAGE}/):
   ${PLUGIN_NAME}.dll   — plugin auto-suffisant (HTML/JS/i18n embarqués)
   install.sh           — installation pour l'utilisateur final (sudo bash install.sh)
-  README-FR.md         — documentation française
+  README.md            — documentation française (principal, affiché sur GitHub)
   README-EN.md         — documentation anglaise
   LICENSE              — licence MIT
   CHANGELOG.md         — journal des versions

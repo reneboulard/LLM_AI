@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
-> French version: see [README-FR.md](README-FR.md).
+> French version: see [README.md](README.md).
 
 An Emby plugin that uses a large language model (LLM — local Ollama, Ollama Cloud, or
 Google Gemini) to produce **series and movie recording recommendations** (scheduled at the
