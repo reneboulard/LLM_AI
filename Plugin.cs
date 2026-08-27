@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
+using MediaBrowser.Model.Drawing;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 
@@ -20,7 +22,15 @@ namespace LLM_AI
     /// par innerHTML n'est jamais exécuté, seul le module déclaré dans
     /// <c>data-controller</c> est chargé via require(). Voir Emby.ComSkipper.
     /// </remarks>
-    public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
+    /// <remarks>
+    /// Implémente <see cref="IHasThumbImage"/> : fournit l'image affichée dans la
+    /// pastille du plugin (liste Dashboard → Plugins). L'hôte Emby sert cette
+    /// image sur <c>/Plugins/{Id}/Thumb</c> et ne peuple <c>ImageTag</c> (donc ne
+    /// remplace l'icône puzzle par défaut) que si le plugin implémente cette
+    /// interface. La ressource embarquée <c>LLM_AI.thumb.png</c> (800x450, 16:9)
+    /// est retournée comme flux PNG.
+    /// </remarks>
+    public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage
     {
         /// <summary>
         /// Singleton exposant le plugin à la page de configuration et à la
@@ -49,6 +59,16 @@ namespace LLM_AI
         // -> la version effective est pilotée par <AssemblyVersion> dans le .csproj.
 
         /// <summary>
+        /// Image de la pastille du plugin (liste Dashboard → Plugins), servie par
+        /// l'hôte sur <c>/Plugins/{Id}/Thumb</c>. Ressource embarquée 16:9.
+        /// </summary>
+        public Stream GetThumbImage()
+            => GetType().Assembly.GetManifestResourceStream("LLM_AI.thumb.png");
+
+        /// <summary>Format de l'image de pastille retournée par <see cref="GetThumbImage"/>.</summary>
+        public ImageFormat ThumbImageFormat => ImageFormat.Png;
+
+        /// <summary>
         /// Pages web embarquées servies par le dashboard Emby.
         /// 1) la page HTML de config (lien « ConfigPageUrl » depuis la liste des plugins),
         /// 2) le module JS AMD de config chargé via <c>data-controller="__plugin/..."</c>,
@@ -56,6 +76,10 @@ namespace LLM_AI
         ///    <see cref="PluginPageInfo.EnableInMainMenu"/>) qui affiche la dernière
         ///    réponse de l'agent,
         /// 4) le module JS AMD de cette page.
+        /// 5) le module i18n (LLMAII18n) : dictionnaires FR/EN + walker DOM,
+        ///    chargé comme dépendance __plugin/LLMAII18n par config.js et
+        ///    recommendations.js. Sans PluginPageInfo, le module ne serait pas
+        ///    servi et la dépendance AMD ne se résoudrait pas.
         /// L'ordre compte pour la page de config : le HTML doit venir en premier
         /// (c'est elle que le dashboard lie au plugin dans la liste).
         /// </summary>
@@ -70,6 +94,11 @@ namespace LLM_AI
             {
                 Name = "LLMAIConfigPageJS",
                 EmbeddedResourcePath = "LLM_AI.config.js"
+            },
+            new PluginPageInfo
+            {
+                Name = "LLMAII18n",
+                EmbeddedResourcePath = "LLM_AI.i18n.js"
             },
             new PluginPageInfo
             {
@@ -94,6 +123,15 @@ namespace LLM_AI
             {
                 Name = "LLMAIRecommendationsPageJS",
                 EmbeddedResourcePath = "LLM_AI.recommendations.js"
+            },
+            new PluginPageInfo
+            {
+                // Image de fond de la page Recommandations : module AMD exportant
+                // une data URI (ASCII), servi sur web/ConfigurationPage?name=LLMAIBg
+                // et chargé par recommendations.js via require(). L'endpoint sert les
+                // ressources en UTF-8 : un binaire serait corrompu, d'où la data URI.
+                Name = "LLMAIBg",
+                EmbeddedResourcePath = "LLM_AI.bg.js"
             }
         };
     }

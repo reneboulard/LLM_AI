@@ -1,0 +1,58 @@
+# Release automatique du plugin LLM_AI sur GitHub.
+#
+# Déclencheur : push d'un tag de la forme v* (ex. v1.0.0).
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# Le workflow :
+#   1. compile le plugin en Release (net8.0),
+#   2. produit dist/LLM_AI-<version>.zip (DLL + install.sh + READMEs),
+#   3. crée une GitHub Release nommée d'après le tag et y joint l'archive.
+#
+# Prérequis : aucune secret particulière (GITHUB_TOKEN intégré suffit pour
+# gh release create). Adapter le champ `owner/repo` n'est pas nécessaire :
+# $GITHUB_REPOSITORY est utilisé tel quel.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # nécessaire pour créer la release / pousser l'asset
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build & package
+        run: bash package.sh
+
+      - name: Resolve archive path
+        id: archive
+        run: |
+          ZIP="$(ls dist/${{ github.event.repository.name || 'LLM_AI' }}-*.zip 2>/dev/null | head -1)"
+          # Fallback : le nom du plugin est fixe (LLM_AI), peu importe le nom du dépôt.
+          if [ -z "${ZIP}" ]; then
+            ZIP="$(ls dist/LLM_AI-*.zip | head -1)"
+          fi
+          echo "path=${ZIP}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${ZIP}")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --generate-notes \
+            "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}"

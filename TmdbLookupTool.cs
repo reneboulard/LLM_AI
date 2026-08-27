@@ -61,12 +61,37 @@ namespace LLM_AI
             string lang = string.IsNullOrWhiteSpace(cfg.TmdbLanguage) ? "fr-FR" : cfg.TmdbLanguage;
             string key = cfg.TmdbApiKey;
 
+            // Cache 24h partagé (WebResultCache) : l'info d'une série/film ne
+            // bouge pas en 24h et la tâche de recommandation est quotidienne.
+            // La clé inclut kind/lang/year : une même requête avec un kind ou une
+            // année différents renvoie des résultats différents.
+            string cacheKey = "tmdb:" + kind + ":" + lang + ":" +
+                              WebResultCache.NormalizeQuery(query) + ":" + (year?.ToString() ?? "");
+            if (WebResultCache.TryGet(cacheKey, out var cached))
+            {
+                _logger?.Info("[LLM_AI] tmdb_lookup cache hit query={0} kind={1}", query, kind);
+                return cached;
+            }
+
             try
             {
                 string result = kind == "movie"
                     ? await LookupMovieAsync(key, lang, query, year, ct).ConfigureAwait(false)
                     : await LookupSeriesAsync(key, lang, query, year, ct).ConfigureAwait(false);
-                _logger?.Info("[LLM_AI] tmdb_lookup query={0} kind={1} -> {2}", query, kind, Truncate(result, 200));
+
+                // Ne cache QUE les résultats valides (pas les erreurs / « aucune
+                // série »), comme web_search.
+                bool valid = false;
+                try { using (JsonDocument.Parse(result)) { valid = true; } } catch { }
+                if (valid && !result.Contains("\"error\""))
+                {
+                    WebResultCache.Set(cacheKey, result);
+                    _logger?.Info("[LLM_AI] tmdb_lookup query={0} kind={1} -> {2} (caché 24h)",
+                        query, kind, Truncate(result, 200));
+                }
+                else
+                    _logger?.Info("[LLM_AI] tmdb_lookup query={0} kind={1} -> {2} (non caché)",
+                        query, kind, Truncate(result, 200));
                 return result;
             }
             catch (Exception ex)

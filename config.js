@@ -8,6 +8,25 @@ define(["loading"], function (loading) {
 
     var pluginId = "e7d3dee6-ef19-46a9-985f-06318b682e60";
 
+    // Module i18n (FR/EN). Chargé comme ressource plugin via require() sur
+    // l'URL « web/ConfigurationPage?name=LLMAII18n » — C'EST LE MÊME mécanisme
+    // que celui par lequel le viewmanager charge ce module config.js lui-même
+    // (getConfigurationResourceUrl -> require([url])). On n'utilise PAS une
+    // dépendance AMD « __plugin/LLMAII18n » : RequireJS ne mappe pas ce
+    // préfixe comme id de module (il n'est géré que pour data-controller).
+    // `i18n` est renseigné avant toute utilisation de t()/translateView().
+    var i18n = null;
+    var _i18nPromise = null;
+    function i18nReady() {
+        if (i18n) return Promise.resolve(i18n);
+        if (_i18nPromise) return _i18nPromise;
+        var url = ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAII18n" });
+        _i18nPromise = new Promise(function (resolve, reject) {
+            require([url], function (mod) { i18n = mod; resolve(mod); }, reject);
+        });
+        return _i18nPromise;
+    }
+
     // DroppedTitles est stocké côté C# comme un tableau JSON (string).
     // La page de config l'affiche/édite comme un textarea « un titre par ligne » :
     // on convertit array↔texte multiligne au chargement et à la sauvegarde.
@@ -49,7 +68,7 @@ define(["loading"], function (loading) {
     function renderChecklist(host, items, selectedSet) {
         if (!host) return;
         if (!items || items.length === 0) {
-            host.innerHTML = '<div class="wlEmpty">(aucun élément disponible)</div>';
+            host.innerHTML = '<div class="wlEmpty">' + esc(i18n.t("cfg.wl.empty")) + '</div>';
             return;
         }
         var html = items.map(function (it) {
@@ -199,9 +218,9 @@ define(["loading"], function (loading) {
 
     function providerOptions(selected) {
         var opts = [
-            { v: "ollama_local", l: "Ollama local" },
-            { v: "ollama_cloud", l: "Ollama cloud" },
-            { v: "gemini",       l: "Google Gemini" }
+            { v: "ollama_local", l: i18n.t("cfg.backend.provider.local") },
+            { v: "ollama_cloud", l: i18n.t("cfg.backend.provider.cloud") },
+            { v: "gemini",       l: i18n.t("cfg.backend.provider.gemini") }
         ];
         return opts.map(function (o) {
             var sel = o.v === selected ? "selected" : "";
@@ -220,29 +239,29 @@ define(["loading"], function (loading) {
         return ''
             + '<div class="llmBackendRow" data-backend>'
             +   '<div class="backendHeader">'
-            +     '<span>LLM #' + (index + 1) + '</span>'
-            +     '<button is="emby-button" type="button" class="btnRemoveBackend">Supprimer</button>'
+            +     '<span>' + i18n.t("cfg.backend.num", (index + 1)) + '</span>'
+            +     '<button is="emby-button" type="button" class="btnRemoveBackend">' + i18n.t("cfg.backend.remove") + '</button>'
             +   '</div>'
             +   '<div class="backendFields">'
             +     '<div class="inputContainer providerField">'
-            +       '<select is="emby-select" class="beProvider" label="Provider">'
+            +       '<select is="emby-select" class="beProvider" label="' + esc(i18n.t("cfg.backend.provider.label")) + '">'
             +         providerOptions(provider)
             +       '</select>'
             +     '</div>'
             +     '<div class="inputContainer">'
             +       '<input is="emby-input" type="text" class="beUrl" '
-            +             'label="URL de base" placeholder="http://192.168.11.2:11434" value="' + url + '" />'
+            +             'label="' + esc(i18n.t("cfg.backend.url.label")) + '" placeholder="http://192.168.11.2:11434" value="' + url + '" />'
             +     '</div>'
             +     '<div class="inputContainer">'
             +       '<input is="emby-input" type="text" class="beModel" '
-            +             'label="Modèle" placeholder="gemma4:26b" value="' + model + '" />'
+            +             'label="' + esc(i18n.t("cfg.backend.model.label")) + '" placeholder="gemma4:26b" value="' + model + '" />'
             +     '</div>'
             +     '<div class="inputContainer priorityField">'
             +       '<input is="emby-input" type="number" class="bePriority" '
-            +             'label="Priorité" min="1" value="' + prio + '" />'
+            +             'label="' + esc(i18n.t("cfg.backend.prio.label")) + '" min="1" value="' + prio + '" />'
             +     '</div>'
             +     '<label class="enabledField">'
-            +       '<input type="checkbox" class="beEnabled" ' + checked + ' /> Activé'
+            +       '<input type="checkbox" class="beEnabled" ' + checked + ' /> ' + esc(i18n.t("cfg.backend.enabled"))
             +     '</label>'
             +   '</div>'
             + '</div>';
@@ -318,6 +337,18 @@ define(["loading"], function (loading) {
         var mmb = parseInt(cfg.MaxMovieBatch, 10);
         view.querySelector("#numMaxMovieBatch").value = isNaN(mmb) ? 30 : mmb;
         view.querySelector("#txtDroppedTitles").value = droppedArrayToText(cfg.DroppedTitles);
+        view.querySelector("#chkTonightEnabled").checked = cfg.TonightEnabled !== false;
+        view.querySelector("#txtTonightWindowStart").value = cfg.TonightWindowStart || "";
+        view.querySelector("#txtTonightWindowEnd").value = cfg.TonightWindowEnd || "23:59";
+        view.querySelector("#txtTonightPrompt").value = cfg.TonightPrompt || "";
+        var tnb = parseInt(cfg.MaxTonightBatch, 10);
+        view.querySelector("#numTonightBatch").value = isNaN(tnb) ? 10 : tnb;
+        var tch = parseInt(cfg.TonightCacheHours, 10);
+        view.querySelector("#numTonightCache").value = isNaN(tch) ? 4 : tch;
+        var trd = parseInt(cfg.TonightRecordingsDays, 10);
+        view.querySelector("#numTonightRecDays").value = isNaN(trd) ? 7 : trd;
+        var tmr = parseInt(cfg.TonightMinRecommendations, 10);
+        view.querySelector("#numTonightMinRec").value = isNaN(tmr) ? 3 : tmr;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -350,6 +381,14 @@ define(["loading"], function (loading) {
             MaxSeriesBatch: parseInt(view.querySelector("#numMaxSeriesBatch").value, 10) || 40,
             MaxMovieBatch: parseInt(view.querySelector("#numMaxMovieBatch").value, 10) || 30,
             DroppedTitles: droppedTextToArray(view.querySelector("#txtDroppedTitles").value),
+            TonightEnabled: view.querySelector("#chkTonightEnabled").checked,
+            TonightWindowStart: view.querySelector("#txtTonightWindowStart").value.trim(),
+            TonightWindowEnd: view.querySelector("#txtTonightWindowEnd").value.trim(),
+            TonightPrompt: view.querySelector("#txtTonightPrompt").value,
+            MaxTonightBatch: parseInt(view.querySelector("#numTonightBatch").value, 10) || 10,
+            TonightCacheHours: parseInt(view.querySelector("#numTonightCache").value, 10) || 4,
+            TonightRecordingsDays: parseInt(view.querySelector("#numTonightRecDays").value, 10) || 7,
+            TonightMinRecommendations: parseInt(view.querySelector("#numTonightMinRec").value, 10) || 3,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),
@@ -359,10 +398,19 @@ define(["loading"], function (loading) {
 
     return function (view) {
         view.addEventListener("viewshow", function () {
-            // Charge la config existante et remplit les champs.
-            ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-                fill(cfg || {}, view);
-            });
+            // i18n : charge le module, résout la langue (globalize) puis traduit
+            // le DOM statique avant de remplir / brancher. Les chaînes dynamiques
+            // (lignes de backend, options, alerts) passent par i18n.t() au moment
+            // de leur construction — toujours après init() (donc langue connue).
+            i18nReady().then(function () {
+                return i18n.init();
+            }).then(function () {
+                i18n.translateView(view);
+
+                // Charge la config existante et remplit les champs.
+                ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
+                    fill(cfg || {}, view);
+                });
 
             // Ajouter un backend.
             var addBtn = view.querySelector("#btnAddBackend");
@@ -415,16 +463,17 @@ define(["loading"], function (loading) {
                         Dashboard.processPluginConfigurationUpdateResult(cfg);
                     }
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {
-                        Dashboard.alert("Configuration enregistrée.");
+                        Dashboard.alert(i18n.t("cfg.alert.saved"));
                     }
                 }, function (err) {
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {
-                        Dashboard.alert("Erreur lors de l'enregistrement : " + (err && err.statusText ? err.statusText : err));
+                        Dashboard.alert(i18n.t("cfg.alert.saveError", (err && err.statusText ? err.statusText : err)));
                     }
                 });
 
                 return false;
             });
+            }); // fin i18nReady().then(...).then(...)
         });
     };
 });

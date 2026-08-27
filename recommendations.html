@@ -27,8 +27,22 @@
 
         <style>
             .LLMAIRecommendationsPage {
-                background: linear-gradient(160deg, #0c0c0c 0%, #161616 50%, #101010 100%) !important;
+                /* Fallback sombre : tant que l'image de fond (ressource embarquée
+                   LLMAIBg) n'est pas posée par recommendations.js, ou si JS est
+                   désactivé / la ressource injoignable. L'image + voile sombre
+                   sont appliquées en inline sur l'élément de page au viewshow via
+                   ApiClient.getUrl (URL absolue correcte quel que soit le prefix
+                   /emby multiserver — une URL relative dans le CSS casserait car
+                   la page est injectée via innerHTML). */
+                background-color: #101010;
                 min-height: 100%;
+            }
+            /* Titre de page « 🤖 LLM AI Recommendations » : par défaut Emby le
+               laisse dans la couleur du thème (souvent noire) → invisible sur le
+               fond sombre. On force le gris pale cohérent avec le reste de la page
+               (.recSectionTitle / .ai-card-title en #e8e8e8). */
+            .LLMAIRecommendationsPage .sectionTitle {
+                color: #e8e8e8 !important;
             }
             .LLMAIRecommendationsPage .content-primary {
                 background-color: #181818 !important;
@@ -171,6 +185,14 @@
                 color: #888;
                 cursor: not-allowed;
             }
+            /* Déjà programmé (détecté au chargement ou doublon au clic) : état
+               neutre/gris, distinct du vert « je viens de programmer ». */
+            .LLMAIRecommendationsPage .ai-btn-record.already {
+                background: #555;
+                color: #bbb;
+                pointer-events: none;
+                cursor: default;
+            }
             .LLMAIRecommendationsPage .ai-btn-drop {
                 background: #444;
                 color: #ff6b6b;
@@ -202,18 +224,76 @@
             .LLMAIRecommendationsPage .toggleRaw {
                 margin-top: 1em;
             }
+
+            /* ---- Section « À regarder ce soir » (endpoint plugin) ---- */
+            .LLMAIRecommendationsPage .tonightSection {
+                border-top: 1px solid #333;
+                padding-top: 0.6em;
+            }
+            .LLMAIRecommendationsPage .tonight-actions {
+                margin-bottom: 0.8em;
+            }
+            .LLMAIRecommendationsPage .tonight-cache {
+                color: #8ab4f8;
+                font-size: 0.7em;
+                font-weight: normal;
+                margin-left: 0.5em;
+                border: 1px solid #3a5a8a;
+                border-radius: 3px;
+                padding: 1px 5px;
+            }
+            .LLMAIRecommendationsPage .ai-btn-watchlive {
+                background: #1f6feb;
+                color: white;
+                border: none;
+                padding: 6px 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 0.8em;
+                font-weight: 600;
+                flex: 1;
+                transition: background 0.2s;
+            }
+            .LLMAIRecommendationsPage .ai-btn-watchlive:hover { background: #388bfd; }
+            /* Bouton « Regarder » (enregistrement disponible, source="recording"). */
+            .LLMAIRecommendationsPage .ai-btn-watchrec {
+                background: #238636;
+                color: white;
+                border: none;
+                padding: 6px 10px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 0.8em;
+                font-weight: 600;
+                flex: 1;
+                transition: background 0.2s;
+            }
+            .LLMAIRecommendationsPage .ai-btn-watchrec:hover { background: #2ea043; }
+            /* Spinner de chargement du run LLM (10–60 s la 1re fois). */
+            .LLMAIRecommendationsPage .tonight-spinner {
+                display: inline-block;
+                width: 1em;
+                height: 1em;
+                vertical-align: middle;
+                border: 2px solid #555;
+                border-top-color: #e8e8e8;
+                border-radius: 50%;
+                animation: llmai-spin 0.8s linear infinite;
+                margin-right: 0.4em;
+            }
+            @keyframes llmai-spin { to { transform: rotate(360deg); } }
         </style>
 
         <div data-role="content">
             <div class="content-primary">
                 <div class="verticalSection">
-                    <h2 class="sectionTitle">🤖 Recommandations LLM AI
+                    <h2 class="sectionTitle"><span data-i18n="rec.title">🤖 Recommandations LLM AI</span>
                         <span id="recCount" class="section-counter"></span>
                     </h2>
                     <div id="recMeta" class="recMeta"></div>
                     <div id="recContent"></div>
                     <div class="toggleRaw">
-                        <button is="emby-button" type="button" class="raised block" id="btnToggleRaw" style="display:none;">
+                        <button is="emby-button" type="button" class="raised block" id="btnToggleRaw" style="display:none;" data-i18n="rec.toggleRaw">
                             Afficher / masquer le JSON brut
                         </button>
                     </div>

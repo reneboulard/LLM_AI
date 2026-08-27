@@ -38,11 +38,11 @@ namespace LLM_AI
         public string Description =>
             "Interroge la bibliothèque Emby et l'EPG (lecture seule). Retourne du JSON minimal. " +
             "Actions : summary, library, global_search, item_details, item_persons, person, " +
-            "epg_series, epg_movies, scheduled, planning.";
+            "epg_series, epg_movies, epg_tonight, scheduled, planning.";
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
-  ""action"": ""summary | library | global_search | item_details | item_persons | person | epg_series | epg_movies | scheduled"",
+  ""action"": ""summary | library | global_search | item_details | item_persons | person | epg_series | epg_movies | epg_tonight | scheduled"",
   ""type"": ""(library) movie | series | episode | audio | album | book — filtre IncludeItemTypes"",
   ""query"": ""(global_search) terme de recherche"",
   ""name"": ""(person) nom de personne à chercher"",
@@ -53,8 +53,8 @@ namespace LLM_AI
   ""types"": ""(global_search) tableau de types à restreindre"",
   ""premieres_only"": ""(epg_series) true pour ne garder que les S01E01 (nouvelles séries). Exclut kids/news sauf si les flags correspondants sont activés en config ; exclut documentary (sauf exclude_genres) et les séries de la biblio"",
   ""new_seasons"": ""(epg_series) true pour le mode « séries absentes » d'emby-absent-series.sh : garde les nouvelles saisons de séries déjà possédées (is_new_season=true), n'exclut que les timers, conserve les kids"",
-  ""exclude_genres"": ""(epg_series / epg_movies) genres à exclure. Défaut epg_series premieres_only: [""documentary"", ""news""] ; sinon []"",
-  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch, après pré-tri par pertinence) ; tu peux demander moins"",
+  ""exclude_genres"": ""(epg_series / epg_movies / epg_tonight) genres à exclure. Défaut epg_series premieres_only: [""documentary"", ""news""] ; sinon []"",
+  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence) ; tu peux demander moins"",
   ""offset"": ""(library) indice de pagination (défaut 0)""
 }";
 
@@ -101,6 +101,7 @@ namespace LLM_AI
                     case "person":         result = Person(args); break;
                     case "epg_series":    result = EpgSeries(args); break;
                     case "epg_movies":    result = EpgMovies(args); break;
+                    case "epg_tonight":   result = EpgTonight(args); break;
                     case "scheduled":     result = Scheduled(); break;
                     case "planning":      result = Scheduled(); break;
                     default:
@@ -633,6 +634,188 @@ namespace LLM_AI
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
 
+        /// <summary>
+        /// Programmes de l'EPG pour « ce soir » : fenêtre temporelle bornée par
+        /// <see cref="PluginConfiguration.TonightWindowStart"/> /
+        /// <see cref="PluginConfiguration.TonightWindowEnd"/> (défaut : maintenant
+        /// → 23:59), tous types confondus (séries ET films, pas de filtre
+        /// IsSeries/IsMovie), <c>HasAired=false</c>. Contrairement à
+        /// <see cref="EpgSeries"/>/<see cref="EpgMovies"/> :
+        /// <list type="bullet">
+        /// <item>la bibliothèque n'est PAS exclue (un film qu'on possède mais qui
+        ///   passe ce soir = à regarder, pas à enregistrer — l'LLM décidera).</item>
+        /// <item>les timers ne sont pas exclus mais marqués <c>is_scheduled=true</c>
+        ///   (un programme déjà enregistré reste recommandable « à regarder en
+        ///   direct »).</item>
+        /// <item>les flags Kids/News/Sports fusionnent séries + films (un programme
+        ///   kid passe si l'un des deux flags est activé).</item>
+        /// </list>
+        /// Même forme de retour que epg_series/epg_movies + <c>is_series</c>/
+        /// <c>is_movie</c>/<c>is_scheduled</c> pour que l'LLM positionne
+        /// <c>kind</c> et que l'UI sache si un timer existe. Plafond
+        /// <see cref="PluginConfiguration.MaxTonightBatch"/> après pré-tri par
+        /// pertinence.
+        /// </summary>
+        private string EpgTonight(JsonElement args)
+        {
+            var excludeGenres = NormGenreSet(OptStringArray(args, "exclude_genres") ?? Array.Empty<string>());
+
+            var cfg = Plugin.Instance?.Configuration;
+            int maxBatch = Math.Max(1, cfg?.MaxTonightBatch ?? 10);
+            int limit = Math.Min(OptInt(args, "limit", maxBatch), maxBatch);
+            const int POOL = 300;
+
+            // Fenêtre temporelle « ce soir » (HH:mm, heure locale). Défaut :
+            // maintenant → 23:59. MinStartDate/MaxStartDate sont DateTimeOffset?.
+            DateTimeOffset minStart, maxStart;
+            {
+                var now = DateTimeOffset.Now;
+                var today = now.Date;
+                minStart = TryParseHHmm(cfg?.TonightWindowStart, out var st)
+                    ? new DateTimeOffset(today.Add(st), now.Offset)
+                    : now;
+                // Fin de fenêtre : ce soir 23:59 (défaut), ou l'heure configurée.
+                // Si l'heure de fin est avant l'heure de début (ex. 01:00 pour
+                // veiller tard), on la reporte au lendemain.
+                var endStr = cfg?.TonightWindowEnd;
+                if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
+                if (TryParseHHmm(endStr, out var et))
+                {
+                    var endDt = today.Add(et);
+                    if (endDt < minStart) endDt = endDt.AddDays(1);
+                    maxStart = new DateTimeOffset(endDt, now.Offset);
+                }
+                else
+                {
+                    maxStart = new DateTimeOffset(today.AddHours(23).AddMinutes(59), now.Offset);
+                }
+            }
+
+            // Flags fusionnés séries + films : un programme kid/news/sports passe
+            // si l'un OU l'autre des flags catégorie est activé.
+            var flags = LoadFlags(series: true);
+            foreach (var f in LoadFlags(series: false))
+                flags.Add(f);
+
+            var q = new InternalItemsQuery
+            {
+                HasAired = false,
+                MinStartDate = minStart,
+                MaxStartDate = maxStart,
+                Limit = POOL
+            };
+            var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
+
+            var genreMap = BuildGenreMap(q);
+
+            // Drop list persistante : retire ces titres de la liste envoyée au LLM.
+            var excluded = DroppedTitlesSet();
+            // Timers : non exclus, mais marqués is_scheduled (recommandable en direct).
+            var scheduled = TimerNamesOnly();
+
+            var wl = LoadWhitelists();
+            if (cfg?.DebugVerbose ?? false)
+            {
+                _logger?.Info("[LLM_AI] epg_tonight fenêtre {0:o} → {1:o} ; whitelists: channels={2} genres={3}",
+                    minStart, maxStart, wl.Channels?.Count ?? 0, wl.Genres?.Count ?? 0);
+            }
+
+            var seen = new HashSet<string>();
+            var kept = new List<(BaseItemDto p, string[] genres, bool isScheduled)>();
+            int wlFiltered = 0, flagRejected = 0, wlRejected = 0;
+            var flagSamples = new List<string>();
+            var wlSamples = new List<string>();
+            foreach (var p in programs.OrderBy(x => x.StartDate ?? DateTimeOffset.MaxValue))
+            {
+                var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                if (string.IsNullOrEmpty(title)) continue;
+                var key = Norm(title);
+                if (excluded.Contains(key)) continue;
+                if (!seen.Add(key)) continue;              // dédupliquer par titre
+                var genres = GenreFor(p, genreMap);
+                if (IsExcludedGenre(genres, excludeGenres)) continue;
+                if (wl.Any && !PassesWhitelists(p, genres, wl))
+                {
+                    wlFiltered++; wlRejected++;
+                    if (wlSamples.Count < 8)
+                        wlSamples.Add("{" + title + " ch=" + Norm(p.ChannelName ?? "") +
+                                       " chId=" + (p.ChannelId ?? "?") +
+                                       " g=[" + (genres == null ? "" : string.Join("/", genres)) + "]}");
+                    continue;
+                }
+                if (!PassesFlags(p, flags))
+                {
+                    wlFiltered++; flagRejected++;
+                    if (flagSamples.Count < 6)
+                        flagSamples.Add("{" + title + " K=" + (p.IsKids == true) + " N=" + (p.IsNews == true) +
+                                        " S=" + (p.IsSports == true) + "}");
+                    continue;
+                }
+                kept.Add((p, genres, scheduled.Contains(key)));
+            }
+            if ((cfg?.DebugVerbose ?? false) && wlRejected > 0)
+                _logger?.Info("[LLM_AI] epg_tonight wl rejetés={0}, échantillons : {1}",
+                    wlRejected, string.Join(" | ", wlSamples));
+            if ((cfg?.DebugVerbose ?? false) && flagRejected > 0)
+                _logger?.Info("[LLM_AI] epg_tonight flags rejetés={0}, échantillons : {1}",
+                    flagRejected, string.Join(" | ", flagSamples));
+
+            // Pré-tri par pertinence, cap, puis re-tri chronologique.
+            var picked = kept
+                .OrderByDescending(t => RelevanceScore(t.p, t.genres, wl))
+                .Take(limit)
+                .OrderBy(t => t.p.StartDate ?? DateTimeOffset.MaxValue)
+                .ToList();
+
+            var results = new List<object>();
+            foreach (var t in picked)
+            {
+                var p = t.p;
+                var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                results.Add(new
+                {
+                    title,
+                    id = p.Id,
+                    channel_id = p.ChannelId,
+                    overview = Truncate(p.Overview, 200),
+                    genres = t.genres ?? Array.Empty<string>(),
+                    channel = p.ChannelName,
+                    channel_number = p.ChannelNumber,
+                    start = p.StartDate,
+                    end = p.EndDate,
+                    rating = p.CommunityRating,
+                    year = p.ProductionYear,
+                    season = p.ParentIndexNumber,
+                    episode = p.IndexNumber,
+                    episode_title = p.EpisodeTitle,
+                    is_series = p.IsSeries == true,
+                    is_movie = p.IsMovie == true,
+                    is_scheduled = t.isScheduled
+                });
+            }
+            _logger?.Info("[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
+                kept.Count, results.Count, wlFiltered, limit);
+            return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
+        }
+
+        /// <summary>
+        /// Parse un <c>HH:mm</c> en <see cref="TimeSpan"/>. Retourne false si la
+        /// chaîne est vide ou mal formée. Tolérant sur les espaces.
+        /// </summary>
+        private static bool TryParseHHmm(string s, out TimeSpan ts)
+        {
+            ts = TimeSpan.Zero;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            s = s.Trim();
+            int colon = s.IndexOf(':');
+            if (colon <= 0 || colon >= s.Length - 1) return false;
+            if (!int.TryParse(s.Substring(0, colon), out var h) ||
+                !int.TryParse(s.Substring(colon + 1), out var m)) return false;
+            if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+            ts = new TimeSpan(h, m, 0);
+            return true;
+        }
+
         // ------------------------------------------------------------------
         //  Helpers EPG / diff / whitelists
         // ------------------------------------------------------------------
@@ -977,8 +1160,26 @@ namespace LLM_AI
         private static string Norm(string s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
-            return Regex.Replace(s.ToLowerInvariant(), "[^a-z0-9]", "");
+            var lower = s.ToLowerInvariant();
+            // Retire un article de tête (FR/EN) séparé par une espace, de sorte
+            // que « Le suspect », « The Suspect » et « Suspect » normalisent tous
+            // vers « suspect ». Indispensable pour l'exclusion biblio/timers :
+            // l'EPG porte souvent le titre localisé (« Le suspect ») tandis que
+            // la bibliothèque/les timers portent le titre original ou écorché
+            // (« The Suspect » / « Suspect »). Sans ce retrait, aucun match et la
+            // série déjà possédée ressort dans les recommandations.
+            // Les articles à apostrophe (« l' », « d' ») n'ont pas besoin d'être
+            // retirés : l'apostrophe est supprimée plus bas, donc « l'avocat »
+            // devient « lavocat » des deux côtés (biblio + EPG) → déjà cohérent.
+            // \b + \s+ évite d'écorcher « Device », « Dune », « United » (article
+            // soudé au reste, sans limite de mot ni espace).
+            lower = s_ArticleRe.Replace(lower, "");
+            return Regex.Replace(lower, "[^a-z0-9]", "");
         }
+
+        private static readonly Regex s_ArticleRe = new Regex(
+            @"^(?:le|la|les|un|une|des|du|de|the|a|an)\b\s+",
+            RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
         private static HashSet<string> NormGenreSet(string[] genres)
         {

@@ -310,5 +310,98 @@ namespace LLM_AI
         /// <see cref="SeriesFlags"/>.
         /// </summary>
         public string MovieFlags { get; set; } = "";
+
+        // ------------------------------------------------------------------
+        //  Section « À regarder ce soir » (recommandation personnalisée par
+        //  usager, à la demande — endpoint TonightApiService). Indépendante de
+        //  la tâche planifiée globale (admin) : croise l'historique de
+        //  visionnage de l'usager avec les programmes EPG de la soirée.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Active la section « À regarder ce soir » (page Recommandations) et
+        /// l'endpoint <c>/Plugins/LLMAI/Tonight</c>. <c>false</c> = la section
+        /// n'est pas rendue et l'endpoint renvoie une réponse désactivée (pas
+        /// de run LLM). Défaut <c>true</c>.
+        /// </summary>
+        public bool TonightEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Borne de début de la fenêtre temporelle « ce soir » pour l'action
+        /// <c>epg_tonight</c> (format <c>HH:mm</c>, ex. <c>"18:00"</c>). Vide =
+        /// « maintenant » (l'EPG est interrogé à partir de l'heure courante).
+        /// </summary>
+        public string TonightWindowStart { get; set; } = "";
+
+        /// <summary>
+        /// Borne de fin de la fenêtre temporelle « ce soir » (format <c>HH:mm</c>,
+        /// ex. <c>"23:59"</c>). Vide = <c>"23:59"</c> (fin de la journée). Un
+        /// programme est retenu si son <c>StartDate</c> tombe dans
+        /// [<c>TonightWindowStart</c> ; <c>TonightWindowEnd</c>].
+        /// </summary>
+        public string TonightWindowEnd { get; set; } = "23:59";
+
+        /// <summary>
+        /// Template du prompt envoyé au LLM pour la section « ce soir ». Le
+        /// profil de goût (historique récent de l'usager) et la consigne
+        /// d'appel à <c>epg_tonight</c> sont injectés à l'exécution par
+        /// <c>TonightApiService</c> ; ce champ porte le squelette /
+        /// l'orientation éditoriale (ex. « privilégie la fiction, croise avec
+        /// mes goûts, recommande à regarder en direct ou à enregistrer »).
+        /// </summary>
+        public string TonightPrompt { get; set; } =
+            "À partir de l'historique de visionnage de l'usager (profil de goût fourni), des " +
+            "programmes de l'EPG pour ce soir (appelle get_emby_info avec action=\"epg_tonight\") " +
+            "ET des enregistrements récents non visionnés listés dans le message (films/épisodes " +
+            "enregistrés ces derniers jours mais pas encore regardés), recommande ce qui pourrait " +
+            "lui plaire À REGARDER CE SOIR. Croise les genres/titres de l'historique avec l'EPG du " +
+            "soir ET avec les enregistrements disponibles : si l'usager suit une série et qu'un " +
+            "nouvel épisode enregistré de cette série est non visionné, c'est un candidat de choix. " +
+            "Pour chaque recommandation, précise kind=\"series\" ou kind=\"movie\" et " +
+            "priority high/medium/low, et source=\"live\" (programme EPG du soir : à regarder en " +
+            "direct ou à enregistrer) ou source=\"recording\" (enregistrement disponible : à " +
+            "regarder maintenant). Reprends title/channel/start tels quels depuis epg_tonight pour " +
+            "le source=\"live\" ; pour source=\"recording\", reprends id tel quel depuis la liste " +
+            "des enregistrements. Tu peux enrichir via tmdb_lookup/web_search si utile, mais reste " +
+            "pratique et rapide : l'objectif est une courte sélection personnalisée pour ce soir, " +
+            "pas un audit exhaustif.";
+
+        /// <summary>
+        /// Nombre max de programmes soumis au LLM par appel <c>epg_tonight</c>
+        /// (plafond dur côté serveur, APRÈS filtrage whitelists/flags/drop et
+        /// pré-tri par pertinence). Protège le contexte du modèle. Défaut 10
+        /// (sélection courte pour « ce soir »).
+        /// </summary>
+        public int MaxTonightBatch { get; set; } = 10;
+
+        /// <summary>
+        /// Durée de validité (heures) du cache par usager de la section « ce
+        /// soir » : un second appel dans cette fenêtre renvoie le résultat
+        /// précédent sans relancer le LLM. <c>0</c> = pas de cache (run à
+        /// chaque ouverture). Défaut 4. Le bouton « Rafraîchir » de la page
+        /// bypass le cache (force un nouveau run).
+        /// </summary>
+        public int TonightCacheHours { get; set; } = 4;
+
+        /// <summary>
+        /// Fenêtre de recherche (en jours) pour les enregistrements récents NON
+        /// visionnés injectés dans le prompt « ce soir » : l'usager peut avoir
+        /// fait enregistrer un film/épisode ces N derniers jours sans l'avoir
+        /// regardé — ces enregistrements disponibles sont des candidats de choix
+        /// immédiat (« à regarder ce soir »), au même titre que l'EPG live. Croisé
+        /// avec le profil de goût, ça permet de remonter un nouvel épisode enregistré
+        /// d'une série que l'usager suit. Défaut 7.
+        /// </summary>
+        public int TonightRecordingsDays { get; set; } = 7;
+
+        /// <summary>
+        /// Nombre minimal de recommandations attendu pour la section « ce soir ».
+        /// Si l'EPG du soir + les enregistrements récents non visionnés produisent
+        /// moins de <c>TonightMinRecommendations</c> pistes, le LLM complète avec
+        /// des titres de la bibliothèque de l'usager non encore visionnés (réserve
+        /// pré-fetchée et injectée dans le prompt, <c>source="library"</c>).
+        /// Garantit une sélection exploitable même quand l'EPG est vide. Défaut 3.
+        /// </summary>
+        public int TonightMinRecommendations { get; set; } = 3;
     }
 }

@@ -13,3 +13,5 @@ obj/
 *.nupkg
 *.snupkg
 .nuget/
+## Packaging output (package.sh)
+dist/

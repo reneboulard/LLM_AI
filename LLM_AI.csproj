@@ -36,5 +36,16 @@
     <EmbeddedResource Include="config.js" />
     <EmbeddedResource Include="recommendations.html" />
     <EmbeddedResource Include="recommendations.js" />
+    <!-- Module i18n (FR/EN) : dictionnaires + walker DOM, dépendance
+         __plugin/LLMAII18n des pages config et recommandations. -->
+    <EmbeddedResource Include="i18n.js" />
+    <!-- Image de la pastille du plugin (IHasThumbImage), servie sur
+         /Plugins/{Id}/Thumb. 800x450 PNG 16:9. -->
+    <EmbeddedResource Include="thumb.png" />
+    <!-- Image de fond de la page Recommandations : module AMD exportant une
+         data URI (ASCII). Servi sur web/ConfigurationPage?name=LLMAIBg.
+         Nécessairement en texte (data URI) car cet endpoint lit les ressources
+         en UTF-8 et corromprait un binaire. -->
+    <EmbeddedResource Include="bg.js" />
   </ItemGroup>
 </Project>
