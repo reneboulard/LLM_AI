@@ -1,143 +1,366 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html>
 <head>
-    <meta charset="utf-8" />
     <title>LLM AI</title>
-    <style>
-        /* Fond opaque : la page de config du plugin n'héritait d'aucun fond
-           et apparaissait transparente par-dessus le dashboard. */
-        #LLMAIConfigPage {
-            background-color: #101010 !important;
-        }
-        /* Panneau de contenu opaque (carte légèrement plus claire). */
-        #LLMAIConfigPage .content-primary {
-            background-color: #181818 !important;
-            padding: 1.5em !important;
-            border-radius: 6px !important;
-        }
-        /* Lisibilité des libellés/descriptions sur fond sombre. */
-        #LLMAIConfigPage .fieldDescription {
-            color: #9a9a9a;
-        }
-    </style>
 </head>
 <body>
-    <div id="LLMAIConfigPage"
-         data-role="page"
-         class="page type-interior pluginConfigurationPage LLMAIConfigPage"
-         data-require="emby-button,emby-input,emby-textarea">
+    <!--
+        Page de configuration du plugin LLM_AI.
+        Pattern dashboard moderne Emby (cf. Emby.ComSkipper) :
+        - data-role="page" + class "pluginConfigurationPage" : reconnu comme
+          page de config plugin par le viewmanager (querySelector
+          '.view, div[data-role="page"]').
+        - data-controller="__plugin/LLMAIConfigPageJS" : le module JS AMD
+          (ressource embarquée LLMAIConfigPageJS) est chargé via require() et
+          reçoit `view`. UN <script> inline n'est PAS exécuté quand Emby injecte
+          le HTML via innerHTML — d'où data-controller obligatoire pour que
+          load/save fonctionne.
+        - data-require : dépendances Emby (web components) à charger avant la vue.
+    -->
+    <div data-role="page"
+         class="type-interior pluginConfigurationPage LLMAIConfigPage"
+         data-require="emby-button,emby-checkbox,emby-input,emby-select,emby-textarea"
+         data-controller="__plugin/LLMAIConfigPageJS">
 
-        <div class="content-primary">
-            <form class="LLMAIConfigForm">
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">LLM AI — Configuration</h2>
+        <style>
+            /* Thème clair (fond blanc) demandé pour la page de config. */
+            .LLMAIConfigPage {
+                background: #ffffff !important;
+                min-height: 100%;
+                color: #1f1f1f;
+            }
+            /* Panneau de contenu : carte claire avec bordure subtile. */
+            .LLMAIConfigPage .content-primary {
+                background-color: #fafafa !important;
+                padding: 1.5em !important;
+                border-radius: 6px !important;
+                border: 1px solid #e0e0e0;
+            }
+            /* Lisibilité des descriptions sur fond clair. */
+            .LLMAIConfigPage .fieldDescription {
+                color: #666;
+            }
+            /* Ligne d'un backend LLM (URL + modèle + priorité + activé + supprimer). */
+            .LLMAIConfigPage .llmBackendRow {
+                border: 1px solid #dcdcdc;
+                border-radius: 6px;
+                padding: 0.8em 0.9em;
+                margin-bottom: 0.7em;
+                background: #f5f5f5;
+            }
+            .LLMAIConfigPage .llmBackendRow .backendHeader {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 0.4em;
+                color: #222;
+                font-weight: 600;
+            }
+            .LLMAIConfigPage .llmBackendRow .backendFields {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.6em 1em;
+                align-items: flex-end;
+            }
+            .LLMAIConfigPage .llmBackendRow .backendFields .inputContainer {
+                flex: 1 1 200px;
+                margin: 0;
+            }
+            .LLMAIConfigPage .llmBackendRow .backendFields .priorityField {
+                flex: 0 0 90px;
+            }
+            .LLMAIConfigPage .llmBackendRow .backendFields .providerField {
+                flex: 0 0 170px;
+            }
+            .LLMAIConfigPage .llmBackendRow .enabledField {
+                flex: 0 0 auto;
+                display: flex;
+                align-items: center;
+                gap: 0.4em;
+                color: #444;
+            }
+            .LLMAIConfigPage .llmBackendRow .btnRemoveBackend {
+                flex: 0 0 auto;
+            }
+            /* Boîte de filtres (cases à cocher chaines/genres/flags).
+               Grille CSS : colonnes alignées quelle que soit la longueur du
+               libellé (le flux flex-wrap laissait les items « pêle-mêle »).
+               minmax(170px,1fr) → colonnes ≥170px qui s'étirent pour remplir,
+               auto-fill crée autant de colonnes que la largeur permet. */
+            .LLMAIConfigPage .wlBox {
+                border: 1px solid #dcdcdc;
+                border-radius: 6px;
+                background: #f9f9f9;
+                padding: 0.6em 0.8em;
+                max-height: 230px;
+                overflow-y: auto;
+                margin-bottom: 0.4em;
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+                align-items: center;
+                gap: 0.3em 0.6em;
+            }
+            .LLMAIConfigPage .wlBox .wlItem {
+                /* emby-checkbox-label vaut width:100% → remplit la cellule
+                   de la grille (alignement colonnes). */
+                color: #333;
+                font-size: 0.92em;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .LLMAIConfigPage .wlBox .wlItem .checkboxLabel {
+                /* Permet l'ellipsis sur les libellés longs. */
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .LLMAIConfigPage .wlBox .checkboxLabel::before {
+                /* Bordure de la case bien visible sur fond blanc. */
+                border-color: #888;
+            }
+            .LLMAIConfigPage .wlEmpty {
+                color: #888;
+                font-style: italic;
+                padding: 0.4em 0;
+            }
+        </style>
 
-                    <div class="inputContainer">
-                        <input is="emby-input" type="text" id="txtLlmUrl"
-                               label="URL du LLM (Ollama)"
-                               placeholder="http://192.168.11.2:11434" />
-                        <div class="fieldDescription">Adresse de l'API Ollama (ex. http://192.168.11.2:11434).</div>
-                    </div>
+        <div data-role="content">
+            <div class="content-primary">
+                <form class="LLMAIConfigForm">
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">LLM AI — Configuration</h2>
 
-                    <div class="inputContainer">
-                        <input is="emby-input" type="text" id="txtModelName"
-                               label="Nom du modèle"
-                               placeholder="gemma4:latest" />
-                        <div class="fieldDescription">Modèle à utiliser (ex. gemma4:latest).</div>
-                    </div>
+                        <h3 class="sectionTitle" style="margin-top:1.2em;">Serveurs LLM (repli par priorité)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;">
+                            Ajoutez un ou plusieurs serveurs Ollama. Chaque LLM a une <b>priorité</b>
+                            (1 = la plus haute, essayée en premier) et un drapeau <b>activé</b>.
+                            Si un serveur est indisponible, la tâche bascule automatiquement sur le
+                            prochain LLM activé selon la priorité.
+                        </div>
 
-                    <div class="inputContainer">
-                        <textarea is="emby-textarea" id="txtRagDirectives"
-                                  label="RAG Directives (system prompt)"
-                                  rows="4"></textarea>
-                        <div class="fieldDescription">Prompt système envoyé au LLM (role: system) à chaque appel.</div>
-                    </div>
+                        <!-- Conteneur des lignes de backends, rempli dynamiquement par config.js. -->
+                        <div id="llmBackends" class="llmBackends"></div>
 
-                    <div class="inputContainer">
-                        <textarea is="emby-textarea" id="txtScheduleTask"
-                                  label="Schedule Task"
-                                  rows="3"
-                                  placeholder="Daily 03:00 | Résume les nouveaux médias ajoutés cette semaine"></textarea>
-                        <div class="fieldDescription">
-                            Format : « &lt;planification&gt; | &lt;prompt de tâche&gt; ».
-                            Planification : Daily HH:MM, Hourly, Weekly &lt;Day&gt; HH:MM, Interval &lt;heures&gt;.
-                            La partie après le « | » est le prompt utilisateur envoyé au LLM.
-                            Déclenchable manuellement dans « Tâches planifiées ».
+                        <div style="margin:0.6em 0 1.2em;">
+                            <button is="emby-button" type="button" id="btnAddBackend"
+                                    class="raised button-submit">
+                                + Ajouter un LLM
+                            </button>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtEmbyPublicUrl"
+                                   label="URL publique Emby"
+                                   placeholder="http://192.168.11.2:8096" />
+                            <div class="fieldDescription">URL d'accès Emby (ex. http://192.168.11.2:8096) — sert à construire les liens d'images retournés au LLM.</div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;">Filtres de l'analyse EPG (tâche recommandations)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;">
+                            Filtres appliqués aux programmes EPG avant envoi au LLM (get_emby_info
+                            epg_series/epg_movies). <b>Chaines</b> et <b>Genres</b> sont partagés par les
+                            deux tâches (séries et films) ; case vide = pas de filtre sur cette dimension.
+                            Les <b>flags Kids/News/Sports</b> sont <i>opt-in</i> par catégorie : vide =
+                            fiction seulement ; cochez un flag pour AJOUTER ces programmes.
+                            Spécifique à la tâche de recommandation.
+                        </div>
+
+                        <div class="inputContainer">
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;">Chaines</label>
+                            <input is="emby-input" type="text" id="wlChannelsFilter"
+                                   label="Rechercher une chaine"
+                                   placeholder="Filtrer la liste…" />
+                            <div id="wlChannels" class="wlBox">
+                                <div class="wlEmpty">Chargement des chaines…</div>
+                            </div>
+                            <div class="fieldDescription">Chaines à garder. Vide = toutes les chaines.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;">Genres</label>
+                            <div id="wlGenres" class="wlBox">
+                                <div class="wlEmpty">Chargement des genres…</div>
+                            </div>
+                            <div class="fieldDescription">Genres de l'EPG (collectés depuis les programmes à venir) à garder. Vide = tous les genres.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;">Flags Séries (opt-in)</label>
+                            <div id="wlSeriesFlags" class="wlBox"></div>
+                            <div class="fieldDescription">Flags à AJOUTER aux séries de fiction. Vide = fiction seulement (kids/news/sports exclus). Cochez Kids/News/Sports pour les inclure.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;">Flags Films (opt-in)</label>
+                            <div id="wlMovieFlags" class="wlBox"></div>
+                            <div class="fieldDescription">Flags à AJOUTER aux films de fiction. Vide = fiction seulement. Cochez Kids/News/Sports pour les inclure.</div>
+                        </div>
+
+                        <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numMaxSeriesBatch"
+                                       label="Plafond séries (par appel)" min="5" max="200" />
+                                <div class="fieldDescription">Max de séries soumises au LLM (après pré-tri). Défaut 40.</div>
+                            </div>
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numMaxMovieBatch"
+                                       label="Plafond films (par appel)" min="5" max="200" />
+                                <div class="fieldDescription">Max de films soumis au LLM (après pré-tri). Défaut 30.</div>
+                            </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;">Clés API — services externes</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;">Clés pour les outils d'enrichissement internet. Un champ vide désactive l'outil correspondant (il n'est pas exposé au LLM).</div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="password" id="txtTmdbApiKey"
+                                   label="Clé API TMDB"
+                                   placeholder="clé themoviedb.org" />
+                            <div class="fieldDescription">Clé API TMDB pour l'outil tmdb_lookup (enrichissement synopsis/statut). Laisser vide pour désactiver l'outil.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtTmdbLanguage"
+                                   label="Langue TMDB"
+                                   placeholder="fr-FR" />
+                            <div class="fieldDescription">Langue des métadonnées TMDB (ex. fr-FR, en-US).</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="password" id="txtTvdbApiKey"
+                                   label="Clé API TheTVDB (tvdb_search)"
+                                   placeholder="clé api4.thetvdb.com" />
+                            <div class="fieldDescription">Clé API TheTVDB.com (v4) pour l'outil tvdb_search (enrichissement séries, synopsis FR en priorité). Repli sur la variable d'environnement TVDB_API_KEY. Vide = désactivé.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="password" id="txtOllamaApiKey"
+                                   label="Clé API Ollama (cloud / web_search / web_fetch)"
+                                   placeholder="ollama.com API key" />
+                            <div class="fieldDescription">Clé ollama.com — sert pour le backend <b>Ollama cloud</b> ET les outils web_search/web_fetch. Repli sur la variable d'environnement OLLAMA_API_KEY. Vide = Ollama cloud désactivé.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtSearXngUrl"
+                                   label="URL SearXNG (recherche web — optionnel)"
+                                   placeholder="http://192.168.11.24" />
+                            <div class="fieldDescription">
+                                Instance SearXNG auto-hébergée (méta-moteur). Si renseigné,
+                                l'outil <b>web_search</b> l'utilise en priorité (gratuit, sans
+                                quota, résultats JSON). L'outil interroge
+                                <c>{url}/search?q=…&amp;format=json</c> — le format JSON doit
+                                être activé dans les réglages SearXNG (<c>search.formats</c>).
+                                Optionnel : un utilisateur de la communauté n'a pas besoin
+                                d'installer SearXNG (repli automatique sur Ollama cloud).
+                                Vide = SearXNG désactivé.
+                            </div>
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkWebFetchDirect" />
+                            <span class="checkboxLabel">web_fetch direct (auto-hébergé, sans clé)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;">
+                            Récupère les pages web directement côté plugin (HttpClient) et extrait
+                            localement le contenu structuré (titre, métadonnées, <b>JSON-LD schema.org</b>,
+                            texte, titres, tableaux) — aucun quota cloud, aucune clé requise. Repli
+                            automatique sur Ollama cloud en cas de blocage anti-bot (si une clé est
+                            renseignée). Décochez pour utiliser uniquement Ollama cloud (clé requise).
+                            Activé par défaut — fonctionne pour tout utilisateur de la communauté.
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="password" id="txtGeminiApiKey"
+                                   label="Clé API Google Gemini"
+                                   placeholder="AIza... API key" />
+                            <div class="fieldDescription">Clé Google AI Studio pour le backend <b>Gemini</b> (generativelanguage.googleapis.com). Repli sur la variable d'environnement GEMINI_API_KEY. Vide = Gemini désactivé.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtShowbizzUrl"
+                                   label="URL nouveautés Showbizz"
+                                   placeholder="https://www.showbizz.net/..." />
+                            <div class="fieldDescription">Active l'outil showbizz_new_releases. La page d'accueil + la liste saisonnière sont scrapées par défaut ; cette URL (si différente) est ajoutée comme source supplémentaire. Laisser vide désactive l'outil.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtShowbizzPattern"
+                                      label="Regex extraction Showbizz (optionnel)"
+                                      rows="2"
+                                      placeholder="Vide = extraction auto (blocs emissions / Saison 1)"></textarea>
+                            <div class="fieldDescription">Vide = extraction automatique des nouveautés « Saison 1 » (portage du scraper showbizz_scraper.php : blocs &lt;a href="/emissions/..."&gt; + titre &lt;h3&gt;/&lt;h4&gt; + date « Dès le »). Renseigné = regex .NET override (groupes « title », « url »/« date » optionnels).</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtRagDirectives"
+                                      label="RAG Directives (system prompt)"
+                                      rows="4"></textarea>
+                            <div class="fieldDescription">Prompt système envoyé au LLM (role: system) à chaque appel.</div>
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkDebugVerbose" />
+                            <span class="checkboxLabel">Debug verbose (journalisation intégrale de l'agent)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;">
+                            Quand activé, le journal Emby contient le system prompt complet, le prompt
+                            utilisateur, la réponse complète de chaque itération et chaque résultat d'outil.
+                            À activer ponctuellement pour comprendre ce que voit le LLM (désactivé par défaut).
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtScheduleTask"
+                                      label="Schedule Task (Séries) — planification + prompt"
+                                      rows="3"
+                                      placeholder="Daily 03:00 | Recommande des enregistrements de SÉRIES : …"></textarea>
+                            <div class="fieldDescription">
+                                Format : « &lt;planification&gt; | &lt;prompt de tâche SÉRIES&gt; ».
+                                Planification : Daily HH:MM, Hourly, Weekly &lt;Day&gt; HH:MM, Interval &lt;heures&gt;.
+                                La partie après le « | » est le prompt utilisateur du <b>run SÉRIES</b>
+                                (étapes 1 + 2 : premieres S01E01 + nouvelles saisons). Exécuté comme un
+                                premier run agent indépendant. Déclenchable manuellement dans
+                                « Tâches planifiées ».
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtScheduleTaskMovies"
+                                      label="Schedule Task (Films) — prompt du run films"
+                                      rows="3"
+                                      placeholder="Recommande des enregistrements de FILMS : …"></textarea>
+                            <div class="fieldDescription">
+                                Prompt du <b>run FILMS</b> (étape 3 : films à venir absents de la biblio,
+                                via get_emby_info action=epg_movies). Pas de planification ici — elle vient
+                                du champ ci-dessus. Exécuté comme un second run agent indépendant, puis
+                                fusionné avec les séries (la page Recommandations affiche deux sections).
+                                Vide = pas de run films (séries seulement).
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtDroppedTitles"
+                                      label="Drop list — titres à exclure des recommandations"
+                                      rows="5"
+                                      placeholder="Star Trek&#10;Castle&#10;Un titre par ligne"></textarea>
+                            <div class="fieldDescription">
+                                Titres exclus des prochaines exécutions : la tâche les retire de la
+                                liste envoyée au LLM (épuration en amont) — ils ne seront plus
+                                recommandés. Un titre par ligne. Alimenté aussi par le bouton
+                                « Oublier » de la page Recommandations.
+                            </div>
+                        </div>
+
+                        <div>
+                            <button is="emby-button" type="submit" class="raised button-submit block">
+                                Enregistrer
+                            </button>
                         </div>
                     </div>
-
-                    <div>
-                        <button is="emby-button" type="submit" class="raised button-submit block">
-                            Enregistrer
-                        </button>
-                    </div>
-                </div>
-            </form>
+                </form>
+            </div>
         </div>
     </div>
-
-    <script type="text/javascript">
-        (function () {
-            'use strict';
-
-            var pluginId = 'e7d3dee6-ef19-46a9-985f-06318b682e60';
-            var page = null;
-            var cfg = null;
-            var wired = false;
-
-            function init(root) {
-                page = root;
-                loadConfig();
-                if (!wired) {
-                    $('form.LLMAIConfigForm', page).on('submit', function (e) {
-                        e.preventDefault();
-                        saveConfig();
-                        return false;
-                    });
-                    wired = true;
-                }
-            }
-
-            function loadConfig() {
-                ApiClient.getPluginConfiguration(pluginId).then(function (c) {
-                    cfg = c || {};
-                    $('#txtLlmUrl', page).val(cfg.LlmUrl || '');
-                    $('#txtModelName', page).val(cfg.ModelName || '');
-                    $('#txtRagDirectives', page).val(cfg.RagDirectives || '');
-                    $('#txtScheduleTask', page).val(cfg.ScheduleTask || '');
-                });
-            }
-
-            function saveConfig() {
-                if (!cfg) { cfg = {}; }
-                cfg.LlmUrl = $('#txtLlmUrl', page).val();
-                cfg.ModelName = $('#txtModelName', page).val();
-                cfg.RagDirectives = $('#txtRagDirectives', page).val();
-                cfg.ScheduleTask = $('#txtScheduleTask', page).val();
-
-                ApiClient.updatePluginConfiguration(pluginId, cfg).then(function () {
-                    if (typeof Dashboard !== 'undefined' && Dashboard.processPluginConfigurationUpdateResult) {
-                        Dashboard.processPluginConfigurationUpdateResult(cfg);
-                    }
-                    if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
-                        Dashboard.alert('Configuration enregistrée.');
-                    }
-                }, function (err) {
-                    if (typeof Dashboard !== 'undefined' && Dashboard.alert) {
-                        Dashboard.alert('Erreur lors de l\\'enregistrement : ' + (err && err.statusText ? err.statusText : err));
-                    }
-                });
-            }
-
-            function findPage() { return document.querySelector('.LLMAIConfigPage'); }
-
-            // Branche dès que la page est présente, + repli sur les événements
-            // de cycle de vie Emby/jQuery si injection différée.
-            var root = findPage();
-            if (root) { init(root); }
-
-            $(document).on('pageshow viewshow', '#LLMAIConfigPage', function () { init(this); });
-        })();
-    </script>
 </body>
 </html>

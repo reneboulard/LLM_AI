@@ -30,7 +30,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Page de configuration servie par IPluginConfigurationPage.GetHtmlStream() -->
+    <!-- Pages de configuration servies via IHasWebPages.GetPages() :
+         HTML (lien dashboard) + module JS AMD lié par data-controller. -->
     <EmbeddedResource Include="config.html" />
+    <EmbeddedResource Include="config.js" />
+    <EmbeddedResource Include="recommendations.html" />
+    <EmbeddedResource Include="recommendations.js" />
   </ItemGroup>
 </Project>
