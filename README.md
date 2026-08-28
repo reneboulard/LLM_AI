@@ -22,10 +22,11 @@ d'outils à effectuer (boucle d'agent / tool-calling).
 5. [Outils LLM](#outils-llm)
 6. [« À regarder ce soir »](#à-regarder-ce-soir)
 7. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
-8. [API HTTP](#api-http)
-9. [i18n (FR / EN)](#i18n-fr--en)
-10. [Dépannage](#dépannage)
-11. [Changelog](#changelog)
+8. [Surfaces natives des recommandations](#surfaces-natives-des-recommandations)
+9. [API HTTP](#api-http)
+10. [i18n (FR / EN)](#i18n-fr--en)
+11. [Dépannage](#dépannage)
+12. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -163,6 +164,32 @@ rendent les recos **discoverables sur la TV** :
 > L’utilisateur peut annuler un timer indésirable dans Emby. Le popup au login
 > s’affiche même sans auto-programmation (suggestions à regarder seulement).
 
+### Surfaces natives (bibliothèque .strm, genre, collection)
+
+Trois leviers **opt-in** (défaut `false`) qui exposent les recos directement dans
+Emby, au-delà de la page web. Tous sont générés par la **tâche planifiée** et
+détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-recommandations).
+
+- `StrmLibraryEnabled` (bool, défaut `false`) — écrit une carte
+  `.strm`+`.nfo`+poster par reco du **record bucket** dans la bibliothèque Emby
+  nommée `StrmLibraryName`. Alternative manuelle à `AutoProgram` (les deux
+  cohabitent, le dedup évite les timers en double).
+- `StrmLibraryName` (chaîne, défaut `""`) — **nom exact** de la bibliothèque Emby
+  dédiée (casse ignorée). L'utilisateur doit d'abord créer dans Emby une
+  bibliothèque de type **Films** (ou Contenu mixte) pointant vers un dossier vide.
+- `StrmSecret` (chaîne, auto-générée) — jeton de capacité vérifié par l'endpoint
+  `/Plugins/LLMAI/Activate`. Auto-généré au premier run, jamais à saisir.
+- `TonightGenreTagEnabled` (bool, défaut `false`) — ajoute le genre `AI Tonight`
+  aux items Emby du **watch bucket** (modifie les métadonnées réelles). Scope
+  isolé du genre `AI Suggestion` de la bibliothèque `.strm`.
+- `TonightCollectionEnabled` (bool, défaut `false`) — maintient une collection
+  (BoxSet) `AI Tonight` des items du watch bucket. **Non destructive** (items
+  référencés, jamais copiés). Indépendante du genre (les deux cohabitent).
+
+> 📌 `StrmLibraryName` doit correspondre au **nom exact** affiché dans le dashboard
+> Emby (l'UserView est slugifié avec des tirets ; un nom avec `_` peut ne pas
+> matcher). En cas de « bibliothèque introuvable », recopier le nom du dashboard.
+
 ### Divers
 
 `TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée), `WebFetchDirect`,
@@ -181,7 +208,12 @@ dans le prompt), `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planif
 | `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, stocke dans `Recommendations`, envoie des notifications. Délègue l'orchestration à `LlmRunner`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, run LLM, enrichissement, **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
-| `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. |
+| `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
+| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB. |
+| `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique puis stream `recording_activated.mp4`. Gated par `StrmSecret`. |
+| `AiGenreTagger.cs` | `AiGenreTagger` (statique) | Étiquetage genre `AI Tonight` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
+| `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
+| `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Utilisé par `LlmScheduledTask` **et** `TonightApiService`. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. |
@@ -312,6 +344,80 @@ fin du run. `LoginPopup` est **indépendant** de `AutoProgram` : les suggestions
 
 ---
 
+## Surfaces natives des recommandations
+
+Outre la page web `recommendations.html` et l'auto-programmation, trois leviers
+**opt-in** exposent les recos directement dans Emby (tous générés par la tâche
+planifiée). Voir [Configuration](#surfaces-natives-bibliothèque-strm-genre-collection).
+
+### Bibliothèque `.strm` (record bucket)
+
+`StrmLibraryGenerator` écrit, après chaque run, une carte **`.strm`+`.nfo`+poster**
+par recommandation **à enregistrer** (programmes EPG à venir non possédés) dans une
+bibliothèque Emby dédiée (option `StrmLibraryEnabled`, nom `StrmLibraryName`). Un
+fichier marqueur `.llmai_reco` par dossier pilote le nettoyage des cartes périmées
+au run suivant (`CleanPrevious`).
+
+Lire une carte déclenche l'endpoint **`GET /Plugins/LLMAI/Activate?programId=&kind=&t=`** :
+1. `AutoProgrammer.ProgramOneAsync` crée le timer d'enregistrement (une reco
+   unique), avec dedup par ProgramId ;
+2. l'endpoint stream le clip embarqué `recording_activated.mp4` (10 s, 640×360).
+
+L'endpoint est **`[Unauthenticated]`** (les lecteurs média / `ffprobe` n'ont pas de
+token Emby) ; le **jeton `StrmSecret`** (`t=`) est l'unique garde. Emby ne probe le
+`.strm` qu'à la **lecture** (pas au scan), donc la programmation se déclenche au
+clic de l'usager. Le clip joué marque la carte Emby **comme visionnée** (drapeau
+vert) — activer « masquer les éléments visionnés » sur la bibliothèque auto-cache
+les cartes activées.
+
+> ⚠️ **Gestes requis côté Emby** : créer d'abord une bibliothèque **Films** (ou
+> Contenu mixte) pointant vers un dossier vide, puis renseigner son **nom exact**
+> dans `StrmLibraryName`. Un `localhost` comme URL de base fonctionne pour le
+> client web (transcodage serveur) ; `EmbyPublicUrl` n'est requis que pour les
+> clients en direct-play (TV, téléphones). L'authentification Emby 401 les
+> requêtes sans token — d'où le `[Unauthenticated]` + `StrmSecret`.
+
+### Genre `AI Tonight` (watch bucket)
+
+`AiGenreTagger` étiquette, sur les **runs frais** de Tonight (pas le cache), les
+items Emby réels du **watch bucket** (enregistrements non visionnés + items
+possédés) avec le genre **`AI Tonight`** (option `TonightGenreTagEnabled`).
+L'usager retrouve les recos en **filtrant sur ce genre** dans n'importe quel
+client Emby.
+
+- Mutate : `item.Genres = …; item.UpdateToRepository(ItemUpdateType.MetadataEdit)`.
+- **Modifie les métadonnées réelles** (tableau `Genres`) — un refresh peut
+  l'effacer, réajouté au prochain run frais.
+- Scope **isolé** du genre `AI Suggestion` utilisé par la bibliothèque `.strm`
+  (nettoyage séparé).
+
+### Collection `AI Tonight` (watch bucket)
+
+`AiTonightCollectionManager` maintient une **collection** (BoxSet) **`AI Tonight`**
+regroupant les items du watch bucket (option `TonightCollectionEnabled`). L'usager
+la parcourt comme n'importe quelle collection dans n'importe quel client.
+
+- **Non destructive** : les items sont **référencés** (regroupés), jamais copiés ni
+  déplacés ; lire un membre joue le vrai item.
+- **Agrège des items inter-bibliothèques** (enregistrements + films/séries
+  possédés), ce qu'un filtre par genre ne permet pas aussi directement.
+- Peuplée sur les runs frais (reconcile remove-all-then-add-all), **indépendante**
+  du genre (les deux peuvent cohabiter). Vérifié : `CreateCollection(ParentId=0)`
+  ressort dans la liste des Collections.
+
+### Nettoyage (tâche `AiTonightCleanupTask`)
+
+Tâche planifiée **quotidienne 03:00**, **toujours active** (non gatingée) :
+
+1. retire le genre `AI Tonight` de tous les items (`AiGenreTagger.RemoveAllAsync`) ;
+2. **vide** la collection `AI Tonight` (coquille conservée, re-remplie au prochain
+   run frais) — best-effort.
+
+Les runs « ce soir » suivants réajoutent le genre / re-remplissent la collection sur
+les recos toujours pertinentes.
+
+---
+
 ## API HTTP
 
 ```
@@ -332,6 +438,24 @@ contre l'usager authentifié (sauf admin).
 ```bash
 curl -H "X-Emby-Token: <token>" \
   "http://localhost:8096/emby/Plugins/LLMAI/Tonight?userId=<id>&refresh=1"
+```
+
+```
+GET /Plugins/LLMAI/Activate?programId=<id>&kind=<series|movie>&t=<StrmSecret>
+```
+
+**Activation d'une carte `.strm`** : appelé par le lecteur média à la lecture d'une
+carte de la bibliothèque `.strm`. Crée l'enregistrement (`AutoProgrammer.ProgramOneAsync`,
+dedup par `programId`) puis stream `recording_activated.mp4` (10 s). Supporte le
+`Range` (206 + `Content-Range`).
+
+**Authentification :** **aucune** (DTO `[Unauthenticated]`) — les lecteurs / `ffprobe`
+n'ont pas de token Emby. L'unique garde est le jeton **`StrmSecret`** (`t=`),
+auto-généré et comparé en temps constant. Un `t` invalide → 403.
+
+**Test :**
+```bash
+curl "http://localhost:8096/emby/Plugins/LLMAI/Activate?programId=<id>&kind=movie&t=<StrmSecret>" -o clip.mp4
 ```
 
 ---
@@ -356,6 +480,19 @@ vérifier que le backend local a la plus haute `Priority`, ou utiliser un backen
 **L'EPG renvoie 0 programmes :**
 Vérifier `TonightWindowStart`/`TonightWindowEnd` (format `HH:mm`) et que l'EPG est peuplé.
 Le fallback « réserve bibliothèque » garantit quand même `TonightMinRecommendations` recos.
+
+**Bibliothèque `.strm` : « bibliothèque introuvable » :**
+`StrmLibraryName` doit correspondre au **nom exact** affiché dans le dashboard Emby.
+L'UserView est slugifié avec des **tirets** (`ai-suggestions`) tandis que le dossier
+CollectionFolder porte souvent le nom typé (`ai_suggestions`). En cas de mismatch,
+recopier le nom du dashboard. Créer d'abord une bibliothèque **Films** (ou Contenu mixte)
+pointant vers un dossier vide avant d'activer `StrmLibraryEnabled`.
+
+**Carte `.strm` : « No compatible streams » / ffprobe « Input/output error » :**
+Les lecteurs / `ffprobe` n'ont pas de token Emby → 401 avant le `Get()` de l'endpoint.
+Le DTO est `[Unauthenticated]` (gated par `StrmSecret`). Vérifier que le `t=` dans le
+`.strm` correspond au `StrmSecret` courant (comparaison temps constant ; invalide → 403).
+Pour `Range: bytes=0-` (EOF), l'endpoint sert le corps complet + `Content-Range: 0-<len-1>/<len>`.
 
 **Seul le bouton « Oublier » s'affiche :**
 La lecture utilise `playbackManager` (module AMD), pas `ApiClient.play`. Recharger le JS
