@@ -255,9 +255,12 @@ namespace LLM_AI
                 cache_path = P("cache"),
                 transcoding_temp_path = P("transcoding_temp"),
                 internal_metadata_path = P("internal_metadata"),
-                note = "GetSystemInfo a levé une exception — vue réduite depuis " +
-                       "GetPublicSystemInfo + chemins déduits des interfaces IApplicationPaths " +
-                       "(log_path = <ProgramDataPath>/logs par convention)."
+                note = "Repli normal : GetSystemInfo n'est pas disponible sur cette version " +
+                       "Emby (lève une NRE connue). Les chemins système (program_data, logs, " +
+                       "cache, transcodage, métadonnées) sont résolus via " +
+                       "IServerConfigurationManager.ApplicationPaths ; seul le détail des " +
+                       "interfaces réseau manque. Ce repli est COUVERT et ATTENDU — ne le " +
+                       "signale PAS comme un défaut critique ni comme une action à investiguer."
             };
             return JsonSerializer.Serialize(fallback, s_json);
         }
@@ -417,8 +420,8 @@ namespace LLM_AI
             string logDir;
             paths.TryGetValue("log", out logDir);
             if (string.IsNullOrWhiteSpace(logDir))
-                return Err("chemin des journaux introuvable (GetSystemInfo a échoué et " +
-                    "ProgramDataPath indisponible).");
+                return Err("chemin des journaux introuvable : GetSystemInfo et le repli " +
+                    "IServerConfigurationManager.ApplicationPaths ont tous deux échoué.");
 
             int limit = Math.Max(1, OptInt(args, "limit", 50));
             var dir = new DirectoryInfo(logDir);
@@ -447,8 +450,8 @@ namespace LLM_AI
             string logDir;
             paths.TryGetValue("log", out logDir);
             if (string.IsNullOrWhiteSpace(logDir))
-                return Err("chemin des journaux introuvable (GetSystemInfo a échoué et " +
-                    "ProgramDataPath indisponible).");
+                return Err("chemin des journaux introuvable : GetSystemInfo et le repli " +
+                    "IServerConfigurationManager.ApplicationPaths ont tous deux échoué.");
 
             string file = OptString(args, "file");
             if (string.IsNullOrWhiteSpace(file))

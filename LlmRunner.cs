@@ -286,7 +286,16 @@ namespace LLM_AI
             "send_message) de ton propre chef. Mentionne-la dans « Actions recommandées ». " +
             "L'usager te demandera explicitement (ex. via le paramètre Focus) si tu dois " +
             "l'exécuter. Si la remédiation est désactivée en config, l'action renvoie une " +
-            "erreur — c'est attendu, signale-le dans le rapport.";
+            "erreur — c'est attendu, signale-le dans le rapport.\n" +
+            "### REPLI GetSystemInfo (À CONNAÎTRE)\n" +
+            "Sur certaines versions Emby, server_info renvoie un champ « note » indiquant " +
+            "que GetSystemInfo est indisponible et que les chemins sont obtenus via repli " +
+            "(IServerConfigurationManager.ApplicationPaths). Ce repli est COUVERT et " +
+            "ATTENDU : les chemins système et les journaux restent accessibles (list_logs, " +
+            "inspect_log, disk_storage fonctionnent). Seul le détail des interfaces réseau " +
+            "manque. Ne le signale PAS comme un défaut critique ni comme une action à " +
+            "investiger — au plus un ✅ info indiquant que les chemins ont été résolus via " +
+            "repli. N'en fais JAMAIS une « Priorité Haute ».";
 
         /// <summary>
         /// Rôle du LLM en mode synthèse déterministe (AuditMode=deterministic) :
@@ -326,7 +335,17 @@ namespace LLM_AI
             "remédiation. Mentionne-la dans « Actions recommandées ». Si une demande " +
             "explicite de remédiation figure dans la consigne (ex. « arrête la session X »), " +
             "indique précisément comment la réaliser mais précise qu'elle nécessite le mode " +
-            "interactif (AuditMode=single) avec AuditRemediationEnabled activé, ou l'UI Emby.";
+            "interactif (AuditMode=single) avec AuditRemediationEnabled activé, ou l'UI Emby.\n" +
+            "### REPLI GetSystemInfo (À CONNAÎTRE)\n" +
+            "La section server_info peut contenir un champ « note » indiquant que " +
+            "GetSystemInfo est indisponible sur cette version Emby et que les chemins sont " +
+            "obtenus via repli (IServerConfigurationManager.ApplicationPaths). Ce repli est " +
+            "COUVERT et ATTENDU : les chemins système et les journaux sont accessibles " +
+            "(list_logs, inspect_log, disk_storage ont fonctionné). Seul le détail des " +
+            "interfaces réseau manque. Ne le signale PAS comme un défaut critique ni comme " +
+            "une action à investiger — au plus un ✅ info. N'en fais JAMAIS une « Priorité " +
+            "Haute » : ce n'est pas un problème à résoudre, c'est une limitation connue et " +
+            "déjà contournée.";
 
         /// <summary>
         /// Construit la liste d'outils exposés au LLM pour un run d'audit. Un

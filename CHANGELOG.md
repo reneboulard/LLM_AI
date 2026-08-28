@@ -233,6 +233,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   noted in the report). `SystemInfo` is cached (one attempt per run). Added the
   **`system_config`** action exposing `IServerConfigurationManager.Configuration` (the full
   `ServerConfiguration` — cross-OS, read in-process, no `system.xml` XML parsing).
+- **Cadrage du repli GetSystemInfo dans le rapport** : le repli (GetSystemInfo lève une
+  NRE sur certaines versions Emby) était signalé par l'LLM comme une exception critique
+  à investiguer en priorité haute — faux, puisque les chemins/logs/config sont couverts
+  par le repli `IServerConfigurationManager.ApplicationPaths`. Le `note` du repli précise
+  désormais « COUVERT et ATTENDU — ne pas signaler comme défaut critique », et les prompts
+  d'audit (single + déterministe) ajoutent une section « REPLI GetSystemInfo (À CONNAÎTRE) »
+  demandant au LLM de le traiter au plus comme un ✅/ℹ️ info, jamais en « Priorité Haute ».
+  **GetSystemInfo fallback framing in the report**: the fallback (GetSystemInfo throws an
+  NRE on some Emby versions) was reported by the LLM as a critical exception to investigate
+  at high priority — wrong, since paths/logs/config are covered by the
+  `IServerConfigurationManager.ApplicationPaths` fallback. The fallback `note` now reads
+  "COUVERT et ATTENDU — do not flag as a critical defect", and the audit prompts (single +
+  deterministic) add a "REPLI GetSystemInfo (À CONNAÎTRE)" section instructing the LLM to
+  treat it at most as a ✅/ℹ️ info, never as "High Priority".
 
 ---
 
