@@ -21,31 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `GET /Plugins/LLMAI/Audit`): an LLM agent queries the `system_audit` tool and produces
   a **Markdown health report** (severity-tagged findings + recommended actions).
   Independent from recommendations (dedicated agent run). Admin-only.
-  - **Outil `system_audit`** — 14 actions sur `action` : inspection (lecture seule,
-    toujours disponibles) `server_info`, `active_sessions`, `scheduled_tasks`,
-    `list_logs`, `inspect_log` (tail ou grep + contexte, **confiné au dossier des
-    journaux** : nom seul + whitelist extension `.txt`/`.log` + containment canonique),
-    `transcode`, `gpu_transcode`, `host_metrics` (BCL : process/GC/runtime/uptime/scan +
-    CPU transcodage agrégé ; GPU uniquement par transcodage), `disk_storage`
-    (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg**
-    par corrélation + top RAM/CPU + compteurs Emby, BCL pure — aucun argument de
-    processus lu), `library_stats` (comptes par type + bibliothèques + état du scan, via
-    `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des
-    items sans synopsis/image/genres) ; remédiation (gate
-    `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`.
-    Ne lève jamais (erreur → JSON, préserve la boucle agent).
-    **`system_audit` tool** — 14 actions on `action`: inspection (read-only, always
-    available) `server_info`, `active_sessions`, `scheduled_tasks`, `list_logs`,
-    `inspect_log` (tail or grep + context, **confined to the log folder**: name-only +
-    `.txt`/`.log` extension whitelist + canonical containment), `transcode`,
-    `gpu_transcode`, `host_metrics` (BCL: process/GC/runtime/uptime/scan + aggregate
-    transcode CPU; GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path
-    mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU +
-    Emby counters, pure BCL — no process arguments read), `library_stats` (per-type
-    counts + libraries + scan state, via `ILibraryManager` — DB layer, no raw FS),
-    `missing_metadata` (sampling of items missing overview/image/genres); remediation
-    (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`.
-    Never throws (error → JSON, preserves the agent loop).
+  - **Outil `system_audit`** — 15 actions sur `action` : inspection (lecture seule,
+    toujours disponibles) `server_info`, `system_config` (configuration serveur via
+    `IServerConfigurationManager.Configuration` — cross-OS, lu en cours de processus),
+    `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (tail ou grep +
+    contexte, **confiné au dossier des journaux** : nom seul + whitelist extension
+    `.txt`/`.log` + containment canonique), `transcode`, `gpu_transcode`, `host_metrics`
+    (BCL : process/GC/runtime/uptime/scan + CPU transcodage agrégé ; GPU uniquement par
+    transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes`
+    (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby,
+    BCL pure — aucun argument de processus lu), `library_stats` (comptes par type +
+    bibliothèques + état du scan, via `ILibraryManager` — couche DB, pas FS brut),
+    `missing_metadata` (échantillonnage des items sans synopsis/image/genres) ;
+    remédiation (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`,
+    `send_message`. Ne lève jamais (erreur → JSON, préserve la boucle agent).
+    **`system_audit` tool** — 15 actions on `action`: inspection (read-only, always
+    available) `server_info`, `system_config` (server configuration via
+    `IServerConfigurationManager.Configuration` — cross-OS, read in-process),
+    `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (tail or grep +
+    context, **confined to the log folder**: name-only + `.txt`/`.log` extension
+    whitelist + canonical containment), `transcode`, `gpu_transcode`, `host_metrics`
+    (BCL: process/GC/runtime/uptime/scan + aggregate transcode CPU; GPU only per
+    transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes`
+    (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters, pure BCL
+    — no process arguments read), `library_stats` (per-type counts + libraries + scan
+    state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling
+    of items missing overview/image/genres); remediation (gate `AuditRemediationEnabled`)
+    `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON,
+    preserves the agent loop).
   - **Deux modes d'exécution** (`AuditMode`) : `single` (défaut, boucle agent
     adaptative — modèle costaud/cloud, seul mode avec remédiation exécutable) et
     `deterministic` (rassemblement C# de toutes les sondes en un digest, zéro LLM,
@@ -192,6 +195,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AutoProgrammer` (matching de déduplication cohérent avec l'exclusion EPG).
   `GetEmbyInfoTool.DroppedTitlesSet` / `Norm` widened to `internal` for reuse by
   `AutoProgrammer` (dedup matching consistent with the EPG exclusion).
+
+### Corrigé / Fixed
+- **Crash NaN/Infinity en JSON** : `disk_storage` divisait par `TotalSize == 0` (volumes
+  tels `/var/snap/lxd`, `/sys/…`), produisant `NaN`/`∞` que `System.Text.Json` refusait de
+  sérialiser — l'exception escapait le digest déterministe et faisait échouer tout l'audit.
+  Triple garde : (1) `s_json` avec `JsonNumberHandling.AllowNamedFloatingPointLiterals`
+  (émet des littéraux au lieu de lancer), (2) `used_pct` gardé `total > 0` (sinon 0),
+  (3) chaque sonde du digest enveloppée dans un `try/catch` résilient (`SectionAsync`/
+  `SectionSync`) — une sonde défaillante ne tue plus les autres (`OperationCanceledException`
+  reste relancé).
+  **NaN/Infinity JSON crash**: `disk_storage` divided by `TotalSize == 0` (volumes like
+  `/var/snap/lxd`, `/sys/…`), yielding `NaN`/`∞` that `System.Text.Json` refused to
+  serialize — the exception escaped the deterministic digest and failed the whole audit.
+  Triple guard: (1) `s_json` with `JsonNumberHandling.AllowNamedFloatingPointLiterals`
+  (emits literals instead of throwing), (2) `used_pct` guarded `total > 0` (else 0),
+  (3) every digest probe wrapped in a resilient `try/catch` (`SectionAsync`/`SectionSync`)
+  — a failing probe no longer takes down the rest (`OperationCanceledException` rethrown).
+- **Repli chemins Emby (GetSystemInfo NRE)** : sur certaines versions Emby
+  (p.ex. 4.9.5.0), `GetSystemInfo(IPAddress.Loopback, ct)` lève une `NullReferenceException`,
+  rendant les chemins système (et donc les logs) inaccessibles. Les chemins Emby sont
+  désormais résolus via `IServerConfigurationManager` (résolu par le host) puis lecture de
+  `.ApplicationPaths` par réflexion sur le nom (program data, cache, transcode temp,
+  métadonnées, items par nom, dossier racine) ; le chemin des journaux est déduit par
+  convention (`<ProgramDataPath>/logs`). Couverture complète, seules les interfaces
+  réseau manquent (signalé honnêtement dans le rapport). `SystemInfo` est mis en cache
+  (une seule tentative par run). Ajout de l'action **`system_config`** exposant
+  `IServerConfigurationManager.Configuration` (la `ServerConfiguration` entière —
+  cross-OS, lu en cours de processus, pas d'analyse XML de `system.xml`).
+  **Emby path fallback (GetSystemInfo NRE)**: on some Emby versions (e.g. 4.9.5.0),
+  `GetSystemInfo(IPAddress.Loopback, ct)` throws a `NullReferenceException`, making system
+  paths (and thus logs) unreachable. Emby paths are now resolved via
+  `IServerConfigurationManager` (resolved through the host) then reading
+  `.ApplicationPaths` by name reflection (program data, cache, transcode temp, metadata,
+  items by name, root folder); the log path is derived by convention
+  (`<ProgramDataPath>/logs`). Full coverage, only network interfaces are missing (honestly
+  noted in the report). `SystemInfo` is cached (one attempt per run). Added the
+  **`system_config`** action exposing `IServerConfigurationManager.Configuration` (the full
+  `ServerConfiguration` — cross-OS, read in-process, no `system.xml` XML parsing).
 
 ---
 

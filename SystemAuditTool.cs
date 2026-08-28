@@ -72,16 +72,17 @@ namespace LLM_AI
 
         public string Description =>
             "Audite la santé du serveur Emby, du système hôte ET de la bibliothèque. Retourne du JSON minimal. " +
-            "Actions (lecture seule) : server_info, active_sessions, scheduled_tasks, " +
-            "list_logs, inspect_log, transcode, host_metrics, gpu_transcode, disk_storage, " +
-            "processes (détection d'orphelins ffmpeg + top processus RAM/CPU + compteurs Emby), " +
-            "library_stats (comptes par type + liste des bibliothèques + état du scan), " +
+            "Actions (lecture seule) : server_info, system_config (configuration serveur : HTTPS, ports, " +
+            "mode maintenance, cache path, rétention des logs — via IServerConfigurationManager, cross-OS), " +
+            "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
+            "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
+            "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
             "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type). " +
             "Actions de REMÉDIATION (écriture, requièrent AuditRemediationEnabled activé en config) : " +
             "stop_session, trigger_task, send_message.";
 
         public string ArgumentsSchema => @"{
-  ""action"": ""server_info | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | stop_session | trigger_task | send_message"",
+  ""action"": ""server_info | system_config | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | stop_session | trigger_task | send_message"",
   ""limit"": ""(active_sessions / list_logs) nombre max de résultats (défaut 50)"",
   ""include_hidden"": ""(scheduled_tasks) true pour inclure les tâches cachées (défaut false)"",
   ""top_n"": ""(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)"",
@@ -105,7 +106,14 @@ namespace LLM_AI
         private static readonly JsonSerializerOptions s_json = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            // Un double NaN/Infinity (ex. division par zéro sur un volume TotalSize==0,
+            // ou un CurrentCpuUsage aberrant) ferait lever JsonSerializer. On autorise
+            // les litéraux nommés : la sortie de s_json n'est JAMAIS consommée par un
+            // parseur JSON strict — c'est du texte injecté dans le prompt (résultats
+            // d'outils / digest déterministe). On préfère un « NaN » lisible par le LLM
+            // à un plantage de tout l'audit.
+            NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
         };
 
         public SystemAuditTool(
@@ -144,6 +152,7 @@ namespace LLM_AI
                 switch (action.ToLowerInvariant())
                 {
                     case "server_info":      result = await ServerInfoAsync(ct).ConfigureAwait(false); break;
+                    case "system_config":   result = SystemConfig(); break;
                     case "active_sessions":  result = ActiveSessions(args); break;
                     case "scheduled_tasks":   result = ScheduledTasks(args); break;
                     case "list_logs":         result = await ListLogsAsync(args, ct).ConfigureAwait(false); break;
@@ -217,9 +226,13 @@ namespace LLM_AI
                 return JsonSerializer.Serialize(o, s_json);
             }
 
-            // Repli : GetSystemInfo indisponible — vue réduite.
+            // Repli : GetSystemInfo indisponible — vue réduite depuis
+            // GetPublicSystemInfo + chemins déduits des interfaces de chemins
+            // (ResolveEmbyPathsAsync fournit program_data/log/transcoding_temp…).
             PublicSystemInfo pub = null;
             try { pub = await _host.GetPublicSystemInfo(ct).ConfigureAwait(false); } catch { }
+            var p = await ResolveEmbyPathsAsync(ct).ConfigureAwait(false);
+            string P(string k) { string v; p.TryGetValue(k, out v); return v; }
             var fallback = new
             {
                 name = _host.FriendlyName,
@@ -228,14 +241,102 @@ namespace LLM_AI
                 version = pub?.Version,
                 available_version = _host.AvailableVersion?.ToString(),
                 has_update_available = _host.HasUpdateAvailable,
+                has_pending_restart = _host.HasPendingRestart,
+                is_shutting_down = false,
+                operating_system = Environment.OSVersion.VersionString,
+                operating_system_display = RuntimeInformation.OSDescription,
                 http_port = _host.HttpPort,
                 https_port = _host.HttpsPort,
                 supports_https = _host.EnableHttps,
                 local_address = pub?.LocalAddress,
                 wan_address = pub?.WanAddress,
-                note = "GetSystemInfo indisponible — vue réduite (chemins non disponibles)."
+                program_data_path = P("program_data"),
+                log_path = P("log"),
+                cache_path = P("cache"),
+                transcoding_temp_path = P("transcoding_temp"),
+                internal_metadata_path = P("internal_metadata"),
+                note = "GetSystemInfo a levé une exception — vue réduite depuis " +
+                       "GetPublicSystemInfo + chemins déduits des interfaces IApplicationPaths " +
+                       "(log_path = <ProgramDataPath>/logs par convention)."
             };
             return JsonSerializer.Serialize(fallback, s_json);
+        }
+
+        /// <summary>
+        /// Expose la <b>configuration serveur</b> Emby (HTTPS, ports, mode maintenance,
+        /// cache path, rétention des journaux, etc.) — le contenu sérialisé de
+        /// <c>system.xml</c>, mais lu <b>in-process</b> via
+        /// <see cref="MediaBrowser.Controller.Configuration.IServerConfigurationManager"/>
+        /// (résolu depuis le host, cross-OS — aucun parsing XML, aucun chemin codé en
+        /// dur). Comble les champs que <see cref="ServerInfoAsync"/> ne peut plus donner
+        /// quand <c>GetSystemInfo</c> lève (Emby 4.9.x). Sérialise le DTO
+        /// <c>ServerConfiguration</c> ; en repli (si la sérialisation globale échoue
+        /// sur un champ complexe), on ne projette que les propriétés simples
+        /// (string/bool/numérique) par réflexion. Lecture seule. Ne lève pas.
+        /// </summary>
+        private string SystemConfig()
+        {
+            object cfg = null;
+            try
+            {
+                // TryResolve<T> est hérité de IApplicationHost (le host l'implémente).
+                // Renvoie null si le service n'est pas enregistré.
+                var mgr = _host.TryResolve<MediaBrowser.Controller.Configuration.IServerConfigurationManager>();
+                cfg = mgr?.Configuration;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit system_config résolution : {0}", ex.Message);
+            }
+            if (cfg == null)
+                return Err("ServerConfiguration indisponible (IServerConfigurationManager non résolu).");
+
+            // Sérialisation globale (DTO plat en principe) — si un champ complexe
+            // fait planter, on retombe sur une projection des propriétés simples.
+            try
+            {
+                return JsonSerializer.Serialize(cfg, s_json);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit system_config sérialisation globale échouée " +
+                    "(projection simple en repli) : {0}", ex.Message);
+            }
+
+            try
+            {
+                var t = cfg.GetType();
+                var simple = new Dictionary<string, object>(StringComparer.Ordinal);
+                foreach (var p in t.GetProperties())
+                {
+                    if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
+                    object val;
+                    try { val = p.GetValue(cfg, null); } catch { continue; }
+                    // On ne garde que les scalaires (string/bool/char/numérique) + leurs
+                    // listes de scalaires — on évite les objets complexes/cycliques.
+                    if (val == null || IsScalar(val.GetType())
+                        || IsScalarArray(val.GetType()))
+                    {
+                        simple[p.Name] = val;
+                    }
+                }
+                return JsonSerializer.Serialize(simple, s_json);
+            }
+            catch (Exception ex)
+            {
+                return Err("system_config : échec de la projection simple : " + ex.Message);
+            }
+        }
+
+        private static bool IsScalar(Type t) =>
+            t.IsPrimitive || t == typeof(string) || t == typeof(decimal) || t == typeof(DateTime)
+            || t == typeof(DateTimeOffset) || t == typeof(TimeSpan) || t.IsEnum;
+
+        private static bool IsScalarArray(Type t)
+        {
+            if (!t.IsArray) return false;
+            var el = t.GetElementType();
+            return el != null && (IsScalar(el) || el == typeof(object));
         }
 
         private string ActiveSessions(JsonElement args)
@@ -312,10 +413,12 @@ namespace LLM_AI
 
         private async Task<string> ListLogsAsync(JsonElement args, CancellationToken ct)
         {
-            var info = await GetSystemInfoAsync(ct).ConfigureAwait(false);
-            string logDir = info?.LogPath;
+            var paths = await ResolveEmbyPathsAsync(ct).ConfigureAwait(false);
+            string logDir;
+            paths.TryGetValue("log", out logDir);
             if (string.IsNullOrWhiteSpace(logDir))
-                return Err("log path indisponible (GetSystemInfo a échoué).");
+                return Err("chemin des journaux introuvable (GetSystemInfo a échoué et " +
+                    "ProgramDataPath indisponible).");
 
             int limit = Math.Max(1, OptInt(args, "limit", 50));
             var dir = new DirectoryInfo(logDir);
@@ -340,10 +443,12 @@ namespace LLM_AI
         /// </summary>
         private async Task<string> InspectLogAsync(JsonElement args, CancellationToken ct)
         {
-            var info = await GetSystemInfoAsync(ct).ConfigureAwait(false);
-            string logDir = info?.LogPath;
+            var paths = await ResolveEmbyPathsAsync(ct).ConfigureAwait(false);
+            string logDir;
+            paths.TryGetValue("log", out logDir);
             if (string.IsNullOrWhiteSpace(logDir))
-                return Err("log path indisponible (GetSystemInfo a échoué).");
+                return Err("chemin des journaux introuvable (GetSystemInfo a échoué et " +
+                    "ProgramDataPath indisponible).");
 
             string file = OptString(args, "file");
             if (string.IsNullOrWhiteSpace(file))
@@ -744,43 +849,44 @@ namespace LLM_AI
             var drives = DriveInfo.GetDrives()
                 .Where(d => d.IsReady)
                 .OrderByDescending(d => d.Name.Length)   // match préfixe le plus spécifique
-                .Select(d => new
+                .Select(d =>
                 {
-                    name = d.Name,
-                    format = d.DriveFormat,
-                    type = d.DriveType.ToString(),
-                    total_bytes = d.TotalSize,
-                    free_bytes = d.AvailableFreeSpace,
-                    used_bytes = d.TotalSize - d.AvailableFreeSpace,
-                    used_pct = Math.Round((double)(d.TotalSize - d.AvailableFreeSpace) / d.TotalSize * 100, 1)
+                    // TotalSize peut valoir 0 (volume réseau/ram mal reporté) :
+                    // division par zéro → +Infinity → JsonSerializer lève. On garde
+                    // 0 dans ce cas plutôt que de planter l'audit entier.
+                    long total = d.TotalSize;
+                    long free = d.AvailableFreeSpace;
+                    return new
+                    {
+                        name = d.Name,
+                        format = d.DriveFormat,
+                        type = d.DriveType.ToString(),
+                        total_bytes = total,
+                        free_bytes = free,
+                        used_bytes = total - free,
+                        used_pct = total > 0 ? Math.Round((double)(total - free) / total * 100, 1) : 0
+                    };
                 })
                 .ToArray();
 
             // Mapping chemins Emby → volume (préfixe le plus spécifique).
-            var info = await GetSystemInfoAsync(ct).ConfigureAwait(false);
+            // ResolveEmbyPathsAsync : SystemInfo si dispo, sinon repli via les
+            // interfaces de chemins (GetSystemInfo lève sur Emby 4.9.x).
+            var paths = await ResolveEmbyPathsAsync(ct).ConfigureAwait(false);
             var pathMap = new List<object>();
-            if (info != null)
+            if (paths.Count > 0)
             {
-                var named = new (string label, string path)[]
-                {
-                    ("program_data", info.ProgramDataPath),
-                    ("cache", info.CachePath),
-                    ("transcoding_temp", info.TranscodingTempPath),
-                    ("log", info.LogPath),
-                    ("internal_metadata", info.InternalMetadataPath),
-                    ("items_by_name", info.ItemsByNamePath)
-                };
                 var allDrives = DriveInfo.GetDrives().Where(d => d.IsReady)
                     .OrderByDescending(d => d.Name.Length).ToArray();
-                foreach (var kv in named)
+                foreach (var kv in paths)
                 {
-                    if (string.IsNullOrWhiteSpace(kv.path)) continue;
+                    if (string.IsNullOrWhiteSpace(kv.Value)) continue;
                     var drive = allDrives.FirstOrDefault(d =>
-                        kv.path.StartsWith(d.Name, StringComparison.OrdinalIgnoreCase));
+                        kv.Value.StartsWith(d.Name, StringComparison.OrdinalIgnoreCase));
                     pathMap.Add(new
                     {
-                        label = kv.label,
-                        path = kv.path,
+                        label = kv.Key,
+                        path = kv.Value,
                         drive = drive?.Name,
                         drive_free_bytes = drive?.AvailableFreeSpace
                     });
@@ -789,10 +895,12 @@ namespace LLM_AI
 
             long? transcodeSize = null;
             bool sizeTruncated = false;
+            string transcodeTemp;
+            paths.TryGetValue("transcoding_temp", out transcodeTemp);
             if (OptBool(args, "include_transcode_size", false)
-                && !string.IsNullOrWhiteSpace(info?.TranscodingTempPath))
+                && !string.IsNullOrWhiteSpace(transcodeTemp))
             {
-                var (sz, trunc) = BoundedDirSize(info.TranscodingTempPath);
+                var (sz, trunc) = BoundedDirSize(transcodeTemp);
                 transcodeSize = sz;
                 sizeTruncated = trunc;
             }
@@ -985,19 +1093,55 @@ namespace LLM_AI
                 sb.AppendLine();
             }
 
-            // Sondes async (await inline pour éviter le sync-over-async).
-            Section("server_info", await ServerInfoAsync(ct).ConfigureAwait(false));
-            Section("host_metrics", HostMetrics());
-            Section("processes", Processes(s_emptyArgs));
-            Section("disk_storage", await DiskStorageAsync(s_emptyArgs, ct).ConfigureAwait(false));
-            Section("active_sessions", ActiveSessions(s_emptyArgs));
-            Section("scheduled_tasks", ScheduledTasks(s_emptyArgs));
-            Section("transcode", Transcode());
-            Section("gpu_transcode", GpuTranscode());
-            Section("library_stats", LibraryStats());
-            Section("missing_metadata", MissingMetadata(s_emptyArgs));
+            // Wrap résilient : une sonde qui lève (ex. un double Infinity qui
+            // s'échappe malgré s_json tolérant, ou un service Emby indisponible)
+            // ne doit JAMAIS faire planter tout l'audit — on l'enregistre comme
+            // section d'erreur et on continue les autres sondes. Les sondes sont
+            // appelées HORS du try/catch de ExecuteAsync (rassemblement direct),
+            // d'où la nécessité de ce garde ici. OperationCanceledException est
+            // propagée (annulation = arrêt volontaire, pas une erreur de sonde).
+            async System.Threading.Tasks.Task SectionAsync(
+                string title, System.Threading.Tasks.Task<string> probe)
+            {
+                try { Section(title, await probe.ConfigureAwait(false)); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit digest sonde « {0} » a échoué : {1}", title, ex.Message);
+                    Section(title, Err("digest: " + title + " a échoué : " + ex.Message));
+                }
+            }
+            void SectionSync(string title, Func<string> probe)
+            {
+                try { Section(title, probe()); }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit digest sonde « {0} » a échoué : {1}", title, ex.Message);
+                    Section(title, Err("digest: " + title + " a échoué : " + ex.Message));
+                }
+            }
 
-            string logs = await ListLogsAsync(s_emptyArgs, ct).ConfigureAwait(false);
+            // Sondes (await inline pour éviter le sync-over-async).
+            await SectionAsync("server_info", ServerInfoAsync(ct)).ConfigureAwait(false);
+            SectionSync("system_config", () => SystemConfig());
+            SectionSync("host_metrics", () => HostMetrics());
+            SectionSync("processes", () => Processes(s_emptyArgs));
+            await SectionAsync("disk_storage", DiskStorageAsync(s_emptyArgs, ct)).ConfigureAwait(false);
+            SectionSync("active_sessions", () => ActiveSessions(s_emptyArgs));
+            SectionSync("scheduled_tasks", () => ScheduledTasks(s_emptyArgs));
+            SectionSync("transcode", () => Transcode());
+            SectionSync("gpu_transcode", () => GpuTranscode());
+            SectionSync("library_stats", () => LibraryStats());
+            SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
+
+            string logs = null;
+            try { logs = await ListLogsAsync(s_emptyArgs, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit digest sonde « list_logs » a échoué : {0}", ex.Message);
+                logs = Err("digest: list_logs a échoué : " + ex.Message);
+            }
             Section("list_logs", logs);
 
             // Tail du journal le plus récent (best-effort) : on extrait le 1er
@@ -1015,10 +1159,11 @@ namespace LLM_AI
                 if (!string.IsNullOrWhiteSpace(newest))
                 {
                     var inspArgs = JsonSerializer.SerializeToElement(new { file = newest, tail = 150 }, s_json);
-                    Section("inspect_log (journal le plus récent, tail 150)",
-                        await InspectLogAsync(inspArgs, ct).ConfigureAwait(false));
+                    await SectionAsync("inspect_log (journal le plus récent, tail 150)",
+                        InspectLogAsync(inspArgs, ct)).ConfigureAwait(false);
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 Section("inspect_log", Err("digest: inspect_log a échoué : " + ex.Message));
@@ -1198,17 +1343,113 @@ namespace LLM_AI
         /// Récupère <see cref="SystemInfo"/> (remoteAddress = Loopback, l'API
         /// n'a pas de surcharge sans adresse). Null si indisponible.
         /// </summary>
+        // SystemInfo mis en cache par run : GetSystemInfo lève une NRE sur certaines
+        // versions d'Emby (4.9.x observé), et on l'appelle depuis plusieurs sondes
+        // (server_info, list_logs, inspect_log, disk_storage). On tente une seule
+        // fois — l'échec est définitif pour ce run et les sondes dégradent proprement
+        // via les replis ci-dessous. OperationCanceledException n'est PAS cachée.
+        private SystemInfo _cachedSystemInfo;
+        private bool _systemInfoTried;
+
         private async Task<SystemInfo> GetSystemInfoAsync(CancellationToken ct)
         {
+            if (_systemInfoTried) return _cachedSystemInfo;
+            _systemInfoTried = true;
             try
             {
-                return await _host.GetSystemInfo(IPAddress.Loopback, ct).ConfigureAwait(false);
+                _cachedSystemInfo = await _host.GetSystemInfo(IPAddress.Loopback, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { _systemInfoTried = false; throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit GetSystemInfo a échoué (on bascule sur les " +
+                    "interfaces de chemins en repli) : {0}", ex.Message);
+                _cachedSystemInfo = null;
+            }
+            return _cachedSystemInfo;
+        }
+
+        /// <summary>
+        /// Résout les chemins Emby (log, program_data, cache, transcoding_temp,
+        /// internal_metadata, root_folder…) — priorité à <see cref="SystemInfo"/>
+        /// (vue complète), puis repli par <b>réflexion par nom</b> sur le type concret
+        /// du host quand GetSystemInfo lève. Le host implémente bien une interface de
+        /// chemins, mais son namespace/type exact varie selon la version d'Emby (le
+        /// cast statique vers <c>IApplicationPaths</c>/<c>IServerApplicationPaths</c>
+        /// a échoué sur Emby 4.9.x) : on lit donc les propriétés par leur nom stable
+        /// (<c>ProgramDataPath</c>, <c>TranscodingTempPath</c>…) sur le type concret et
+        /// ses interfaces. Le chemin des journaux n'est exposé par AUCUNE interface
+        /// connue : on le déduit en convention Emby comme
+        /// <c>&lt;ProgramDataPath&gt;/logs</c>. Ne lève pas.
+        /// </summary>
+        private async Task<Dictionary<string, string>> ResolveEmbyPathsAsync(CancellationToken ct)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            var info = await GetSystemInfoAsync(ct).ConfigureAwait(false);
+            if (info != null)
+            {
+                map["log"] = info.LogPath;
+                map["program_data"] = info.ProgramDataPath;
+                map["cache"] = info.CachePath;
+                map["transcoding_temp"] = info.TranscodingTempPath;
+                map["internal_metadata"] = info.InternalMetadataPath;
+                map["items_by_name"] = info.ItemsByNamePath;
+                return map;
+            }
+
+            // Repli : le host n'expose pas ProgramDataPath en propriété publique directe
+            // (implémentation explicite d'interface — GetProperty par nom échoue sur le
+            // host, et il n'implémente même pas l'IApplicationPaths qu'on ciblait). En
+            // revanche, le gestionnaire de config serveur (résolu depuis le host, comme
+            // dans system_config) expose .ApplicationPaths — l'objet dédié des chemins
+            // qui, lui, implémente l'interface des chemins. On lit les chemins par
+            // réflexion par nom sur CET objet (noms stables cross-version, cross-OS).
+            object paths = null;
+            try
+            {
+                var mgr = _host.TryResolve<MediaBrowser.Controller.Configuration.IServerConfigurationManager>();
+                paths = mgr?.ApplicationPaths;
             }
             catch (Exception ex)
             {
-                _logger?.Warn("[LLM_AI] system_audit GetSystemInfo a échoué : {0}", ex.Message);
-                return null;
+                _logger?.Warn("[LLM_AI] system_audit ResolveEmbyPaths (repli) : {0}", ex.Message);
             }
+
+            string GetPathProp(string name)
+            {
+                if (paths == null) return null;
+                try
+                {
+                    var t = paths.GetType();
+                    var pi = t.GetProperty(name);
+                    if (pi == null)
+                    {
+                        foreach (var it in t.GetInterfaces())
+                        {
+                            pi = it.GetProperty(name);
+                            if (pi != null) break;
+                        }
+                    }
+                    if (pi == null) return null;
+                    return pi.GetValue(paths, null) as string;
+                }
+                catch { return null; }
+            }
+
+            map["program_data"] = GetPathProp("ProgramDataPath");
+            map["cache"] = GetPathProp("CachePath");
+            map["transcoding_temp"] = GetPathProp("TranscodingTempPath");
+            map["internal_metadata"] = GetPathProp("InternalMetadataPath");
+            map["items_by_name"] = GetPathProp("ItemsByNamePath");
+            map["root_folder"] = GetPathProp("RootFolderPath");
+            // LogPath n'est pas exposé par les interfaces de chemins : convention Emby.
+            string log = GetPathProp("LogPath");
+            if (!string.IsNullOrWhiteSpace(log))
+                map["log"] = log;
+            else if (!string.IsNullOrWhiteSpace(map["program_data"]))
+                map["log"] = Path.Combine(map["program_data"], "logs");
+
+            return map;
         }
 
         /// <summary>Projection du <see cref="TranscodingInfo"/> d'une session.</summary>

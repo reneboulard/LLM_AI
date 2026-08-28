@@ -290,7 +290,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `web_search` | Recherche web (SearXng `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web (`WebFetchDirect` pour lecture brute). |
 | `showbizz_new_releases` | Nouveautés depuis une source « Showbizz » (`ShowbizzUrl` + `ShowbizzPattern`). |
-| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 14 actions sur `action` : **inspection** `server_info`, `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata` ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
+| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 15 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata` ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---
 
@@ -483,7 +483,7 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
 
 | Famille | Actions (lecture seule, toujours disponibles) |
 |---|---|
-| Télémétrie & config | `server_info` (version, ports, chemins, redémarrage en attente, mise à jour, maintenance), `active_sessions`, `scheduled_tasks` |
+| Télémétrie & config | `server_info` (version, ports, chemins, redémarrage en attente, mise à jour, maintenance), `system_config` (configuration serveur complète via `IServerConfigurationManager.Configuration`), `active_sessions`, `scheduled_tasks` |
 | Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `transcode`, `gpu_transcode` |
 | Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
 | Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres) |
@@ -501,10 +501,20 @@ l'exécuter.
 - **Admin-only** : l'endpoint résout l'usager appelant et vérifie `Policy.IsAdministrator`.
   Un non-admin reçoit `{Enabled:true, Error:"Réservé aux administrateurs."}`.
 - **Confinement du système de fichiers** : il n'y a **pas d'outil générique de lecture
-  de fichier**. `inspect_log` est épinglé au dossier des journaux (`SystemInfo.LogPath`)
-  avec trois gardes : `Path.GetFileName` (rejette tout slash/`..`), **whitelist
-  d'extension** (`.txt`/`.log` uniquement) et **containment canonique**
-  (`Path.GetFullPath` sous `LogPath`). Le LLM ne peut pas vaguer dans `/`.
+  de fichier**. `inspect_log` est épinglé au dossier des journaux avec trois gardes :
+  `Path.GetFileName` (rejette tout slash/`..`), **whitelist d'extension**
+  (`.txt`/`.log` uniquement) et **containment canonique** (`Path.GetFullPath` sous le
+  dossier des journaux). Le LLM ne peut pas vaguer dans `/`.
+- **Résolution des chemins Emby** : `server_info`/`list_logs`/`inspect_log`/`disk_storage`
+  obtiennent les chemins Emby (program data, cache, transcode temp, métadonnées, **logs**)
+  en résolvant `IServerConfigurationManager` via le host puis en lisant `.ApplicationPaths`
+  par réflexion sur le nom. `system_config` expose `IServerConfigurationManager.Configuration`
+  (la `ServerConfiguration` entière — cross-OS, lu en cours de processus, pas d'analyse XML).
+  Repli : si l'appel `GetSystemInfo` échoue (sur certaines versions Emby il lève une
+  `NullReferenceException`), les chemins proviennent quand même d'`ApplicationPaths` et le
+  chemin des journaux est déduit par convention (`<ProgramDataPath>/logs`) — la couverture
+  reste complète, seules les interfaces réseau manquent (signalé honnêtement dans le
+  rapport).
 - **Bibliothèque via DB** : `library_stats` / `missing_metadata` passent par
   `ILibraryManager` (couche DB) — aucun accès FS brut aux dossiers de la bibliothèque.
 - **Remédiation gated** : `stop_session` / `trigger_task` / `send_message` vérifient

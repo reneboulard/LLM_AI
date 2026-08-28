@@ -285,7 +285,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `web_search` | Web search (SearXng `SearXngUrl` or built-in provider). |
 | `web_fetch` | Fetch/read a web page (`WebFetchDirect` for raw read). |
 | `showbizz_new_releases` | New releases from a "Showbizz" source (`ShowbizzUrl` + `ShowbizzPattern`). |
-| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 14 actions on `action`: **inspection** `server_info`, `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`; **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 15 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`; **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
 
 ---
 
@@ -478,7 +478,7 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 
 | Family | Actions (read-only, always available) |
 |---|---|
-| Telemetry & config | `server_info` (version, ports, paths, pending restart, update, maintenance), `active_sessions`, `scheduled_tasks` |
+| Telemetry & config | `server_info` (version, ports, paths, pending restart, update, maintenance), `system_config` (full server configuration via `IServerConfigurationManager.Configuration`), `active_sessions`, `scheduled_tasks` |
 | Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `transcode`, `gpu_transcode` |
 | Hardware & OS | `host_metrics` (BCL: process, GC, runtime, uptime, scan running, aggregate transcode CPU — GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters) |
 | Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres) |
@@ -495,10 +495,18 @@ must then **recommend** the action in its report instead of executing it.
 - **Admin-only**: the endpoint resolves the calling user and checks
   `Policy.IsAdministrator`. A non-admin receives `{Enabled:true, Error:"Réservé aux administrateurs."}`.
 - **Filesystem confinement**: there is **no generic file-read tool**. `inspect_log` is
-  pinned to the log folder (`SystemInfo.LogPath`) with three guards: `Path.GetFileName`
-  (rejects any slash/`..`), an **extension whitelist** (`.txt`/`.log` only), and
-  **canonical containment** (`Path.GetFullPath` under `LogPath`). The LLM cannot wander
-  into `/`.
+  pinned to the log folder with three guards: `Path.GetFileName` (rejects any slash/`..`),
+  an **extension whitelist** (`.txt`/`.log` only), and **canonical containment**
+  (`Path.GetFullPath` under the log folder). The LLM cannot wander into `/`.
+- **Emby path resolution**: `server_info`/`list_logs`/`inspect_log`/`disk_storage` obtain
+  the Emby paths (program data, cache, transcode temp, metadata, **logs**) by resolving
+  `IServerConfigurationManager` through the host then reading `.ApplicationPaths` by name
+  reflection. `system_config` exposes `IServerConfigurationManager.Configuration` (the full
+  `ServerConfiguration` — cross-OS, read in-process, no XML parsing). Fallback: if the
+  `GetSystemInfo` call fails (on some Emby versions it throws a `NullReferenceException`),
+  paths still come from `ApplicationPaths` and the log path is derived by convention
+  (`<ProgramDataPath>/logs`) — coverage stays complete, only the network interfaces are
+  missing (honestly noted in the report).
 - **Library via DB**: `library_stats` / `missing_metadata` go through `ILibraryManager`
   (DB layer) — no raw FS access to library folders.
 - **Gated remediation**: `stop_session` / `trigger_task` / `send_message` check
