@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
@@ -39,10 +40,11 @@ namespace LLM_AI
         private readonly IJsonSerializer _json;
         private readonly IServerApplicationHost _host;
         private readonly ILogger _logger;
+        private readonly ICollectionManager _collections;
 
         public TonightService(IUserManager users, ILibraryManager library,
             ILiveTvManager liveTv, IJsonSerializer json, IServerApplicationHost host,
-            ILogger logger)
+            ILogger logger, ICollectionManager collections)
         {
             _users = users;
             _library = library;
@@ -50,6 +52,7 @@ namespace LLM_AI
             _json = json;
             _host = host;
             _logger = logger;
+            _collections = collections;
         }
 
         // Workflow injecté dans le system prompt de l'agent (bloc
@@ -232,6 +235,54 @@ namespace LLM_AI
             // depuis la bibliothèque + signal owned-guard pour AutoProgrammer).
             // S'exécute après l'enrichissement EPG.
             payload = runner.EnrichWithLibrary(payload);
+
+            // Surface native des recos du watch bucket sur un run FRAIS (pas sur
+            // cache) : deux mécanismes indépendants et opt-in, réutilisant les
+            // mêmes ids collectés une fois ci-dessous (parseur/dedup
+            // d'AutoProgrammer) :
+            //  - étiquetage par genre « AI Tonight » (filtre par genre dans Emby) ;
+            //  - collection Emby « AI Tonight » (collection navigable, non
+            //    destructive — regroupe les items par référence).
+            // Le nettoyage quotidien (AiTonightCleanupTask, 3 h) retire le genre
+            // ET vide la collection ; les runs suivants reconstruisent l'un et/ou
+            // l'autre selon les flags.
+            HashSet<string> watchBucketIds = null;
+            if (cfg.TonightGenreTagEnabled || cfg.TonightCollectionEnabled)
+            {
+                try
+                {
+                    var recos = AutoProgrammer.ParseRecommendations(payload);
+                    watchBucketIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var r in recos)
+                    {
+                        if (AutoProgrammer.IsWatchBucket(r) && !string.IsNullOrEmpty(r.Id))
+                            watchBucketIds.Add(r.Id);          // source=recording / library
+                        if (!string.IsNullOrEmpty(r.LibraryId))
+                            watchBucketIds.Add(r.LibraryId);   // owned item (live-but-owned aussi)
+                    }
+                }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight surface : collecte ids échouée : {0}", ex.Message); }
+            }
+
+            if (cfg.TonightGenreTagEnabled && watchBucketIds != null)
+            {
+                try
+                {
+                    await AiGenreTagger.AddAsync(_library, _logger, watchBucketIds, AiGenreTagger.TonightGenre, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight genre tag : {0}", ex.Message); }
+            }
+
+            if (cfg.TonightCollectionEnabled && watchBucketIds != null)
+            {
+                try
+                {
+                    await AiTonightCollectionManager.EnsureAsync(_collections, _library, _logger, watchBucketIds, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight collection : {0}", ex.Message); }
+            }
 
             string date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
 

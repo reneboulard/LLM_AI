@@ -100,10 +100,6 @@ namespace LLM_AI
                 .OrderBy(r => PriorityRank(r.Priority))
                 .ToList();
 
-            // Drop list (normalisée avec article removal — cohérent avec
-            // l'exclusion EPG faite par get_emby_info).
-            var dropped = GetEmbyInfoTool.DroppedTitlesSet();
-
             // Timers existants (dedup) : on croise ProgramId exact (single timers
             // + series timers) ET nom normalisé (un series timer couvre toute la
             // série, pas seulement le programme d'origine). Port serveur du check
@@ -118,84 +114,112 @@ namespace LLM_AI
 
             foreach (var r in recos)
             {
-                // ---- Bucket : watch vs record ----
-                // Watch bucket : déjà enregistré (recording), déjà possédé
-                // (library), ou live mais possédé en bibliothèque (library_id).
-                // Aucun timer à créer.
-                if (IsWatchBucket(r))
+                // Logique factorisée dans ProgramOneAsync (réutilisée par
+                // l'endpoint /Plugins/LLMAI/Activate pour une reco unique).
+                var outcome = await ProgramOneAsync(r, existingProgramIds, existingNames, ct).ConfigureAwait(false);
+                switch (outcome)
                 {
-                    stats.Watch++;
-                    continue;
-                }
-
-                // ---- Record bucket ----
-                // Garde owned-guard : si un library_id est présent, l'usager
-                // possède déjà le titre → ne pas enregistrer.
-                if (!string.IsNullOrEmpty(r.LibraryId))
-                {
-                    stats.SkippedOwnedOrDropped++;
-                    _logger?.Info("[LLM_AI] Auto-program : « {0} » déjà possédé (library_id) → non programmé.", r.Title);
-                    continue;
-                }
-
-                // Drop list : titre exclu par l'usager.
-                string norm = GetEmbyInfoTool.Norm(r.Title ?? string.Empty);
-                if (!string.IsNullOrEmpty(norm) && dropped.Contains(norm))
-                {
-                    stats.SkippedOwnedOrDropped++;
-                    _logger?.Info("[LLM_AI] Auto-program : « {0} » dans la drop list → non programmé.", r.Title);
-                    continue;
-                }
-
-                // Sans id de programme EPG, impossible de créer un timer (il
-                // faut un programme à enregistrer).
-                if (string.IsNullOrEmpty(r.Id))
-                {
-                    stats.SkippedNoId++;
-                    _logger?.Info("[LLM_AI] Auto-program : « {0} » sans id EPG → non programmé.", r.Title);
-                    continue;
-                }
-
-                // Dedup : déjà un timer sur ce programme ou ce nom de série.
-                if (existingProgramIds.Contains(r.Id) ||
-                    (!string.IsNullOrEmpty(norm) && existingNames.Contains(norm)))
-                {
-                    stats.SkippedDedup++;
-                    _logger?.Info("[LLM_AI] Auto-program : « {0} » déjà programmé (timer existant) → sauté.", r.Title);
-                    continue;
-                }
-
-                // Création du timer. Une exception (conflit de tuner, programme
-                // introuvable, doublon refusé par le tuner host…) est loguée et
-                // n'interrompt pas le reste.
-                try
-                {
-                    if (IsSeries(r.Kind))
-                    {
-                        await CreateSeriesTimerAsync(r.Id, ct).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        CreateMovieTimer(r.Id);
-                    }
-                    stats.Programmed++;
-                    _logger?.Info("[LLM_AI] Auto-program : « {0} » → {1} timer créé (programId={2}).",
-                        r.Title, IsSeries(r.Kind) ? "series" : "movie", r.Id);
-                    // Mémorise pour le dedup intra-passe (deux recos du même titre).
-                    existingProgramIds.Add(r.Id);
-                    if (!string.IsNullOrEmpty(norm)) existingNames.Add(norm);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    _logger?.Warn("[LLM_AI] Auto-program : échec création timer pour « {0} » (programId={1}) : {2}",
-                        r.Title, r.Id, ex.Message);
+                    case OneOutcome.Created:          stats.Programmed++; break;
+                    case OneOutcome.Watch:            stats.Watch++; break;
+                    case OneOutcome.OwnedOrDropped:   stats.SkippedOwnedOrDropped++; break;
+                    case OneOutcome.NoId:             stats.SkippedNoId++; break;
+                    case OneOutcome.Dedup:            stats.SkippedDedup++; break;
+                    // OneOutcome.Failed : déjà logué dans ProgramOneAsync.
                 }
             }
 
             _logger?.Info("[LLM_AI] Auto-program [{0}] bilan : {1} programmé(s), {2} watch, {3} dedup, {4} owned/dropped, {5} sans id.",
                 who, stats.Programmed, stats.Watch, stats.SkippedDedup, stats.SkippedOwnedOrDropped, stats.SkippedNoId);
             return stats;
+        }
+
+        // ------------------------------------------------------------------
+        //  Programmation d'une reco unique (réutilisée par l'endpoint Activate)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Résultat du traitement d'une reco par <see cref="ProgramOneAsync"/>.
+        /// <see cref="Created"/> = timer créé ; <see cref="Watch"/> = watch
+        /// bucket (rien à programmer) ; <see cref="OwnedOrDropped"/> = déjà
+        /// possédée (library_id) ou dans la drop list ; <see cref="NoId"/> =
+        /// sans id EPG ; <see cref="Dedup"/> = déjà couverte par un timer
+        /// existant ; <see cref="Failed"/> = la création a levé (conflit tuner,
+        /// programme introuvable…) — déjà logué.
+        /// </summary>
+        internal enum OneOutcome { Created, Watch, OwnedOrDropped, NoId, Dedup, Failed }
+
+        /// <summary>
+        /// Traite une reco : applique les garde-fous (watch bucket, owned-guard,
+        /// drop list, dedup) puis crée le timer adéquat (SeriesTimer pour une
+        /// série, Timer unique pour un film). Méthode partagée entre la boucle
+        /// <see cref="Program"/> (tâche planifiée) et l'endpoint
+        /// <c>/Plugins/LLMAI/Activate</c> (une reco unique déclenchée à la
+        /// lecture d'une carte .strm). Les ensembles <paramref name="programIds"
+        /// />&amp;<paramref name="names"/> sont fournis par l'appelant (construits
+        /// via <see cref="BuildExistingTimerSets"/>) et mutés en cas de création
+        /// (dedup intra-passe).
+        /// </summary>
+        internal async Task<OneOutcome> ProgramOneAsync(
+            Reco r, HashSet<string> programIds, HashSet<string> names, CancellationToken ct)
+        {
+            // Watch bucket : déjà disponible (rien à programmer).
+            if (IsWatchBucket(r)) return OneOutcome.Watch;
+
+            // Owned-guard : déjà possédé en bibliothèque.
+            if (!string.IsNullOrEmpty(r.LibraryId))
+            {
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » déjà possédé (library_id) → non programmé.", r.Title);
+                return OneOutcome.OwnedOrDropped;
+            }
+
+            // Drop list : titre exclu par l'usager.
+            string norm = GetEmbyInfoTool.Norm(r.Title ?? string.Empty);
+            var dropped = GetEmbyInfoTool.DroppedTitlesSet();
+            if (!string.IsNullOrEmpty(norm) && dropped.Contains(norm))
+            {
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » dans la drop list → non programmé.", r.Title);
+                return OneOutcome.OwnedOrDropped;
+            }
+
+            // Sans id de programme EPG, impossible de créer un timer.
+            if (string.IsNullOrEmpty(r.Id))
+            {
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » sans id EPG → non programmé.", r.Title);
+                return OneOutcome.NoId;
+            }
+
+            // Dedup : déjà un timer sur ce programme ou ce nom de série.
+            if (programIds.Contains(r.Id) ||
+                (!string.IsNullOrEmpty(norm) && names.Contains(norm)))
+            {
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » déjà programmé (timer existant) → sauté.", r.Title);
+                return OneOutcome.Dedup;
+            }
+
+            try
+            {
+                if (IsSeries(r.Kind))
+                {
+                    await CreateSeriesTimerAsync(r.Id, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    CreateMovieTimer(r.Id);
+                }
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » → {1} timer créé (programId={2}).",
+                    r.Title, IsSeries(r.Kind) ? "series" : "movie", r.Id);
+                // Mémorise pour le dedup intra-passe (deux recos du même titre).
+                programIds.Add(r.Id);
+                if (!string.IsNullOrEmpty(norm)) names.Add(norm);
+                return OneOutcome.Created;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Auto-program : échec création timer pour « {0} » (programId={1}) : {2}",
+                    r.Title, r.Id, ex.Message);
+                return OneOutcome.Failed;
+            }
         }
 
         // ------------------------------------------------------------------
@@ -209,7 +233,7 @@ namespace LLM_AI
         /// séparément via <c>library_id</c> (owned-guard) — on le laisse passer
         /// ici comme record candidate, l'owned-guard le retire ensuite.
         /// </summary>
-        private static bool IsWatchBucket(Reco r)
+        internal static bool IsWatchBucket(Reco r)
         {
             if (string.Equals(r.Source, "recording", StringComparison.OrdinalIgnoreCase)) return true;
             if (string.Equals(r.Source, "library", StringComparison.OrdinalIgnoreCase)) return true;
@@ -217,7 +241,7 @@ namespace LLM_AI
         }
 
         /// <summary>Série → SeriesTimer ; film/one-off → Timer unique.</summary>
-        private static bool IsSeries(string kind) =>
+        internal static bool IsSeries(string kind) =>
             string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
@@ -329,7 +353,7 @@ namespace LLM_AI
         /// un échec de lecture n'empêche pas la programmation (sets vides → on
         /// tente, le tuner host refusera les vrais doublons).
         /// </summary>
-        private void BuildExistingTimerSets(HashSet<string> programIds, HashSet<string> names)
+        internal void BuildExistingTimerSets(HashSet<string> programIds, HashSet<string> names)
         {
             try
             {
@@ -377,7 +401,7 @@ namespace LLM_AI
         /// programmation). On n'extrait que ce dont on a besoin : title, kind,
         /// source, priority, id (programId EPG), library_id (signal owned-guard).
         /// </summary>
-        private struct Reco
+        internal struct Reco
         {
             public string Title;
             public string Kind;
@@ -385,9 +409,13 @@ namespace LLM_AI
             public string Priority;
             public string Id;
             public string LibraryId;
+            // Champs extraits pour la génération .nfo (bibliothèque .strm).
+            public string Reason;
+            public string Channel;
+            public string Start;
         }
 
-        private static List<Reco> ParseRecommendations(string payload)
+        internal static List<Reco> ParseRecommendations(string payload)
         {
             var list = new List<Reco>();
             try
@@ -406,6 +434,9 @@ namespace LLM_AI
                             Priority = Str(el, "priority"),
                             Id = Str(el, "id"),
                             LibraryId = Str(el, "library_id"),
+                            Reason = Str(el, "reason"),
+                            Channel = Str(el, "channel"),
+                            Start = Str(el, "start"),
                         });
                     }
                 }

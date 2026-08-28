@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Api;
+using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
@@ -41,11 +42,14 @@ namespace LLM_AI
     {
         private readonly ILiveTvManager _liveTv;
         private readonly IJsonSerializer _json;
+        private readonly ICollectionManager _collections;
 
-        public TonightApiService(ILiveTvManager liveTv, IJsonSerializer json)
+        public TonightApiService(ILiveTvManager liveTv, IJsonSerializer json,
+            ICollectionManager collections)
         {
             _liveTv = liveTv;
             _json = json;
+            _collections = collections;
         }
 
         // ------------------------------------------------------------------
@@ -110,7 +114,7 @@ namespace LLM_AI
             // Génération partagée (cache par usager, builders, run LLM, enrich).
             // Le CancellationToken vient de la requête HTTP.
             var ct = Request?.CancellationToken ?? CancellationToken.None;
-            var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger);
+            var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger, _collections);
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(res.Error))

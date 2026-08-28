@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
@@ -57,6 +58,7 @@ namespace LLM_AI
         private readonly IServerApplicationHost _host;
         private readonly INotificationManager _notifications;
         private readonly ILogger _logger;
+        private readonly ICollectionManager _collections;
 
         public TonightLoginService(
             ISessionManager sessionManager,
@@ -66,7 +68,8 @@ namespace LLM_AI
             ILibraryManager library,
             IServerApplicationHost host,
             INotificationManager notifications,
-            ILogger logger)
+            ILogger logger,
+            ICollectionManager collections)
         {
             _sessions = sessionManager;
             _users = userManager;
@@ -76,6 +79,7 @@ namespace LLM_AI
             _host = host;
             _notifications = notifications;
             _logger = logger;
+            _collections = collections;
         }
 
         // Garde-fou anti-run-parallèle pour un même usager : si deux appareils
@@ -150,7 +154,7 @@ namespace LLM_AI
                 {
                     _logger?.Info("[LLM_AI] Login « {0} » : cache Tonight froid → run LLM puis toast.", user.Name);
                     var ct = CancellationToken.None; // le run survit à la requête login
-                    var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger);
+                    var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger, _collections);
                     var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, ct).ConfigureAwait(false);
                     if (res.Error != null || string.IsNullOrEmpty(res.Payload))
                     {

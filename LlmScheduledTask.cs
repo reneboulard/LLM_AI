@@ -190,6 +190,23 @@ namespace LLM_AI
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
 
+                // Bibliothèque .strm dédiée (opt-in, indépendant de
+                // AutoProgram) : écrit une carte .strm+.nfo+poster par reco du
+                // record bucket. L'usager parcourt la bibliothèque ; lire une
+                // carte déclenche l'enregistrement via /Plugins/LLMAI/Activate.
+                if (cfg.StrmLibraryEnabled)
+                {
+                    try
+                    {
+                        var gen = new StrmLibraryGenerator(_library, _liveTv, _logger);
+                        await gen.GenerateAsync(merged, cfg, ResolveEmbyUrl(), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.ErrorException("[LLM_AI] Strm library : {0}", ex, ex.Message);
+                    }
+                }
+
                 // Auto-programmation (opt-in) : si cfg.AutoProgram est coché,
                 // crée les timers Emby du record bucket (recos EPG à venir non
                 // possédées, non déjà programmées, hors drop list) → les recos
@@ -463,17 +480,31 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Résout l'URL de base d'Emby pour les liens absolus (notification) en
-        /// interrogeant la config réseau du serveur via
-        /// <see cref="IServerApplicationHost.GetLocalHostApiUrl"/> (qui exploite
-        /// les ports HTTP/HTTPS et le schéma de <c>system.xml</c> + l'hôte local
-        /// détecté). On ne code aucune IP. Repli sur
-        /// <see cref="PluginConfiguration.EmbyPublicUrl"/> si la détection
-        /// renvoie vide (ou si l'utilisateur a renseigné un domaine public
-        /// explicite dans la config du plugin).
+        /// Résout l'URL de base d'Emby pour les liens absolus (notifications,
+        /// cartes <c>.strm</c>). On ne code aucune IP.
+        /// <para><b>Priorité</b> : si <see cref="PluginConfiguration.EmbyPublicUrl"/>
+        /// est renseigné, on l'utilise en priorité — l'usager l'a défini exprès
+        /// pour que les liens soient joignables depuis les clients externes
+        /// (TV, téléphone) ; <c>GetLocalHostApiUrl</c> renvoie souvent
+        /// <c>localhost</c>, injouable par un client distant qui lit un
+        /// <c>.strm</c>.</para>
+        /// <para>Sinon, on interroge la config réseau du serveur via
+        /// <see cref="IServerApplicationHost.GetLocalHostApiUrl"/> (ports
+        /// HTTP/HTTPS + schéma de <c>system.xml</c> + hôte local détecté).
+        /// Repli sur chaîne vide si les deux échouent.</para>
         /// </summary>
         private string ResolveEmbyUrl()
         {
+            // 1) EmbyPublicUrl explicite -> prioritaire : l'usager l'a défini
+            //    exprès pour que les liens soient joignables depuis les clients
+            //    externes (TV, téléphone). GetLocalHostApiUrl renvoie souvent
+            //    "localhost", injouable par un client distant qui lit un .strm.
+            string publicUrl = (Plugin.Instance?.Configuration?.EmbyPublicUrl ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(publicUrl))
+                return publicUrl;
+
+            // 2) Détection automatique (hôte local) — convient au serveur
+            //    lui-même et aux clients sur la même machine.
             try
             {
                 if (_host != null)
@@ -485,9 +516,9 @@ namespace LLM_AI
             }
             catch (Exception ex)
             {
-                _logger?.Warn("[LLM_AI] ResolveEmbyUrl : GetLocalHostApiUrl a échoué ({0}) — repli sur EmbyPublicUrl.", ex.Message);
+                _logger?.Warn("[LLM_AI] ResolveEmbyUrl : GetLocalHostApiUrl a échoué ({0}) — aucun repli disponible (EmbyPublicUrl vide).", ex.Message);
             }
-            return (Plugin.Instance?.Configuration?.EmbyPublicUrl ?? string.Empty).Trim();
+            return string.Empty;
         }
     }
 }

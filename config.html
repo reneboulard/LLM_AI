@@ -397,6 +397,34 @@
                             <span class="checkboxLabel" data-i18n="cfg.tonight.enabled">Activer la section « À regarder ce soir »</span>
                         </label>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightGenreTagEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.genretag.flag">Étiqueter les recos « à regarder ce soir » avec le genre « AI Tonight »</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.genretag.desc">
+                            Option <b>opt-in</b>. Ajoute le genre <b>AI Tonight</b> aux items Emby recommandés (enregistrements
+                            non visionnés + bibliothèque) pour les retrouver en filtrant sur ce genre dans n'importe quel
+                            client Emby. Une tâche planifiée (<b>Nettoyage genre AI Tonight</b>, 3 h du matin) retire le genre
+                            chaque jour ; les runs « ce soir » suivants le réajoutent sur les recos pertinentes. <b>Modifie les
+                            métadonnées réelles</b> des items (tableau Genres) — un refresh peut l'effacer (réajouté au prochain
+                            run). Indépendant de la bibliothèque <c>.strm</c> (genre <c>AI Suggestion</c>, nettoyage séparé).
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightCollectionEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.collection.flag">Regrouper les recos « à regarder ce soir » dans une collection « AI Tonight »</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.collection.desc">
+                            Option <b>opt-in</b>, indépendante du genre ci-dessus (les deux peuvent cohabiter). Maintient une
+                            <b>collection Emby</b> <b>AI Tonight</b> regroupant les items recommandés (enregistrements non
+                            visionnés + bibliothèque) — l'usager la parcourt comme n'importe quelle collection dans n'importe
+                            quel client Emby. <b>Non destructive</b> : les items sont référencés (regroupés), jamais copiés ni
+                            déplacés ; lire un membre joue le vrai item. La collection agrège des items
+                            <i>inter-bibliothèques</i> (enregistrements + films/séries possédés). La tâche planifiée
+                            (<b>Nettoyage genre AI Tonight</b>, 3 h du matin) <b>vide</b> aussi la collection chaque jour
+                            (coquille conservée, re-remplie au prochain run).
+                        </div>
+
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="text" id="txtTonightWindowStart"
@@ -494,6 +522,33 @@
                                 se connecte (si <c>DisplayMessage</c> supporté) + notification cloche persistante
                                 (deep-link) en repli. La cloche reste même si la session ferme avant la fin du run
                                 LLM (~30–60 s) ou si le client ne supporte pas le toast.
+                            </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.strmlib.h">Bibliothèque .strm des recommandations</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.strmlib.desc">
+                            Alternative <b>manuelle</b> à l'auto-programmation : après chaque run, le plugin écrit une
+                            carte <b>.strm</b>+<b>.nfo</b>+poster par recommandation à enregistrer (programmes EPG à
+                            venir, non possédés) dans une bibliothèque Emby dédiée. L'usager parcourt la bibliothèque ;
+                            <b>lire une carte crée l'enregistrement</b> puis affiche un clip de confirmation. Créez
+                            d'abord dans Emby une bibliothèque de type <b>Films</b> (ou Contenu mixte) pointant vers
+                            un dossier vide, puis renseignez son nom exact ici.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkStrmLibraryEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.strmlib.flag">Activer la bibliothèque .strm des recommandations</span>
+                        </label>
+                        <div class="inputContainer" style="max-width:420px;margin-top:0.4em;">
+                            <input is="emby-input" type="text" id="txtStrmLibraryName"
+                                   label="Nom de la bibliothèque Emby dédiée"
+                                   data-i18n-label="cfg.strmlib.name"
+                                   placeholder="AI Suggestions" />
+                            <div class="fieldDescription" data-i18n-html="cfg.strmlib.name.desc">
+                                Nom exact (sensible à la casse ignorée) de la bibliothèque Emby où écrire les cartes.
+                                Indépendant de l'auto-programmation (les deux peuvent cohabiter : le dedup évite les
+                                timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger
+                                l'endpoint d'activation.
                             </div>
                         </div>
 

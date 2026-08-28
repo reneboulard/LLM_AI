@@ -404,6 +404,52 @@ namespace LLM_AI
         /// </summary>
         public int TonightMinRecommendations { get; set; } = 3;
 
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
+        /// run <b>frais</b> de « À regarder ce soir », le plugin ajoute le genre
+        /// <c>AI Tonight</c> aux items Emby du <b>watch bucket</b> recommandés
+        /// (enregistrements non visionnés + items possédés) — l'usager les
+        /// retrouve en filtrant sur ce genre dans n'importe quel client Emby.
+        /// <para>Une tâche planifiée (« Nettoyage genre AI Tonight », 3 h du
+        /// matin) retire le genre de tous les items chaque jour ; les runs
+        /// Tonight suivants le réajoutent sur les recos toujours pertinentes.
+        /// Cette tâche de nettoyage tourne <b>même si ce flag est décoché</b>
+        /// (pour nettoyer les tags restants après désactivation).</para>
+        /// <para><b>Scope isolé</b> du genre <c>AI Suggestion</c> utilisé par la
+        /// bibliothèque <c>.strm</c> (<see cref="StrmLibraryEnabled"/>) — les
+        /// deux nettoyages sont indépendants. <b>Attention</b> : modifie les
+        /// métadonnées réelles des items (tableau <c>Genres</c>) ; un refresh
+        /// métadonnées peut annuler le tag (réajouté au prochain run).</para>
+        /// </summary>
+        public bool TonightGenreTagEnabled { get; set; } = false;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
+        /// run <b>frais</b> de « À regarder ce soir », le plugin maintient une
+        /// <b>collection Emby</b> nommée <c>AI Tonight</c> regroupant les items du
+        /// <b>watch bucket</b> recommandés (enregistrements non visionnés + items
+        /// possédés) — l'usager la parcourt comme n'importe quelle collection dans
+        /// n'importe quel client Emby. Même principe que l'étiquetage par genre
+        /// (<see cref="TonightGenreTagEnabled"/>) mais présenté comme une
+        /// collection navigable plutôt qu'un filtre par genre ; les deux flags sont
+        /// indépendants (peuvent cohabiter).
+        /// <para>Contrairement au genre (qui <b>modifie</b> les métadonnées des
+        /// items), la collection est <b>non destructive</b> : les items sont
+        /// référencés (regroupés), jamais copiés ni déplacés — lire un membre
+        /// joue le vrai item (enregistrement ou fichier possédé). La collection
+        /// agrège des items <i>inter-bibliothèques</i> (enregistrements + films/
+        /// séries possédés), ce qu'un filtre par genre ne permet pas aussi
+        /// directement.</para>
+        /// <para>Une tâche planifiée (« Nettoyage genre AI Tonight », 3 h du
+        /// matin) <b>vide</b> aussi la collection chaque jour (retire tous les
+        /// membres, la coquille BoxSet reste pour être re-remplie au prochain
+        /// run) ; cette tâche tourne <b>même si ce flag est décoché</b> (nettoie
+        /// les membres restants après désactivation). Le rapprochement se fait par
+        /// « tout retirer puis tout réajouter » sur chaque run frais (volume
+        /// faible, ~10 items).</para>
+        /// </summary>
+        public bool TonightCollectionEnabled { get; set; } = false;
+
         // ------------------------------------------------------------------
         //  Auto-programmation + popup au login (visibilité native TV).
         //  Les recommandations LLM_AI ne s'affichent que sur la page web ; les
@@ -450,5 +496,50 @@ namespace LLM_AI
         /// 8. Ne s'applique qu'aux clients supportant <c>DisplayMessage</c>.
         /// </summary>
         public int LoginPopupSeconds { get; set; } = 8;
+
+        // ------------------------------------------------------------------
+        //  Bibliothèque .strm/.nfo dédiée (surface native des recos à enregistrer).
+        //  Alternative manuelle à AutoProgram : au lieu de programmer tous les
+        //  timers d'un coup, la tâche planifiée écrit une carte .strm + .nfo par
+        //  reco du record bucket dans une bibliothèque Emby dédiée. L'usager
+        //  parcourt la bibliothèque ; lire une carte appelle l'endpoint
+        //  /Plugins/LLMAI/Activate qui crée le timer puis renvoie une vidéo de
+        //  confirmation. Indépendant de AutoProgram (les deux peuvent cohabiter,
+        //  le dedup évite les timers en double).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
+        /// run de la tâche planifiée, le plugin écrit une carte
+        /// <c>.strm</c>+<c>.nfo</c>+poster par reco du <b>record bucket</b>
+        /// (programmes EPG à venir, non possédés) dans la bibliothèque Emby
+        /// nommée <see cref="StrmLibraryName"/>. Lire la carte déclenche
+        /// l'enregistrement via l'endpoint <c>/Plugins/LLMAI/Activate</c>.
+        /// Indépendant de <see cref="AutoProgram"/>.
+        /// </summary>
+        public bool StrmLibraryEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Nom de la bibliothèque Emby dédiée (ex. « AI Suggestions ») où écrire
+        /// les cartes .strm/.nfo. L'utilisateur doit créer cette bibliothèque
+        /// (type « Films » ou « Contenu mixte ») pointant vers un dossier vide
+        /// avant d'activer <see cref="StrmLibraryEnabled"/>. Résolue en chemin
+        /// disque au moment de la génération via
+        /// <c>ILibraryManager.GetVirtualFolders</c>. Vide = la feature est
+        /// inactive (log d'avertissement).
+        /// </summary>
+        public string StrmLibraryName { get; set; } = "";
+
+        /// <summary>
+        /// Jeton de capacité (capability token) embarqué dans l'URL
+        /// <c>.strm</c> et vérifié par l'endpoint <c>/Plugins/LLMAI/Activate</c>.
+        /// L'URL <c>.strm</c> est demandée par le lecteur média lors de la
+        /// lecture, qui ne transmet pas les en-têtes d'auth Emby : ce jeton est
+        /// donc la seule gate d'accès (l'URL est la capacité). Auto-généré
+        /// (aléatoire) au premier run si vide, puis persisté via
+        /// <c>Plugin.Instance.SaveConfiguration</c>. Non éditable dans la page
+        /// de config.
+        /// </summary>
+        public string StrmSecret { get; set; } = "";
     }
 }

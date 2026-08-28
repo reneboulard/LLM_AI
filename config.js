@@ -8,6 +8,11 @@ define(["loading"], function (loading) {
 
     var pluginId = "e7d3dee6-ef19-46a9-985f-06318b682e60";
 
+    // Config chargée depuis le serveur au viewshow. Servira à carry-forward
+    // les champs non édités par le formulaire (ex. StrmSecret, auto-généré
+    // côté serveur et qu'il ne faut pas écraser lors d'un Enregistrer).
+    var loadedCfg = null;
+
     // Module i18n (FR/EN). Chargé comme ressource plugin via require() sur
     // l'URL « web/ConfigurationPage?name=LLMAII18n » — C'EST LE MÊME mécanisme
     // que celui par lequel le viewmanager charge ce module config.js lui-même
@@ -338,6 +343,8 @@ define(["loading"], function (loading) {
         view.querySelector("#numMaxMovieBatch").value = isNaN(mmb) ? 30 : mmb;
         view.querySelector("#txtDroppedTitles").value = droppedArrayToText(cfg.DroppedTitles);
         view.querySelector("#chkTonightEnabled").checked = cfg.TonightEnabled !== false;
+        view.querySelector("#chkTonightGenreTagEnabled").checked = !!cfg.TonightGenreTagEnabled;
+        view.querySelector("#chkTonightCollectionEnabled").checked = !!cfg.TonightCollectionEnabled;
         view.querySelector("#txtTonightWindowStart").value = cfg.TonightWindowStart || "";
         view.querySelector("#txtTonightWindowEnd").value = cfg.TonightWindowEnd || "23:59";
         view.querySelector("#txtTonightPrompt").value = cfg.TonightPrompt || "";
@@ -353,6 +360,8 @@ define(["loading"], function (loading) {
         view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
         var lps = parseInt(cfg.LoginPopupSeconds, 10);
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
+        view.querySelector("#chkStrmLibraryEnabled").checked = !!cfg.StrmLibraryEnabled;
+        view.querySelector("#txtStrmLibraryName").value = cfg.StrmLibraryName || "";
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -386,6 +395,8 @@ define(["loading"], function (loading) {
             MaxMovieBatch: parseInt(view.querySelector("#numMaxMovieBatch").value, 10) || 30,
             DroppedTitles: droppedTextToArray(view.querySelector("#txtDroppedTitles").value),
             TonightEnabled: view.querySelector("#chkTonightEnabled").checked,
+            TonightGenreTagEnabled: view.querySelector("#chkTonightGenreTagEnabled").checked,
+            TonightCollectionEnabled: view.querySelector("#chkTonightCollectionEnabled").checked,
             TonightWindowStart: view.querySelector("#txtTonightWindowStart").value.trim(),
             TonightWindowEnd: view.querySelector("#txtTonightWindowEnd").value.trim(),
             TonightPrompt: view.querySelector("#txtTonightPrompt").value,
@@ -396,6 +407,11 @@ define(["loading"], function (loading) {
             AutoProgram: view.querySelector("#chkAutoProgram").checked,
             LoginPopup: view.querySelector("#chkLoginPopup").checked,
             LoginPopupSeconds: parseInt(view.querySelector("#numLoginPopupSeconds").value, 10) || 8,
+            StrmLibraryEnabled: view.querySelector("#chkStrmLibraryEnabled").checked,
+            StrmLibraryName: (view.querySelector("#txtStrmLibraryName").value || "").trim(),
+            // Carry-forward : StrmSecret est auto-généré côté serveur et n'est
+            // pas édité ici — on le renvoie tel quel pour éviter de l'écraser.
+            StrmSecret: (loadedCfg && loadedCfg.StrmSecret) || "",
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),
@@ -416,7 +432,8 @@ define(["loading"], function (loading) {
 
                 // Charge la config existante et remplit les champs.
                 ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-                    fill(cfg || {}, view);
+                    loadedCfg = cfg || {};
+                    fill(loadedCfg, view);
                 });
 
             // Ajouter un backend.
