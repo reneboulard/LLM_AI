@@ -413,7 +413,7 @@ au run suivant (`CleanPrevious`).
 Lire une carte déclenche l'endpoint **`GET /Plugins/LLMAI/Activate?programId=&kind=&t=`** :
 1. `AutoProgrammer.ProgramOneAsync` crée le timer d'enregistrement (une reco
    unique), avec dedup par ProgramId ;
-2. l'endpoint stream le clip embarqué `recording_activated.mp4` (10 s, 640×360).
+2. l'endpoint stream le clip embarqué `recording_activated.mp4` (8 s, 1280×720, sans texte ni audio — universel).
 
 L'endpoint est **`[Unauthenticated]`** (les lecteurs média / `ffprobe` n'ont pas de
 token Emby) ; le **jeton `StrmSecret`** (`t=`) est l'unique garde. Emby ne probe le
@@ -574,7 +574,7 @@ GET /Plugins/LLMAI/Activate?programId=<id>&kind=<series|movie>&t=<StrmSecret>
 
 **Activation d'une carte `.strm`** : appelé par le lecteur média à la lecture d'une
 carte de la bibliothèque `.strm`. Crée l'enregistrement (`AutoProgrammer.ProgramOneAsync`,
-dedup par `programId`) puis stream `recording_activated.mp4` (10 s). Supporte le
+dedup par `programId`) puis stream `recording_activated.mp4` (8 s, 1280×720). Supporte le
 `Range` (206 + `Content-Range`).
 
 **Authentification :** **aucune** (DTO `[Unauthenticated]`) — les lecteurs / `ffprobe`

@@ -172,6 +172,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `cfg.AutoProgram == false` (vérifié dans les deux chemins avant tout appel à
   `AutoProgrammer.Program`). / No timer is created while `AutoProgram == false` (checked in
   both paths before any `AutoProgrammer.Program` call).
+- **Clip de confirmation universel** : `recording_activated.mp4` (embarqué, streamé par
+  `ActivateApiService` à la lecture d'une carte `.strm`) remplacé par une version **sans
+  texte ni audio** (8 s, 1280×720, ~545 Ko) — appropriée à toutes les langues, cohérente
+  avec la nouvelle option `ResponseLanguage`. L'ancienne version (10 s, 1080p, ~931 Ko,
+  texte français, audio quasi-silencieux à 2 kbps) reste récupérable via
+  `git show HEAD:recording_activated.mp4`. Aucun changement de code (le clip est embarqué
+  par son nom) ; commentaires de code et docs mis à jour (durée/résolution).
+  **Universal confirmation clip**: `recording_activated.mp4` (embedded, streamed by
+  `ActivateApiService` on `.strm` card play) replaced with a **no-text, no-audio** version
+  (8 s, 1280×720, ~545 KB) — suitable for all languages, consistent with the new
+  `ResponseLanguage` option. The old version (10 s, 1080p, ~931 KB, French text,
+  near-silent 2 kbps audio) remains recoverable via
+  `git show HEAD:recording_activated.mp4`. No code change (the clip is embedded by name);
+  code comments and docs updated (duration/resolution).
 
 ### Modifié / Changed
 - `LlmAgentService` : deux paramètres optionnels (`roleIntro`, `formatSection`) au

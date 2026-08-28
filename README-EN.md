@@ -411,7 +411,7 @@ marker file per folder drives stale-card cleanup on the next run (`CleanPrevious
 Playing a card triggers **`GET /Plugins/LLMAI/Activate?programId=&kind=&t=`**:
 1. `AutoProgrammer.ProgramOneAsync` creates the recording timer (a single reco),
    with dedup by ProgramId;
-2. the endpoint streams the embedded `recording_activated.mp4` clip (10 s, 640×360).
+2. the endpoint streams the embedded `recording_activated.mp4` clip (8 s, 1280×720, no text or audio — universal).
 
 The endpoint is **`[Unauthenticated]`** (media players / `ffprobe` carry no Emby
 token); the **`StrmSecret` token** (`t=`) is the sole gate. Emby only probes the
@@ -565,7 +565,7 @@ GET /Plugins/LLMAI/Activate?programId=<id>&kind=<series|movie>&t=<StrmSecret>
 
 **`.strm` card activation**: called by the media player when a card from the `.strm`
 library is played. Creates the recording (`AutoProgrammer.ProgramOneAsync`, dedup
-by `programId`) then streams `recording_activated.mp4` (10 s). Supports `Range`
+by `programId`) then streams `recording_activated.mp4` (8 s, 1280×720). Supports `Range`
 (206 + `Content-Range`).
 
 **Authentication:** **none** (`[Unauthenticated]` DTO) — players / `ffprobe` carry

@@ -22,7 +22,7 @@ namespace LLM_AI
     /// Quand l'usager lit la carte, le lecteur média demande cette URL ; le
     /// plugin crée alors le timer Emby (série → SeriesTimer, film → Timer via
     /// <see cref="AutoProgrammer.ProgramOneAsync"/>) puis renvoie un court clip
-    /// de confirmation <c>recording_activated.mp4</c> (10 s).</para>
+    /// de confirmation <c>recording_activated.mp4</c> (8 s, sans texte ni audio — universel).</para>
     /// <para><b>Auth</b> : l'URL <c>.strm</c> est demandée par le lecteur média
     /// (et par <c>ffprobe</c>/le transcodeur côté serveur) lors de la lecture,
     /// qui ne transmet PAS les en-têtes d'auth Emby. Le DTO requête
@@ -40,12 +40,13 @@ namespace LLM_AI
     /// <see cref="ILibraryManager"/> (pour construire un
     /// <see cref="AutoProgrammer"/>). La route est portée par le DTO requête
     /// <see cref="ActivateRequest"/> via <see cref="RouteAttribute"/>.</para>
-    /// <para><b>Streaming</b> : le clip (≈14 Ko) est renvoyé comme un
-    /// <c>byte[]</c> ; les en-têtes (Content-Type, Accept-Ranges, Content-Range
-    /// pour une requête <c>Range</c>) sont posés sur <c>Request.Response</c>
-    /// (<c>IResponse</c>) avant le retour. L'API <c>IResponse</c> de cet hôte
-    /// n'expose pas <c>OutputStream</c> : on délègue donc l'écriture du corps au
-    /// framework en retournant le tableau d'octets (tranche pour une Range).</para>
+    /// <para><b>Streaming</b> : le clip (≈545 Ko, 8 s, 720p, sans piste audio)
+    /// est renvoyé comme un <c>byte[]</c> ; les en-têtes (Content-Type,
+    /// Accept-Ranges, Content-Range pour une requête <c>Range</c>) sont posés sur
+    /// <c>Request.Response</c> (<c>IResponse</c>) avant le retour. L'API
+    /// <c>IResponse</c> de cet hôte n'expose pas <c>OutputStream</c> : on délègue
+    /// donc l'écriture du corps au framework en retournant le tableau d'octets
+    /// (tranche pour une Range).</para>
     /// </remarks>
     public class ActivateApiService : BaseApiService
     {
