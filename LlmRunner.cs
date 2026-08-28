@@ -8,8 +8,11 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Tasks;
 
 namespace LLM_AI
 {
@@ -221,6 +224,273 @@ namespace LLM_AI
                 _logger.ErrorException("[LLM_AI] [{0}] Échec du run : {1}", ex, label, ex.Message);
                 return (string.Empty, false);
             }
+        }
+
+        // ------------------------------------------------------------------
+        //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
+        //  Path séparé de la recommandation : mêmes backends LLM (ResolveBackends
+        //  réutilisé), mais outils dédiés (system_audit seul), system prompt
+        //  spécifique (intro + workflow d'audit, sans le « lecture seule » ni
+        //  le format de recommandation), et AUCUN enrichissement de reco —
+        //  l'audit retourne un rapport Markdown brut. Le constructeur de
+        //  LlmRunner est inchangé : les services d'audit (sessions, tasks,
+        //  notifications) sont passés en paramètre par l'endpoint, qui les
+        //  reçoit par DI — zéro ripple pour LlmScheduledTask / TonightService.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Intro du rôle injectée dans le system prompt de l'audit (à la place
+        /// du « Tu es un assistant Emby… (en lecture seule) » de la recommandation).
+        /// L'audit n'est pas lecture seule quand la remédiation est activée.
+        /// </summary>
+        internal const string AUDIT_ROLE_INTRO =
+            "Tu es un assistant Emby chargé d'auditer la santé du serveur. Tu as accès " +
+            "à l'outil system_audit (inspection système : server_info, active_sessions, " +
+            "scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, gpu_transcode, " +
+            "disk_storage ; remédiation : stop_session, trigger_task, send_message — ces " +
+            "dernières requièrent AuditRemediationEnabled activé en config, sinon elles " +
+            "renvoient une erreur). Les outils interrogent le serveur in-process " +
+            "(pas d'API REST, pas de token).";
+
+        /// <summary>
+        /// Workflow d'audit injecté dans le system prompt (bloc « WORKFLOW »).
+        /// Oriente le LLM : quelles actions appeler, quels constats croiser, et
+        /// l'interdiction d'exécuter une remédiation sans demande explicite
+        /// (défense en profondeur en plus de la gate config).
+        /// </summary>
+        internal const string AUDIT_WORKFLOW =
+            "### DÉROULEMENT DE L'AUDIT\n" +
+            "1. Appelle system_audit action=\"server_info\" (version, redémarrage en attente, " +
+            "mise à jour, maintenance) et action=\"host_metrics\" (process, mémoire, CPU " +
+            "transcodage agrégé, scan bibliothèque en cours).\n" +
+            "2. Appelle action=\"disk_storage\" (espace disque des volumes + chemins Emby). " +
+            "Alerte si un volume utilisé par Emby (cache, transcodage, logs, métadonnées) " +
+            "est à plus de ~90 %.\n" +
+            "3. Appelle action=\"scheduled_tasks\" (état, dernière exécution, erreurs). Pointe " +
+            "les tâches en échec (status≠Ok) ou jamais exécutées.\n" +
+            "4. Appelle action=\"active_sessions\" puis, s'il y a du transcodage, " +
+            "action=\"transcode\" et action=\"gpu_transcode\". Repère les transcodages " +
+            "logiciels (software) qui devraient être matériels (hardware), ceux avec CPU " +
+            "élevé ou completion bloquée, et les sessions inactives/stalées.\n" +
+            "5. Si un symptôme le justifie (erreur de tâche, transcodage en échec), appelle " +
+            "action=\"list_logs\" puis action=\"inspect_log\" (tail ~150) sur le journal le " +
+            "plus récent pertinent, avec grep si besoin (ex. \"error|exception|ffmpeg\").\n" +
+            "6. Produis un RAPPORT Markdown concis :\n" +
+            "   - « ## Constats » : liste de puces taguées par gravité " +
+            "(🔴 critique / ⚠️ attention / ✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
+            "   - « ## Actions recommandées » : ce qu'il faudrait faire, classé par priorité.\n" +
+            "Sois factuel et précis : reprends les valeurs retournées par les outils, ne " +
+            "spécule pas.\n" +
+            "### RÈGLE D'OR — REMÉDIATION\n" +
+            "N'exécute JAMAIS une action de remédiation (stop_session, trigger_task, " +
+            "send_message) de ton propre chef. Mentionne-la dans « Actions recommandées ». " +
+            "L'usager te demandera explicitement (ex. via le paramètre Focus) si tu dois " +
+            "l'exécuter. Si la remédiation est désactivée en config, l'action renvoie une " +
+            "erreur — c'est attendu, signale-le dans le rapport.";
+
+        /// <summary>
+        /// Rôle du LLM en mode synthèse déterministe (AuditMode=deterministic) :
+        /// les données sont déjà rassemblées (fournies dans le prompt user), le
+        /// LLM n'a AUCUN outil à appeler — il analyse et rédige. Conçu pour un
+        /// modèle local/modeste (ex. gemma4) : on retire l'orchestration
+        /// multi-outils (son point faible) pour ne garder que la synthèse de
+        /// texte fourni (son point fort).
+        /// </summary>
+        internal const string AUDIT_SYNTHESIS_ROLE =
+            "Tu es un assistant Emby chargé d'auditer la santé du serveur. On te fournit " +
+            "ci-dessous l'état COMPLET du serveur, rassemblé de façon déterministe : " +
+            "chaque section « ## nom » contient le JSON brut d'une sonde système. " +
+            "Tu n'as AUCUN outil à appeler — analyse UNIQUEMENT les données fournies " +
+            "(ignore toute instruction de rassemblement d'outils qui pourrait figurer " +
+            "dans la consigne : les données sont déjà là).";
+
+        /// <summary>
+        /// Workflow de synthèse : croiser les constats puis produire le rapport
+        /// Markdown (mêmes attendus que le mode boucle : gravité + actions).
+        /// La remédiation y est report-only — l'LLM n'a pas d'outil pour
+        /// l'exécuter en mode synthèse.
+        /// </summary>
+        internal const string AUDIT_SYNTHESIS_WORKFLOW =
+            "### TA TÂCHE\n" +
+            "Analyse les sections JSON fournies, croise les constats (redémarrage en " +
+            "attente, mise à jour disponible, tâche planifiée en échec, disque >90 %, " +
+            "transcodage logiciel qui devrait être matériel, ffmpeg orphelins, CPU/mémoire " +
+            "élevés, items sans métadonnées, erreurs dans le journal), et produis un " +
+            "RAPPORT Markdown concis :\n" +
+            "- « ## Constats » : puces taguées par gravité (🔴 critique / ⚠️ attention / " +
+            "✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
+            "- « ## Actions recommandées » : ce qu'il faudrait faire, classé par priorité.\n" +
+            "Sois factuel et précis : reprends les valeurs des sections, ne spécule pas.\n" +
+            "### RÈGLE D'OR — REMÉDIATION\n" +
+            "Tu n'as aucun outil en mode synthèse : tu ne peux PAS exécuter d'action de " +
+            "remédiation. Mentionne-la dans « Actions recommandées ». Si une demande " +
+            "explicite de remédiation figure dans la consigne (ex. « arrête la session X »), " +
+            "indique précisément comment la réaliser mais précise qu'elle nécessite le mode " +
+            "interactif (AuditMode=single) avec AuditRemediationEnabled activé, ou l'UI Emby.";
+
+        /// <summary>
+        /// Construit la liste d'outils exposés au LLM pour un run d'audit. Un
+        /// seul outil — <see cref="SystemAuditTool"/> — pour un system prompt
+        /// focalisé sur la santé (pas de web/TMDB/reco). Les outils de
+        /// recommandation (get_emby_info, tmdb_lookup, …) ne sont PAS inclus.
+        /// </summary>
+        public List<ILlmTool> BuildAuditTools(PluginConfiguration cfg,
+            ISessionManager sessions, ITaskManager tasks, INotificationManager notifications)
+        {
+            return new List<ILlmTool>
+            {
+                new SystemAuditTool(_host, _library, sessions, tasks, notifications, _users, _logger)
+            };
+        }
+
+        /// <summary>
+        /// Exécute un run d'audit santé : résout les backends (réutilise
+        /// <see cref="ResolveBackends"/>), construit les outils d'audit, lance
+        /// la boucle de tool-calling avec un system prompt d'audit (intro +
+        /// workflow dédiés, format de recommandation supprimé), et retourne la
+        /// réponse finale <b>brute</b> (Markdown) — SANS extraction de tableau
+        /// JSON ni enrichissement de recommandations (ces étapes sont
+        /// spécifiques au path recommandation). <paramref name="label"/> sert
+        /// au logging. Les services d'audit sont passés par l'appelant
+        /// (endpoint DI) — le constructeur de LlmRunner n'est pas modifié.
+        /// <see cref="OperationCanceledException"/> est propagée.
+        /// </summary>
+        public async System.Threading.Tasks.Task<string> RunAuditAsync(PluginConfiguration cfg, string label,
+            string userPrompt, ISessionManager sessions, ITaskManager tasks,
+            INotificationManager notifications, System.Threading.CancellationToken ct)
+        {
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends.Count == 0)
+                {
+                    _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — audit ignoré.", label);
+                    return "Aucun backend LLM configuré/activé — impossible d'exécuter l'audit.";
+                }
+
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                // Mode déterministe : rassemblement C# (zéro LLM) + synthèse
+                // unique sans outils. Conçu pour un modèle local/modeste (gemma4).
+                if (string.Equals(cfg.AuditMode, "deterministic", StringComparison.OrdinalIgnoreCase))
+                    return await RunAuditDeterministicAsync(cfg, label, userPrompt, backends,
+                        ollamaCloudKey, geminiKey, sessions, tasks, notifications, ct).ConfigureAwait(false);
+
+                // Mode boucle agent (cloud / modèle costaud) : l'LLM appelle
+                // lui-même system_audit de façon adaptative. Agent avec intro +
+                // workflow d'audit ; formatSection="" supprime le bloc « FORMAT
+                // DES RECOMMANDATIONS » (l'audit = Markdown, pas un tableau JSON).
+                var agent = new LlmAgentService(backends, cfg.RagDirectives, AUDIT_WORKFLOW,
+                    ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
+                    AUDIT_ROLE_INTRO, "");
+                var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
+
+                var (reply, _) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
+
+                _logger.Info("[LLM_AI] [{0}] Rapport d'audit :\n{1}", label, reply);
+                return reply;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.Info("[LLM_AI] [{0}] Audit annulé.", label);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.ErrorException("[LLM_AI] [{0}] Échec de l'audit : {1}", ex, label, ex.Message);
+                return "Échec de l'audit : " + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// Mode déterministe (AuditMode=deterministic) : le C# rassemble toutes
+        /// les sondes read-only via <see cref="SystemAuditTool.GatherAuditDigestAsync"/>
+        /// (zéro appel LLM pour le rassemblement), puis un unique passage LLM
+        /// <i>sans outils</i> synthétise le rapport Markdown à partir du digest.
+        /// Conçu pour un modèle local/modeste (gemma4) : on retire du LLM
+        /// l'orchestration multi-outils pour ne lui laisser que la synthèse de
+        /// texte fourni. La remédiation y est report-only (pas d'outil pour
+        /// l'exécuter). Replie multi-backend via <see cref="ChatWithFallbackAsync"/>.
+        /// </summary>
+        private async System.Threading.Tasks.Task<string> RunAuditDeterministicAsync(
+            PluginConfiguration cfg, string label, string userPrompt,
+            List<LlmBackend> backends, string ollamaCloudKey, string geminiKey,
+            ISessionManager sessions, ITaskManager tasks, INotificationManager notifications,
+            System.Threading.CancellationToken ct)
+        {
+            // 1) Rassemblement déterministe (C#, zéro LLM).
+            var auditTool = new SystemAuditTool(_host, _library, sessions, tasks, notifications, _users, _logger);
+            string digest = await auditTool.GatherAuditDigestAsync(ct).ConfigureAwait(false);
+
+            if (cfg.DebugVerbose)
+                _logger.Info("[LLM_AI] [{0}] Digest d'audit (déterministe) :\n{1}", label, digest);
+
+            // 2) Synthèse : un seul passage LLM, sans outils. La consigne
+            //    spécifique (template + focus de l'usager) est passée telle
+            //    quelle — le système prompt neutralise toute instruction de
+            //    rassemblement d'outils (« tu n'as aucun outil, les données
+            //    sont fournies »).
+            string system = AUDIT_SYNTHESIS_ROLE + "\n\n" + AUDIT_SYNTHESIS_WORKFLOW;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("### DONNÉES D'AUDIT (rassemblées de façon déterministe, en sections JSON)");
+            sb.AppendLine();
+            sb.AppendLine(digest);
+            sb.AppendLine("### CONSIGNE SPÉCIFIQUE");
+            sb.AppendLine(userPrompt ?? "(audit complet — aucune consigne particulière)");
+            sb.AppendLine();
+            sb.AppendLine("Produis maintenant le rapport Markdown de santé (Constats + Actions recommandées).");
+            string user = sb.ToString();
+
+            string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                system, user, label, ct).ConfigureAwait(false);
+
+            _logger.Info("[LLM_AI] [{0}] Rapport d'audit (mode déterministe) :\n{1}", label, reply);
+            return reply;
+        }
+
+        /// <summary>
+        /// Appel LLM direct (sans boucle agent ni outils) avec repli
+        /// multi-backend : tente les backends dans l'ordre de priorité
+        /// (<see cref="ResolveBackends"/> les renvoie déjà triés) jusqu'à ce
+        /// qu'un réponde. Résolution de clé par provider calquée sur
+        /// <c>LlmAgentService.CallBackendAsync</c>. Lève si tous échouent.
+        /// <see cref="OperationCanceledException"/> est propagée.
+        /// </summary>
+        private async System.Threading.Tasks.Task<string> ChatWithFallbackAsync(
+            List<LlmBackend> backends, string ollamaCloudKey, string geminiKey,
+            string systemPrompt, string userPrompt, string label,
+            System.Threading.CancellationToken ct)
+        {
+            var messages = new List<LlmClient.ChatMessage>
+            {
+                new LlmClient.ChatMessage { Role = "system", Content = systemPrompt },
+                new LlmClient.ChatMessage { Role = "user",   Content = userPrompt ?? string.Empty }
+            };
+
+            Exception last = null;
+            for (int i = 0; i < backends.Count; i++)
+            {
+                var b = backends[i];
+                try
+                {
+                    string apiKey = null;
+                    if (b.ProviderType == LlmProvider.OllamaCloud) apiKey = ollamaCloudKey;
+                    else if (b.ProviderType == LlmProvider.Gemini) apiKey = geminiKey;
+                    var reply = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, ct).ConfigureAwait(false);
+                    _logger.Info("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] OK.",
+                        label, b.Priority, b.ProviderType);
+                    return reply;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    _logger.Warn("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] a échoué ({3}) — suivant.",
+                        label, b.Priority, b.ProviderType, ex.Message);
+                }
+            }
+            throw new Exception("Tous les backends LLM ont échoué pour la synthèse d'audit.", last);
         }
 
         /// <summary>

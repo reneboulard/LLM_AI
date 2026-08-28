@@ -13,6 +13,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Ajouté / Added
+- **Audit santé du serveur** (`SystemAuditTool` + `AuditApiService`, endpoint à la
+  demande `GET /Plugins/LLMAI/Audit`) : un agent LLM interroge l'outil `system_audit`
+  et produit un **rapport Markdown** de santé (constats tagués 🔴/⚠️/✅ + actions
+  recommandées). Indépendant de la recommandation (run agent dédié). Admin-only.
+  **Server health audit** (`SystemAuditTool` + `AuditApiService`, on-demand endpoint
+  `GET /Plugins/LLMAI/Audit`): an LLM agent queries the `system_audit` tool and produces
+  a **Markdown health report** (severity-tagged findings + recommended actions).
+  Independent from recommendations (dedicated agent run). Admin-only.
+  - **Outil `system_audit`** — 14 actions sur `action` : inspection (lecture seule,
+    toujours disponibles) `server_info`, `active_sessions`, `scheduled_tasks`,
+    `list_logs`, `inspect_log` (tail ou grep + contexte, **confiné au dossier des
+    journaux** : nom seul + whitelist extension `.txt`/`.log` + containment canonique),
+    `transcode`, `gpu_transcode`, `host_metrics` (BCL : process/GC/runtime/uptime/scan +
+    CPU transcodage agrégé ; GPU uniquement par transcodage), `disk_storage`
+    (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg**
+    par corrélation + top RAM/CPU + compteurs Emby, BCL pure — aucun argument de
+    processus lu), `library_stats` (comptes par type + bibliothèques + état du scan, via
+    `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des
+    items sans synopsis/image/genres) ; remédiation (gate
+    `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`.
+    Ne lève jamais (erreur → JSON, préserve la boucle agent).
+    **`system_audit` tool** — 14 actions on `action`: inspection (read-only, always
+    available) `server_info`, `active_sessions`, `scheduled_tasks`, `list_logs`,
+    `inspect_log` (tail or grep + context, **confined to the log folder**: name-only +
+    `.txt`/`.log` extension whitelist + canonical containment), `transcode`,
+    `gpu_transcode`, `host_metrics` (BCL: process/GC/runtime/uptime/scan + aggregate
+    transcode CPU; GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path
+    mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU +
+    Emby counters, pure BCL — no process arguments read), `library_stats` (per-type
+    counts + libraries + scan state, via `ILibraryManager` — DB layer, no raw FS),
+    `missing_metadata` (sampling of items missing overview/image/genres); remediation
+    (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`.
+    Never throws (error → JSON, preserves the agent loop).
+  - **Deux modes d'exécution** (`AuditMode`) : `single` (défaut, boucle agent
+    adaptative — modèle costaud/cloud, seul mode avec remédiation exécutable) et
+    `deterministic` (rassemblement C# de toutes les sondes en un digest, zéro LLM,
+    puis un seul passage LLM **sans outils** synthétise le rapport — conçu pour un
+    modèle local/modeste comme gemma4, retire l'orchestration multi-outils pour ne
+    garder que la synthèse de texte fourni ; remédiation report-only).
+    **Two execution modes** (`AuditMode`): `single` (default, adaptive agent loop —
+    capable/cloud model, the only mode with executable remediation) and `deterministic`
+    (C# gathers all probes into a digest, zero LLM, then a single **tool-free** LLM pass
+    synthesizes the report — designed for a local/smaller model like gemma4, removes
+    multi-tool orchestration to keep only synthesis of provided text; remediation is
+    report-only).
+  - **Sécurité** : endpoint admin-only (`Policy.IsAdministrator`) ; pas d'outil générique
+    de lecture de fichier (le LLM ne peut pas vaguer dans `/`) ; remédiation gated par
+    config (défaut off) + consigne du prompt « n'agis jamais sans demande explicite ».
+    **Security**: admin-only endpoint (`Policy.IsAdministrator`); no generic file-read
+    tool (the LLM cannot wander into `/`); remediation gated by config (default off) +
+    prompt instruction "never act without an explicit request".
+  - **Config** : `AuditEnabled` (défaut `true`), `AuditRemediationEnabled` (défaut
+    `false`, opt-in), `AuditMode` (`single`/`deterministic`), `AuditPrompt` (template +
+    `Focus` optionnel). Page de config : section « Audit santé » avec bouton
+    « Lancer l'audit » + panneau de rendu Markdown + mini-convertisseur Markdown→HTML sûr.
+    **Config**: `AuditEnabled` (default `true`), `AuditRemediationEnabled` (default
+    `false`, opt-in), `AuditMode` (`single`/`deterministic`), `AuditPrompt` (template +
+    optional `Focus`). Config page: "Health audit" section with a "Run health audit"
+    button + Markdown render panel + safe minimal Markdown→HTML converter.
+
+### Modifié / Changed
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la
   tâche planifiée) pour exposer les recos directement dans Emby, au-delà de la
   page web `recommendations.html` :
@@ -92,6 +153,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   both paths before any `AutoProgrammer.Program` call).
 
 ### Modifié / Changed
+- `LlmAgentService` : deux paramètres optionnels (`roleIntro`, `formatSection`) au
+  constructeur pour surcharger l'intro du rôle et le bloc de format de sortie (le path
+  d'audit passe une intro d'audit et supprime le bloc « FORMAT DES RECOMMANDATIONS »).
+  Les appelants recommandation existants ne passent rien → comportement inchangé.
+  `LlmAgentService`: two optional constructor params (`roleIntro`, `formatSection`) to
+  override the role intro and the output-format block (the audit path passes an audit
+  intro and suppresses the "FORMAT DES RECOMMANDATIONS" block). Existing recommendation
+  call sites pass nothing → behavior unchanged.
+- `LlmRunner` : path d'audit dédié ajouté (`BuildAuditTools`, `RunAuditAsync`,
+  `RunAuditDeterministicAsync`, `ChatWithFallbackAsync`) sans modifier le constructeur
+  ni le path recommandation (zéro impact sur `LlmScheduledTask` / `TonightApiService`).
+  `LlmRunner`: dedicated audit path added (`BuildAuditTools`, `RunAuditAsync`,
+  `RunAuditDeterministicAsync`, `ChatWithFallbackAsync`) without changing the
+  constructor or the recommendation path (zero impact on `LlmScheduledTask` /
+  `TonightApiService`).
 - `AutoProgrammer` : logique par-reco extraite en `internal ProgramOneAsync(Reco,
   HashSet, HashSet, ct)` (retourne `OneOutcome`) — réutilisée par la boucle de la
   tâche planifiée **et** l'endpoint `/Plugins/LLMAI/Activate` (reco unique déclenchée

@@ -11,6 +11,13 @@ par usager. Le LLM dispose d'outils pour interroger la bibliothèque Emby, l'EPG
 TVDB, le web et une source « Showbizz » de nouveautés ; il décide lui-même des appels
 d'outils à effectuer (boucle d'agent / tool-calling).
 
+Il expose aussi un **audit santé du serveur** à la demande (`GET /Plugins/LLMAI/Audit`,
+admin) : un agent LLM interroge l'outil `system_audit` (sessions, tâches planifiées,
+transcodage, disques, journaux, métriques hôte, bibliothèque) et produit un **rapport
+Markdown** de santé (constats tagués par gravité + actions recommandées). La
+**remédiation** (arrêter une session, déclencher une tâche, notifier un usager) est
+désactivée par défaut (opt-in). Voir [Audit santé](#audit-santé).
+
 ---
 
 ## Table des matières
@@ -23,10 +30,11 @@ d'outils à effectuer (boucle d'agent / tool-calling).
 6. [« À regarder ce soir »](#à-regarder-ce-soir)
 7. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
 8. [Surfaces natives des recommandations](#surfaces-natives-des-recommandations)
-9. [API HTTP](#api-http)
-10. [i18n (FR / EN)](#i18n-fr--en)
-11. [Dépannage](#dépannage)
-12. [Changelog](#changelog)
+9. [Audit santé](#audit-santé)
+10. [API HTTP](#api-http)
+11. [i18n (FR / EN)](#i18n-fr--en)
+12. [Dépannage](#dépannage)
+13. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -197,6 +205,34 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 dans le prompt), `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planifiée),
 `DebugVerbose`.
 
+### Audit santé
+
+Endpoint **à la demande** (admin uniquement) `GET /Plugins/LLMAI/Audit` qui produit un
+rapport de santé du serveur. Indépendant de la recommandation (run agent dédié, outil
+`system_audit`). Voir [Audit santé](#audit-santé).
+
+- `AuditEnabled` (bool, défaut `true`) — active l'endpoint et le bouton « Lancer l'audit ».
+  `false` = l'endpoint renvoie une réponse désactivée (pas de run LLM). L'endpoint reste
+  réservé aux administrateurs.
+- `AuditRemediationEnabled` (bool, **défaut `false` — opt-in explicite**) — si coché, le
+  LLM peut **exécuter** les trois actions de remédiation (`stop_session`,
+  `trigger_task`, `send_message`) pendant l'audit. Tant que décoché, ces actions
+  renvoient une erreur et le LLM se contente de les **recommander** dans le rapport.
+  Double contrôle : le prompt d'audit demande de toute façon au LLM de ne JAMAIS agir
+  sans demande explicite — ce flag n'ouvre que la *capacité*, pas l'autonomie.
+- `AuditMode` (`single` | `deterministic`, défaut `single`) — stratégie d'exécution :
+  - `single` — une boucle agent : le LLM appelle lui-même `system_audit` de façon
+    adaptative (peut creuser un journal suite à un constat). Convient à un modèle
+    costaud / cloud. **Seul mode où la remédiation peut être exécutée** (si le flag est
+    activé).
+  - `deterministic` — le C# rassemble toutes les sondes read-only (zéro appel LLM
+    pour le rassemblement), puis un seul passage LLM **sans outils** synthétise le
+    rapport à partir du digest. Conçu pour un modèle local/modeste (ex. gemma4) : on
+    retire du LLM l'orchestration multi-outils pour ne garder que la synthèse de texte
+    fourni. Remédiation report-only (l'LLM n'a pas d'outil pour l'exécuter).
+- `AuditPrompt` — template du prompt envoyé au LLM (message user). L'éventuel
+  paramètre `Focus` de l'endpoint est appendé à l'exécution pour orienter l'audit.
+
 ---
 
 ## Composants
@@ -215,8 +251,10 @@ dans le prompt), `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planif
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
-| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Utilisé par `LlmScheduledTask` **et** `TonightApiService`. |
-| `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. |
+| `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut. |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 12 actions d'audit système (sessions, tâches, transcodage, disques, journaux, métriques hôte, processus, bibliothèque) + 3 actions de remédiation gated par `AuditRemediationEnabled`. Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
+| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Utilisé par `LlmScheduledTask`, `TonightApiService` **et** `AuditApiService`. |
+| `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour le path d'audit (sans toucher aux appelants recommandation). |
 | `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). |
 | `GetEmbyInfoTool.cs` | `GetEmbyInfoTool` | Outil `get_emby_info` (voir [Outils](#outils-llm)). |
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `ShowbizzTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). |
@@ -252,6 +290,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `web_search` | Recherche web (SearXng `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web (`WebFetchDirect` pour lecture brute). |
 | `showbizz_new_releases` | Nouveautés depuis une source « Showbizz » (`ShowbizzUrl` + `ShowbizzPattern`). |
+| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 14 actions sur `action` : **inspection** `server_info`, `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata` ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---
 
@@ -418,6 +457,72 @@ les recos toujours pertinentes.
 
 ---
 
+## Audit santé
+
+L'audit santé est **indépendant de la recommandation** : un run agent dédié interroge
+l'outil `system_audit` (télémétrie système, journaux, transcodage, matériel/OS, disque,
+bibliothèque) puis produit un **rapport Markdown** (constats tagués par gravité
+🔴/⚠️/✅ + section « Actions recommandées »). Il se déclenche **à la demande** depuis la
+page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/LLMAI/Audit`.
+
+### Deux modes d'exécution (`AuditMode`)
+
+- **`single` (boucle agent, défaut)** — l'LLM appelle lui-même `system_audit` de façon
+  adaptative (il peut creuser un journal suite à un constat, enchaîner les actions dans
+  l'ordre qui lui semble utile). Convient à un modèle costaud / cloud. **C'est le seul
+  mode où la remédiation peut être exécutée** (si `AuditRemediationEnabled` est activé).
+- **`deterministic` (rassemblement C# + synthèse)** — le C# rassemble **toutes** les
+  sondes read-only lui-même (`GatherAuditDigestAsync`, zéro appel LLM pour le
+  rassemblement) dans un digest Markdown, puis **un seul passage LLM sans outils**
+  synthétise le rapport à partir du digest. Conçu pour un modèle local/modeste
+  (ex. gemma4) : on retire au LLM l'orchestration multi-outils (son point faible) pour
+  ne lui laisser que la synthèse de texte fourni (son point fort). La remédiation y est
+  **report-only** (l'LLM n'a pas d'outil pour l'exécuter).
+
+### Actions de l'outil `system_audit`
+
+| Famille | Actions (lecture seule, toujours disponibles) |
+|---|---|
+| Télémétrie & config | `server_info` (version, ports, chemins, redémarrage en attente, mise à jour, maintenance), `active_sessions`, `scheduled_tasks` |
+| Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `transcode`, `gpu_transcode` |
+| Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
+| Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres) |
+
+| Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
+|---|---|
+| Contrôle | `stop_session` (PlaystateCommand Stop), `trigger_task` (`QueueScheduledTask`), `send_message` (notification inbox **ou** toast OSD) |
+
+Quand `AuditRemediationEnabled` est décoché, les actions de remédiation renvoient une
+erreur JSON — le LLM doit alors **recommander** l'action dans son rapport sans
+l'exécuter.
+
+### Sécurité
+
+- **Admin-only** : l'endpoint résout l'usager appelant et vérifie `Policy.IsAdministrator`.
+  Un non-admin reçoit `{Enabled:true, Error:"Réservé aux administrateurs."}`.
+- **Confinement du système de fichiers** : il n'y a **pas d'outil générique de lecture
+  de fichier**. `inspect_log` est épinglé au dossier des journaux (`SystemInfo.LogPath`)
+  avec trois gardes : `Path.GetFileName` (rejette tout slash/`..`), **whitelist
+  d'extension** (`.txt`/`.log` uniquement) et **containment canonique**
+  (`Path.GetFullPath` sous `LogPath`). Le LLM ne peut pas vaguer dans `/`.
+- **Bibliothèque via DB** : `library_stats` / `missing_metadata` passent par
+  `ILibraryManager` (couche DB) — aucun accès FS brut aux dossiers de la bibliothèque.
+- **Remédiation gated** : `stop_session` / `trigger_task` / `send_message` vérifient
+  `Plugin.Instance.Configuration.AuditRemediationEnabled` avant d'agir (défaut off).
+  Le prompt d'audit demande en plus au LLM de ne **jamais** exécuter de remédiation sans
+  demande explicite de l'usager (défense en profondeur).
+- **Processus : BCL pure** — `Process.GetProcesses()` n'expose que noms/temps CPU/âge,
+  **jamais** les arguments ni le contenu : aucune fuite de secret.
+
+### Paramètre `Focus`
+
+L'endpoint accepte un `Focus` libre (champ de la page de config) appendé au template
+`AuditPrompt` pour orienter l'audit (ex. `disk`, `transcoding`) ou formuler une demande
+explicite de remédiation (ex. « arrête la session XYZ » — qui n'aboutira que si la
+remédiation est activée **et** le mode est `single`).
+
+---
+
 ## API HTTP
 
 ```
@@ -456,6 +561,32 @@ auto-généré et comparé en temps constant. Un `t` invalide → 403.
 **Test :**
 ```bash
 curl "http://localhost:8096/emby/Plugins/LLMAI/Activate?programId=<id>&kind=movie&t=<StrmSecret>" -o clip.mp4
+```
+
+```
+GET /Plugins/LLMAI/Audit?focus=<texte optionnel>
+```
+
+**Audit santé à la demande** : lance un run agent dédié (outil `system_audit`) et
+renvoie un **rapport Markdown** de santé du serveur. Voir [Audit santé](#audit-santé).
+
+**Réponse :** `{ Enabled, Report, Date, Error }` — `Report` est le rapport Markdown brut
+(rendu côté config.js via un mini-convertisseur Markdown→HTML sûr). `Enabled=false` si
+`AuditEnabled` est off ; `Error="Réservé aux administrateurs."` si l'appelant n'est pas
+admin.
+
+**Paramètre `focus` :** orientation libre de l'audit (un domaine à inspecter, ou une
+demande explicite de remédiation). Appendé au template `AuditPrompt`. Laisser vide pour
+un audit complet.
+
+**Authentification :** **admin uniquement**. Résolution de l'usager via le token de
+session (`X-Emby-Token`) ou la clé API, puis vérification `Policy.IsAdministrator`. Un
+non-admin reçoit `Error` (pas de run LLM).
+
+**Test :**
+```bash
+curl -H "X-Emby-Token: <token-admin>" \
+  "http://localhost:8096/emby/Plugins/LLMAI/Audit?focus=transcoding"
 ```
 
 ---

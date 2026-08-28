@@ -29,6 +29,12 @@ namespace LLM_AI
         private readonly IJsonSerializer _json;
         private readonly ILogger _logger;
 
+        // Surcharges optionnelles du system prompt, pour les usages non-recommandation
+        // (ex. audit système). Null = comportement nominal (intro + format de
+        // recommandation historiques) — les appelants existants ne passent rien.
+        private readonly string _roleIntro;          // intro du rôle à la place du « Tu es un assistant Emby… (en lecture seule) » ; null = intro par défaut
+        private readonly string _formatSection;     // bloc format de sortie à la place du « FORMAT DES RECOMMANDATIONS » ; null = bloc recos par défaut ; "" = supprimé
+
         // Index du backend actif dans _backends, résolu paresseusement au 1er
         // appel réussi. -1 = aucun verrouillé (première tentative). Si le backend
         // actif échoue en cours de boucle, on re-scanne toute la liste et on
@@ -39,7 +45,9 @@ namespace LLM_AI
                                string workflow,
                                string ollamaCloudKey, string geminiKey,
                                IJsonSerializer json, ILogger logger,
-                               bool verbose = false)
+                               bool verbose = false,
+                               string roleIntro = null,
+                               string formatSection = null)
         {
             _backends = backends != null
                 ? new List<LlmBackend>(backends)
@@ -51,6 +59,8 @@ namespace LLM_AI
             _json = json;
             _logger = logger;
             _verbose = verbose;
+            _roleIntro = roleIntro;
+            _formatSection = formatSection;
         }
 
         /// <summary>
@@ -241,11 +251,19 @@ namespace LLM_AI
         //  System prompt (rôle + AVAILABLE TOOLS + directives RAG)
         // ------------------------------------------------------------------
 
-        private static string BuildSystemPrompt(IReadOnlyList<ILlmTool> tools, string ragDirectives, string workflow)
+        private string BuildSystemPrompt(IReadOnlyList<ILlmTool> tools, string ragDirectives, string workflow)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("Tu es un assistant Emby expert et autonome. Tu as accès à des outils ");
-            sb.AppendLine("qui interrogent directement le serveur Emby (en lecture seule).");
+            // Intro du rôle : surcharge optionnelle (_roleIntro) pour les usages non
+            // recommandation (ex. audit système, qui n'est pas « en lecture seule »
+            // quand la remédiation est activée). Null = intro historique.
+            if (!string.IsNullOrWhiteSpace(_roleIntro))
+                sb.AppendLine(_roleIntro.Trim());
+            else
+            {
+                sb.AppendLine("Tu es un assistant Emby expert et autonome. Tu as accès à des outils ");
+                sb.AppendLine("qui interrogent directement le serveur Emby (en lecture seule).");
+            }
             sb.AppendLine();
             sb.AppendLine("### AVAILABLE TOOLS");
             foreach (var t in tools)
@@ -271,20 +289,35 @@ namespace LLM_AI
                 sb.AppendLine(workflow);
                 sb.AppendLine();
             }
-            sb.AppendLine("### FORMAT DES RECOMMANDATIONS");
-            sb.AppendLine("Si la tâche demande des recommandations d'enregistrement, retourne un tableau JSON ");
-            sb.AppendLine("d'objets avec, pour chaque item, les champs : ");
-            sb.AppendLine("title, kind (series|movie), reason, priority (high|medium|low), ");
-            sb.AppendLine("channel (nom de la chaîne), ");
-            sb.AppendLine("start (date/heure de diffusion, format ISO 8601, ex. 2026-08-26T21:00:00), ");
-            sb.AppendLine("et showbizz_match (booléen ou nom de l'émission Showbizz correspondante). ");
-            sb.AppendLine("Les champs channel et start sont OBLIGATOIRES (servent à programmer l'enregistrement) : ");
-            sb.AppendLine("reprends-les tels quels depuis les résultats de get_emby_info (epg_series/epg_movies). ");
-            sb.AppendLine("priority reflète l'intérêt de la recommandation (high = à ne pas manquer, ");
-            sb.AppendLine("medium = intéressant, low = bonus) — sert au badge couleur de la carte. ");
-            sb.AppendLine("Reprends le title TEL QUEL depuis les résultats de get_emby_info (epg_series/epg_movies) ");
-            sb.AppendLine("pour permettre le rattachement à l'Id programme (poster + programmation). ");
-            sb.AppendLine("Même si le prompt utilisateur n'inclut pas channel/start/priority dans son schéma, AJOUTE-les toujours.");
+            // Bloc format de sortie : surcharge optionnelle (_formatSection) pour les
+            // usages non recommandation. Null = bloc « FORMAT DES RECOMMANDATIONS »
+            // historique (rétro-compat) ; "" = supprimé (audit = rapport Markdown,
+            // pas de tableau JSON de recos) ; chaîne non vide = bloc personnalisé.
+            if (_formatSection != null)
+            {
+                if (_formatSection.Length > 0)
+                {
+                    sb.AppendLine(_formatSection.Trim());
+                    sb.AppendLine();
+                }
+            }
+            else
+            {
+                sb.AppendLine("### FORMAT DES RECOMMANDATIONS");
+                sb.AppendLine("Si la tâche demande des recommandations d'enregistrement, retourne un tableau JSON ");
+                sb.AppendLine("d'objets avec, pour chaque item, les champs : ");
+                sb.AppendLine("title, kind (series|movie), reason, priority (high|medium|low), ");
+                sb.AppendLine("channel (nom de la chaîne), ");
+                sb.AppendLine("start (date/heure de diffusion, format ISO 8601, ex. 2026-08-26T21:00:00), ");
+                sb.AppendLine("et showbizz_match (booléen ou nom de l'émission Showbizz correspondante). ");
+                sb.AppendLine("Les champs channel et start sont OBLIGATOIRES (servent à programmer l'enregistrement) : ");
+                sb.AppendLine("reprends-les tels quels depuis les résultats de get_emby_info (epg_series/epg_movies). ");
+                sb.AppendLine("priority reflète l'intérêt de la recommandation (high = à ne pas manquer, ");
+                sb.AppendLine("medium = intéressant, low = bonus) — sert au badge couleur de la carte. ");
+                sb.AppendLine("Reprends le title TEL QUEL depuis les résultats de get_emby_info (epg_series/epg_movies) ");
+                sb.AppendLine("pour permettre le rattachement à l'Id programme (poster + programmation). ");
+                sb.AppendLine("Même si le prompt utilisateur n'inclut pas channel/start/priority dans son schéma, AJOUTE-les toujours.");
+            }
             if (!string.IsNullOrWhiteSpace(ragDirectives))
             {
                 sb.AppendLine();

@@ -552,6 +552,95 @@
                             </div>
                         </div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.desc">
+                            Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches
+                            planifiées, transcodage, disques, journaux, métriques hôte) et produit un
+                            <b>rapport Markdown</b> de santé : constats tagués par gravité + actions
+                            recommandées. Réservé aux administrateurs. La <b>remédiation</b> (arrêter une
+                            session, déclencher une tâche, notifier un usager) est désactivée par défaut.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkAuditEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.audit.enabled">Activer l'endpoint d'audit (/Plugins/LLMAI/Audit)</span>
+                        </label>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkAuditRemediationEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.audit.remediation">Autoriser la remédiation (stop_session, trigger_task, send_message)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.remediation.desc">
+                            Option <b>opt-in</b> (décochée par défaut). Si cochée, le LLM peut <b>exécuter</b>
+                            des actions de remédiation pendant l'audit (arrêter une lecture, déclencher une
+                            tâche, envoyer un message). Tant que décochée, ces actions renvoient une erreur
+                            et le LLM se contente de les <b>recommander</b> dans le rapport. Le prompt d'audit
+                            demande de toute façon au LLM de ne jamais agir sans demande explicite.
+                        </div>
+
+                        <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
+                            <select is="emby-select" id="selAuditMode" label="Mode d'exécution de l'audit" data-i18n-label="cfg.audit.mode">
+                                <option value="single" data-i18n="cfg.audit.mode.single">Boucle agent (adaptatif — modèle costaud / cloud)</option>
+                                <option value="deterministic" data-i18n="cfg.audit.mode.deterministic">Déterministe + synthèse (modèle local / gemma4)</option>
+                            </select>
+                            <div class="fieldDescription" data-i18n-html="cfg.audit.mode.desc">
+                                <b>single</b> : l'LLM appelle lui-même l'outil system_audit de façon adaptative (peut
+                                creuser un journal suite à un constat). Convient à un modèle puissant (cloud).
+                                <b>deterministic</b> : le plugin rassemble lui-même toutes les sondes (zéro LLM) puis
+                                un seul passage LLM <b>sans outils</b> synthétise le rapport — conçu pour un modèle
+                                local/modeste (ex. gemma4), qui synthétise bien du texte fourni mais gère mal
+                                l'orchestration multi-outils. Note : la <b>remédiation exécutable</b> n'est possible
+                                qu'en mode <b>single</b> (avec le flag de remédiation activé) ; en mode déterministe
+                                elle reste rapport-only.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer" style="max-width:420px;margin-top:0.4em;">
+                            <input is="emby-input" type="text" id="txtAuditFocus"
+                                   label="Focus optionnel de l'audit"
+                                   data-i18n-label="cfg.audit.focus"
+                                   placeholder="ex. transcoding, disk, ou « arrête la session XYZ »" />
+                            <div class="fieldDescription" data-i18n-html="cfg.audit.focus.desc">
+                                Orientation libre de l'audit (ex. un domaine à inspecter, ou une demande
+                                explicite de remédiation). Laisser vide pour un audit complet.
+                            </div>
+                        </div>
+
+                        <style>
+                            .LLMAIConfigPage .auditReport {
+                                margin: 0.8em 0;
+                                padding: 1em 1.2em;
+                                background: rgba(0,0,0,0.18);
+                                border-radius: 6px;
+                                max-height: 60vh;
+                                overflow: auto;
+                                font-size: 13px;
+                                line-height: 1.5;
+                                white-space: normal;
+                            }
+                            .LLMAIConfigPage .auditReport h1,
+                            .LLMAIConfigPage .auditReport h2,
+                            .LLMAIConfigPage .auditReport h3 { margin: 0.6em 0 0.3em; }
+                            .LLMAIConfigPage .auditReport h2 { font-size: 1.15em; }
+                            .LLMAIConfigPage .auditReport h3 { font-size: 1.05em; }
+                            .LLMAIConfigPage .auditReport ul { margin: 0.3em 0; padding-left: 1.4em; }
+                            .LLMAIConfigPage .auditReport li { margin: 0.2em 0; }
+                            .LLMAIConfigPage .auditReport p { margin: 0.4em 0; }
+                            .LLMAIConfigPage .auditReport code {
+                                background: rgba(0,0,0,0.25); padding: 0 0.3em; border-radius: 3px;
+                                font-family: monospace;
+                            }
+                            .LLMAIConfigPage .auditReport .auditMeta {
+                                color: #888; font-size: 11px; margin-bottom: 0.6em;
+                            }
+                        </style>
+                        <div style="margin:0.8em 0;">
+                            <button is="emby-button" type="button" class="raised block" id="btnRunAudit" data-i18n="cfg.audit.run">
+                                Lancer l'audit santé
+                            </button>
+                        </div>
+                        <div id="auditReport" class="auditReport" style="display:none;"></div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

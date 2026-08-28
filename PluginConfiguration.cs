@@ -541,5 +541,78 @@ namespace LLM_AI
         /// de config.
         /// </summary>
         public string StrmSecret { get; set; } = "";
+
+        // ------------------------------------------------------------------
+        //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
+        //  Indépendant de la recommandation : un run agent dédié interroge
+        //  l'outil `system_audit` (12 actions : télémétrie, logs, transcodage,
+        //  matériel/OS, disque, et — si activé — remédiation) puis produit un
+        //  rapport Markdown de santé (constats + actions recommandées).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Active l'endpoint d'audit <c>GET /Plugins/LLMAI/Audit</c> et le bouton
+        /// « Lancer l'audit » de la page de config. <c>false</c> = l'endpoint
+        /// renvoie une réponse désactivée (pas de run LLM). Défaut <c>true</c>.
+        /// L'audit reste réservé aux administrateurs (vérifié côté endpoint).
+        /// </summary>
+        public bool AuditEnabled { get; set; } = true;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, les trois
+        /// actions de remédiation de l'outil <c>system_audit</c> —
+        /// <c>stop_session</c> (arrêter la lecture d'une session),
+        /// <c>trigger_task</c> (déclencher une tâche planifiée) et
+        /// <c>send_message</c> (notifier un usager) — peuvent être exécutées par
+        /// le LLM. Tant que ce flag est décoché, ces actions renvoient une
+        /// erreur (l'LLM doit alors se contenter de recommander l'action dans
+        /// son rapport, sans l'exécuter). Double contrôle : le prompt d'audit
+        /// demande aussi au LLM de ne JAMAIS exécuter de remédiation sans
+        /// demande explicite de l'usager — ce flag ne fait qu'ouvrir la
+        /// <i>capacité</i>, pas autoriser l'autonomie.
+        /// </summary>
+        public bool AuditRemediationEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Template du prompt envoyé au LLM pour l'audit santé (message user).
+        /// L'éventuel paramètre <c>Focus</c> de l'endpoint (ex. « transcoding »,
+        /// « disk ») est appendé à ce template à l'exécution pour orienter
+        /// l'audit. Défaut : audit complet de la santé du serveur.
+        /// </summary>
+        public string AuditPrompt { get; set; } =
+            "Audite la santé de ce serveur Emby. Appelle system_audit avec les actions " +
+            "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
+            "transcode, gpu_transcode, list_logs (et inspect_log si un journal semble " +
+            "pertinent). Croise les constats : redémarrage en attente (HasPendingRestart), " +
+            "mise à jour disponible, tâche planifiée en échec, disque faible, transcodage " +
+            "avec CPU élevé ou logiciel (software) au lieu de matériel (hardware), " +
+            "sessions inactives/stalées, scan de bibliothèque en cours, maintenance. " +
+            "Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
+            "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions " +
+            "recommandées ». N'exécute JAMAIS d'action de remédiation (stop_session, " +
+            "trigger_task, send_message) de ton propre chef : mentionne-les dans la " +
+            "section « Actions recommandées » ; l'usager te demandera explicitement si " +
+            "il veut que tu les exécutes. Sois factuel et précis (reprends les valeurs " +
+            "chiffrées retournées par les outils).";
+
+        /// <summary>
+        /// Stratégie d'exécution de l'audit santé.
+        /// <list type="bullet">
+        /// <item><c>single</c> (défaut) : une seule boucle agent — l'LLM appelle
+        ///   lui-même l'outil <c>system_audit</c> de façon adaptative (peut
+        ///   creuser un journal suite à un constat). Convient à un modèle
+        ///   costaud (cloud). C'est le seul mode où la remédiation peut être
+        ///   <i>exécutée</i> (si <see cref="AuditRemediationEnabled"/> est activé).</item>
+        /// <item><c>deterministic</c> : le C# rassemble lui-même toutes les
+        ///   sondes read-only (zéro appel LLM pour le rassemblement), puis un
+        ///   seul passage LLM <i>sans outils</i> synthétise le rapport à partir
+        ///   du digest. Conçu pour un modèle local/plus modeste (ex. gemma4) :
+        ///   on retire du LLM l'orchestration multi-outils (son point faible)
+        ///   et on ne lui laisse que la synthèse de texte fourni (son point
+        ///   fort). Mode lecture-seule au sens exécution : la remédiation y est
+        ///   toujours report-only (l'LLM n'a pas d'outil pour l'exécuter).</item>
+        /// </list>
+        /// </summary>
+        public string AuditMode { get; set; } = "single";
     }
 }

@@ -215,6 +215,49 @@ define(["loading"], function (loading) {
             .replace(/"/g, "&quot;");
     }
 
+    // Mini-rendu Markdown -> HTML sûr pour le rapport d'audit. On échappe
+    // d'abord tout le texte, puis on convertit les constructions supportées
+    // (titres #/##/###, listes -/*, gras **…`, `code` inline, paragraphes,
+    // lignes de code séparées). Pas de dépendance externe ; volontairement
+    // minimal — le rapport est produit par notre propre agent.
+    function renderMarkdown(md) {
+        var lines = String(md == null ? "" : md).replace(/\r\n?/g, "\n").split("\n");
+        var out = [];
+        var inUl = false;
+        var para = [];
+        function flushPara() {
+            if (para.length) {
+                out.push("<p>" + para.join(" ") + "</p>");
+                para = [];
+            }
+        }
+        function closeUl() {
+            if (inUl) { out.push("</ul>"); inUl = false; }
+        }
+        function inline(s) {
+            // inline : **bold** et `code` (après escape global déjà fait sur
+            // la ligne entière, on ne réintroduit aucun balisage utilisateur).
+            var h = esc(s);
+            h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+            h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
+            return h;
+        }
+        for (var i = 0; i < lines.length; i++) {
+            var raw = lines[i];
+            var line = raw.replace(/^\s+|\s+$/g, "");
+            if (!line) { flushPara(); closeUl(); continue; }
+            var h = /^(#{1,3})\s+(.*)$/.exec(line);
+            if (h) { flushPara(); closeUl(); var lvl = h[1].length; out.push("<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">"); continue; }
+            if (/^[-*]\s+/.test(line)) { flushPara(); if (!inUl) { out.push("<ul>"); inUl = true; } out.push("<li>" + inline(line.replace(/^[-*]\s+/, "")) + "</li>"); continue; }
+            // Citation > ou ligne « tableau » (|…|) : rendue en monospace brut.
+            if (/^>|^\|/.test(line)) { flushPara(); closeUl(); out.push("<p><code>" + esc(line) + "</code></p>"); continue; }
+            para.push(inline(line));
+        }
+        flushPara();
+        closeUl();
+        return out.join("\n");
+    }
+
     var PROVIDER_DEFAULTS = {
         "ollama_local": { url: "http://192.168.11.2:11434", model: "gemma4:26b" },
         "ollama_cloud": { url: "https://ollama.com",         model: "gemma4:31b" },
@@ -362,6 +405,12 @@ define(["loading"], function (loading) {
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
         view.querySelector("#chkStrmLibraryEnabled").checked = !!cfg.StrmLibraryEnabled;
         view.querySelector("#txtStrmLibraryName").value = cfg.StrmLibraryName || "";
+        // Audit santé — Lecture seule par défaut, remédiation opt-in.
+        view.querySelector("#chkAuditEnabled").checked = cfg.AuditEnabled !== false;
+        view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
+        // Mode d'exécution de l'audit : single (boucle agent) | deterministic (rassemblement C# + synthèse).
+        view.querySelector("#selAuditMode").value = cfg.AuditMode === "deterministic" ? "deterministic" : "single";
+        view.querySelector("#txtAuditFocus").value = "";
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -415,7 +464,14 @@ define(["loading"], function (loading) {
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),
-            MovieFlags: arrayToJson(collectChecked(view.querySelector("#wlMovieFlags")))
+            MovieFlags: arrayToJson(collectChecked(view.querySelector("#wlMovieFlags"))),
+            // Audit santé — pas d'éditeur de prompt en v1 : on porte le
+            // template serveur (AuditPrompt) en carry-forward pour ne pas
+            // l'écraser par défaut. Seuls les deux commutateurs sont édités.
+            AuditEnabled: view.querySelector("#chkAuditEnabled").checked,
+            AuditRemediationEnabled: view.querySelector("#chkAuditRemediationEnabled").checked,
+            AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
+            AuditPrompt: (loadedCfg && loadedCfg.AuditPrompt) || ""
         };
     }
 
@@ -473,6 +529,61 @@ define(["loading"], function (loading) {
                     box.querySelectorAll(".wlItem").forEach(function (item) {
                         var label = item.textContent || "";
                         item.style.display = (!q || label.toLowerCase().indexOf(q) >= 0) ? "" : "none";
+                    });
+                });
+            }
+
+            // Audit santé : déclenche l'endpoint /Plugins/LLMAI/Audit et rend
+            // le rapport Markdown retourné dans #auditReport. La page de config
+            // étant déjà en contexte admin, la porte d'auth côté serveur passe.
+            var runAuditBtn = view.querySelector("#btnRunAudit");
+            if (runAuditBtn) {
+                runAuditBtn.addEventListener("click", function () {
+                    var reportEl = view.querySelector("#auditReport");
+                    var focus = (view.querySelector("#txtAuditFocus").value || "").trim();
+                    var url = ApiClient.getUrl("Plugins/LLMAI/Audit", focus ? { Focus: focus } : {});
+
+                    // États UI : bouton désactivé + libellé « en cours ».
+                    runAuditBtn.disabled = true;
+                    var prevLabel = runAuditBtn.textContent;
+                    runAuditBtn.textContent = i18n.t("cfg.audit.running");
+                    if (reportEl) {
+                        reportEl.style.display = "block";
+                        reportEl.innerHTML =
+                            '<div class="auditMeta">' + esc(i18n.t("cfg.audit.running")) + '</div>';
+                    }
+
+                    ApiClient.ajax({ url: url, type: "GET" }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (data) {
+                        runAuditBtn.disabled = false;
+                        runAuditBtn.textContent = prevLabel;
+                        if (!reportEl) return;
+                        if (!data || data.Enabled === false) {
+                            reportEl.innerHTML = '<div class="auditMeta">' +
+                                esc(i18n.t("cfg.audit.disabled")) + '</div>';
+                            return;
+                        }
+                        if (data.Error) {
+                            reportEl.innerHTML = '<div class="auditMeta">' +
+                                esc(data.Error) + '</div>';
+                            return;
+                        }
+                        var meta = '<div class="auditMeta">' +
+                            esc(i18n.t("cfg.audit.done")) +
+                            (data.Date ? ' — ' + esc(data.Date) : '') +
+                            '</div>';
+                        reportEl.innerHTML = meta + renderMarkdown(data.Report || "");
+                    }, function (err) {
+                        runAuditBtn.disabled = false;
+                        runAuditBtn.textContent = prevLabel;
+                        if (reportEl) {
+                            reportEl.style.display = "block";
+                            reportEl.innerHTML = '<div class="auditMeta">' +
+                                esc(i18n.t("cfg.alert.saveError",
+                                    (err && err.statusText ? err.statusText : err))) +
+                                '</div>';
+                        }
                     });
                 });
             }
