@@ -202,8 +202,21 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 
 `TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée), `WebFetchDirect`,
 `ShowbizzUrl` / `ShowbizzPattern`, `RagDirectives` (directives additionnelles injectées
-dans le prompt), `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planifiée),
+dans le prompt), `ResponseLanguage` (langue de sortie du LLM — voir ci-dessous),
+`ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planifiée),
 `DebugVerbose`.
+
+### Langue de réponse du LLM
+
+`ResponseLanguage` force la langue du **texte en prose** de l'LLM — les **raisons des
+recommandations** (champ `reason` des cartes) **et** le **rapport d'audit**. Vide / `Auto`
+= aucune directive (l'LLM suit la langue du prompt, ici le français — comportement par
+défaut). Toute autre valeur (ex. `English`, `Español`, `Deutsch`…) injecte une directive
+en fin de system prompt : l'LLM rédige alors dans cette langue. Les titres de films/séries,
+noms de chaînes et noms de champs JSON techniques restent inchangés (langue d'origine).
+Select sur la page de config : `Auto`, `Français`, `English`, `Español`, `Deutsch`,
+`Italiano`, `Português`. S'applique aux deux paths (recommandation + audit, modes single
+et déterministe).
 
 ### Audit santé
 

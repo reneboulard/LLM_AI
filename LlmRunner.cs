@@ -200,7 +200,8 @@ namespace LLM_AI
                 string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
 
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
-                    ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose);
+                    ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
+                    responseLanguage: cfg.ResponseLanguage);
                 var tools = BuildTools(cfg);
 
                 var (reply, toolResults) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
@@ -402,7 +403,7 @@ namespace LLM_AI
                 // DES RECOMMANDATIONS » (l'audit = Markdown, pas un tableau JSON).
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, AUDIT_WORKFLOW,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    AUDIT_ROLE_INTRO, "");
+                    AUDIT_ROLE_INTRO, "", cfg.ResponseLanguage);
                 var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
 
                 var (reply, _) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
@@ -451,6 +452,11 @@ namespace LLM_AI
             //    rassemblement d'outils (« tu n'as aucun outil, les données
             //    sont fournies »).
             string system = AUDIT_SYNTHESIS_ROLE + "\n\n" + AUDIT_SYNTHESIS_WORKFLOW;
+            // Directive de langue de réponse (partagée avec la boucle agent —
+            // voir LlmAgentService.BuildLanguageDirective). Vide = pas de directive.
+            var langDir = LlmAgentService.BuildLanguageDirective(cfg.ResponseLanguage);
+            if (langDir.Length > 0)
+                system += "\n\n" + langDir;
             var sb = new System.Text.StringBuilder();
             sb.AppendLine("### DONNÉES D'AUDIT (rassemblées de façon déterministe, en sections JSON)");
             sb.AppendLine();

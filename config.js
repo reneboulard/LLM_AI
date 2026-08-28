@@ -367,6 +367,7 @@ define(["loading"], function (loading) {
 
     function fill(cfg, view) {
         view.querySelector("#txtEmbyPublicUrl").value = cfg.EmbyPublicUrl || "";
+        view.querySelector("#selResponseLanguage").value = cfg.ResponseLanguage || "";
         view.querySelector("#txtTmdbApiKey").value = cfg.TmdbApiKey || "";
         view.querySelector("#txtTmdbLanguage").value = cfg.TmdbLanguage || "";
         view.querySelector("#txtTvdbApiKey").value = cfg.TvdbApiKey || "";
@@ -427,6 +428,7 @@ define(["loading"], function (loading) {
             LlmUrl: firstEnabled ? firstEnabled.Url : (backends[0] ? backends[0].Url : ""),
             ModelName: firstEnabled ? firstEnabled.Model : (backends[0] ? backends[0].Model : ""),
             EmbyPublicUrl: view.querySelector("#txtEmbyPublicUrl").value,
+            ResponseLanguage: view.querySelector("#selResponseLanguage").value,
             TmdbApiKey: view.querySelector("#txtTmdbApiKey").value,
             TmdbLanguage: view.querySelector("#txtTmdbLanguage").value,
             TvdbApiKey: view.querySelector("#txtTvdbApiKey").value,

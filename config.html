@@ -165,6 +165,25 @@
                             <div class="fieldDescription" data-i18n-html="cfg.embyurl.desc">URL d'accès Emby (ex. http://192.168.11.2:8096) — sert à construire les liens d'images retournés au LLM.</div>
                         </div>
 
+                        <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
+                            <select is="emby-select" id="selResponseLanguage" label="Langue de réponse du LLM" data-i18n-label="cfg.relang.label">
+                                <option value="" data-i18n="cfg.relang.auto">Auto (langue du prompt — défaut)</option>
+                                <option value="Français">Français</option>
+                                <option value="English">English</option>
+                                <option value="Español">Español</option>
+                                <option value="Deutsch">Deutsch</option>
+                                <option value="Italiano">Italiano</option>
+                                <option value="Português">Português</option>
+                            </select>
+                            <div class="fieldDescription" data-i18n-html="cfg.relang.desc">
+                                Langue du texte en prose de l'LLM — les <b>raisons des recommandations</b>
+                                et le <b>rapport d'audit</b>. « Auto » = aucune directive (l'LLM suit la
+                                langue du prompt, ici le français). Choisir une langue force l'LLM à
+                                répondre dans celle-ci. Les titres de films/séries, noms de chaînes et
+                                champs JSON techniques restent inchangés.
+                            </div>
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.filters.h">Filtres de l'analyse EPG (tâche recommandations)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.filters.desc">
                             Filtres appliqués aux programmes EPG avant envoi au LLM (get_emby_info

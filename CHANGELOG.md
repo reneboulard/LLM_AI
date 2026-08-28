@@ -75,6 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `false`, opt-in), `AuditMode` (`single`/`deterministic`), `AuditPrompt` (template +
     optional `Focus`). Config page: "Health audit" section with a "Run health audit"
     button + Markdown render panel + safe minimal Markdown→HTML converter.
+- **Langue de réponse du LLM** (`ResponseLanguage`) : force la langue du texte en prose de
+  l'LLM — les **raisons des recommandations** (champ `reason`) **et** le **rapport d'audit**.
+  Vide / `Auto` (défaut) = aucune directive (l'LLM suit la langue du prompt, ici le
+  français). Toute autre valeur (ex. `English`, `Español`…) injecte une directive en fin de
+  system prompt ; les titres de films/séries, noms de chaînes et champs JSON techniques
+  restent inchangés. Select sur la page de config (`Auto`, `Français`, `English`, `Español`,
+  `Deutsch`, `Italiano`, `Português`). S'applique aux deux paths (recommandation + audit,
+  modes single et déterministe) via un paramètre optionnel rétro-compatible du
+  `LlmAgentService` et un append au system prompt du mode synthèse déterministe.
+  **LLM response language** (`ResponseLanguage`): forces the language of the LLM's prose —
+  the **recommendation reasons** (`reason` field) **and** the **audit report**. Empty /
+  `Auto` (default) = no directive (the LLM follows the prompt's language, here French). Any
+  other value (e.g. `English`, `Español`…) injects a directive at the end of the system
+  prompt; movie/series titles, channel names and technical JSON fields stay unchanged.
+  Config-page select (`Auto`, `Français`, `English`, `Español`, `Deutsch`, `Italiano`,
+  `Português`). Applies to both paths (recommendations + audit, single and deterministic
+  modes) via a backward-compatible optional `LlmAgentService` parameter and an append to the
+  deterministic-synthesis system prompt.
 
 ### Modifié / Changed
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la

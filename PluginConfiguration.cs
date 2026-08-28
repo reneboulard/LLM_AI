@@ -207,6 +207,18 @@ namespace LLM_AI
         public string RagDirectives { get; set; } = "";
 
         /// <summary>
+        /// Langue de sortie du LLM pour le texte en langage naturel (raisons des
+        /// recommandations, rapport d'audit, explications). Vide = pas de
+        /// directive (comportement historique : l'LLM suit la langue du prompt,
+        /// ici le français). Toute valeur non vide (ex. « English », « Français »,
+        /// « Español ») injecte une directive forçant l'LLM à répondre dans cette
+        /// langue. S'applique aux recommandations ET à l'audit. Les titres de
+        /// films/séries, noms de chaînes et noms de champs JSON techniques restent
+        /// inchangés (langue d'origine).
+        /// </summary>
+        public string ResponseLanguage { get; set; } = "";
+
+        /// <summary>
         /// Tâche planifiée combinée : « &lt;planification&gt; | &lt;prompt de tâche&gt; ».
         /// Ex. « Daily 03:00 | Résume les nouveaux médias ajoutés cette semaine ».
         /// La planification (gauche du '|') fixe les triggers par défaut ;

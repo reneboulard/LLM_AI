@@ -34,6 +34,7 @@ namespace LLM_AI
         // recommandation historiques) — les appelants existants ne passent rien.
         private readonly string _roleIntro;          // intro du rôle à la place du « Tu es un assistant Emby… (en lecture seule) » ; null = intro par défaut
         private readonly string _formatSection;     // bloc format de sortie à la place du « FORMAT DES RECOMMANDATIONS » ; null = bloc recos par défaut ; "" = supprimé
+        private readonly string _responseLang;     // langue de sortie imposée au LLM (ex. « English ») ; vide = pas de directive (comportement historique)
 
         // Index du backend actif dans _backends, résolu paresseusement au 1er
         // appel réussi. -1 = aucun verrouillé (première tentative). Si le backend
@@ -47,7 +48,8 @@ namespace LLM_AI
                                IJsonSerializer json, ILogger logger,
                                bool verbose = false,
                                string roleIntro = null,
-                               string formatSection = null)
+                               string formatSection = null,
+                               string responseLanguage = "")
         {
             _backends = backends != null
                 ? new List<LlmBackend>(backends)
@@ -61,6 +63,25 @@ namespace LLM_AI
             _verbose = verbose;
             _roleIntro = roleIntro;
             _formatSection = formatSection;
+            _responseLang = responseLanguage ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Construit la directive de langue de réponse injectée en fin de system
+        /// prompt. Retourne une chaîne vide si <paramref name="lang"/> est vide ou
+        /// blanc (aucune directive = comportement historique : l'LLM suit la langue
+        /// du prompt). Partagée par le path recommandation (boucle agent) et le path
+        /// synthèse déterministe de l'audit (qui assemble son propre system prompt).
+        /// </summary>
+        internal static string BuildLanguageDirective(string lang)
+        {
+            if (string.IsNullOrWhiteSpace(lang))
+                return string.Empty;
+            return "### LANGUE DE RÉPONSE\n" +
+                   "Rédige TOUTE ta sortie en langage naturel — les raisons des recommandations, " +
+                   "le rapport d'audit, les explications — en " + lang.Trim() + ". " +
+                   "Les titres de films/séries et les noms de chaînes restent dans leur langue " +
+                   "d'origine. Les noms des champs JSON techniques sont inchangés.";
         }
 
         /// <summary>
@@ -323,6 +344,14 @@ namespace LLM_AI
                 sb.AppendLine();
                 sb.AppendLine("### DIRECTIVES ADDITIONNELLES");
                 sb.AppendLine(ragDirectives);
+            }
+            // Directive de langue de réponse (en tout dernier pour la rendre
+            // prédominante) — voir BuildLanguageDirective. Vide = pas de directive.
+            var langDir = BuildLanguageDirective(_responseLang);
+            if (langDir.Length > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine(langDir);
             }
             return sb.ToString();
         }
