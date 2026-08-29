@@ -12,7 +12,6 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Providers;
-using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Logging;
@@ -59,17 +58,17 @@ namespace LLM_AI
     /// ignorés au passage suivant. <b>Dry-run</b> : <c>OrphanIdentifyDryRun</c>
     /// = aucune mutation, log détaillé de la résolution proposée. Best-effort :
     /// un item en erreur n'interrompt jamais le passage.</para>
-    /// <para><b>Périmètre</b> : enregistrements DVR uniquement (films et séries),
-    /// pas les cartes <c>.strm</c>. Découverte via
-    /// <see cref="ILiveTvManager.GetRecordings(InternalItemsQuery, CancellationToken)"/>.</para>
+    /// <para><b>Périmètre</b> : items de bibliothèque (films et séries)
+    /// issus d'enregistrements DVR — une fois l'enregistrement terminé, Emby
+    /// place l'item dans une bibliothèque, où il vit comme un <c>Movie</c>/<c>Series</c>
+    /// normal. Les cartes <c>.strm</c> sont exclues. Découverte via
+    /// <see cref="ILibraryManager.GetItemList(InternalItemsQuery)"/>.</para>
     /// </remarks>
     public class OrphanIdentifyTask : IScheduledTask
     {
         private readonly ILogger _logger;
         private readonly IJsonSerializer _json;
         private readonly ILibraryManager _library;
-        private readonly IUserManager _users;
-        private readonly ILiveTvManager _liveTv;
         private readonly IServerApplicationHost _host;
         private readonly IProviderManager _providers;
         private readonly LlmRunner _runner;
@@ -98,8 +97,6 @@ namespace LLM_AI
             _logger = logger;
             _json = jsonSerializer;
             _library = library;
-            _users = users;
-            _liveTv = liveTv;
             _host = host;
             _providers = providers;
             _runner = new LlmRunner(logger, jsonSerializer, library, users, liveTv, host);
@@ -158,46 +155,41 @@ namespace LLM_AI
             var langs = new[] { "en-US", "fr-FR", userTmdb }
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-            // GetRecordings requiert un User sur la requête (sans contexte usager,
-            // Emby renvoie 0 enregistrement). On résout un usager admin (voit toutes
-            // les recordings) à défaut le premier usager. Aucun usager → abandon.
-            var user = ResolveAdminUser();
-            if (user == null)
-            {
-                _logger?.Warn("[LLM_AI] OrphanIdentify : aucun usager Emby disponible — GetRecordings nécessite un contexte usager. Passage annulé.");
-                return;
-            }
-
             bool verbose = cfg.DebugVerbose;
-            _logger?.Info("[LLM_AI] OrphanIdentify : démarrage ({0}, langs=[{1}], user={2}{3}).",
-                dry ? "DRY-RUN" : "application", string.Join(",", langs), user.Name,
-                verbose ? ", verbose" : "");
+            _logger?.Info("[LLM_AI] OrphanIdentify : démarrage ({0}, langs=[{1}]{2}).",
+                dry ? "DRY-RUN" : "application", string.Join(",", langs), verbose ? ", verbose" : "");
 
-            BaseItemDto[] recs;
+            // Les enregistrements DVR terminés sont importés par Emby dans une
+            // bibliothèque (Movies/Series) — or GetRecordings ne retourne que les
+            // enregistrements actifs/à venir, PAS les enregistrements complétés (qui
+            // deviennent des items bibliothèque normaux). On scanne donc les items
+            // Movie/Series de la bibliothèque et on retient les orphelins (aucun id
+            // provider IMDb/TMDB/TVDB = identification Emby échouée). Les cartes
+            // .strm de la bibliothèque ai_suggestions sont exclues (extension .strm).
+            BaseItem[] items;
             try
             {
-                // Pas de filtre IsPlayed : on veut TOUTES les recordings (identifiées
-                // ou non, regardées ou non) pour repérer les orphelins.
-                recs = (_liveTv.GetRecordings(new InternalItemsQuery
+                items = _library.GetItemList(new InternalItemsQuery
                 {
-                    User = user,
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
                     EnableTotalRecordCount = false
-                }, ct)?.Items) ?? Array.Empty<BaseItemDto>();
+                }) ?? Array.Empty<BaseItem>();
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger?.ErrorException("[LLM_AI] OrphanIdentify : GetRecordings a échoué — passage annulé.", ex, ex.Message);
+                _logger?.ErrorException("[LLM_AI] OrphanIdentify : GetItemList a échoué — passage annulé.", ex, ex.Message);
                 return;
             }
 
             int scanned = 0, orphans = 0, resolved = 0, review = 0, skipped = 0, errors = 0;
-            int total = recs.Length;
+            int total = items.Length;
             int idx = 0;
 
-            _logger?.Info("[LLM_AI] OrphanIdentify : {0} enregistrement(s) DVR retourné(s) par GetRecordings.", total);
+            _logger?.Info("[LLM_AI] OrphanIdentify : {0} item(s) Movie/Series en bibliothèque.", total);
 
-            foreach (var dto in recs)
+            foreach (var item in items)
             {
                 ct.ThrowIfCancellationRequested();
                 idx++;
@@ -207,106 +199,81 @@ namespace LLM_AI
                 Status st;
                 try
                 {
-                    st = await HandleRecordingAsync(dto, cfg, dry, langs, userTmdb, verbose, ct).ConfigureAwait(false);
+                    st = await HandleItemAsync(item, cfg, dry, langs, userTmdb, verbose, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     errors++;
                     _logger?.Warn("[LLM_AI] OrphanIdentify : erreur sur « {0} » ({1}) — item ignoré.",
-                        dto?.Name, ex.Message);
+                        item?.Name, ex.Message);
                     continue;
                 }
 
                 switch (st)
                 {
                     case Status.Skipped: skipped++; break;
-                    case Status.OrphanResolved: resolved++; break;
-                    case Status.NeedsReview: review++; break;
+                    // Un item résolu ou en needs-review était par construction un orphelin.
+                    case Status.OrphanResolved: orphans++; resolved++; break;
+                    case Status.NeedsReview: orphans++; review++; break;
                 }
             }
 
             _logger?.Info(
-                "[LLM_AI] OrphanIdentify : terminé. recordings={0} orphelins={1} résolus={2} needs-review={3} ignorés(non-orphelin/déjà taggé)={4} erreurs={5} ({6}).",
+                "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} ignorés(non-orphelin/.strm/déjà taggé)={4} erreurs={5} ({6}).",
                 scanned, orphans, resolved, review, skipped, errors, dry ? "DRY-RUN" : "application");
-        }
-
-        /// <summary>
-        /// Résout un usager admin (voit toutes les recordings) pour le contexte
-        /// <see cref="ILiveTvManager.GetRecordings"/> ; à défaut le premier usager
-        /// disponible. Null si aucun usager. Ne lève jamais.
-        /// </summary>
-        private User ResolveAdminUser()
-        {
-            try
-            {
-                var list = _users.GetUserList(new UserQuery());
-                if (list == null) return null;
-                User first = null;
-                foreach (var u in list)
-                {
-                    if (u == null) continue;
-                    first ??= u;
-                    try { if (u.Policy?.IsAdministrator == true) return u; } catch { /* Policy illisible → on continue */ }
-                }
-                return first;
-            }
-            catch (Exception ex)
-            {
-                _logger?.Warn("[LLM_AI] OrphanIdentify : résolution usager échouée ({0}).", ex.Message);
-                return null;
-            }
         }
 
         private enum Status { Skipped, OrphanResolved, NeedsReview }
 
         // ------------------------------------------------------------------
-        //  Traitement d'un enregistrement
+        //  Traitement d'un item bibliothèque (Movie/Series) orphelin
         // ------------------------------------------------------------------
 
-        private async Task<Status> HandleRecordingAsync(BaseItemDto dto, PluginConfiguration cfg,
+        private async Task<Status> HandleItemAsync(BaseItem item, PluginConfiguration cfg,
             bool dry, string[] langs, string userTmdb, bool verbose, CancellationToken ct)
         {
-            // Films/séries seulement.
-            bool isSeries = dto.IsSeries == true;
-            bool isMovie = dto.IsMovie == true;
-            string kind = isSeries ? "series" : (isMovie ? "movie" : "other");
-            string dtoName = !string.IsNullOrEmpty(dto.SeriesName) ? dto.SeriesName : dto.Name;
-            var dtoTags = dto.Tags ?? Array.Empty<string>();
-            bool tagged = Array.IndexOf(dtoTags, TagIdentified) >= 0 || Array.IndexOf(dtoTags, TagNeedsReview) >= 0;
-            bool orphan = IsOrphan(dto);
+            // La requête est déjà filtrée sur Movie/Series ; on détermine le kind via
+            // le nom du type (robuste aux sous-types Emby).
+            bool isSeries = item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0;
+            string kind = isSeries ? "series" : "movie";
 
-            // Diagnostics verbose : expose pour chaque recording pourquoi elle est
-            // gardée ou écartée — sinon les skips sont silencieux (l'usager ne voit
-            // pas pourquoi son recording n'est pas traité).
+            var itemTags = item.Tags ?? Array.Empty<string>();
+            bool tagged = Array.IndexOf(itemTags, TagIdentified) >= 0 || Array.IndexOf(itemTags, TagNeedsReview) >= 0;
+            bool strmCard = IsStrmCard(item);
+            bool orphan = IsOrphanItem(item);
+            string itemName = item.Name;
+
+            // Diagnostics verbose : expose pour chaque item pourquoi il est gardé ou
+            // écarté — sinon les skips sont silencieux.
             if (verbose)
             {
                 string reason;
-                if (!isSeries && !isMovie) reason = "type non movie/series";
-                else if (tagged) reason = "déjà taggé " + (Array.IndexOf(dtoTags, TagIdentified) >= 0 ? TagIdentified : TagNeedsReview);
+                if (strmCard) reason = "carte .strm (bibliothèque ai_suggestions)";
+                else if (tagged) reason = "déjà taggé " + (Array.IndexOf(itemTags, TagIdentified) >= 0 ? TagIdentified : TagNeedsReview);
                 else if (!orphan) reason = "a déjà un id provider (non-orphelin)";
-                else if (string.IsNullOrWhiteSpace(dtoName)) reason = "titre vide";
+                else if (string.IsNullOrWhiteSpace(itemName)) reason = "titre vide";
                 else reason = "ORPHELIN → à traiter";
                 _logger?.Info("[LLM_AI] OrphanIdentify : id={0} « {1} » kind={2} imdb={3} tmdb={4} tvdb={5} tags=[{6}] → {7}.",
-                    dto.Id, dtoName, kind,
-                    HasProviderId(dto, "imdb") ? "oui" : "non",
-                    HasProviderId(dto, "tmdb") ? "oui" : "non",
-                    HasProviderId(dto, "tvdb") ? "oui" : "non",
-                    string.Join(",", dtoTags), reason);
+                    item.Id, itemName, kind,
+                    HasItemProviderId(item, "imdb") ? "oui" : "non",
+                    HasItemProviderId(item, "tmdb") ? "oui" : "non",
+                    HasItemProviderId(item, "tvdb") ? "oui" : "non",
+                    string.Join(",", itemTags), reason);
             }
 
-            if (!isSeries && !isMovie) return Status.Skipped;
+            // Cartes .strm de la bibliothèque du plugin : hors périmètre.
+            if (strmCard) return Status.Skipped;
             if (tagged) return Status.Skipped;
 
             // Orphelin = aucun id provider IMDb/TMDB/TVDB.
             if (!orphan) return Status.Skipped;
 
-            string epgTitle = dtoName;
+            string epgTitle = itemName;
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
-            int? year = dto.ProductionYear ?? YearOf(dto.PremiereDate) ?? YearOf(dto.DateCreated);
-            string overview = dto.Overview;
-            string channel = dto.ChannelName;
+            int? year = item.ProductionYear ?? YearOf(item.PremiereDate) ?? YearOf(item.DateCreated);
+            string overview = item.Overview;
             string cleanTitle = TmdbLookupTool.CleanEpgTitle(epgTitle);
             if (string.IsNullOrWhiteSpace(cleanTitle)) cleanTitle = epgTitle;
 
@@ -330,7 +297,7 @@ namespace LLM_AI
             {
                 try
                 {
-                    meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year, overview, channel, langs, userTmdb, ct).ConfigureAwait(false);
+                    meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year, overview, null, langs, userTmdb, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S2";
                 }
                 catch (OperationCanceledException) { throw; }
@@ -342,12 +309,8 @@ namespace LLM_AI
             {
                 _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » ({1}) — NON résolu (needs-review).", epgTitle, kind);
                 if (dry) return Status.NeedsReview;
-                var item2 = ResolveItem(dto);
-                if (item2 != null)
-                {
-                    AddTag(item2, TagNeedsReview);
-                    item2.UpdateToRepository(ItemUpdateType.MetadataEdit);
-                }
+                AddTag(item, TagNeedsReview);
+                item.UpdateToRepository(ItemUpdateType.MetadataEdit);
                 return Status.NeedsReview;
             }
 
@@ -357,14 +320,6 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] OrphanIdentify (DRY-RUN) : « {0} » → tmdb={1} imdb={2} tvdb={3} ({4}) — aucune écriture.",
                     epgTitle, meta.TmdbId, meta.ImdbId ?? "—", meta.TvdbId ?? "—", stage);
                 return Status.OrphanResolved;
-            }
-
-            var item = ResolveItem(dto);
-            if (item == null)
-            {
-                _logger?.Warn("[LLM_AI] OrphanIdentify : « {0} » — BaseItem introuvable (id={1}), résolution abandonnée.",
-                    epgTitle, dto.Id);
-                return Status.NeedsReview;
             }
 
             await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
@@ -507,45 +462,30 @@ namespace LLM_AI
         //  Helpers
         // ------------------------------------------------------------------
 
-        /// <summary>Résout le <see cref="BaseItem"/> sous-jacent depuis l'id du DTO.</summary>
-        private BaseItem ResolveItem(BaseItemDto dto)
+        /// <summary>Orphelin = aucun id provider IMDb/TMDB/TVDB présent (identification Emby échouée).</summary>
+        private static bool IsOrphanItem(BaseItem item)
         {
-            if (dto == null || !long.TryParse(dto.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out long id) || id == 0)
-                return null;
-            try
-            {
-                return (_library.GetItemList(new InternalItemsQuery
-                {
-                    ItemIds = new[] { id },
-                    Limit = 1
-                }) ?? Array.Empty<BaseItem>()).FirstOrDefault();
-            }
-            catch (Exception ex)
-            {
-                _logger?.Info("[LLM_AI] OrphanIdentify : GetItemList(id={0}) échoué ({1}).", id, ex.Message);
-                return null;
-            }
+            return !HasItemProviderId(item, "imdb")
+                && !HasItemProviderId(item, "tmdb")
+                && !HasItemProviderId(item, "tvdb");
         }
 
-        /// <summary>Orphelin = aucun id provider IMDb/TMDB/TVDB présent.</summary>
-        private static bool IsOrphan(BaseItemDto dto)
+        private static bool HasItemProviderId(BaseItem item, string key)
         {
-            return !HasProviderId(dto, "imdb")
-                && !HasProviderId(dto, "tmdb")
-                && !HasProviderId(dto, "tvdb");
+            if (item == null) return false;
+            try { return !string.IsNullOrWhiteSpace(item.GetProviderId(key)); }
+            catch { return false; }
         }
 
-        private static bool HasProviderId(BaseItemDto dto, string key)
+        /// <summary>
+        /// Carte .strm de la bibliothèque du plugin (ai_suggestions) : hors périmètre
+        /// — ce ne sont pas des enregistrements DVR. Détecté par l'extension du chemin.
+        /// </summary>
+        private static bool IsStrmCard(BaseItem item)
         {
-            var p = dto?.ProviderIds;
-            if (p == null || p.Count == 0) return false;
-            foreach (var kv in p)
-            {
-                if (string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrWhiteSpace(kv.Value))
-                    return true;
-            }
-            return false;
+            var path = item?.Path;
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            return path.EndsWith(".strm", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -588,7 +528,10 @@ namespace LLM_AI
             return sb.ToString();
         }
 
+        private static int? YearOf(DateTime? d) => d.HasValue ? d.Value.Year : (int?)null;
+        private static int? YearOf(DateTime d) => d == default ? (int?)null : d.Year;
         private static int? YearOf(DateTimeOffset? d) => d.HasValue ? d.Value.Year : (int?)null;
+        private static int? YearOf(DateTimeOffset d) => d == default ? (int?)null : d.Year;
 
         private static string MimeFromUrl(string url) =>
             url.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg";

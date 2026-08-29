@@ -243,9 +243,11 @@ tool). See [Server health audit](#server-health-audit).
 
 ### Orphan recording identification
 
-Daily **04:00** scheduled task that identifies **unidentified** DVR recordings (no
-IMDb/TMDB/TVDB id — often Quebec titles missing from the TMDB/TVDB catalog). See
-[Orphan identification](#orphan-recording-identification).
+Daily **04:00** scheduled task that identifies **unidentified library items**
+(movies/series from **completed** DVR recordings — once recording completes, Emby
+imports the item into a library where it lives as a normal `Movie`/`Series`; no
+IMDb/TMDB/TVDB id = failed identification, often Quebec titles missing from the
+TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification).
 
 - `OrphanIdentifyEnabled` (bool, **default `false` — explicit opt-in**) — enables the
   task. `false` = the task is inactive (no-op). Mutates recording metadata — hence the
@@ -272,7 +274,7 @@ IMDb/TMDB/TVDB id — often Quebec titles missing from the TMDB/TVDB catalog). S
 | `AiGenreTagger.cs` | `AiGenreTagger` (static) | `AI Tonight` genre tagging: `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` genre + empties the collection (always active). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan DVR recordings (no IMDb/TMDB/TVDB id): S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series) → S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, dry-run. See [Orphan identification](#orphan-recording-identification). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default poster (`default_poster.jpg`, embedded resource) on the `AI Tonight` collection (BoxSet) and the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
@@ -569,11 +571,18 @@ enabled **and** the mode is `single`).
 
 ## Orphan recording identification
 
-When Emby identifies a DVR recording, it writes its metadata to a `.nfo`. For **Quebec
-titles**, the TMDB/TVDB lookup often fails (the catalog uses France or original titles):
-the recording ends up **without an IMDb/TMDB id** — an **orphan**. The user then fixes it
-by hand (web search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`**
-scheduled task (daily **4 AM**, right after the 03:00 cleanup) automates this.
+When Emby finishes a DVR recording, it **imports it into a library** (Movies/Series)
+and tries to identify it, then writes metadata to a `.nfo`. For **Quebec titles**, the
+TMDB/TVDB lookup often fails (the catalog uses France or original titles): the item ends
+up **without an IMDb/TMDB id** — an **orphan**. The user then fixes it by hand (web
+search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** scheduled task
+(daily **4 AM**, right after the 03:00 cleanup) automates this.
+
+> ℹ️ **Discovery**: the task **scans library `Movie`/`Series` items**
+> (`ILibraryManager.GetItemList`, `Recursive=true`) and keeps those without an
+> IMDb/TMDB/TVDB id. It does **not** use `ILiveTvManager.GetRecordings`, which returns
+> only **active/upcoming** recordings — **completed** recordings live in the library as
+> normal items. `.strm` cards are excluded (`.strm` extension).
 
 ### Flow (two stages)
 
@@ -614,7 +623,8 @@ next pass (tag-based idempotency). With **`OrphanIdentifyDryRun`**, the task wri
 nothing: it logs each orphan + the proposed resolution (S1/S2) and a summary (resolved /
 needs-review / skipped / errors) — to validate resolution quality before switching to
 application. Best-effort: a failing item never aborts the pass (per-item try/catch).
-Scope: **DVR recordings only** (movies and series), not `.strm` cards.
+Scope: **library `Movie`/`Series` items** (completed DVR recordings imported into a
+library), not `.strm` cards.
 
 > 📌 **Recommended verification**: enable `OrphanIdentifyEnabled` **with**
 > `OrphanIdentifyDryRun` checked, trigger the task manually (Dashboard ▶ Scheduled

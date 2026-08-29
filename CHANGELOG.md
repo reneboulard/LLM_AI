@@ -123,9 +123,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   assignment ("Edit Images"). Best-effort (never throws) via
   `IProviderManager.SaveImage` + `UpdateToRepository(ImageUpdate)`.
 - **Identification des enregistrements orphelins** (`OrphanIdentifyTask`, tâche
-  planifiée quotidienne **04:00**) : repère les enregistrements DVR **non identifiés**
-  (aucun id IMDb/TMDB/TVDB — souvent des titres québécois absents du catalogue
-  TMDB/TVDB) et tente de les résoudre en deux stages :
+  planifiée quotidienne **04:00**) : repère les **items de bibliothèque non
+  identifiés** (films/séries issus d'enregistrements DVR terminés — une fois
+  l'enregistrement terminé, Emby importe l'item dans une bibliothèque ; aucun id
+  IMDb/TMDB/TVDB = identification échouée, souvent des titres québécois absents du
+  catalogue TMDB/TVDB) et tente de les résoudre en deux stages :
   - **S1 — nettoyage + recherche multilingue** : le titre EPG est débarrassé de son
     bruit (`CleanEpgTitle` : HD, VOSTFR, « Rediff. », marqueurs saison/épisode,
     parenthèses) puis recherché sur TMDB en plusieurs langues (en-US = titre original,
@@ -144,10 +146,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **Idempotence** via tags `llmai-identified` (résolu) / `llmai-needs-review`
     (irrésolu — marqué pour revue). **Dry-run** (`OrphanIdentifyDryRun`) : aucune
     écriture, log détaillé de la résolution proposée + bilan. Best-effort : un item en
-    erreur n'interrompt jamais le passage. Scope : enregistrements DVR uniquement.
+    erreur n'interrompt jamais le passage. Scope : items de bibliothèque Movie/Series
+  (enregistrements DVR terminés), pas les cartes `.strm` (découverte via
+  `ILibraryManager.GetItemList`, `IncludeItemTypes=Movie,Series`).
   **Orphan recording identification** (`OrphanIdentifyTask`, daily scheduled task
-  **4 AM**): finds **unidentified** DVR recordings (no IMDb/TMDB/TVDB id — often Quebec
-  titles missing from TMDB/TVDB) and tries to resolve them in two stages:
+  **4 AM**): finds **unidentified library items** (movies/series from completed DVR
+  recordings — once recording completes, Emby imports the item into a library; no
+  IMDb/TMDB/TVDB id = failed identification, often Quebec titles missing from
+  TMDB/TVDB) and tries to resolve them in two stages:
   - **S1 — cleanup + multi-language search**: the EPG title is stripped of noise
     (`CleanEpgTitle`: HD, VOSTFR, "Rediff.", season/episode markers, parentheses) then
     searched on TMDB in several languages (en-US = original title, fr-FR = France
@@ -164,7 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **Idempotent** via `llmai-identified` (resolved) / `llmai-needs-review` (unresolved
     — tagged for review) tags. **Dry-run** (`OrphanIdentifyDryRun`): no writes, detailed
     log of the proposed resolution + summary. Best-effort: a failing item never aborts
-    the pass. Scope: DVR recordings only.
+    the pass. Scope: library Movie/Series items (completed DVR recordings), not
+    `.strm` cards (discovered via `ILibraryManager.GetItemList`,
+    `IncludeItemTypes=Movie,Series`).
   - **Config** : `OrphanIdentifyEnabled` (défaut `false`, opt-in — modifie des
     enregistrements), `OrphanIdentifyDryRun` (défaut `false`). Page de config : section
     « Identification des enregistrements orphelins ».
