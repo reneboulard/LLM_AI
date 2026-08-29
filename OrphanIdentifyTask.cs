@@ -158,14 +158,31 @@ namespace LLM_AI
             var langs = new[] { "en-US", "fr-FR", userTmdb }
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-            _logger?.Info("[LLM_AI] OrphanIdentify : démarrage ({0}, langs=[{1}]).",
-                dry ? "DRY-RUN" : "application", string.Join(",", langs));
+            // GetRecordings requiert un User sur la requête (sans contexte usager,
+            // Emby renvoie 0 enregistrement). On résout un usager admin (voit toutes
+            // les recordings) à défaut le premier usager. Aucun usager → abandon.
+            var user = ResolveAdminUser();
+            if (user == null)
+            {
+                _logger?.Warn("[LLM_AI] OrphanIdentify : aucun usager Emby disponible — GetRecordings nécessite un contexte usager. Passage annulé.");
+                return;
+            }
+
+            bool verbose = cfg.DebugVerbose;
+            _logger?.Info("[LLM_AI] OrphanIdentify : démarrage ({0}, langs=[{1}], user={2}{3}).",
+                dry ? "DRY-RUN" : "application", string.Join(",", langs), user.Name,
+                verbose ? ", verbose" : "");
 
             BaseItemDto[] recs;
             try
             {
-                recs = (_liveTv.GetRecordings(new InternalItemsQuery { EnableTotalRecordCount = false }, ct)?.Items)
-                       ?? Array.Empty<BaseItemDto>();
+                // Pas de filtre IsPlayed : on veut TOUTES les recordings (identifiées
+                // ou non, regardées ou non) pour repérer les orphelins.
+                recs = (_liveTv.GetRecordings(new InternalItemsQuery
+                {
+                    User = user,
+                    EnableTotalRecordCount = false
+                }, ct)?.Items) ?? Array.Empty<BaseItemDto>();
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -178,6 +195,8 @@ namespace LLM_AI
             int total = recs.Length;
             int idx = 0;
 
+            _logger?.Info("[LLM_AI] OrphanIdentify : {0} enregistrement(s) DVR retourné(s) par GetRecordings.", total);
+
             foreach (var dto in recs)
             {
                 ct.ThrowIfCancellationRequested();
@@ -188,7 +207,7 @@ namespace LLM_AI
                 Status st;
                 try
                 {
-                    st = await HandleRecordingAsync(dto, cfg, dry, langs, userTmdb, ct).ConfigureAwait(false);
+                    st = await HandleRecordingAsync(dto, cfg, dry, langs, userTmdb, verbose, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -212,6 +231,33 @@ namespace LLM_AI
                 scanned, orphans, resolved, review, skipped, errors, dry ? "DRY-RUN" : "application");
         }
 
+        /// <summary>
+        /// Résout un usager admin (voit toutes les recordings) pour le contexte
+        /// <see cref="ILiveTvManager.GetRecordings"/> ; à défaut le premier usager
+        /// disponible. Null si aucun usager. Ne lève jamais.
+        /// </summary>
+        private User ResolveAdminUser()
+        {
+            try
+            {
+                var list = _users.GetUserList(new UserQuery());
+                if (list == null) return null;
+                User first = null;
+                foreach (var u in list)
+                {
+                    if (u == null) continue;
+                    first ??= u;
+                    try { if (u.Policy?.IsAdministrator == true) return u; } catch { /* Policy illisible → on continue */ }
+                }
+                return first;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] OrphanIdentify : résolution usager échouée ({0}).", ex.Message);
+                return null;
+            }
+        }
+
         private enum Status { Skipped, OrphanResolved, NeedsReview }
 
         // ------------------------------------------------------------------
@@ -219,23 +265,43 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         private async Task<Status> HandleRecordingAsync(BaseItemDto dto, PluginConfiguration cfg,
-            bool dry, string[] langs, string userTmdb, CancellationToken ct)
+            bool dry, string[] langs, string userTmdb, bool verbose, CancellationToken ct)
         {
             // Films/séries seulement.
             bool isSeries = dto.IsSeries == true;
             bool isMovie = dto.IsMovie == true;
-            if (!isSeries && !isMovie) return Status.Skipped;
-            string kind = isSeries ? "series" : "movie";
-
-            // Idempotence : ignorer les items déjà traités (tagués).
+            string kind = isSeries ? "series" : (isMovie ? "movie" : "other");
+            string dtoName = !string.IsNullOrEmpty(dto.SeriesName) ? dto.SeriesName : dto.Name;
             var dtoTags = dto.Tags ?? Array.Empty<string>();
-            if (Array.IndexOf(dtoTags, TagIdentified) >= 0 || Array.IndexOf(dtoTags, TagNeedsReview) >= 0)
-                return Status.Skipped;
+            bool tagged = Array.IndexOf(dtoTags, TagIdentified) >= 0 || Array.IndexOf(dtoTags, TagNeedsReview) >= 0;
+            bool orphan = IsOrphan(dto);
+
+            // Diagnostics verbose : expose pour chaque recording pourquoi elle est
+            // gardée ou écartée — sinon les skips sont silencieux (l'usager ne voit
+            // pas pourquoi son recording n'est pas traité).
+            if (verbose)
+            {
+                string reason;
+                if (!isSeries && !isMovie) reason = "type non movie/series";
+                else if (tagged) reason = "déjà taggé " + (Array.IndexOf(dtoTags, TagIdentified) >= 0 ? TagIdentified : TagNeedsReview);
+                else if (!orphan) reason = "a déjà un id provider (non-orphelin)";
+                else if (string.IsNullOrWhiteSpace(dtoName)) reason = "titre vide";
+                else reason = "ORPHELIN → à traiter";
+                _logger?.Info("[LLM_AI] OrphanIdentify : id={0} « {1} » kind={2} imdb={3} tmdb={4} tvdb={5} tags=[{6}] → {7}.",
+                    dto.Id, dtoName, kind,
+                    HasProviderId(dto, "imdb") ? "oui" : "non",
+                    HasProviderId(dto, "tmdb") ? "oui" : "non",
+                    HasProviderId(dto, "tvdb") ? "oui" : "non",
+                    string.Join(",", dtoTags), reason);
+            }
+
+            if (!isSeries && !isMovie) return Status.Skipped;
+            if (tagged) return Status.Skipped;
 
             // Orphelin = aucun id provider IMDb/TMDB/TVDB.
-            if (!IsOrphan(dto)) return Status.Skipped;
+            if (!orphan) return Status.Skipped;
 
-            string epgTitle = isSeries ? (dto.SeriesName ?? dto.Name) : dto.Name;
+            string epgTitle = dtoName;
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
             int? year = dto.ProductionYear ?? YearOf(dto.PremiereDate) ?? YearOf(dto.DateCreated);
