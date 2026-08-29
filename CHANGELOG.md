@@ -127,12 +127,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   identifiés** (films/séries issus d'enregistrements DVR terminés — une fois
   l'enregistrement terminé, Emby importe l'item dans une bibliothèque ; aucun id
   IMDb/TMDB/TVDB = identification échouée, souvent des titres québécois absents du
-  catalogue TMDB/TVDB) et tente de les résoudre en deux stages :
+  catalogue TMDB/TVDB) et tente de les résoudre en trois stages :
   - **S1 — nettoyage + recherche multilingue** : le titre EPG est débarrassé de son
     bruit (`CleanEpgTitle` : HD, VOSTFR, « Rediff. », marqueurs saison/épisode,
     parenthèses) puis recherché sur TMDB en plusieurs langues (en-US = titre original,
     fr-FR = titre France, + langue de l'usager). Garde-fou de correspondance (titre
-    normalisé + année).
+    normalisé + année). **S1 n'est lancé que si l'année `ProductionYear` est connue** :
+    sans année fiable, la recherche TMDB est large et la garde lexicale (sans juge)
+    pourrait accepter un faux film homonyme — les orphelins sans année sont laissés à
+    S2/S3.
   - **S2 — proposition LLM validée par TMDB** : le LLM propose un id IMDb/TMDB à partir
     du titre + overview + chaîne ; la proposition est **validée** via TMDB `/find`
     (`FindByExternalIdAsync`) ou détail par id (`LookupMetaByIdAsync`) — TMDB est la
@@ -144,6 +147,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     manuelle de l'usager (comparaison synopsis + date ; on continue de chercher si
     différent). Garde-fou année en plus. Skippé quand l'EPG n'a pas de synopsis
     (retour à année + titre).
+  - **S3 — recherche web (SearXNG) → id IMDb** : si S1 et S2 échouent, la tâche
+    interroge l'instance **SearXNG** auto-hébergée (champ `SearXngUrl`, déjà utilisé
+    par l'outil `web_search` ; repli Ollama cloud), extrait les **ids IMDb** des URLs
+    de résultats (regex `imdb.com/.../title/tt…`), puis valide chaque id via TMDB
+    `/find` + la **même porte d'acceptation** (année + juge synopsis). Reproduit
+    exactement la méthode manuelle de l'usager (web-search du titre → id IMDb → Emby
+    tire TMDB → comparaison synopsis+date) et résout les **titres paraphrasés
+    québécois** qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg » →
+    film « Seberg » 2019 → tt1780967). Accepté sans synopsis à comparer → logué
+    « à confirmer visuellement ».
+  - **Correction année** : l'année de référence est désormais `ProductionYear`
+    **uniquement** (avant : `PremiereDate`/`DateCreated` en repli — or pour un
+    enregistrement DVR ce sont des dates de **diffusion/enregistrement**, pas de
+    sortie ; utilisées comme `primary_release_year` elles filtraient TMDB à tort et
+    rataient des films existants).
   - **Application non destructive** : ne remplit que les ids provider absents, un
     `Overview` vide, des `Genres` vides, un poster `Primary` manquant. **Le `Name` EPG
     n'est jamais modifié** — il est **verrouillé** (`MetadataFields.Name`) pour
@@ -160,11 +178,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   **4 AM**): finds **unidentified library items** (movies/series from completed DVR
   recordings — once recording completes, Emby imports the item into a library; no
   IMDb/TMDB/TVDB id = failed identification, often Quebec titles missing from
-  TMDB/TVDB) and tries to resolve them in two stages:
+  TMDB/TVDB) and tries to resolve them in three stages:
   - **S1 — cleanup + multi-language search**: the EPG title is stripped of noise
     (`CleanEpgTitle`: HD, VOSTFR, "Rediff.", season/episode markers, parentheses) then
     searched on TMDB in several languages (en-US = original title, fr-FR = France
-    title, + user language). Match guard (normalized title + year).
+    title, + user language). Match guard (normalized title + year). **S1 only runs
+    when the `ProductionYear` is known**: without a reliable year, TMDB search is broad
+    and the lexical guard (no judge) could accept a wrong same-titled film — orphans
+    with no year are left to S2/S3.
   - **S2 — LLM proposal validated by TMDB**: the LLM proposes an IMDb/TMDB id from the
     title + overview + channel; the proposal is **validated** via TMDB `/find`
     (`FindByExternalIdAsync`) or detail-by-id (`LookupMetaByIdAsync`) — TMDB is the
@@ -175,6 +196,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     "Le guérisseur" 1953 vs 2017 — is rejected). Mirrors the user's manual method
     (compare synopsis + date; keep searching if different). Year guard on top. Skipped
     when the EPG has no synopsis (falls back to year + title).
+  - **S3 — web search (SearXNG) → IMDb id**: if S1 and S2 fail, the task queries the
+    self-hosted **SearXNG** instance (`SearXngUrl` field, already used by the
+    `web_search` tool; Ollama cloud fallback), extracts **IMDb ids** from result URLs
+    (regex `imdb.com/.../title/tt…`), then validates each id via TMDB `/find` + the
+    **same acceptance gate** (year + synopsis judge). Mirrors the user's manual method
+    exactly (web-search the title → IMDb id → Emby pulls TMDB → compare synopsis+date)
+    and resolves **paraphrased Quebec titles** no catalog knows (e.g. "L'histoire de
+    Jean Seberg" → film "Seberg" 2019 → tt1780967). Accepted with no synopsis to
+    compare → logged "to confirm visually".
+  - **Year fix**: the reference year is now `ProductionYear` **only** (previously
+    `PremiereDate`/`DateCreated` as fallback — but for a DVR recording those are
+    **broadcast/recording** dates, not release dates; used as `primary_release_year`
+    they filtered TMDB wrongly and missed existing films).
   - **Non-destructive apply**: only fills missing provider ids, an empty `Overview`,
     empty `Genres`, a missing `Primary` poster. **The EPG `Name` is never changed** —
     it is **locked** (`MetadataFields.Name`) to preserve the original title (reused
@@ -187,11 +221,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `.strm` cards (discovered via `ILibraryManager.GetItemList`,
     `IncludeItemTypes=Movie,Series`).
   - **Config** : `OrphanIdentifyEnabled` (défaut `false`, opt-in — modifie des
-    enregistrements), `OrphanIdentifyDryRun` (défaut `false`). Page de config : section
-    « Identification des enregistrements orphelins ».
+    enregistrements), `OrphanIdentifyDryRun` (défaut `false`),
+    `OrphanSearXngEnabled` (défaut `true` — étape S3 ; inopérant sans SearXNG/clé
+    Ollama), `OrphanRetryNeedsReview` (défaut `false` — retraite les besoins-revues,
+    utile pour y repasser S3 une fois SearXNG configuré ; en cas de résolution le tag
+    `needs-review` devient `identified`). Page de config : section « Identification
+    des enregistrements orphelins ».
     **Config**: `OrphanIdentifyEnabled` (default `false`, opt-in — mutates recordings),
-    `OrphanIdentifyDryRun` (default `false`). Config page: "Orphan recording
-    identification" section.
+    `OrphanIdentifyDryRun` (default `false`), `OrphanSearXngEnabled` (default `true` —
+    S3 stage; no-op without SearXNG/Ollama key), `OrphanRetryNeedsReview` (default
+    `false` — re-processes needs-review items, useful to run S3 on them once SearXNG is
+    configured; on success the `needs-review` tag becomes `identified`). Config page:
+    "Orphan recording identification" section.
 
 ### Modifié / Changed
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la

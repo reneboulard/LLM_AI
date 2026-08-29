@@ -409,6 +409,8 @@ define(["loading"], function (loading) {
         // Identification des orphelins — opt-in (modifie des enregistrements), dry-run par défaut pour les premiers runs.
         view.querySelector("#chkOrphanIdentifyEnabled").checked = !!cfg.OrphanIdentifyEnabled;
         view.querySelector("#chkOrphanIdentifyDryRun").checked = !!cfg.OrphanIdentifyDryRun;
+        view.querySelector("#chkOrphanSearXngEnabled").checked = cfg.OrphanSearXngEnabled !== false;
+        view.querySelector("#chkOrphanRetryNeedsReview").checked = !!cfg.OrphanRetryNeedsReview;
         // Audit santé — Lecture seule par défaut, remédiation opt-in.
         view.querySelector("#chkAuditEnabled").checked = cfg.AuditEnabled !== false;
         view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
@@ -469,6 +471,8 @@ define(["loading"], function (loading) {
             // Identification des enregistrements orphelins (opt-in + dry-run).
             OrphanIdentifyEnabled: view.querySelector("#chkOrphanIdentifyEnabled").checked,
             OrphanIdentifyDryRun: view.querySelector("#chkOrphanIdentifyDryRun").checked,
+            OrphanSearXngEnabled: view.querySelector("#chkOrphanSearXngEnabled").checked,
+            OrphanRetryNeedsReview: view.querySelector("#chkOrphanRetryNeedsReview").checked,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),

@@ -593,8 +593,29 @@
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.dryrun.desc">
                             Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés
-                            et la résolution proposée (S1/S2) + un bilan. Sert à valider la qualité des résolutions
+                            et la résolution proposée (S1/S2/S3) + un bilan. Sert à valider la qualité des résolutions
                             avant de basculer en application automatique. À garder cochée pour les premiers runs.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanSearXngEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.searxng">Étape S3 : recherche web (SearXNG) pour les titres introuvables</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.searxng.desc">
+                            Si cochée, après S1/S2 la tâche interroge <b>SearXNG</b> (cf. URL ci-dessus), extrait
+                            les ids <b>IMDb</b> des résultats, valide via TMDB + juge de synopsis. Résout les titres
+                            québécois paraphrasés qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg »
+                            → film « Seberg » 2019). Inopérant si ni SearXNG ni clé Ollama ne sont configurés.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanRetryNeedsReview" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.retry">Retraiter les besoins-revues (retry)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.retry.desc">
+                            Si cochée, les orphelins marqués <b>needs-review</b> sont retraités (au lieu d'être
+                            sautés) — pour y repasser S3 une fois SearXNG configuré. En cas de résolution, le tag
+                            devient <b>identified</b>. Les déjà-identifiés restent sautés.
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>

@@ -253,9 +253,15 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   task. `false` = the task is inactive (no-op). Mutates recording metadata — hence the
   opt-in.
 - `OrphanIdentifyDryRun` (bool, default `false`) — when checked, the task **writes
-  nothing**: it only logs the orphans found and the proposed resolution (S1/S2) + a
+  nothing**: it only logs the orphans found and the proposed resolution (S1/S2/S3) + a
   summary. Use it to validate resolution quality before switching to automatic
   application. Keep checked for the first runs.
+- `OrphanSearXngEnabled` (bool, default `true`) — enables the **S3** stage (SearXNG web
+  search → IMDb id → TMDB validation + synopsis judge) for titles S1 and S2 can't
+  resolve. No-op if neither SearXNG nor an Ollama key is configured.
+- `OrphanRetryNeedsReview` (bool, default `false`) — when checked, re-processes
+  `llmai-needs-review` items (instead of skipping them) to run S3 on them; on success
+  the tag becomes `llmai-identified`. Already-identified items stay skipped.
 
 ---
 
@@ -274,7 +280,7 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
 | `AiGenreTagger.cs` | `AiGenreTagger` (static) | `AI Tonight` genre tagging: `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` genre + empties the collection (always active). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series) → S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series) → S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`) → S3 (SearXNG web search → IMDb id, same acceptance gate), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. See [Orphan identification](#orphan-recording-identification). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default poster (`default_poster.jpg`, embedded resource) on the `AI Tonight` collection (BoxSet) and the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
@@ -584,14 +590,16 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
 > only **active/upcoming** recordings — **completed** recordings live in the library as
 > normal items. `.strm` cards are excluded (`.strm` extension).
 
-### Flow (two stages)
+### Flow (three stages)
 
 1. **S1 — cleanup + multi-language search.** The EPG title is stripped of noise by
    `CleanEpgTitle` (`HD`/`VOSTFR`/`VF`/`VO` markers, "Rediff."/"Inédit", `S##E##` /
    `Saison \d` / `Épisode \d`, parentheses) then searched on TMDB in several languages:
    `en-US` (original title), `fr-FR` (France title), + the user's language. A candidate
    is accepted if the **normalized title** matches (guard against an ambiguous wrong
-   match), with a year check.
+   match), with a year check. **S1 only runs when `ProductionYear` is known**: without a
+   reliable year, TMDB search is broad and the lexical guard (no judge) could accept a
+   wrong same-titled film — orphans with no year go straight to S2/S3.
 2. **S2 — LLM proposal validated by TMDB** (if S1 fails). `LlmRunner.ResolveIdsAsync`
    asks the LLM for an IMDb/TMDB id from the EPG title + overview + channel (one-shot
    call, multi-backend with fallback). The proposal is **never applied as-is**: it is
@@ -606,6 +614,17 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
      guérisseur" 1953 vs 2017) is **rejected**, and the search continues. Mirrors the
      user's manual method (compare synopsis + date). Skipped when the EPG has no
      synopsis (falls back to year + title). The verdict + reasoning are logged.
+3. **S3 — web search (SearXNG) → IMDb id** (if S1 and S2 fail, and
+   `OrphanSearXngEnabled`). The task queries the self-hosted **SearXNG** instance
+   (`SearXngUrl` field, already used by the LLM's `web_search` tool; Ollama cloud
+   fallback), extracts **IMDb ids** from result URLs (regex
+   `imdb.com/.../title/tt…`, appearance order = SearXNG relevance), then validates each
+   id via `FindByExternalIdAsync` + the **same acceptance gate** (year + synopsis judge).
+   Mirrors **exactly** the user's manual method (web-search the title → IMDb id → Emby
+   pulls TMDB → compare synopsis+date) and resolves **paraphrased Quebec titles** no
+   catalog knows (e.g. "L'histoire de Jean Seberg" → film "Seberg" 2019 → tt1780967). A
+   candidate accepted **with no synopsis to compare** is logged "to confirm visually"
+   (trust SearXNG ranking, as the user would before validating by hand).
 
 ### Non-destructive apply + locking
 
@@ -626,13 +645,22 @@ hand) — no id is written.
 
 ### Idempotency & dry-run
 
-Items already tagged `llmai-identified` or `llmai-needs-review` are **skipped** on the
-next pass (tag-based idempotency). With **`OrphanIdentifyDryRun`**, the task writes
-nothing: it logs each orphan + the proposed resolution (S1/S2) and a summary (resolved /
-needs-review / skipped / errors) — to validate resolution quality before switching to
-application. Best-effort: a failing item never aborts the pass (per-item try/catch).
-Scope: **library `Movie`/`Series` items** (completed DVR recordings imported into a
-library), not `.strm` cards.
+Items already tagged `llmai-identified` are **skipped** on the next pass (tag-based
+idempotency). With **`OrphanRetryNeedsReview`**, `llmai-needs-review` items are
+**re-processed** (instead of skipped) — to run S3 on them once SearXNG is configured; on
+success the `needs-review` tag is **replaced** with `identified`. With
+**`OrphanIdentifyDryRun`**, the task writes nothing: it logs each orphan + the proposed
+resolution (S1/S2/S3) and a summary (resolved / needs-review / skipped / errors) — to
+validate resolution quality before switching to application. Best-effort: a failing item
+never aborts the pass (per-item try/catch). Scope: **library `Movie`/`Series` items**
+(completed DVR recordings imported into a library), not `.strm` cards.
+
+> ⚠️ **Reference year**: the year used by S1 (`primary_release_year` filter) and by the
+> S2/S3 year guard is `ProductionYear` **only**. For a DVR recording,
+> `PremiereDate`/`DateCreated` are **broadcast** or recording dates (e.g. 2024), not the
+> film's release year — using them filtered TMDB wrongly and missed existing films.
+> Orphans with no `ProductionYear` skip S1 and rely on the synopsis judge (S2/S3) to
+> avoid a wrong match.
 
 > 📌 **Recommended verification**: enable `OrphanIdentifyEnabled` **with**
 > `OrphanIdentifyDryRun` checked, trigger the task manually (Dashboard ▶ Scheduled

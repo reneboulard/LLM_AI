@@ -259,9 +259,15 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
   tâche. `false` = la tâche est inactive (no-op). Modifie des métadonnées
   d'enregistrements — d'où l'opt-in.
 - `OrphanIdentifyDryRun` (bool, défaut `false`) — si coché, la tâche **n'écrit rien** :
-  elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2) + un
+  elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2/S3) + un
   bilan. Sert à valider la qualité des résolutions avant de basculer en application
   automatique. À garder cochée pour les premiers runs.
+- `OrphanSearXngEnabled` (bool, défaut `true`) — active l'étape **S3** (recherche web
+  SearXNG → id IMDb → validation TMDB + juge synopsis) pour les titres que S1 et S2 ne
+  résolvent pas. Inopérant si ni SearXNG ni clé Ollama ne sont configurés.
+- `OrphanRetryNeedsReview` (bool, défaut `false`) — si coché, retraite les items
+  `llmai-needs-review` (au lieu de les ignorer) pour y repasser S3 ; en cas de
+  résolution, le tag devient `llmai-identified`. Les déjà-identifiés restent ignorés.
 
 ---
 
@@ -280,7 +286,7 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
 | `AiGenreTagger.cs` | `AiGenreTagger` (statique) | Étiquetage genre `AI Tonight` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`) → S3 (recherche web SearXNG → id IMDb, même porte d'acceptation), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
@@ -595,14 +601,17 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 > en bibliothèque comme des items normaux. Les cartes `.strm` sont exclues
 > (extension `.strm`).
 
-### Flux (deux stages)
+### Flux (trois stages)
 
 1. **S1 — nettoyage + recherche multilingue.** Le titre EPG est débarrassé de son
    bruit par `CleanEpgTitle` (marqueurs `HD`/`VOSTFR`/`VF`/`VO`, « Rediff. »/« Inédit »,
    `S##E##` / `Saison \d` / `Épisode \d`, parenthèses) puis recherché sur TMDB en
    plusieurs langues : `en-US` (titre original), `fr-FR` (titre France), + la langue de
    l'usager. Un candidat est retenu si le **titre normalisé** correspond (garde-fou
-   contre un mauvais match ambigu), avec contrôle de l'année.
+   contre un mauvais match ambigu), avec contrôle de l'année. **S1 n'est lancé que si
+   `ProductionYear` est connu** : sans année fiable, la recherche TMDB est large et la
+   garde lexicale (sans juge) pourrait accepter un faux film homonyme — les orphelins
+   sans année vont directement à S2/S3.
 2. **S2 — proposition LLM validée par TMDB** (si S1 échoue). `LlmRunner.ResolveIdsAsync`
    demande au LLM un id IMDb/TMDB à partir du titre EPG + overview + chaîne (appel
    one-shot, multi-backend avec repli). La proposition n'est **jamais appliquée telle
@@ -617,6 +626,18 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
      guérisseur » 1953 vs 2017) est **rejeté**, et on continue de chercher. Reproduit la
      méthode manuelle de l'usager (comparaison synopsis + date). Skippé quand l'EPG n'a
      pas de synopsis (retour à année + titre). Le verdict + la justification sont logués.
+3. **S3 — recherche web (SearXNG) → id IMDb** (si S1 et S2 échouent, et
+   `OrphanSearXngEnabled`). La tâche interroge l'instance **SearXNG** auto-hébergée
+   (champ `SearXngUrl`, déjà utilisé par l'outil `web_search` du LLM ; repli Ollama
+   cloud), extrait les **ids IMDb** des URLs de résultats (regex
+   `imdb.com/.../title/tt…`, ordre d'apparition = pertinence SearXNG), puis valide
+   chaque id via `FindByExternalIdAsync` + la **même porte d'acceptation** (année + juge
+   synopsis). Reproduit **exactement** la méthode manuelle de l'usager (web-search du
+   titre → id IMDb → Emby tire TMDB → comparaison synopsis+date) et résout les **titres
+   paraphrasés québécois** qu'aucun catalogue ne connaît (ex. « L'histoire de Jean
+   Seberg » → film « Seberg » 2019 → tt1780967). Un candidat accepté **sans synopsis à
+   comparer** est logué « à confirmer visuellement » (on fait confiance au classement
+   SearXNG, comme l'usager le ferait avant de valider à la main).
 
 ### Application non destructive + verrouillage
 
@@ -637,13 +658,23 @@ Les orphelins qu'aucun stage ne résout sont tagués **`llmai-needs-review`** (�
 
 ### Idempotence & dry-run
 
-Les items déjà tagués `llmai-identified` ou `llmai-needs-review` sont **ignorés** au
-passage suivant (idempotence par tags). Avec **`OrphanIdentifyDryRun`**, la tâche n'écrit
-rien : elle logue chaque orphelin + la résolution proposée (S1/S2) et un bilan
+Les items déjà tagués `llmai-identified` sont **ignorés** au passage suivant
+(idempotence par tags). Avec **`OrphanRetryNeedsReview`**, les items `llmai-needs-review`
+sont **retraités** (au lieu d'être ignorés) — pour y repasser S3 une fois SearXNG
+configuré ; en cas de résolution, le tag `needs-review` est **remplacé** par
+`identified`. Avec **`OrphanIdentifyDryRun`**, la tâche n'écrit
+rien : elle logue chaque orphelin + la résolution proposée (S1/S2/S3) et un bilan
 (résolus / needs-review / ignorés / erreurs) — pour valider la qualité des résolutions
 avant de basculer en application. Best-effort : un item en erreur n'interrompt jamais le
 passage (per-item try/catch). Scope : **items de bibliothèque `Movie`/`Series`**
 (enregistrements DVR terminés importés en bibliothèque), pas les cartes `.strm`.
+
+> ⚠️ **Année de référence** : l'année utilisée par S1 (filtre `primary_release_year`) et
+> par la garde-fou année de S2/S3 est `ProductionYear` **uniquement**. Pour un
+> enregistrement DVR, `PremiereDate`/`DateCreated` sont des dates de **diffusion** ou
+> d'enregistrement (ex. 2024), pas l'année de sortie du film — les utiliser filtrait
+> TMDB à tort et ratait des films existants. Les orphelins sans `ProductionYear`
+> sautent S1 et s'appuient sur le juge synopsis (S2/S3) pour éviter un faux match.
 
 > 📌 **Vérification recommandée** : activer `OrphanIdentifyEnabled` **avec**
 > `OrphanIdentifyDryRun` coché, déclencher la tâche manuellement (Dashboard ▶ Tâches

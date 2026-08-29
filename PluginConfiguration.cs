@@ -580,6 +580,25 @@ namespace LLM_AI
         /// </summary>
         public bool OrphanIdentifyDryRun { get; set; } = false;
 
+        /// <summary>
+        /// Si <c>true</c>, la tâche retraite les orphelins déjà marqués
+        /// <c>llmai-needs-review</c> (au lieu de les sauter) — utile pour refaire
+        /// passer les besoins-revues par S3 (recherche web) une fois SearXNG
+        /// configuré. Les items déjà <c>llmai-identified</c> restent sautés. En cas
+        /// de résolution réussie, le tag <c>needs-review</c> est remplacé par
+        /// <c>identified</c>. Défaut <c>false</c>.
+        /// </summary>
+        public bool OrphanRetryNeedsReview { get; set; } = false;
+
+        /// <summary>
+        /// Active l'étape <b>S3</b> d'identification par recherche web (SearXNG,
+        /// via <see cref="SearXngUrl"/> — repli Ollama cloud) : extraction d'ids
+        /// IMDb dans les résultats puis validation TMDB + juge synopsis. Résout
+        /// les titres paraphrasés québécois que ni S1 ni le LLM ne connaissent.
+        /// Défaut <c>true</c> (inopérant si SearXNG/clé Ollama absents).
+        /// </summary>
+        public bool OrphanSearXngEnabled { get; set; } = true;
+
         // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Indépendant de la recommandation : un run agent dédié interroge

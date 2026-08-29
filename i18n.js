@@ -125,10 +125,14 @@ define([], function () {
 
             // -- Identification des enregistrements orphelins (tâche planifiée 04 h) ---
             "cfg.orphan.h": "Identification des enregistrements orphelins",
-            "cfg.orphan.desc": "Passe quotidienne (04 h) qui repère les enregistrements DVR <b>non identifiés</b> (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB), tente de les résoudre par <b>nettoyage du titre + recherche multilingue</b> (S1), puis par <b>proposition LLM d'un id IMDb validé via TMDB /find</b> (S2), et écrit l'id + métadonnées + affiche en <b>verrouillant le titre EPG</b> (jamais écrasé). Les irrésolus sont marqués pour revue. <b>Opt-in</b> : modifie des enregistrements.",
+            "cfg.orphan.desc": "Passe quotidienne (04 h) qui repère les enregistrements DVR <b>non identifiés</b> (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB), tente de les résoudre par <b>nettoyage du titre + recherche multilingue</b> (S1), puis par <b>proposition LLM d'un id IMDb validé via TMDB /find</b> (S2), puis par <b>recherche web SearXNG → id IMDb</b> (S3), et écrit l'id + métadonnées + affiche en <b>verrouillant le titre EPG</b> (jamais écrasé). Les irrésolus sont marqués pour revue. <b>Opt-in</b> : modifie des enregistrements.",
             "cfg.orphan.enabled": "Activer la tâche d'identification des orphelins",
             "cfg.orphan.dryrun": "Mode simulation (dry-run — aucune écriture)",
-            "cfg.orphan.dryrun.desc": "Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2) + un bilan. Sert à valider la qualité des résolutions avant de basculer en application automatique. À garder cochée pour les premiers runs.",
+            "cfg.orphan.dryrun.desc": "Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2/S3) + un bilan. Sert à valider la qualité des résolutions avant de basculer en application automatique. À garder cochée pour les premiers runs.",
+            "cfg.orphan.searxng": "Étape S3 : recherche web (SearXNG) pour les titres introuvables",
+            "cfg.orphan.searxng.desc": "Si cochée, après S1/S2 la tâche interroge <b>SearXNG</b> (cf. URL ci-dessus), extrait les ids <b>IMDb</b> des résultats, valide via TMDB + juge de synopsis. Résout les titres québécois paraphrasés qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg » → film « Seberg » 2019). Inopérant si ni SearXNG ni clé Ollama ne sont configurés.",
+            "cfg.orphan.retry": "Retraiter les besoins-revues (retry)",
+            "cfg.orphan.retry.desc": "Si cochée, les orphelins marqués <b>needs-review</b> sont retraités (au lieu d'être sautés) — pour y repasser S3 une fois SearXNG configuré. En cas de résolution, le tag devient <b>identified</b>. Les déjà-identifiés restent sautés.",
 
             // -- Audit santé (endpoint à la demande, agent system_audit) ---
             "cfg.audit.h": "Audit santé du serveur",
@@ -304,10 +308,14 @@ define([], function () {
 
             // -- Orphan recording identification (scheduled task, 4 AM) ---
             "cfg.orphan.h": "Orphan recording identification",
-            "cfg.orphan.desc": "Daily pass (4 AM) that finds <b>unidentified</b> DVR recordings (no IMDb/TMDB id — often Quebec titles missing from TMDB/TVDB), resolves them via <b>title cleanup + multi-language search</b> (S1), then an <b>LLM-proposed IMDb id validated through TMDB /find</b> (S2), and writes the id + metadata + poster while <b>locking the EPG title</b> (never overwritten). Unresolved ones are tagged for review. <b>Opt-in</b>: mutates recordings.",
+            "cfg.orphan.desc": "Daily pass (4 AM) that finds <b>unidentified</b> DVR recordings (no IMDb/TMDB id — often Quebec titles missing from TMDB/TVDB), resolves them via <b>title cleanup + multi-language search</b> (S1), then an <b>LLM-proposed IMDb id validated through TMDB /find</b> (S2), then a <b>SearXNG web search → IMDb id</b> (S3), and writes the id + metadata + poster while <b>locking the EPG title</b> (never overwritten). Unresolved ones are tagged for review. <b>Opt-in</b>: mutates recordings.",
             "cfg.orphan.enabled": "Enable the orphan identification task",
             "cfg.orphan.dryrun": "Simulation mode (dry-run — no writes)",
-            "cfg.orphan.dryrun.desc": "When checked, the task <b>writes nothing</b>: it only logs the orphans found and the proposed resolution (S1/S2) + a summary. Use it to validate resolution quality before switching to automatic application. Keep checked for the first runs.",
+            "cfg.orphan.dryrun.desc": "When checked, the task <b>writes nothing</b>: it only logs the orphans found and the proposed resolution (S1/S2/S3) + a summary. Use it to validate resolution quality before switching to automatic application. Keep checked for the first runs.",
+            "cfg.orphan.searxng": "S3 stage: web search (SearXNG) for titles that can't be found",
+            "cfg.orphan.searxng.desc": "When checked, after S1/S2 the task queries <b>SearXNG</b> (see URL above), extracts <b>IMDb</b> ids from the results, and validates them through TMDB + synopsis judge. Resolves paraphrased Quebec titles no catalog knows (e.g. \"L'histoire de Jean Seberg\" → film \"Seberg\" 2019). No-op if neither SearXNG nor an Ollama key is configured.",
+            "cfg.orphan.retry": "Re-process needs-review items (retry)",
+            "cfg.orphan.retry.desc": "When checked, orphans tagged <b>needs-review</b> are reprocessed (instead of skipped) — to run S3 on them once SearXNG is configured. On success the tag becomes <b>identified</b>. Already-identified items stay skipped.",
 
             "cfg.audit.h": "Server health audit",
             "cfg.audit.desc": "Launches an LLM agent that queries the <b>system_audit</b> tool (sessions, scheduled tasks, transcoding, disks, logs, host metrics) and produces a Markdown health report: severity-tagged findings + recommended actions. Admin-only. <b>Remediation</b> (stop a session, trigger a task, notify a user) is disabled by default.",

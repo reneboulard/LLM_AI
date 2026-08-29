@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -73,6 +75,7 @@ namespace LLM_AI
         private readonly IProviderManager _providers;
         private readonly LlmRunner _runner;
         private readonly TmdbLookupTool _tmdb;
+        private readonly WebSearchTool _search;
 
         /// <summary>HttpClient partagé pour le téléchargement des posters TMDB.</summary>
         private static readonly HttpClient _http = new HttpClient
@@ -101,6 +104,7 @@ namespace LLM_AI
             _providers = providers;
             _runner = new LlmRunner(logger, jsonSerializer, library, users, liveTv, host);
             _tmdb = new TmdbLookupTool(logger);
+            _search = new WebSearchTool(logger);
         }
 
         public string Name => I18n.S("task.orphan.name", I18n.ResolveDisplayLangKey(_host));
@@ -239,7 +243,12 @@ namespace LLM_AI
             string kind = isSeries ? "series" : "movie";
 
             var itemTags = item.Tags ?? Array.Empty<string>();
-            bool tagged = Array.IndexOf(itemTags, TagIdentified) >= 0 || Array.IndexOf(itemTags, TagNeedsReview) >= 0;
+            bool taggedIdentified = Array.IndexOf(itemTags, TagIdentified) >= 0;
+            bool taggedReview = Array.IndexOf(itemTags, TagNeedsReview) >= 0;
+            // RetryNeedsReview : on retraite les needs-review (pour voir si S3/web-search
+            // les résout maintenant), mais on saute toujours les déjà-identifiés.
+            bool retryReview = cfg.OrphanRetryNeedsReview;
+            bool tagged = taggedIdentified || (taggedReview && !retryReview);
             bool strmCard = IsStrmCard(item);
             bool orphan = IsOrphanItem(item);
             string itemName = item.Name;
@@ -250,7 +259,8 @@ namespace LLM_AI
             {
                 string reason;
                 if (strmCard) reason = "carte .strm (bibliothèque ai_suggestions)";
-                else if (tagged) reason = "déjà taggé " + (Array.IndexOf(itemTags, TagIdentified) >= 0 ? TagIdentified : TagNeedsReview);
+                else if (taggedIdentified) reason = "déjà taggé " + TagIdentified;
+                else if (taggedReview) reason = retryReview ? ("needs-review (retry ON) → à retraiter") : ("déjà taggé " + TagNeedsReview);
                 else if (!orphan) reason = "a déjà un id provider (non-orphelin)";
                 else if (string.IsNullOrWhiteSpace(itemName)) reason = "titre vide";
                 else reason = "ORPHELIN → à traiter";
@@ -272,25 +282,36 @@ namespace LLM_AI
             string epgTitle = itemName;
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
-            int? year = item.ProductionYear ?? YearOf(item.PremiereDate) ?? YearOf(item.DateCreated);
+            // Année = ProductionYear UNIQUEMENT. Pour un enregistrement DVR, PremiereDate
+            // et DateCreated sont la date de DIFFUSION/enregistrement (ex. 2024), pas
+            // l'année de sortie du film — les utiliser comme année de sortie filtre
+            // TMDB à tort (primary_release_year) et fait rater des films existants.
+            int? year = item.ProductionYear;
             string overview = item.Overview;
             string cleanTitle = TmdbLookupTool.CleanEpgTitle(epgTitle);
             if (string.IsNullOrWhiteSpace(cleanTitle)) cleanTitle = epgTitle;
 
-            // S1 : nettoyage + recherche multilingue.
+            // S1 : nettoyage + recherche multilingue. On ne lance S1 que si l'on
+            // dispose d'une année fiable (ProductionYear) : sans année, la recherche
+            // TMDB est large et la garde lexicale TitleMatches (sans juge) peut
+            // accepter un faux film homonyme d'une autre époque. Les orphelins sans
+            // année sont laissés à S2 (juge LLM) puis S3 (recherche web + juge).
             TmdbMeta meta = null;
             string stage = null;
-            try
+            if (year.HasValue)
             {
-                var s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, year, langs, ct).ConfigureAwait(false);
-                if (s1 != null && TitleMatches(cleanTitle, s1.Title, year, s1.Year))
+                try
                 {
-                    meta = s1;
-                    stage = "S1";
+                    var s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, year, langs, ct).ConfigureAwait(false);
+                    if (s1 != null && TitleMatches(cleanTitle, s1.Title, year, s1.Year))
+                    {
+                        meta = s1;
+                        stage = "S1";
+                    }
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S1 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S1 « {0} » échoué ({1}).", epgTitle, ex.Message); }
 
             // S2 : proposition LLM validée par TMDB.
             if (meta == null)
@@ -302,6 +323,23 @@ namespace LLM_AI
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S2 « {0} » échoué ({1}).", epgTitle, ex.Message); }
+            }
+
+            // S3 : recherche web (SearXNG) → extraction d'ids IMDb dans les résultats
+            // → validation TMDB + porte d'acceptation (année + juge synopsis). Reproduit
+            // la méthode manuelle de l'usager : web-search du titre → id IMDb → Emby
+            // tire TMDB → comparaison synopsis+date. Résout les titres paraphrasés
+            // québécois que ni S1 ni le LLM ne connaissent (ex. « L'histoire de Jean
+            // Seberg » → film « Seberg » 2019 → tt1780967).
+            if (meta == null && cfg.OrphanSearXngEnabled)
+            {
+                try
+                {
+                    meta = await ResolveViaSearXngAsync(cfg, epgTitle, kind, year, overview, userTmdb, ct).ConfigureAwait(false);
+                    if (meta != null) stage = "S3";
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
             // Aucun candidat → needs-review (sauf en dry-run : on logue seulement).
@@ -376,6 +414,133 @@ namespace LLM_AI
 
             return null;
         }
+
+        // ------------------------------------------------------------------
+        //  S3 : recherche web (SearXNG via WebSearchTool) → ids IMDb extraits
+        //  des URLs de résultats → validation TMDB + porte d'acceptation.
+        //  Reproduit la méthode manuelle : web-search du titre → id IMDb →
+        //  TMDB /find → comparaison année + synopsis.
+        // ------------------------------------------------------------------
+
+        private static readonly Regex s_imdbUrlRe = new Regex(
+            @"imdb\.com/(?:[a-z\-]+/)?title/(tt\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private async Task<TmdbMeta> ResolveViaSearXngAsync(PluginConfiguration cfg,
+            string epgTitle, string kind, int? year, string overview, string userTmdb, CancellationToken ct)
+        {
+            // Requête : titre EPG + année si connue (aide à lever l'ambiguïté).
+            string query = epgTitle;
+            if (year.HasValue) query = epgTitle + " " + year.Value.ToString(CultureInfo.InvariantCulture);
+
+            string json;
+            using (var doc = JsonDocument.Parse("{\"query\":\"" + JsonEscape(query) + "\"}"))
+            {
+                json = await _search.ExecuteAsync(doc.RootElement, ct).ConfigureAwait(false);
+            }
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — recherche web sans réponse.", epgTitle);
+                return null;
+            }
+
+            // Extraire les ids IMDb (uniques, ordre d'apparition = pertinence SearXNG)
+            // depuis les URLs des résultats. On sonde aussi le contenu textuel au cas
+            // où un id apparaîtrait dans un extrait (rare mais possible).
+            var ids = new List<string>();
+            try
+            {
+                using (var doc = JsonDocument.Parse(json))
+                {
+                    var root = doc.RootElement;
+                    // Un objet d'erreur (WebSearchTool renvoie {"error":"…"}) = pas de résultat.
+                    if (root.TryGetProperty("error", out var errEl) && errEl.ValueKind == JsonValueKind.String)
+                    {
+                        _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — recherche web en erreur ({1}).",
+                            epgTitle, TruncateLog(errEl.GetString(), 120));
+                        return null;
+                    }
+                    if (root.TryGetProperty("results", out var res) && res.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var r in res.EnumerateArray())
+                        {
+                            CollectImdbIds(r, "url", ids);
+                            CollectImdbIds(r, "content", ids);
+                        }
+                    }
+                    if (root.TryGetProperty("infobox", out var ib) && ib.ValueKind == JsonValueKind.String)
+                        CollectImdbIdsFromText(ib.GetString(), ids);
+                    if (root.TryGetProperty("answers", out var ans) && ans.ValueKind == JsonValueKind.Array)
+                        foreach (var a in ans.EnumerateArray())
+                            if (a.ValueKind == JsonValueKind.String) CollectImdbIdsFromText(a.GetString(), ids);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — échec parsing résultats ({1}).", epgTitle, ex.Message); }
+
+            if (ids.Count == 0)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — aucun id IMDb trouvé dans les résultats web.", epgTitle);
+                return null;
+            }
+
+            // Année de référence pour la porte (ProductionYear, ou null → pas de garde
+            // année, le juge synopsis décide seul).
+            int? expectedYear = year;
+
+            foreach (string imdbId in ids)
+            {
+                var m = await _tmdb.FindByExternalIdAsync(imdbId, "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                {
+                    // Accepté sans juge synopsis (pas d'overview EPG) : on n'a pu
+                    // vérifier sémantiquement — signaler pour confirmation visuelle,
+                    // comme le ferait l'usager avant de valider à la main.
+                    if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
+                        _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » → candidat « {1} » (tt={2}) accepté SANS vérif synopsis — à confirmer visuellement.",
+                            epgTitle, m.Title, imdbId);
+                    return m;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>Extrait les ids IMDb d'une propriété texte/URL d'un résultat et les ajoute (sans doublon).</summary>
+        private void CollectImdbIds(JsonElement parent, string prop, List<string> ids)
+        {
+            if (!parent.TryGetProperty(prop, out var el) || el.ValueKind != JsonValueKind.String) return;
+            CollectImdbIdsFromText(el.GetString(), ids);
+        }
+
+        private void CollectImdbIdsFromText(string text, List<string> ids)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            foreach (Match match in s_imdbUrlRe.Matches(text))
+            {
+                string id = match.Groups[1].Value;
+                if (!ids.Contains(id)) ids.Add(id);
+            }
+        }
+
+        private static string JsonEscape(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var sb = new StringBuilder(s.Length);
+            foreach (var c in s)
+            {
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\t') sb.Append("\\t");
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        private static string TruncateLog(string s, int max) =>
+            string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 
         // ------------------------------------------------------------------
         //  Porte d'acceptation d'un candidat TMDB : année + juge sémantique.
@@ -470,6 +635,9 @@ namespace LLM_AI
             if (setGenres) AddLock(item, MetadataFields.Genres);
 
             // --- Tag d'idempotence ---
+            // En mode retry, l'item portait peut-être le tag needs-review : on le
+            // retire (la résolution réussie le transforme en identifié).
+            RemoveTag(item, TagNeedsReview);
             AddTag(item, TagIdentified);
 
             // --- Persistance ---
@@ -598,11 +766,6 @@ namespace LLM_AI
             return sb.ToString();
         }
 
-        private static int? YearOf(DateTime? d) => d.HasValue ? d.Value.Year : (int?)null;
-        private static int? YearOf(DateTime d) => d == default ? (int?)null : d.Year;
-        private static int? YearOf(DateTimeOffset? d) => d.HasValue ? d.Value.Year : (int?)null;
-        private static int? YearOf(DateTimeOffset d) => d == default ? (int?)null : d.Year;
-
         private static string MimeFromUrl(string url) =>
             url.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg";
 
@@ -622,6 +785,17 @@ namespace LLM_AI
             var t = item.Tags ?? Array.Empty<string>();
             if (Array.IndexOf(t, tag) >= 0) return;
             var list = new List<string>(t) { tag };
+            item.Tags = list.ToArray();
+        }
+
+        /// <summary>Retire un tag s'il est présent.</summary>
+        private static void RemoveTag(BaseItem item, string tag)
+        {
+            var t = item.Tags ?? Array.Empty<string>();
+            int i = Array.IndexOf(t, tag);
+            if (i < 0) return;
+            var list = new List<string>(t);
+            list.RemoveAt(i);
             item.Tags = list.ToArray();
         }
     }
