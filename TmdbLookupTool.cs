@@ -338,7 +338,7 @@ namespace LLM_AI
                     $"&external_source={UrlEnc(source)}&language={UrlEnc(lang)}", ct)
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger?.Info("[LLM_AI] tmdb /find {0}={1} échoué ({2}).", source, externalId, ex.Message);
@@ -357,7 +357,7 @@ namespace LLM_AI
                             var meta = ParseMeta(json);
                             if (meta != null) return meta;
                         }
-                        catch (OperationCanceledException) { throw; }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                         catch (Exception ex) { _logger?.Info("[LLM_AI] tmdb /find détail {0} échoué ({1}).", id, ex.Message); }
                         break; // 1er résultat seulement
                     }
@@ -383,7 +383,7 @@ namespace LLM_AI
                 ct.ThrowIfCancellationRequested();
                 TmdbMeta m = null;
                 try { m = await LookupMetaAsync(query, kind, year, lang, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] tmdb multi-lang « {0} » ({1}) échoué ({2}).", query, lang, ex.Message); }
 
                 if (m == null) continue;
@@ -412,7 +412,7 @@ namespace LLM_AI
                 string json = await FetchDetailAsync(cfg.TmdbApiKey, tmdbId, kind, lang, ct).ConfigureAwait(false);
                 return ParseMeta(json);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _logger?.Info("[LLM_AI] tmdb détail by-id {0} échoué ({1}).", tmdbId, ex.Message); return null; }
         }
 

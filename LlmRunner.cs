@@ -509,7 +509,7 @@ namespace LLM_AI
                         label, b.Priority, b.ProviderType);
                     return reply;
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     last = ex;
@@ -630,7 +630,7 @@ namespace LLM_AI
 
                 return ParseIdGuess(reply);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger?.Warn("[LLM_AI] ResolveIds échoué pour « {0} » ({1}) — proposition vide.", title, ex.Message);

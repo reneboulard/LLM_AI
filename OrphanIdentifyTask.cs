@@ -176,7 +176,7 @@ namespace LLM_AI
                     EnableTotalRecordCount = false
                 }) ?? Array.Empty<BaseItem>();
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger?.ErrorException("[LLM_AI] OrphanIdentify : GetItemList a échoué — passage annulé.", ex, ex.Message);
@@ -201,7 +201,7 @@ namespace LLM_AI
                 {
                     st = await HandleItemAsync(item, cfg, dry, langs, userTmdb, verbose, ct).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     errors++;
@@ -289,7 +289,7 @@ namespace LLM_AI
                     stage = "S1";
                 }
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S1 « {0} » échoué ({1}).", epgTitle, ex.Message); }
 
             // S2 : proposition LLM validée par TMDB.
@@ -300,7 +300,7 @@ namespace LLM_AI
                     meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year, overview, null, langs, userTmdb, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S2";
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S2 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
@@ -340,17 +340,21 @@ namespace LLM_AI
             if (guess.IsEmpty) return null;
 
             // 1) id IMDb → TMDB /find (validation forte : si TMDB résout l'id, c'est bon).
+            //    Garde-fou année : un même titre peut exister pour deux films
+            //    différents (ex. « Le guérisseur » 1953 vs un enregistrement 2023)
+            //    — on refuse si les deux années sont connues et diffèrent de >1.
+            int? expectedYear = year ?? guess.Year;
             if (!string.IsNullOrWhiteSpace(guess.ImdbId))
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
-                if (m != null && m.TmdbId > 0) return m;
+                if (m != null && m.TmdbId > 0 && YearCompatible(expectedYear, m.Year)) return m;
             }
 
             // 2) id TMDB → relire la fiche (validation : un id halluciné renvoie null).
             if (guess.TmdbId > 0)
             {
                 var m = await _tmdb.LookupMetaByIdAsync(guess.TmdbId, kind, userTmdb, ct).ConfigureAwait(false);
-                if (m != null && m.TmdbId > 0) return m;
+                if (m != null && m.TmdbId > 0 && YearCompatible(expectedYear, m.Year)) return m;
             }
 
             // 3) titre original proposé → recherche S1 sur ce titre (garde-fou : match de titre).
@@ -450,7 +454,7 @@ namespace LLM_AI
                     }
                 }
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger?.Info("[LLM_AI] OrphanIdentify : poster « {0} » échoué ({1}) — ignoré.", item.Name, ex.Message);
@@ -508,6 +512,18 @@ namespace LLM_AI
                 return false;
 
             return true;
+        }
+
+        /// <summary>
+        /// Garde-fou d'année pour S2 : deux films peuvent partager un même titre
+        /// (ex. « Le guérisseur » 1953 vs un enregistrement de 2023). On accepte
+        /// si l'une des deux années est inconnue, ou si elles diffèrent d'au plus
+        /// un an (tolérance de date de sortie vs date d'enregistrement).
+        /// </summary>
+        private static bool YearCompatible(int? expected, int? actual)
+        {
+            if (!expected.HasValue || !actual.HasValue) return true;
+            return Math.Abs(expected.Value - actual.Value) <= 1;
         }
 
         private static string NormalizeTitle(string s)
