@@ -580,6 +580,19 @@ namespace LLM_AI
                 string.IsNullOrWhiteSpace(ImdbId) && TmdbId <= 0 && string.IsNullOrWhiteSpace(OriginalTitle);
         }
 
+        /// <summary>Verdict du juge sémantique de synopsis (porte d'acceptation S2).</summary>
+        internal struct SynopsisVerdict
+        {
+            /// <summary>true si le LLM a répondu un verdict exploitable (parse OK).
+            /// false = appel échoué/réponse non interprétable — l'appelant rejette
+            /// le candidat par prudence.</summary>
+            public bool IsValid;
+            /// <summary>true si les deux synopsis décrivent la MÊME œuvre.</summary>
+            public bool Match;
+            /// <summary>Courte justification (FR) renvoyée par le LLM.</summary>
+            public string Reason;
+        }
+
         /// <summary>
         /// Demande au LLM de proposer l'équivalence TMDB/IMDb d'un titre EPG
         /// (souvent québécois) — S2 de la tâche d'identification d'orphelins.
@@ -636,6 +649,95 @@ namespace LLM_AI
                 _logger?.Warn("[LLM_AI] ResolveIds échoué pour « {0} » ({1}) — proposition vide.", title, ex.Message);
                 return empty;
             }
+        }
+
+        /// <summary>
+        /// Juge sémantique S2 : demande au LLM de comparer le synopsis EPG au
+        /// synopsis d'un candidat TMDB pour décider s'ils décrivent la MÊME œuvre.
+        /// Contrairement à une comparaison lexicale (chevauchement de mots), le LLM
+        /// saisit le <b>sens</b> : deux synopsis peuvent décrire la même œuvre avec
+        /// un accent différent (ex. l'un insiste sur l'intrigue amoureuse, l'autre
+        /// sur l'enquête criminelle, mais même lieu/époque/personnages = même œuvre),
+        /// ou décrire deux œuvres clairement différentes. Appel one-shot via
+        /// <see cref="ChatWithFallbackAsync"/>. <b>Best-effort</b> : en cas d'échec
+        /// (annulation exceptée), renvoie un verdict <see cref="SynopsisVerdict"/>
+        /// invalide — l'appelant rejette le candidat par prudence. Ne lève jamais.
+        /// </summary>
+        internal async System.Threading.Tasks.Task<SynopsisVerdict> JudgeSynopsisMatchAsync(
+            PluginConfiguration cfg, string epgTitle, int? epgYear, string epgSynopsis,
+            string candTitle, int? candYear, string candOverview,
+            System.Threading.CancellationToken ct)
+        {
+            var bad = new SynopsisVerdict();
+            if (cfg == null) return bad;
+            if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(candOverview))
+                return bad; // rien à comparer — l'appelant ne devrait pas appeler le juge dans ce cas
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends == null || backends.Count == 0)
+                {
+                    _logger?.Warn("[LLM_AI] Juge synopsis : aucun backend LLM activé.");
+                    return bad;
+                }
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                const string system =
+                    "Tu compares deux synopsis pour décider s'ils décrivent la MÊME œuvre " +
+                    "(film ou série). Deux synopsis peuvent décrire la même œuvre même si " +
+                    "l'accent diffère : par exemple l'un met l'accent sur une intrigue " +
+                    "amoureuse et l'autre sur une enquête criminelle, mais même lieu, même " +
+                    "époque et mêmes personnages = même œuvre. En revanche, deux histoires " +
+                    "clairement indépendantes (ex. une comédie romantique vs un thriller " +
+                    "policier sans rapport) = deux œuvres différentes. Réponds UNIQUEMENT " +
+                    "un objet JSON compact, sans explication ni balises markdown : " +
+                    "{\"match\":true,\"reason\":\"courte justification en français\"}. " +
+                    "Mets match=false si les synopsis décrivent des œuvres différentes.";
+
+                var user = new StringBuilder();
+                user.Append("Synopsis A (EPG, titre=").Append(epgTitle ?? "—");
+                if (epgYear.HasValue) user.Append(", année=").Append(epgYear.Value.ToString(CultureInfo.InvariantCulture));
+                user.Append(") :\n").Append(TruncateOverview(epgSynopsis, 800));
+                user.Append("\n\nSynopsis B (candidat TMDB, titre=").Append(candTitle ?? "—");
+                if (candYear.HasValue) user.Append(", année=").Append(candYear.Value.ToString(CultureInfo.InvariantCulture));
+                user.Append(") :\n").Append(TruncateOverview(candOverview, 800));
+                user.Append("\n\nLe synopsis A et le synopsis B décrivent-ils la MÊME œuvre ?");
+
+                string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                    system, user.ToString(), "judge-synopsis", ct).ConfigureAwait(false);
+
+                return ParseSynopsisVerdict(reply);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Juge synopsis échoué pour « {0} » ({1}).", epgTitle, ex.Message);
+                return bad;
+            }
+        }
+
+        internal static SynopsisVerdict ParseSynopsisVerdict(string reply)
+        {
+            var v = new SynopsisVerdict();
+            string json = ExtractJsonObject(reply);
+            if (string.IsNullOrWhiteSpace(json)) return v;
+            try
+            {
+                using (var doc = JsonDocument.Parse(json))
+                {
+                    var r = doc.RootElement;
+                    if (r.ValueKind != JsonValueKind.Object) return v;
+                    if (r.TryGetProperty("match", out var m))
+                    {
+                        if (m.ValueKind == JsonValueKind.True) { v.Match = true; v.IsValid = true; }
+                        else if (m.ValueKind == JsonValueKind.False) { v.Match = false; v.IsValid = true; }
+                    }
+                    v.Reason = StrId(r, "reason");
+                }
+            }
+            catch { /* tolérant */ }
+            return v;
         }
 
         internal static IdGuess ParseIdGuess(string reply)

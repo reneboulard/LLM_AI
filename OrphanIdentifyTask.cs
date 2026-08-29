@@ -339,25 +339,29 @@ namespace LLM_AI
             var guess = await _runner.ResolveIdsAsync(cfg, epgTitle, kind, year, overview, channel, ct).ConfigureAwait(false);
             if (guess.IsEmpty) return null;
 
-            // 1) id IMDb → TMDB /find (validation forte : si TMDB résout l'id, c'est bon).
-            //    Garde-fou année : un même titre peut exister pour deux films
-            //    différents (ex. « Le guérisseur » 1953 vs un enregistrement 2023)
-            //    — on refuse si les deux années sont connues et diffèrent de >1.
+            // Année de référence (enregistrement) : préférence à l'année EPG, sinon
+            // à l'année proposée par le LLM. Sert au garde-fou année de chaque candidat.
             int? expectedYear = year ?? guess.Year;
+
+            // 1) id IMDb → TMDB /find. Le candidat n'est accepté que s'il passe la
+            //    porte d'acceptation (année compatible + juge sémantique de synopsis).
             if (!string.IsNullOrWhiteSpace(guess.ImdbId))
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
-                if (m != null && m.TmdbId > 0 && YearCompatible(expectedYear, m.Year)) return m;
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                    return m;
             }
 
-            // 2) id TMDB → relire la fiche (validation : un id halluciné renvoie null).
+            // 2) id TMDB → relire la fiche (un id halluciné renvoie null). Même porte.
             if (guess.TmdbId > 0)
             {
                 var m = await _tmdb.LookupMetaByIdAsync(guess.TmdbId, kind, userTmdb, ct).ConfigureAwait(false);
-                if (m != null && m.TmdbId > 0 && YearCompatible(expectedYear, m.Year)) return m;
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                    return m;
             }
 
-            // 3) titre original proposé → recherche S1 sur ce titre (garde-fou : match de titre).
+            // 3) titre original proposé → recherche S1 sur ce titre. Porte avec garde
+            //    de titre lexical en plus (le candidat vient d'une recherche par titre).
             if (!string.IsNullOrWhiteSpace(guess.OriginalTitle))
             {
                 string ot = TmdbLookupTool.CleanEpgTitle(guess.OriginalTitle);
@@ -365,11 +369,61 @@ namespace LLM_AI
                 {
                     int? y = guess.Year ?? year;
                     var m = await _tmdb.LookupMetaMultiLangAsync(ot, kind, y, langs, ct).ConfigureAwait(false);
-                    if (m != null && TitleMatches(ot, m.Title, y, m.Year)) return m;
+                    if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, true, ot, ct).ConfigureAwait(false))
+                        return m;
                 }
             }
 
             return null;
+        }
+
+        // ------------------------------------------------------------------
+        //  Porte d'acceptation d'un candidat TMDB : année + juge sémantique.
+        //  Reproduit la méthode manuelle de l'usager : on accepte un candidat
+        //  si l'année est compatible ET (pas de synopsis à comparer, OU le juge
+        //  LLM confirme que les synopsis décrivent la même œuvre). Un candidat
+        //  dont le synopsis décrit une autre œuvre est rejeté — « on continue de
+        //  chercher ». Optionnellement, une garde de titre lexical (chemin 3).
+        // ------------------------------------------------------------------
+
+        private async Task<bool> AcceptCandidateAsync(PluginConfiguration cfg, TmdbMeta m,
+            string epgTitle, int? epgYear, string epgSynopsis,
+            bool requireTitleMatch, string matchTitle, CancellationToken ct)
+        {
+            if (m == null || m.TmdbId <= 0) return false;
+
+            // Garde-fou année (un même titre peut désigner deux œuvres d'époques
+            // différentes — ex. « Le guérisseur » 1953 vs 2017).
+            if (!YearCompatible(epgYear, m.Year)) return false;
+
+            // Garde de titre lexicale (chemin 3 uniquement).
+            if (requireTitleMatch && !TitleMatches(matchTitle, m.Title, epgYear, m.Year)) return false;
+
+            // Pas de synopsis EPG (ou candidat sans overview) → rien à comparer
+            // sémantiquement : on accepte sur année (+titre). Conserve le comportement
+            // attendu pour les EPG québécois sans synopsis.
+            if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(m.Overview))
+                return true;
+
+            // Juge sémantique LLM : compare le synopsis EPG au synopsis TMDB.
+            var v = await _runner.JudgeSynopsisMatchAsync(cfg, epgTitle, epgYear, epgSynopsis,
+                m.Title, m.Year, m.Overview, ct).ConfigureAwait(false);
+
+            if (!v.IsValid)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : juge synopsis indisponible pour « {0} » — candidat « {1} » rejeté par prudence.",
+                    epgTitle, m.Title);
+                return false;
+            }
+            if (!v.Match)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : juge synopsis : « {0} » ≠ candidat « {1} » ({2}) — rejet, on continue.",
+                    epgTitle, m.Title, v.Reason);
+                return false;
+            }
+            _logger?.Info("[LLM_AI] OrphanIdentify : juge synopsis : « {0} » = candidat « {1} » ({2}) — accepté.",
+                epgTitle, m.Title, v.Reason);
+            return true;
         }
 
         // ------------------------------------------------------------------

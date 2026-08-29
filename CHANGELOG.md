@@ -136,7 +136,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **S2 — proposition LLM validée par TMDB** : le LLM propose un id IMDb/TMDB à partir
     du titre + overview + chaîne ; la proposition est **validée** via TMDB `/find`
     (`FindByExternalIdAsync`) ou détail par id (`LookupMetaByIdAsync`) — TMDB est la
-    source de vérité, un id halluciné renvoie null.
+    source de vérité, un id halluciné renvoie null. **Porte d'acceptation sémantique** :
+    chaque candidat doit passer un **juge LLM de synopsis** (`LlmRunner.JudgeSynopsisMatchAsync`)
+    qui compare le synopsis EPG au synopsis TMDB pour confirmer qu'ils décrivent la
+    *même œuvre* (un id qui existe mais qui correspond à un film homonyme d'une autre
+    époque — ex. « Le guérisseur » 1953 vs 2017 — est rejeté). Reproduit la méthode
+    manuelle de l'usager (comparaison synopsis + date ; on continue de chercher si
+    différent). Garde-fou année en plus. Skippé quand l'EPG n'a pas de synopsis
+    (retour à année + titre).
   - **Application non destructive** : ne remplit que les ids provider absents, un
     `Overview` vide, des `Genres` vides, un poster `Primary` manquant. **Le `Name` EPG
     n'est jamais modifié** — il est **verrouillé** (`MetadataFields.Name`) pour
@@ -161,7 +168,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **S2 — LLM proposal validated by TMDB**: the LLM proposes an IMDb/TMDB id from the
     title + overview + channel; the proposal is **validated** via TMDB `/find`
     (`FindByExternalIdAsync`) or detail-by-id (`LookupMetaByIdAsync`) — TMDB is the
-    source of truth, a hallucinated id returns null.
+    source of truth, a hallucinated id returns null. **Semantic acceptance gate**: each
+    candidate must pass an **LLM synopsis judge** (`LlmRunner.JudgeSynopsisMatchAsync`)
+    that compares the EPG synopsis to the TMDB synopsis to confirm they describe the
+    *same work* (an id that exists but is a same-titled film from a different era — e.g.
+    "Le guérisseur" 1953 vs 2017 — is rejected). Mirrors the user's manual method
+    (compare synopsis + date; keep searching if different). Year guard on top. Skipped
+    when the EPG has no synopsis (falls back to year + title).
   - **Non-destructive apply**: only fills missing provider ids, an empty `Overview`,
     empty `Genres`, a missing `Primary` poster. **The EPG `Name` is never changed** —
     it is **locked** (`MetadataFields.Name`) to preserve the original title (reused

@@ -609,6 +609,14 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    quelle** : elle est validée via `FindByExternalIdAsync` (TMDB `/find` par `imdb_id`)
    ou `LookupMetaByIdAsync` (détail par `tmdb_id`) — **TMDB est la source de vérité**, un
    id halluciné renvoie null. À défaut, le titre original proposé est passé à S1.
+   Chaque candidat doit ensuite passer une **porte d'acceptation sémantique** :
+   - **garde-fou année** (`YearCompatible`, ±1 an) ;
+   - **juge LLM de synopsis** (`LlmRunner.JudgeSynopsisMatchAsync`) qui compare le
+     synopsis EPG au synopsis TMDB et confirme qu'ils décrivent la *même œuvre* — un id
+     qui existe mais qui pointe vers un film homonyme d'une autre époque (ex. « Le
+     guérisseur » 1953 vs 2017) est **rejeté**, et on continue de chercher. Reproduit la
+     méthode manuelle de l'usager (comparaison synopsis + date). Skippé quand l'EPG n'a
+     pas de synopsis (retour à année + titre). Le verdict + la justification sont logués.
 
 ### Application non destructive + verrouillage
 

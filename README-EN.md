@@ -598,6 +598,14 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
    validated via `FindByExternalIdAsync` (TMDB `/find` by `imdb_id`) or
    `LookupMetaByIdAsync` (detail by `tmdb_id`) — **TMDB is the source of truth**, a
    hallucinated id returns null. Failing that, the proposed original title is fed to S1.
+   Each candidate must then pass a **semantic acceptance gate**:
+   - **year guard** (`YearCompatible`, ±1 year);
+   - **LLM synopsis judge** (`LlmRunner.JudgeSynopsisMatchAsync`) compares the EPG
+     synopsis to the TMDB synopsis and confirms they describe the *same work* — an id
+     that exists but points to a same-titled film from a different era (e.g. "Le
+     guérisseur" 1953 vs 2017) is **rejected**, and the search continues. Mirrors the
+     user's manual method (compare synopsis + date). Skipped when the EPG has no
+     synopsis (falls back to year + title). The verdict + reasoning are logged.
 
 ### Non-destructive apply + locking
 
