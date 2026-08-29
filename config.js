@@ -406,6 +406,9 @@ define(["loading"], function (loading) {
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
         view.querySelector("#chkStrmLibraryEnabled").checked = !!cfg.StrmLibraryEnabled;
         view.querySelector("#txtStrmLibraryName").value = cfg.StrmLibraryName || "";
+        // Identification des orphelins — opt-in (modifie des enregistrements), dry-run par défaut pour les premiers runs.
+        view.querySelector("#chkOrphanIdentifyEnabled").checked = !!cfg.OrphanIdentifyEnabled;
+        view.querySelector("#chkOrphanIdentifyDryRun").checked = !!cfg.OrphanIdentifyDryRun;
         // Audit santé — Lecture seule par défaut, remédiation opt-in.
         view.querySelector("#chkAuditEnabled").checked = cfg.AuditEnabled !== false;
         view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
@@ -463,6 +466,9 @@ define(["loading"], function (loading) {
             // Carry-forward : StrmSecret est auto-généré côté serveur et n'est
             // pas édité ici — on le renvoie tel quel pour éviter de l'écraser.
             StrmSecret: (loadedCfg && loadedCfg.StrmSecret) || "",
+            // Identification des enregistrements orphelins (opt-in + dry-run).
+            OrphanIdentifyEnabled: view.querySelector("#chkOrphanIdentifyEnabled").checked,
+            OrphanIdentifyDryRun: view.querySelector("#chkOrphanIdentifyDryRun").checked,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),

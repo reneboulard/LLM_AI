@@ -32,8 +32,8 @@ define([], function () {
             "cfg.embyurl.label": "URL publique Emby",
             "cfg.embyurl.desc": "URL d'accès Emby (ex. http://192.168.11.2:8096) — sert à construire les liens d'images retournés au LLM.",
             "cfg.relang.label": "Langue de réponse du LLM",
-            "cfg.relang.auto": "Auto (langue du prompt — défaut)",
-            "cfg.relang.desc": "Langue du texte en prose de l'LLM — les <b>raisons des recommandations</b> et le <b>rapport d'audit</b>. « Auto » = aucune directive (l'LLM suit la langue du prompt, ici le français). Choisir une langue force l'LLM à répondre dans celle-ci. Les titres de films/séries, noms de chaînes et champs JSON techniques restent inchangés.",
+            "cfg.relang.auto": "Auto (langue de l'interface — défaut)",
+            "cfg.relang.desc": "Langue des <b>métadonnées</b> et du texte en prose de l'LLM : <b>raisons des recommandations</b>, <b>rapport d'audit</b>, scaffolding des cartes .strm et <b>synopsis TMDB</b> (demandé dans cette langue, repli en-US, traduction LLM en dernier recours). « Auto » = suit la langue d'affichage Emby. Les titres de films/séries, noms de chaînes et champs JSON techniques restent inchangés.",
             "cfg.filters.h": "Filtres de l'analyse EPG (tâche recommandations)",
             "cfg.filters.desc": "Filtres appliqués aux programmes EPG avant envoi au LLM (get_emby_info epg_series/epg_movies). <b>Chaines</b> et <b>Genres</b> sont partagés par les deux tâches (séries et films) ; case vide = pas de filtre sur cette dimension. Les <b>flags Kids/News/Sports</b> sont <i>opt-in</i> par catégorie : vide = fiction seulement ; cochez un flag pour AJOUTER ces programmes. Spécifique à la tâche de recommandation.",
             "cfg.channels.label": "Chaines",
@@ -58,7 +58,7 @@ define([], function () {
             "cfg.tmdb.ph": "clé themoviedb.org",
             "cfg.tmdb.desc": "Clé API TMDB pour l'outil tmdb_lookup (enrichissement synopsis/statut). Laisser vide pour désactiver l'outil.",
             "cfg.tmdblang.label": "Langue TMDB",
-            "cfg.tmdblang.desc": "Langue des métadonnées TMDB (ex. fr-FR, en-US).",
+            "cfg.tmdblang.desc": "Repli legacy pour la langue TMDB quand « Langue de réponse du LLM » est sur Auto et que la langue d'affichage Emby est illisible. Quand une langue de réponse est choisie, c'est elle qui pilote TMDB (repli en-US, traduction LLM en dernier recours). Ex. fr-FR, en-US.",
             "cfg.tvdb.label": "Clé API TheTVDB (tvdb_search)",
             "cfg.tvdb.ph": "clé api4.thetvdb.com",
             "cfg.tvdb.desc": "Clé API TheTVDB.com (v4) pour l'outil tvdb_search (enrichissement séries, synopsis FR en priorité). Repli sur la variable d'environnement TVDB_API_KEY. Vide = désactivé.",
@@ -122,6 +122,13 @@ define([], function () {
             "cfg.strmlib.flag": "Activer la bibliothèque .strm des recommandations",
             "cfg.strmlib.name": "Nom de la bibliothèque Emby dédiée",
             "cfg.strmlib.name.desc": "Nom exact (casse ignorée) de la bibliothèque Emby où écrire les cartes. Indépendant de l'auto-programmation (les deux peuvent cohabiter : le dedup évite les timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger l'endpoint d'activation.",
+
+            // -- Identification des enregistrements orphelins (tâche planifiée 04 h) ---
+            "cfg.orphan.h": "Identification des enregistrements orphelins",
+            "cfg.orphan.desc": "Passe quotidienne (04 h) qui repère les enregistrements DVR <b>non identifiés</b> (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB), tente de les résoudre par <b>nettoyage du titre + recherche multilingue</b> (S1), puis par <b>proposition LLM d'un id IMDb validé via TMDB /find</b> (S2), et écrit l'id + métadonnées + affiche en <b>verrouillant le titre EPG</b> (jamais écrasé). Les irrésolus sont marqués pour revue. <b>Opt-in</b> : modifie des enregistrements.",
+            "cfg.orphan.enabled": "Activer la tâche d'identification des orphelins",
+            "cfg.orphan.dryrun": "Mode simulation (dry-run — aucune écriture)",
+            "cfg.orphan.dryrun.desc": "Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2) + un bilan. Sert à valider la qualité des résolutions avant de basculer en application automatique. À garder cochée pour les premiers runs.",
 
             // -- Audit santé (endpoint à la demande, agent system_audit) ---
             "cfg.audit.h": "Audit santé du serveur",
@@ -190,7 +197,11 @@ define([], function () {
             "rec.tonight.fromCache": "depuis cache",
             "rec.tonight.watchLive": "Regarder en direct",
             "rec.tonight.watch": "Regarder",
-            "rec.tonight.watchLib": "Regarder (bibli.)"
+            "rec.tonight.watchLib": "Regarder (bibli.)",
+            "rec.type.upcoming": "À venir",
+            "rec.type.recording": "Disponible · Enregistrement",
+            "rec.type.library": "Disponible · Bibliothèque",
+            "rec.type.aired": "Diffusé"
         },
 
         en: {
@@ -201,8 +212,8 @@ define([], function () {
             "cfg.embyurl.label": "Emby public URL",
             "cfg.embyurl.desc": "Emby access URL (e.g. http://192.168.11.2:8096) — used to build the image links returned to the LLM.",
             "cfg.relang.label": "LLM response language",
-            "cfg.relang.auto": "Auto (prompt language — default)",
-            "cfg.relang.desc": "Language of the LLM's prose — the <b>recommendation reasons</b> and the <b>audit report</b>. “Auto” = no directive (the LLM follows the prompt's language, here French). Picking a language forces the LLM to respond in it. Movie/series titles, channel names and technical JSON fields stay unchanged.",
+            "cfg.relang.auto": "Auto (interface language — default)",
+            "cfg.relang.desc": "Language of <b>metadata</b> and the LLM's prose: <b>recommendation reasons</b>, <b>audit report</b>, .strm card scaffolding and <b>TMDB synopsis</b> (requested in this language, en-US fallback, LLM translation as last resort). “Auto” = follows the Emby display language. Movie/series titles, channel names and technical JSON fields stay unchanged.",
             "cfg.filters.h": "EPG analysis filters (recommendations task)",
             "cfg.filters.desc": "Filters applied to EPG programs before sending them to the LLM (get_emby_info epg_series/epg_movies). <b>Channels</b> and <b>Genres</b> are shared by both tasks (series and movies); an empty box = no filter on that dimension. The <b>Kids/News/Sports flags</b> are <i>opt-in</i> per category: empty = fiction only; check a flag to ADD these programs. Specific to the recommendation task.",
             "cfg.channels.label": "Channels",
@@ -227,7 +238,7 @@ define([], function () {
             "cfg.tmdb.ph": "themoviedb.org key",
             "cfg.tmdb.desc": "TMDB API key for the tmdb_lookup tool (synopsis/status enrichment). Leave empty to disable the tool.",
             "cfg.tmdblang.label": "TMDB language",
-            "cfg.tmdblang.desc": "Language of TMDB metadata (e.g. fr-FR, en-US).",
+            "cfg.tmdblang.desc": "Legacy fallback for the TMDB language when \"LLM response language\" is Auto and the Emby display language can't be read. When a response language is set, it drives TMDB (en-US fallback, LLM translation as last resort). E.g. fr-FR, en-US.",
             "cfg.tvdb.label": "TheTVDB API key (tvdb_search)",
             "cfg.tvdb.ph": "api4.thetvdb.com key",
             "cfg.tvdb.desc": "TheTVDB.com (v4) API key for the tvdb_search tool (series enrichment, FR synopsis first). Falls back to the TVDB_API_KEY environment variable. Empty = disabled.",
@@ -290,6 +301,13 @@ define([], function () {
             "cfg.strmlib.flag": "Enable the recommendations .strm library",
             "cfg.strmlib.name": "Dedicated Emby library name",
             "cfg.strmlib.name.desc": "Exact name (case-insensitive) of the Emby library where cards are written. Independent of auto-programming (both can coexist: dedup prevents duplicate timers). A security token is auto-generated on the first run to protect the activation endpoint.",
+
+            // -- Orphan recording identification (scheduled task, 4 AM) ---
+            "cfg.orphan.h": "Orphan recording identification",
+            "cfg.orphan.desc": "Daily pass (4 AM) that finds <b>unidentified</b> DVR recordings (no IMDb/TMDB id — often Quebec titles missing from TMDB/TVDB), resolves them via <b>title cleanup + multi-language search</b> (S1), then an <b>LLM-proposed IMDb id validated through TMDB /find</b> (S2), and writes the id + metadata + poster while <b>locking the EPG title</b> (never overwritten). Unresolved ones are tagged for review. <b>Opt-in</b>: mutates recordings.",
+            "cfg.orphan.enabled": "Enable the orphan identification task",
+            "cfg.orphan.dryrun": "Simulation mode (dry-run — no writes)",
+            "cfg.orphan.dryrun.desc": "When checked, the task <b>writes nothing</b>: it only logs the orphans found and the proposed resolution (S1/S2) + a summary. Use it to validate resolution quality before switching to automatic application. Keep checked for the first runs.",
 
             "cfg.audit.h": "Server health audit",
             "cfg.audit.desc": "Launches an LLM agent that queries the <b>system_audit</b> tool (sessions, scheduled tasks, transcoding, disks, logs, host metrics) and produces a Markdown health report: severity-tagged findings + recommended actions. Admin-only. <b>Remediation</b> (stop a session, trigger a task, notify a user) is disabled by default.",
@@ -354,7 +372,11 @@ define([], function () {
             "rec.tonight.fromCache": "from cache",
             "rec.tonight.watchLive": "Watch live",
             "rec.tonight.watch": "Watch",
-            "rec.tonight.watchLib": "Watch (library)"
+            "rec.tonight.watchLib": "Watch (library)",
+            "rec.type.upcoming": "Upcoming",
+            "rec.type.recording": "Available · Recording",
+            "rec.type.library": "Available · Library",
+            "rec.type.aired": "Aired"
         }
     };
 

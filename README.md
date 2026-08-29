@@ -31,10 +31,11 @@ désactivée par défaut (opt-in). Voir [Audit santé](#audit-santé).
 7. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
 8. [Surfaces natives des recommandations](#surfaces-natives-des-recommandations)
 9. [Audit santé](#audit-santé)
-10. [API HTTP](#api-http)
-11. [i18n (FR / EN)](#i18n-fr--en)
-12. [Dépannage](#dépannage)
-13. [Changelog](#changelog)
+10. [Identification des enregistrements orphelins](#identification-des-enregistrements-orphelins)
+11. [API HTTP](#api-http)
+12. [i18n (FR / EN)](#i18n-fr--en)
+13. [Dépannage](#dépannage)
+14. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -246,6 +247,20 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
 - `AuditPrompt` — template du prompt envoyé au LLM (message user). L'éventuel
   paramètre `Focus` de l'endpoint est appendé à l'exécution pour orienter l'audit.
 
+### Identification des enregistrements orphelins
+
+Tâche planifiée **quotidienne 04:00** qui identifie les enregistrements DVR **non
+identifiés** (aucun id IMDb/TMDB/TVDB — souvent des titres québécois absents du
+catalogue TMDB/TVDB). Voir [Identification des orphelins](#identification-des-enregistrements-orphelins).
+
+- `OrphanIdentifyEnabled` (bool, **défaut `false` — opt-in explicite**) — active la
+  tâche. `false` = la tâche est inactive (no-op). Modifie des métadonnées
+  d'enregistrements — d'où l'opt-in.
+- `OrphanIdentifyDryRun` (bool, défaut `false`) — si coché, la tâche **n'écrit rien** :
+  elle logue seulement les orphelins trouvés et la résolution proposée (S1/S2) + un
+  bilan. Sert à valider la qualité des résolutions avant de basculer en application
+  automatique. À garder cochée pour les premiers runs.
+
 ---
 
 ## Composants
@@ -258,19 +273,22 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, run LLM, enrichissement, **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
 | `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
-| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB. |
+| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique puis stream `recording_activated.mp4`. Gated par `StrmSecret`. |
 | `AiGenreTagger.cs` | `AiGenreTagger` (statique) | Étiquetage genre `AI Tonight` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des enregistrements DVR orphelins (sans id IMDb/TMDB/TVDB) : S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
+| `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
+| `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut. |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 12 actions d'audit système (sessions, tâches, transcodage, disques, journaux, métriques hôte, processus, bibliothèque) + 3 actions de remédiation gated par `AuditRemediationEnabled`. Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
-| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Utilisé par `LlmScheduledTask`, `TonightApiService` **et** `AuditApiService`. |
+| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary`, `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle`, résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService` **et** `OrphanIdentifyTask`. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour le path d'audit (sans toucher aux appelants recommandation). |
 | `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). |
 | `GetEmbyInfoTool.cs` | `GetEmbyInfoTool` | Outil `get_emby_info` (voir [Outils](#outils-llm)). |
-| `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `ShowbizzTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). |
+| `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `ShowbizzTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |
 | `recommendations.html` / `recommendations.js` | — | Page Recommandations (rendu des 3 sections, cartes, boutons). |
 | `i18n.js` | — | Chaînes localisées FR/EN + endpoint `web/ConfigurationPage?name=LLMAII18n`. |
@@ -410,6 +428,18 @@ bibliothèque Emby dédiée (option `StrmLibraryEnabled`, nom `StrmLibraryName`)
 fichier marqueur `.llmai_reco` par dossier pilote le nettoyage des cartes périmées
 au run suivant (`CleanPrevious`).
 
+Le `.nfo` de chaque carte contient :
+
+- un `<plot>` qui commence par le **synopsis natif de l'EPG** (langue d'origine du
+  programme, lu sur le `BaseItem` EPG sous-jacent), suivi de l'enrichissement
+  (synopsis TMDB + raison LLM + méta + diffusion à venir + lien fiche EPG) dans la
+  **langue de l'usager** (`ResponseLanguage`). L'usager lit l'enrichissement dans sa
+  langue tout en gardant le synopsis EPG d'origine — aucune déduction de la langue du
+  programme nécessaire ;
+- les **External IDs** `<tmdbid>` / `<imdbid>` / `<tvdbid>` quand ils sont disponibles
+  (récupérés via `append_to_response=external_ids` de TMDB) → Emby génère les **liens
+  profonds** TMDB / IMDb / TVDB sur la fiche de la carte.
+
 Lire une carte déclenche l'endpoint **`GET /Plugins/LLMAI/Activate?programId=&kind=&t=`** :
 1. `AutoProgrammer.ProgramOneAsync` crée le timer d'enregistrement (une reco
    unique), avec dedup par ProgramId ;
@@ -546,6 +576,64 @@ remédiation est activée **et** le mode est `single`).
 
 ---
 
+## Identification des enregistrements orphelins
+
+Quand Emby identifie un enregistrement DVR, il écrit ses métadonnées dans un `.nfo`.
+Pour les **titres québécois**, le lookup TMDB/TVDB échoue souvent (le catalogue utilise
+les titres de France ou originaux) : l'enregistrement finit **sans id IMDb/TMDB** — un
+**orphelin**. L'usager corrige alors à la main (recherche web → id IMDb) puis
+**verrouille** les champs. La tâche planifiée **`OrphanIdentifyTask`** (quotidienne
+**04:00**, juste après le nettoyage 03:00) automatise cette démarche.
+
+### Flux (deux stages)
+
+1. **S1 — nettoyage + recherche multilingue.** Le titre EPG est débarrassé de son
+   bruit par `CleanEpgTitle` (marqueurs `HD`/`VOSTFR`/`VF`/`VO`, « Rediff. »/« Inédit »,
+   `S##E##` / `Saison \d` / `Épisode \d`, parenthèses) puis recherché sur TMDB en
+   plusieurs langues : `en-US` (titre original), `fr-FR` (titre France), + la langue de
+   l'usager. Un candidat est retenu si le **titre normalisé** correspond (garde-fou
+   contre un mauvais match ambigu), avec contrôle de l'année.
+2. **S2 — proposition LLM validée par TMDB** (si S1 échoue). `LlmRunner.ResolveIdsAsync`
+   demande au LLM un id IMDb/TMDB à partir du titre EPG + overview + chaîne (appel
+   one-shot, multi-backend avec repli). La proposition n'est **jamais appliquée telle
+   quelle** : elle est validée via `FindByExternalIdAsync` (TMDB `/find` par `imdb_id`)
+   ou `LookupMetaByIdAsync` (détail par `tmdb_id`) — **TMDB est la source de vérité**, un
+   id halluciné renvoie null. À défaut, le titre original proposé est passé à S1.
+
+### Application non destructive + verrouillage
+
+Quand un candidat est validé (et hors dry-run), `OrphanIdentifyTask` :
+
+- remplit les **ids provider** absents (`SetProviderId` `tmdb`/`imdb`/`tvdb`) ;
+- remplit un `Overview` **vide**, des `Genres` **vides**, un poster `Primary`
+  **manquant** (téléchargé depuis TMDB, `IProviderManager.SaveImage`) — jamais n'écrase
+  une valeur existante ;
+- **verrouille `MetadataFields.Name`** (le titre EPG n'est **jamais modifié** — préservé
+  pour scanner l'EPG plus tard à la recherche de nouveaux programmes) ainsi que les
+  champs remplis (`Overview`/`Genres`) — **add-only** : aucun verrou existant n'est
+  retiré, reflétant la pratique manuelle de l'usager ;
+- ajoute le tag **`llmai-identified`** et persiste (`UpdateToRepository`).
+
+Les orphelins qu'aucun stage ne résout sont tagués **`llmai-needs-review`** (à revérifier
+à la main) — aucun id n'est écrit.
+
+### Idempotence & dry-run
+
+Les items déjà tagués `llmai-identified` ou `llmai-needs-review` sont **ignorés** au
+passage suivant (idempotence par tags). Avec **`OrphanIdentifyDryRun`**, la tâche n'écrit
+rien : elle logue chaque orphelin + la résolution proposée (S1/S2) et un bilan
+(résolus / needs-review / ignorés / erreurs) — pour valider la qualité des résolutions
+avant de basculer en application. Best-effort : un item en erreur n'interrompt jamais le
+passage (per-item try/catch). Scope : **enregistrements DVR uniquement** (films et
+séries), pas les cartes `.strm`.
+
+> 📌 **Vérification recommandée** : activer `OrphanIdentifyEnabled` **avec**
+> `OrphanIdentifyDryRun` coché, déclencher la tâche manuellement (Dashboard ▶ Tâches
+> planifiées) et inspecter les lignes `[LLM_AI] OrphanIdentify` du journal avant de
+> décocher le dry-run pour une vraie application.
+
+---
+
 ## API HTTP
 
 ```
@@ -616,11 +704,26 @@ curl -H "X-Emby-Token: <token-admin>" \
 
 ## i18n (FR / EN)
 
-Système maison (`i18n.js`) : dictionnaire `STRINGS { fr, en }`, fonction `t(key, …args)`.
-Chargé côté navigateur via `require([ApiClient.getUrl("web/ConfigurationPage",
+**Côté navigateur** (`i18n.js`) : dictionnaire `STRINGS { fr, en }`, fonction
+`t(key, …args)`. Chargé via `require([ApiClient.getUrl("web/ConfigurationPage",
 {name:"LLMAII18n"})])`. Toutes les étiquettes visibles (sections, boutons, champs de
 config, messages d'erreur/vide/loading) passent par `t(...)`. Pour ajouter une langue,
 ajouter une branche dans `STRINGS` et un sélecteur de langue côté page.
+
+**Côté serveur** (`I18n.cs`) : dictionnaires inline FR/EN (`s_res`) + résolution de langue.
+**Deux buckets** distincts :
+
+- **métadonnées** (`ResolveMetaLangKey`) — `<plot>` du `.nfo`, synopsis TMDB, prose LLM :
+  précédence `ResponseLanguage` → langue d'affichage Emby → legacy `TmdbLanguage` →
+  anglais ;
+- **interface** (`ResolveDisplayLangKey`) — nom/description des tâches planifiées :
+  langue d'affichage Emby (`UICulture`), repli anglais.
+
+Helpers `ToTmdbLang` (clé 2 lettres → code TMDB `fr-FR`/`en-US`…) et `ToLangName` (→ nom
+humain pour la cible de traduction LLM). Extensible par la donnée : ajouter une entrée
+`I18n.s_res` (les langues sans dictionnaire retombent sur l'anglais pour les courts
+libellés ; le synopsis TMDB et la prose LLM restent dans la langue de l'usager via la
+cascade TMDB + traduction LLM en dernier recours).
 
 ---
 

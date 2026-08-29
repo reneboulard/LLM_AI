@@ -131,6 +131,34 @@
                 font-weight: bold;
                 padding: 2px;
             }
+            /* Badge de type (coin haut-gauche du poster) : différencie une reco
+               « À venir » (programme EPG du soir) d'une reco déjà disponible
+               (enregistrement / bibliothèque) ou diffusée. Icône seule — le
+               libellé complet va dans la méta-ligne (le poster ne fait que 90 px). */
+            .LLMAIRecommendationsPage .ai-type-badge {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 1.7em;
+                height: 1.7em;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 0.85em;
+                font-weight: bold;
+                border-radius: 0 0 4px 0;
+                line-height: 1;
+            }
+            .LLMAIRecommendationsPage .ai-type-badge.ai-type-upcoming { background: #1f6feb; }
+            .LLMAIRecommendationsPage .ai-type-badge.ai-type-rec { background: #6a4fbf; }
+            .LLMAIRecommendationsPage .ai-type-badge.ai-type-lib { background: #2a7a7a; }
+            .LLMAIRecommendationsPage .ai-type-badge.ai-type-aired { background: #555; color: #ccc; }
+            /* Une reco diffusée (passée, sans action) est estompée — distincte
+               des recos « À venir » encore actionnables. */
+            .LLMAIRecommendationsPage .ai-card[data-aired="1"] {
+                opacity: 0.72;
+            }
             .LLMAIRecommendationsPage .ai-card-info {
                 padding: 10px;
                 flex-grow: 1;

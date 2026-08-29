@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -84,7 +85,7 @@ namespace LLM_AI
         /// </summary>
         internal static async Task EnsureAsync(
             ICollectionManager collections, ILibraryManager library, ILogger logger,
-            IEnumerable<string> itemGuidIds, CancellationToken ct)
+            IServerApplicationHost host, IEnumerable<string> itemGuidIds, CancellationToken ct)
         {
             if (collections == null || library == null || itemGuidIds == null)
                 return;
@@ -144,6 +145,16 @@ namespace LLM_AI
                     };
                     await collections.CreateCollection(opts).ConfigureAwait(false);
                     logger?.Info("[LLM_AI] Collection « {0} » : créée avec {1} membre(s).", CollectionName, freshArr.Length);
+
+                    // CreateCollection ne retourne pas le BoxSet : on le ré-resout pour poser
+                    // l'image par défaut (idempotent — ne s'applique qu'à la création).
+                    try
+                    {
+                        var fresh = FindCollection(library);
+                        if (fresh != null)
+                            await DefaultImageApplier.ApplyPrimaryIfMissingAsync(fresh, host, library, logger, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) { logger?.Warn("[LLM_AI] Collection « {0} » : image par défaut échouée : {1}", CollectionName, ex.Message); }
                 }
                 catch (Exception ex)
                 {
@@ -163,9 +174,18 @@ namespace LLM_AI
             //     écraserait notre collage de pochettes par l'affiche TMDB.
             EnsureLocked(boxSet, logger);
 
+            // Image par défaut (idempotent) : couvre aussi une collection créée par une
+            // version antérieure (avant cette feature) — au 1er run post-update, elle
+            // reçoit le poster standard si elle n'en a pas déjà un.
             try
             {
-                long[] current = GetCurrentMemberIds(boxSet);
+                await DefaultImageApplier.ApplyPrimaryIfMissingAsync(boxSet, host, library, logger, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) { logger?.Warn("[LLM_AI] Collection « {0} » : image par défaut échouée : {1}", CollectionName, ex.Message); }
+
+            try
+            {
+                long[] current = GetCurrentMemberIds(library, boxSet);
                 if (current.Length > 0)
                 {
                     collections.RemoveFromCollection(boxSet, current);
@@ -204,7 +224,7 @@ namespace LLM_AI
                 if (boxSet == null)
                     return Task.CompletedTask;
 
-                long[] current = GetCurrentMemberIds(boxSet);
+                long[] current = GetCurrentMemberIds(library, boxSet);
                 if (current.Length == 0)
                 {
                     logger?.Info("[LLM_AI] Collection cleanup « {0} » : déjà vide.", CollectionName);
@@ -304,17 +324,37 @@ namespace LLM_AI
 
         /// <summary>
         /// Récupère les <c>InternalId</c> (long) des membres actuels d'un
-        /// <see cref="BoxSet"/> — les membres d'une collection sont ses enfants
-        /// (<see cref="Folder.GetChildrenIds"/>). Retourne un tableau vide en
-        /// cas d'erreur ou de collection vide.
+        /// <see cref="BoxSet"/>. Les membres d'une collection Emby sont portés
+        /// par les items enfants eux-mêmes (lien de collection), et le
+        /// <see cref="BoxSet"/> les résout en interrogeant les items dont
+        /// <c>CollectionIds</c> contient son <see cref="BaseItem.InternalId"/>.
         /// </summary>
-        private static long[] GetCurrentMemberIds(BoxSet boxSet)
+        /// <remarks>
+        /// <b>On interroge la bibliothèque directement avec
+        /// <see cref="InternalItemsQuery.CollectionIds"/></b>, et NON via
+        /// <c>boxSet.GetChildrenIds(...)</c> : <see cref="Folder.GetChildrenIds"/>
+        /// force <c>query.ForceOriginalFolders = true</c> dès que la requête n'a
+        /// pas de <c>User</c> (notre cas — pas d'utilisateur en contexte de
+        /// nettoyage), or <see cref="BoxSet"/>'s <c>GetItemIdsInternal</c>
+        /// <b>retourne un tableau vide</b> lorsque
+        /// <c>ForceOriginalFolders</c> est vrai. <c>GetChildrenIds</c> aurait
+        /// donc toujours renvoyé <c>[]</c> ici, rendant le vidage muet
+        /// (log « déjà vide » émis alors que la collection est pleine) — c'était
+        /// le bug : la tâche de nettoyage ne vidait jamais la collection.
+        /// </remarks>
+        private static long[] GetCurrentMemberIds(ILibraryManager library, BoxSet boxSet)
         {
-            if (boxSet == null) return Array.Empty<long>();
+            if (boxSet == null || library == null) return Array.Empty<long>();
             try
             {
-                var ids = boxSet.GetChildrenIds(new InternalItemsQuery());
-                return ids ?? Array.Empty<long>();
+                var q = new InternalItemsQuery
+                {
+                    CollectionIds = new[] { boxSet.InternalId },
+                    EnableTotalRecordCount = false
+                };
+                var items = library.GetItemList(q);
+                if (items == null) return Array.Empty<long>();
+                return items.Select(i => i.InternalId).ToArray();
             }
             catch (Exception)
             {

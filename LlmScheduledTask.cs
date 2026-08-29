@@ -59,14 +59,14 @@ namespace LLM_AI
             _runner = new LlmRunner(logger, jsonSerializer, library, users, liveTv, host);
         }
 
-        public string Name => "LLM AI Task";
+        public string Name => I18n.S("task.llm.name", I18n.ResolveDisplayLangKey(_host));
 
         /// <summary>Identifiant stable de la tâche (GUID du plugin).</summary>
         public string Key => "e7d3dee6-ef19-46a9-985f-06318b682e60";
 
-        public string Description => "Agent LLM autonome (Ollama) qui interroge la bibliothèque Emby via des outils natifs read-only pour accomplir la tâche configurée.";
+        public string Description => I18n.S("task.llm.desc", I18n.ResolveDisplayLangKey(_host));
 
-        public string Category => "LLM AI";
+        public string Category => I18n.S("task.category", I18n.ResolveDisplayLangKey(_host));
 
         public bool IsHidden => false;
 
@@ -198,7 +198,7 @@ namespace LLM_AI
                 {
                     try
                     {
-                        var gen = new StrmLibraryGenerator(_library, _liveTv, _logger);
+                        var gen = new StrmLibraryGenerator(_library, _liveTv, _host, _logger, _runner);
                         await gen.GenerateAsync(merged, cfg, ResolveEmbyUrl(), cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception ex)

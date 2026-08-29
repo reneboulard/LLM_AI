@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Logging;
@@ -37,28 +38,25 @@ namespace LLM_AI
         private readonly ILibraryManager _library;
         private readonly ILogger _logger;
         private readonly ICollectionManager _collections;
+        private readonly IServerApplicationHost _host;
 
         public AiTonightCleanupTask(ILibraryManager library, ILogger logger,
-            ICollectionManager collections)
+            ICollectionManager collections, IServerApplicationHost host)
         {
             _library = library;
             _logger = logger;
             _collections = collections;
+            _host = host;
         }
 
-        public string Name => "LLM AI — Nettoyage genre « AI Tonight »";
+        public string Name => I18n.S("task.cleanup.name", I18n.ResolveDisplayLangKey(_host));
 
         /// <summary>Identifiant stable de la tâche.</summary>
         public string Key => "a1b2c3d4-1111-2222-3333-444455556666";
 
-        public string Description =>
-            "Nettoyage nocturne des surfaces natives « À regarder ce soir » : retire le genre " +
-            "« AI Tonight » de tous les items Emby ET vide la collection « AI Tonight » de ses " +
-            "membres (la coquille reste, re-remplie au prochain run). Tourne quotidiennement à 3 h ; " +
-            "les runs Tonight suivants reconstruisent les surfaces sur les recos toujours pertinentes. " +
-            "Ne touche pas au genre « AI Suggestion » de la bibliothèque .strm.";
+        public string Description => I18n.S("task.cleanup.desc", I18n.ResolveDisplayLangKey(_host));
 
-        public string Category => "LLM AI";
+        public string Category => I18n.S("task.category", I18n.ResolveDisplayLangKey(_host));
 
         public bool IsHidden => false;
 

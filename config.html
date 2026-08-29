@@ -167,7 +167,7 @@
 
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
                             <select is="emby-select" id="selResponseLanguage" label="Langue de réponse du LLM" data-i18n-label="cfg.relang.label">
-                                <option value="" data-i18n="cfg.relang.auto">Auto (langue du prompt — défaut)</option>
+                                <option value="" data-i18n="cfg.relang.auto">Auto (langue de l'interface — défaut)</option>
                                 <option value="Français">Français</option>
                                 <option value="English">English</option>
                                 <option value="Español">Español</option>
@@ -176,11 +176,12 @@
                                 <option value="Português">Português</option>
                             </select>
                             <div class="fieldDescription" data-i18n-html="cfg.relang.desc">
-                                Langue du texte en prose de l'LLM — les <b>raisons des recommandations</b>
-                                et le <b>rapport d'audit</b>. « Auto » = aucune directive (l'LLM suit la
-                                langue du prompt, ici le français). Choisir une langue force l'LLM à
-                                répondre dans celle-ci. Les titres de films/séries, noms de chaînes et
-                                champs JSON techniques restent inchangés.
+                                Langue des <b>métadonnées</b> et du texte en prose de l'LLM :
+                                <b>raisons des recommandations</b>, <b>rapport d'audit</b>, scaffolding des
+                                cartes .strm et <b>synopsis TMDB</b> (demandé dans cette langue, repli en-US,
+                                traduction LLM en dernier recours). « Auto » = suit la langue d'affichage
+                                Emby. Les titres de films/séries, noms de chaînes et champs JSON techniques
+                                restent inchangés.
                             </div>
                         </div>
 
@@ -261,7 +262,7 @@
                                    label="Langue TMDB"
                                    data-i18n-label="cfg.tmdblang.label"
                                    placeholder="fr-FR" />
-                            <div class="fieldDescription" data-i18n-html="cfg.tmdblang.desc">Langue des métadonnées TMDB (ex. fr-FR, en-US).</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.tmdblang.desc">Repli legacy pour la langue TMDB quand « Langue de réponse du LLM » est sur Auto et que la langue d'affichage Emby est illisible. Quand une langue de réponse est choisie, c'est elle qui pilote TMDB (repli en-US, traduction LLM en dernier recours). Ex. fr-FR, en-US.</div>
                         </div>
 
                         <div class="inputContainer">
@@ -569,6 +570,31 @@
                                 timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger
                                 l'endpoint d'activation.
                             </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.orphan.h">Identification des enregistrements orphelins</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.desc">
+                            Passe quotidienne (04 h) qui repère les enregistrements DVR <b>non identifiés</b>
+                            (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB),
+                            tente de les résoudre par <b>nettoyage du titre + recherche multilingue</b> (S1),
+                            puis par <b>proposition LLM d'un id IMDb validé via TMDB /find</b> (S2), et écrit
+                            l'id + métadonnées + affiche en <b>verrouillant le titre EPG</b> (jamais écrasé).
+                            Les irrésolus sont marqués pour revue. <b>Opt-in</b> : modifie des enregistrements.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanIdentifyEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.enabled">Activer la tâche d'identification des orphelins</span>
+                        </label>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanIdentifyDryRun" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.dryrun">Mode simulation (dry-run — aucune écriture)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.dryrun.desc">
+                            Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés
+                            et la résolution proposée (S1/S2) + un bilan. Sert à valider la qualité des résolutions
+                            avant de basculer en application automatique. À garder cochée pour les premiers runs.
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>

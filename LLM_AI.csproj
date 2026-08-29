@@ -45,6 +45,10 @@
     <!-- Image de la pastille du plugin (IHasThumbImage), servie sur
          /Plugins/{Id}/Thumb. 800x450 PNG 16:9. -->
     <EmbeddedResource Include="thumb.png" />
+    <!-- Poster par défaut standardisé posé automatiquement (si manquant) sur la
+         collection « AI Tonight » et la racine de la bibliothèque .strm.
+         Lu via DefaultImageApplier.GetManifestResourceStream. JPEG portrait. -->
+    <EmbeddedResource Include="default_poster.jpg" />
     <!-- Image de fond de la page Recommandations : module AMD exportant une
          data URI (ASCII). Servi sur web/ConfigurationPage?name=LLMAIBg.
          Nécessairement en texte (data URI) car cet endpoint lit les ressources

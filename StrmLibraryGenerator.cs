@@ -5,12 +5,15 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Querying;
 
 namespace LLM_AI
 {
@@ -46,6 +49,11 @@ namespace LLM_AI
         private readonly ILibraryManager _library;
         private readonly ILiveTvManager _liveTv;
         private readonly ILogger _logger;
+        private readonly IServerApplicationHost _host;
+        // Runner LLM pour le tier-3 de la cascade TMDB (traduction synopsis en-US
+        // -> langue usager en dernier recours). Null = pas de LLM (on garde le
+        // synopsis en-US tel quel). Ne casse jamais la génération de cartes.
+        private readonly LlmRunner _runner;
 
         // HttpClient partagé (poster TMDB). Pas de credentials, timeouts courts.
         private static readonly HttpClient s_http = new HttpClient
@@ -55,11 +63,14 @@ namespace LLM_AI
 
         private const string MarkerFile = ".llmai_reco";
 
-        public StrmLibraryGenerator(ILibraryManager library, ILiveTvManager liveTv, ILogger logger)
+        public StrmLibraryGenerator(ILibraryManager library, ILiveTvManager liveTv,
+            IServerApplicationHost host, ILogger logger, LlmRunner runner = null)
         {
             _library = library;
             _liveTv = liveTv;
+            _host = host;
             _logger = logger;
+            _runner = runner;
         }
 
         /// <summary>
@@ -85,6 +96,18 @@ namespace LLM_AI
                 return;
             }
             Directory.CreateDirectory(root);
+
+            // 1b) Image par défaut standardisée sur la bibliothèque .strm (idempotent).
+            //     Posée tôt, avant l'écriture des cartes, pour qu'elle s'applique même si
+            //     la génération échoue plus loin. Best-effort.
+            try
+            {
+                var libItem = _library.FindByPath(root, true);
+                if (libItem != null)
+                    await DefaultImageApplier.ApplyPrimaryIfMissingAsync(libItem, _host, _library, _logger, ct)
+                        .ConfigureAwait(false);
+            }
+            catch (Exception ex) { _logger?.Warn("[LLM_AI] Strm library : image par défaut échouée : {0}", ex.Message); }
 
             // 2) Auto-générer le secret de capacité si vide (une seule fois).
             EnsureSecret(cfg);
@@ -115,12 +138,121 @@ namespace LLM_AI
                 _logger?.Warn("[LLM_AI] Strm library : URL de base Emby indéfinie (EmbyPublicUrl vide et GetLocalHostApiUrl indisponible) → cartes .strm ignorées (URL relative injouable). Renseignez « URL publique Emby » dans la config.");
                 return;
             }
+
+            // Identifiant du serveur Emby pour le lien profond web vers le
+            // programme EPG (/{baseApi}/web/index.html#!/item?id=<pgm>&serverId=<srv>).
+            // GetPublicSystemInfo est le chemin fiable (GetSystemInfo lève une
+            // NRE sur certains hôtes Windows). Fail-open : si l'id manque, on
+            // omet simplement le lien <website> de la carte.
+            string serverId = null;
+            try
+            {
+                if (_host != null)
+                {
+                    var pub = await _host.GetPublicSystemInfo(ct).ConfigureAwait(false);
+                    serverId = pub?.Id;
+                }
+            }
+            catch (Exception ex) { _logger?.Warn("[LLM_AI] Strm library : serverId indispo ({0}) — lien EPG omis sur les cartes.", ex.Message); }
+
+            // 5+6) Une carte par reco : lookup TMDB (cache 24h partagé avec l'agent
+            //      LLM) -> écriture de la carte (.strm + .nfo enrichi + marker) ->
+            //      poster (URL TMDB du même lookup, sinon poster EPG en repli).
+            //      Un seul appel TMDB par reco donne à la fois les métadonnées du
+            //      .nfo et le poster.
+            // Langue des métadonnées (scaffolding NFO + synopsis TMDB) : suit
+            // ResponseLanguage, sinon la langue d'affichage Emby (Auto), sinon
+            // legacy TmdbLanguage, sinon anglais. Calculé une fois avant la
+            // boucle — la même langue sert pour toutes les cartes de cette passe.
+            string langKey = I18n.ResolveMetaLangKey(cfg, _host);
+            string userTmdb = I18n.ToTmdbLang(langKey);
+
             int written = 0;
+            var tmdb = new TmdbLookupTool(_logger);
             foreach (var r in bucket)
             {
+                ct.ThrowIfCancellationRequested();
+
+                // Lookup TMDB : synopsis/note/genres/année pour le .nfo + URL poster.
+                string kind = AutoProgrammer.IsSeries(r.Kind) ? "series" : "movie";
+
+                // Programme EPG (une seule requête in-process par reco, via r.Id =
+                // programId) : fournit l'overview natif du diffuseur — dans la
+                // langue de la chaîne, indépendante de ResponseLanguage — que l'on
+                // place en tête du <plot>. Sert aussi de source au poster de repli.
+                BaseItem epgProgram = TryGetEpgProgram(r);
+                string epgOverview = (epgProgram?.Overview ?? string.Empty).Trim();
+
+                TmdbMeta meta = null;
+                try { meta = await tmdb.LookupMetaAsync(r.Title, kind, null, userTmdb, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB échoué pour « {0} » ({1}).", r.Title, ex.Message); }
+
+                // Cascade TMDB (tiers 2 + 3) :
+                //  Tier 1 : langue de l'usager (userTmdb) — déjà fait ci-dessus.
+                //  Tier 2 : si pas de synopsis (ou pas de match) et userTmdb != en-US,
+                //           repli en-US et on fusionne poster/genres/année.
+                //  Tier 3 : dernier recours, on traduit le synopsis en-US vers la
+                //           langue de l'usager via le LLM. Sauté si userTmdb == en-US
+                //           (le tier 1 est déjà en anglais -> zéro appel LLM).
+                if (!string.Equals(userTmdb, "en-US", StringComparison.OrdinalIgnoreCase)
+                    && (meta == null || string.IsNullOrWhiteSpace(meta.Overview)))
+                {
+                    TmdbMeta metaEn = null;
+                    try { metaEn = await tmdb.LookupMetaAsync(r.Title, kind, null, "en-US", ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB en-US échoué pour « {0} » ({1}).", r.Title, ex.Message); }
+
+                    if (metaEn != null)
+                    {
+                        if (meta == null)
+                        {
+                            // Aucun match dans la langue usager : on part du match en-US.
+                            meta = metaEn;
+                        }
+                        else
+                        {
+                            // Match partiel en langue usager (souvent sans synopsis) :
+                            // on comble poster/genres/année depuis le match en-US.
+                            if (string.IsNullOrWhiteSpace(meta.PosterUrl)) meta.PosterUrl = metaEn.PosterUrl;
+                            if (meta.Genres == null || meta.Genres.Length == 0) meta.Genres = metaEn.Genres;
+                            if (!meta.Year.HasValue) meta.Year = metaEn.Year;
+                            if (!meta.Rating.HasValue) meta.Rating = metaEn.Rating;
+                        }
+
+                        // Tier 3 : traduction LLM du synopsis en-US -> langue usager.
+                        if (!string.IsNullOrWhiteSpace(metaEn.Overview))
+                        {
+                            if (_runner != null)
+                            {
+                                try
+                                {
+                                    string translated = await _runner.TranslateTextAsync(
+                                        cfg, metaEn.Overview, I18n.ToLangName(langKey), ct).ConfigureAwait(false);
+                                    if (!string.IsNullOrWhiteSpace(translated))
+                                        meta.Overview = translated;
+                                }
+                                catch (OperationCanceledException) { throw; }
+                                catch (Exception ex)
+                                {
+                                    _logger?.Warn("[LLM_AI] Strm library : traduction synopsis « {0} » échouée ({1}) — synopsis en-US conservé.",
+                                        r.Title, ex.Message);
+                                    meta.Overview = metaEn.Overview;
+                                }
+                            }
+                            else
+                            {
+                                // Pas de runner (LLM indispo) : on garde le synopsis en-US.
+                                meta.Overview = metaEn.Overview;
+                            }
+                        }
+                    }
+                }
+
+                // 5) Écriture de la carte (.strm + .nfo enrichi + marker).
                 try
                 {
-                    WriteCard(root, r, cfg, baseApi);
+                    WriteCard(root, r, cfg, baseApi, serverId, langKey, meta, epgOverview);
                     written++;
                 }
                 catch (OperationCanceledException) { throw; }
@@ -128,16 +260,25 @@ namespace LLM_AI
                 {
                     _logger?.Warn("[LLM_AI] Strm library : échec écriture carte « {0} » : {1}", r.Title, ex.Message);
                 }
-            }
 
-            // 6) Poster TMDB (best-effort, séquentiel, court) — après les cartes
-            // pour que la bibliothèque soit fonctionnelle même si TMDB échoue.
-            foreach (var r in bucket)
-            {
-                ct.ThrowIfCancellationRequested();
-                try { await DownloadPosterAsync(root, r, cfg, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster pour « {0} » ({1}).", r.Title, ex.Message); }
+                // 6) Poster : URL TMDB (depuis le lookup) sinon poster EPG en repli.
+                bool posterWritten = false;
+                if (!string.IsNullOrWhiteSpace(meta?.PosterUrl))
+                {
+                    try { posterWritten = await DownloadPosterAsync(root, r, meta.PosterUrl, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster TMDB pour « {0} » ({1}).", r.Title, ex.Message); }
+                }
+
+                // Repli : copie l'affiche Primary du programme EPG pointé par r.Id
+                // (téléfilm/titre régional absent de TMDB mais dont la chaîne fournit
+                // déjà un poster, souvent un vrai portrait 2:3).
+                if (!posterWritten)
+                {
+                    try { posterWritten = TryCopyProgramPoster(root, r, epgProgram); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
+                }
             }
 
             // 7) Déclencher un scan pour faire apparaître les nouvelles cartes.
@@ -155,24 +296,60 @@ namespace LLM_AI
         /// <paramref name="name"/> via <see cref="ILibraryManager.GetVirtualFolders"/>
         /// (premier <c>Location</c> non vide). Null si introuvable.
         /// </summary>
-        private string ResolveLibraryRoot(string name)
+        private string ResolveLibraryRoot(string name) => ResolveLibraryRoot(_library, name, _logger);
+
+        /// <summary>
+        /// Résout le chemin disque d'une bibliothèque Emby nommée via
+        /// <see cref="ILibraryManager.GetVirtualFolders"/> (premier
+        /// <c>Location</c> non vide). La comparaison de nom est
+        /// <b>normalisée</b> (<c>-</c>/<c>_</c>/espaces équivalents) :
+        /// <c>GetVirtualFolders</c> renvoie le nom du UserView slugifié (traits
+        /// d'union) qui peut différer du nom configuré (underscores). Null si
+        /// introuvable. Partagé entre la génération .strm et l'exclusion
+        /// circulaire de <see cref="TonightService"/>.
+        /// </summary>
+        internal static string ResolveLibraryRoot(ILibraryManager library, string name, ILogger logger)
         {
+            if (string.IsNullOrWhiteSpace(name)) return null;
             try
             {
-                var folders = _library.GetVirtualFolders();
+                var folders = library.GetVirtualFolders();
                 if (folders == null) return null;
+                var key = NormLibName(name);
                 foreach (var f in folders)
                 {
                     if (f == null) continue;
-                    if (!string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(NormLibName(f.Name), key, StringComparison.Ordinal)) continue;
                     var locs = f.Locations;
                     if (locs == null) continue;
                     foreach (var l in locs)
                         if (!string.IsNullOrWhiteSpace(l)) return l;
                 }
             }
-            catch (Exception ex) { _logger?.Warn("[LLM_AI] Strm library : GetVirtualFolders a échoué : {0}", ex.Message); }
+            catch (Exception ex) { logger?.Warn("[LLM_AI] ResolveLibraryRoot : GetVirtualFolders a échoué : {0}", ex.Message); }
             return null;
+        }
+
+        /// <summary>
+        /// Normalise un nom de bibliothèque pour la comparaison : minuscules,
+        /// et toute séquence de <c>-</c>/<c>_</c>/espaces → un seul
+        /// <c>_</c>. Évite le décalage « ai-suggestions » (UserView) vs
+        /// « ai_suggestions » (config) observé sur Emby.
+        /// </summary>
+        internal static string NormLibName(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+            var sb = new StringBuilder();
+            bool sep = false;
+            foreach (var c in s.Trim().ToLowerInvariant())
+            {
+                if (c == '-' || c == '_' || char.IsWhiteSpace(c))
+                {
+                    if (!sep) { sb.Append('_'); sep = true; }
+                }
+                else { sb.Append(c); sep = false; }
+            }
+            return sb.ToString();
         }
 
         // ------------------------------------------------------------------
@@ -235,7 +412,7 @@ namespace LLM_AI
         //  Écriture d'une carte
         // ------------------------------------------------------------------
 
-        private void WriteCard(string root, AutoProgrammer.Reco r, PluginConfiguration cfg, string baseApi)
+        private void WriteCard(string root, AutoProgrammer.Reco r, PluginConfiguration cfg, string baseApi, string serverId, string langKey, TmdbMeta meta, string epgOverview)
         {
             string safe = SanitizeName(r.Title);
             if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
@@ -251,38 +428,137 @@ namespace LLM_AI
                 Uri.EscapeDataString(cfg.StrmSecret ?? string.Empty));
             File.WriteAllText(Path.Combine(folder, safe + ".strm"), url + Environment.NewLine, new UTF8Encoding(false));
 
-            // .nfo : <movie> (valide en bibliothèque Films ou Contenu mixte).
-            File.WriteAllText(Path.Combine(folder, safe + ".nfo"), BuildNfo(r), new UTF8Encoding(false));
+            // .nfo : <movie> (valide en bibliothèque Films ou Contenu mixte),
+            // enrichi des métadonnées TMDB quand disponibles (synopsis, note,
+            // genres, année). Scaffolding localisé via I18n (langKey). L'overview
+            // EPG natif (epgOverview) ouvre le <plot>, avant l'enrichissement
+            // dans la langue de l'usager.
+            File.WriteAllText(Path.Combine(folder, safe + ".nfo"), BuildNfo(r, baseApi, serverId, langKey, meta, epgOverview), new UTF8Encoding(false));
 
             // Marker (identifie le dossier comme généré par le plugin).
             File.WriteAllText(Path.Combine(folder, MarkerFile), DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture), new UTF8Encoding(false));
         }
 
         /// <summary>
-        /// Construit le NFO <c>&lt;movie&gt;</c> : titre (suffixe « (série) »
-        /// pour kind=series), plot = raison LLM + note d'usage, studio = chaine,
-        /// genres « AI Suggestion » + priority, premiered depuis start.
+        /// Construit le NFO <c>&lt;movie&gt;</c> : titre (suffixe « (série)/(series) »
+        /// pour kind=series), <c>&lt;plot&gt;</c> enrichi du synopsis TMDB +
+        /// ligne méta (note/genres/année) + raison LLM + info de diffusion +
+        /// lien interne vers la fiche EPG (en clair, visible dans l'Overview —
+        /// Emby n'affichant pas <c>&lt;website&gt;</c>), studio = chaine, genres
+        /// « AI Suggestion » + genres réels TMDB + priority, premiered depuis
+        /// start, et le même lien EPG dans <c>&lt;website&gt;</c>
+        /// (<c>asSeries=true</c> pour une série seulement).
+        /// <para>Structure du <c>&lt;plot&gt;</c> : (0) synopsis EPG natif
+        /// (<paramref name="epgOverview"/>) — description du diffuseur dans la
+        /// langue de la chaîne, indépendante de <c>ResponseLanguage</c> — placé en
+        /// tête ; puis (1) enrichissement dans la langue de l'usager
+        /// (<paramref name="langKey"/>) : synopsis TMDB + ligne méta
+        /// (note/genres/année), (2) raison LLM (« Pourquoi ce soir »), (3) info de
+        /// diffusion, (4) lien fiche EPG. Le scaffolding est localisé via
+        /// <see cref="I18n.S"/>. La raison LLM et le synopsis TMDB sont déjà dans
+        /// la langue de l'usager (directive LLM + cascade TMDB) ; on n'y touche
+        /// pas. Best-effort : sans overview EPG ni TMDB, on retombe sur raison +
+        /// diffusion (comportement précédent).</para>
         /// </summary>
-        private string BuildNfo(AutoProgrammer.Reco r)
+        private string BuildNfo(AutoProgrammer.Reco r, string baseApi, string serverId, string langKey, TmdbMeta meta, string epgOverview)
         {
             bool isSeries = AutoProgrammer.IsSeries(r.Kind);
+            string seriesSuffix = I18n.S("nfo.seriesSuffix", langKey);
             string title = (r.Title ?? string.Empty).Trim();
-            if (isSeries && !title.EndsWith(" (série)", StringComparison.OrdinalIgnoreCase))
-                title += " (série)";
+            if (isSeries && !title.EndsWith(seriesSuffix, StringComparison.OrdinalIgnoreCase))
+                title += seriesSuffix;
 
-            string plot = (r.Reason ?? string.Empty).Trim();
-            if (!string.IsNullOrEmpty(plot)) plot += " ";
-            plot += "Diffusion à venir — lire cette carte programme l'enregistrement.";
+            // Lien profond vers la fiche EPG interne (asSeries=true pour une série,
+            // omis pour un film). Construit une fois, utilisé à la fois dans le
+            // <plot> (visible dans l'Overview Emby) et dans <website>.
+            string epgLink = EpgLink(r.Id, serverId, baseApi, isSeries);
+
+            // Plot enrichi :
+            //  0) synopsis EPG natif (langue de la chaîne, du diffuseur) — en tête ;
+            //  1) synopsis TMDB (si disponible) + ligne méta (note/genres/année) ;
+            //  2) raison LLM (« Pourquoi ce soir ») ;
+            //  3) info de diffusion (chaîne + date/heure dans le fuseau EPG) +
+            //     rappel d'usage. Sans overview EPG ni TMDB, on retombe sur raison +
+            //     diffusion (comportement précédent).
+            var plot = new StringBuilder();
+
+            // 0) Synopsis EPG natif en tête : description authentique du programme
+            //    dans la langue du diffuseur, quelle que soit ResponseLanguage.
+            //    Best-effort : absent si l'EPG ne fournit pas d'overview.
+            if (!string.IsNullOrEmpty(epgOverview))
+            {
+                plot.Append(epgOverview);
+            }
+
+            // 1) Enrichissement dans la langue de l'usager (ResponseLanguage) :
+            //    synopsis TMDB + ligne méta (note/genres/année).
+            string overview = (meta?.Overview ?? string.Empty).Trim();
+            if (!string.IsNullOrEmpty(overview))
+            {
+                if (plot.Length > 0) plot.Append("\n\n");
+                plot.Append(overview);
+                var metaParts = new List<string>();
+                if (meta.Rating.HasValue && meta.Rating.Value > 0)
+                    metaParts.Add(string.Format(CultureInfo.InvariantCulture,
+                        I18n.S("nfo.rating", langKey), meta.Rating.Value.ToString("0.0", CultureInfo.InvariantCulture)));
+                if (meta.Genres != null && meta.Genres.Length > 0)
+                    metaParts.Add(string.Format(CultureInfo.InvariantCulture,
+                        I18n.S("nfo.genres", langKey), string.Join(", ", meta.Genres)));
+                if (meta.Year.HasValue)
+                    metaParts.Add(meta.Year.Value.ToString(CultureInfo.InvariantCulture));
+                if (metaParts.Count > 0)
+                {
+                    plot.Append("\n\n").Append(string.Join(" · ", metaParts));
+                }
+            }
+
+            string reason = (r.Reason ?? string.Empty).Trim();
+            if (!string.IsNullOrEmpty(reason))
+            {
+                if (plot.Length > 0) plot.Append("\n\n");
+                plot.Append(I18n.S("nfo.why", langKey)).Append(reason);
+            }
+
+            {
+                if (plot.Length > 0) plot.Append("\n\n");
+                plot.Append(I18n.S("nfo.airs.prefix", langKey));
+                string chan = (r.Channel ?? string.Empty).Trim();
+                string air = FormatAirTime(r.Start);
+                if (!string.IsNullOrEmpty(chan))
+                    plot.Append(string.Format(CultureInfo.InvariantCulture, I18n.S("nfo.airs.chan", langKey), chan));
+                if (!string.IsNullOrEmpty(air))
+                    plot.Append(string.Format(CultureInfo.InvariantCulture, I18n.S("nfo.airs.date", langKey), air));
+                plot.Append(I18n.S("nfo.airs.suffix", langKey));
+            }
+
+            // Lien interne vers la fiche EPG, en clair dans l'Overview : Emby
+            // n'affiche pas <website> dans son UI, on l'inscrit donc aussi dans le
+            // <plot> pour qu'il soit visible (et copiable) sur la fiche de la carte.
+            if (!string.IsNullOrEmpty(epgLink))
+            {
+                if (plot.Length > 0) plot.Append("\n\n");
+                plot.Append(I18n.S("nfo.epglink", langKey)).Append(epgLink);
+            }
 
             var sb = new StringBuilder();
             sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n");
             sb.Append("<movie>\n");
             sb.Append("  <title>").Append(XmlEsc(title)).Append("</title>\n");
-            sb.Append("  <plot>").Append(XmlEsc(plot)).Append("</plot>\n");
-            sb.Append("  <outline>").Append(XmlEsc((r.Reason ?? string.Empty).Trim())).Append("</outline>\n");
+            sb.Append("  <plot>").Append(XmlEsc(plot.ToString())).Append("</plot>\n");
+            sb.Append("  <outline>").Append(XmlEsc(reason)).Append("</outline>\n");
             if (!string.IsNullOrWhiteSpace(r.Channel))
                 sb.Append("  <studio>").Append(XmlEsc(r.Channel.Trim())).Append("</studio>\n");
             sb.Append("  <genre>AI Suggestion</genre>\n");
+            // Genres réels TMDB (en plus du marqueur « AI Suggestion ») : la carte
+            // devient filtrable par genre dans Emby. Best-effort (meta peut être null).
+            if (meta?.Genres != null)
+            {
+                foreach (var g in meta.Genres)
+                {
+                    if (string.IsNullOrWhiteSpace(g)) continue;
+                    sb.Append("  <genre>").Append(XmlEsc(g.Trim())).Append("</genre>\n");
+                }
+            }
             if (!string.IsNullOrWhiteSpace(r.Priority))
                 sb.Append("  <genre>priority:").Append(XmlEsc(r.Priority.Trim())).Append("</genre>\n");
             if (!string.IsNullOrWhiteSpace(r.Kind))
@@ -293,9 +569,46 @@ namespace LLM_AI
                 sb.Append("  <premiered>").Append(premiered).Append("</premiered>\n");
                 sb.Append("  <year>").Append(premiered.Length >= 4 ? premiered.Substring(0, 4) : "").Append("</year>\n");
             }
+            // External IDs (provider ids) : Emby lit ces éléments NFO et peuple
+            // BaseItem.ProviderIds, ce qui génère les liens profonds vers les bases
+            // externes (TMDB/IMDb/TVDB) dans la section « External IDs » de la fiche.
+            // Uniquement quand on a un match TMDB (ids portés par le lookup). Les ids
+            // étant indépendants de la langue, ils sont identiques quel que soit le
+            // tier de la cascade. Best-effort (meta peut être null ou sans id).
+            if (meta != null)
+            {
+                if (meta.TmdbId > 0)
+                    sb.Append("  <tmdbid>").Append(meta.TmdbId.ToString(CultureInfo.InvariantCulture)).Append("</tmdbid>\n");
+                if (!string.IsNullOrWhiteSpace(meta.ImdbId))
+                    sb.Append("  <imdbid>").Append(XmlEsc(meta.ImdbId.Trim())).Append("</imdbid>\n");
+                if (!string.IsNullOrWhiteSpace(meta.TvdbId))
+                    sb.Append("  <tvdbid>").Append(XmlEsc(meta.TvdbId.Trim())).Append("</tvdbid>\n");
+            }
+            // Lien profond vers la fiche EPG interne Emby. Pour une SÉRIE,
+            // asSeries=true : Emby ouvre le programme groupé par série (tous les
+            // passages/épisodes de ce titre), comme le fait la fiche EPG native.
+            // Pour un film/one-off, on omet asSeries (le programme n'appartient à
+            // aucune série ; une vue groupée serait vide). Conservé dans <website>
+            // en plus du <plot> (certains clients Emby exposent le champ lien).
+            if (!string.IsNullOrEmpty(epgLink))
+                sb.Append("  <website>").Append(XmlEsc(epgLink)).Append("</website>\n");
             sb.Append("  <tag>LLM_AI</tag>\n");
             sb.Append("</movie>\n");
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Formate la date/heure de diffusion depuis le champ start (ISO 8601)
+        /// en « yyyy-MM-dd HH:mm », en préservant le fuseau de l'EPG (celui du
+        /// DateTimeOffset tel que reçu, sans conversion vers le fuseau serveur).
+        /// Retourne null si start est absent ou non analysable.
+        /// </summary>
+        private static string FormatAirTime(string start)
+        {
+            if (string.IsNullOrWhiteSpace(start)) return null;
+            if (DateTimeOffset.TryParse(start, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+                return dto.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            return null;
         }
 
         /// <summary>Extrait une date ISO yyyy-MM-dd depuis le champ start (ISO 8601).</summary>
@@ -307,65 +620,134 @@ namespace LLM_AI
             return null;
         }
 
+        /// <summary>
+        /// Construit le lien web profond vers la fiche EPG interne Emby du
+        /// programme <paramref name="programId"/>. Pour une série
+        /// (<paramref name="isSeries"/>=true) on ajoute <c>&amp;asSeries=true</c>
+        /// (vue groupée par série — tous les passages du titre) ; pour un film on
+        /// l'omet (fiche directe du programme). Retourne <c>null</c> si un des
+        /// trois paramètres requis (id / serverId / baseApi) est vide.
+        /// </summary>
+        private static string EpgLink(string programId, string serverId, string baseApi, bool isSeries)
+        {
+            if (string.IsNullOrWhiteSpace(programId) || string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(baseApi))
+                return null;
+            return string.Format(CultureInfo.InvariantCulture,
+                isSeries ? "{0}/web/index.html#!/item?id={1}&serverId={2}&asSeries=true"
+                         : "{0}/web/index.html#!/item?id={1}&serverId={2}",
+                baseApi.TrimEnd('/'),
+                Uri.EscapeDataString(programId),
+                Uri.EscapeDataString(serverId));
+        }
+
         // ------------------------------------------------------------------
         //  Poster TMDB
         // ------------------------------------------------------------------
 
         /// <summary>
         /// Télécharge le poster TMDB de la reco dans <c>poster.jpg</c>
-        /// (best-effort). Reprend le même endpoint search/tv | search/movie que
-        /// <see cref="TmdbLookupTool"/> : premier résultat, poster_path →
-        /// image.tmdb.org/t/p/w500. Sans clé ou sans match : no-op.
+        /// (best-effort) depuis l'URL <paramref name="posterUrl"/> fournie par le
+        /// lookup TMDB partagé (<see cref="TmdbLookupTool.LookupMetaAsync"/> —
+        /// image.tmdb.org/t/p/w500). Retourne <c>true</c> si <c>poster.jpg</c> a
+        /// été écrit, <c>false</c> sinon (URL absente ou échec réseau) —
+        /// l'appelant enchaîne alors sur le repli par poster EPG
+        /// (<see cref="TryCopyProgramPoster"/>).
         /// </summary>
-        private async Task DownloadPosterAsync(string root, AutoProgrammer.Reco r, PluginConfiguration cfg, CancellationToken ct)
+        private async Task<bool> DownloadPosterAsync(string root, AutoProgrammer.Reco r, string posterUrl, CancellationToken ct)
         {
-            if (string.IsNullOrWhiteSpace(cfg.TmdbApiKey) || string.IsNullOrWhiteSpace(r.Title)) return;
+            if (string.IsNullOrWhiteSpace(posterUrl) || string.IsNullOrWhiteSpace(r.Title)) return false;
 
             string safe = SanitizeName(r.Title);
             if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
             string folder = Path.Combine(root, safe);
-            if (!Directory.Exists(folder)) return;
+            if (!Directory.Exists(folder)) return false;
 
-            bool isSeries = AutoProgrammer.IsSeries(r.Kind);
-            string query = Uri.EscapeDataString(r.Title);
-            string lang = Uri.EscapeDataString(string.IsNullOrWhiteSpace(cfg.TmdbLanguage) ? "en-US" : cfg.TmdbLanguage);
-            string searchUrl = string.Format(CultureInfo.InvariantCulture,
-                "https://api.themoviedb.org/3/search/{0}?api_key={1}&language={2}&query={3}",
-                isSeries ? "tv" : "movie", Uri.EscapeDataString(cfg.TmdbApiKey), lang, query);
-
-            string posterPath;
             try
             {
-                using (var resp = await s_http.GetAsync(searchUrl, ct).ConfigureAwait(false))
-                {
-                    resp.EnsureSuccessStatusCode();
-                    using (var doc = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), cancellationToken: ct).ConfigureAwait(false))
-                    {
-                        if (!doc.RootElement.TryGetProperty("results", out var results) ||
-                            results.ValueKind != JsonValueKind.Array || results.GetArrayLength() == 0)
-                            return;
-                        var first = results.EnumerateArray().First();
-                        if (!first.TryGetProperty("poster_path", out var pp) || pp.ValueKind != JsonValueKind.String)
-                            return;
-                        posterPath = pp.GetString();
-                    }
-                }
-            }
-            catch { return; }
-
-            if (string.IsNullOrWhiteSpace(posterPath)) return;
-
-            string imgUrl = "https://image.tmdb.org/t/p/w500" + posterPath;
-            try
-            {
-                using (var resp = await s_http.GetAsync(imgUrl, ct).ConfigureAwait(false))
+                using (var resp = await s_http.GetAsync(posterUrl, ct).ConfigureAwait(false))
                 {
                     resp.EnsureSuccessStatusCode();
                     using (var fs = File.Create(Path.Combine(folder, "poster.jpg")))
                         await (await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false)).CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
                 }
+                return true;
             }
-            catch { /* poster optionnel */ }
+            catch { /* poster optionnel */ return false; }
+        }
+
+        /// <summary>
+        /// Résout le <see cref="BaseItem"/> du programme EPG pointé par
+        /// <c>r.Id</c> (programId). Une seule requête in-process par reco, partagée
+        /// entre (a) la lecture de l'<c>Overview</c> natif du diffuseur — placé en
+        /// tête du <c>&lt;plot&gt;</c> via <see cref="BuildNfo"/> — et (b) le repli
+        /// poster (<see cref="TryCopyProgramPoster"/>). Best-effort : retourne
+        /// <c>null</c> si l'id est absent/invalide ou si le lookup échoue.
+        /// </summary>
+        /// <remarks>
+        /// <c>r.Id</c> est l'<c>InternalId</c> (long) du programme EPG exposé en
+        /// chaîne (cf. <c>GetEmbyInfoTool</c> : <c>EnableInternalIdsExternally</c>
+        /// — le <c>DTO.Id</c> de <c>GetPrograms</c> est l'<c>InternalId</c> Int64,
+        /// pas le <c>Guid</c> <c>BaseItem.Id</c>). On résout donc le
+        /// <see cref="BaseItem"/> via <see cref="InternalItemsQuery.ItemIds"/>
+        /// (long[]).
+        /// </remarks>
+        private BaseItem TryGetEpgProgram(AutoProgrammer.Reco r)
+        {
+            if (string.IsNullOrWhiteSpace(r.Id)) return null;
+            if (!long.TryParse(r.Id, out long programId) || programId <= 0) return null;
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    ItemIds = new[] { programId },
+                    Limit = 1
+                };
+                return (_library.GetItemList(q) ?? Array.Empty<BaseItem>()).FirstOrDefault();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] Strm library : lookup programme EPG « {0} » échoué ({1}).", r.Title, ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Repli de poster : copie l'image <see cref="ImageType.Primary"/> du
+        /// programme EPG (<paramref name="program"/>, déjà résolu par
+        /// <see cref="TryGetEpgProgram"/>) vers <c>poster.jpg</c> dans le dossier
+        /// de la carte. Comble le cas fréquent où <see cref="DownloadPosterAsync"/>
+        /// ne trouve pas de match TMDB (téléfilm/titre régional absent du
+        /// catalogue) alors que le programme EPG possède déjà une affiche — souvent
+        /// un vrai poster portrait fourni par la chaîne, donc de meilleure facture
+        /// que le poster par défaut générique. Best-effort, ne lève jamais.
+        /// <c>true</c> si poster écrit.
+        /// </summary>
+        private bool TryCopyProgramPoster(string root, AutoProgrammer.Reco r, BaseItem program)
+        {
+            if (program == null || string.IsNullOrWhiteSpace(r.Title)) return false;
+            if (!program.HasImage(ImageType.Primary, 0)) return false;
+
+            string src;
+            try { src = program.GetImageInfo(ImageType.Primary, 0)?.Path; }
+            catch (Exception) { return false; }
+            if (string.IsNullOrWhiteSpace(src) || !File.Exists(src)) return false;
+
+            string safe = SanitizeName(r.Title);
+            if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
+            string folder = Path.Combine(root, safe);
+            if (!Directory.Exists(folder)) return false;
+
+            try
+            {
+                File.Copy(src, Path.Combine(folder, "poster.jpg"), overwrite: true);
+                _logger?.Info("[LLM_AI] Strm library : poster EPG copié pour « {0} » (depuis programme {1}).", r.Title, r.Id);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : copie échouée ({1}).", r.Title, ex.Message);
+                return false;
+            }
         }
 
         // ------------------------------------------------------------------

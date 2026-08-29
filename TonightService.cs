@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -198,8 +199,21 @@ namespace LLM_AI
             bool compact = IsLocalPrimary(cfg);
             if (compact) _logger?.Info("[LLM_AI] Tonight : backend local détecté — mode compact (données injectées réduites).");
 
+            // Racine de la bibliothèque .strm (recommendations à enregistrer,
+            // surface du record-bucket) à EXCLURE des sondes bibliothèque
+            // envoyées au LLM (profil de goût + réserve). Sans cela, les cartes
+            // .strm reviennent dans le profil (lu → marqué visionné) et dans la
+            // réserve (non visionné → candidat source="library") : décision
+            // circulaire (« recommande d'enregistrer X » → plus tard « recommande
+            // de regarder X ce soir depuis la bibliothèque »). Null si la
+            // bibliothèque .strm n'est pas configurée/trouvée → pas d'exclusion.
+            string excludedStrmRoot = StrmLibraryGenerator.ResolveLibraryRoot(
+                _library, Plugin.Instance?.Configuration?.StrmLibraryName, _logger);
+            if (!string.IsNullOrWhiteSpace(excludedStrmRoot))
+                _logger?.Info("[LLM_AI] Tonight : bibliothèque .strm exclue du LLM (anti-circulaire) : {0}", excludedStrmRoot);
+
             // 1) Profil de goût : historique de visionnage récent de l'usager.
-            string profile = BuildTasteProfile(user, compact);
+            string profile = BuildTasteProfile(user, compact, excludedStrmRoot);
 
             // 2) Enregistrements récents non visionnés (candidats « à regarder
             //    ce soir » — déjà enregistrés, prêts à lire). Injectés comme le
@@ -209,7 +223,7 @@ namespace LLM_AI
 
             // 2b) Réserve bibliothèque (items non visionnés) : utilisée par le
             //    LLM uniquement si EPG + enregistrements < TonightMinRecommendations.
-            string reserve = BuildLibraryFallbackPool(user, compact);
+            string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot);
 
             // 3) Prompt personnalisé = template config + profil + enregistrements
             //    + réserve + contrainte de minimum dynamique.
@@ -235,6 +249,16 @@ namespace LLM_AI
             // depuis la bibliothèque + signal owned-guard pour AutoProgrammer).
             // S'exécute après l'enrichissement EPG.
             payload = runner.EnrichWithLibrary(payload);
+
+            // Validation d'existence : on vérifie que chaque recommandation
+            // pointe vers un item réel (EPG non expiré / item bibliothèque non
+            // supprimé / id non halluciné). Drop les introuvables ; marque
+            // « Diffusé » (aired=true) les programmes EPG déjà terminés (gardés,
+            // mais sans actions obsolètes côté UI). Fail-open : une erreur de
+            // requête transitoire ne vide jamais les recos.
+            payload = ValidateAndFilter(payload, ct);
+            if (string.IsNullOrWhiteSpace(payload))
+                return new TonightResult { Error = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés)." };
 
             // Surface native des recos du watch bucket sur un run FRAIS (pas sur
             // cache) : deux mécanismes indépendants et opt-in, réutilisant les
@@ -278,7 +302,7 @@ namespace LLM_AI
             {
                 try
                 {
-                    await AiTonightCollectionManager.EnsureAsync(_collections, _library, _logger, watchBucketIds, ct)
+                    await AiTonightCollectionManager.EnsureAsync(_collections, _library, _logger, _host, watchBucketIds, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight collection : {0}", ex.Message); }
@@ -301,6 +325,224 @@ namespace LLM_AI
             }
 
             return new TonightResult { Payload = payload, Date = date, FromCache = false };
+        }
+
+        // ------------------------------------------------------------------
+        //  Validation d'existence des recommandations
+        //  (drop introuvables, marque « Diffusé » les programmes EPG terminés)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Valide que chaque recommandation du payload pointe vers un item réel,
+        /// puis filtre/marque :
+        /// <list type="bullet">
+        /// <item><c>source="live"</c> : l'id (ProgramId EPG) doit figurer dans un
+        ///   snapshot de l'EPG (programmes des dernières 24 h jusqu'à la fin de
+        ///   la fenêtre « ce soir »). Si le programme a déjà fini
+        ///   (<c>EndDate &lt;= now</c>) → on garde la reco mais on pose
+        ///   <c>aired=true</c> (l'UI marque « Diffusé » et masque Programmer /
+        ///   Regarder en direct). Sinon on injecte <c>end</c> (date de fin
+        ///   autoritaire). Id absent du snapshot → drop (EPG expiré ou id
+        ///   halluciné).</item>
+        /// <item><c>source="recording"/"library"</c> : l'id (Guid Emby) doit
+        ///   résoudre un BaseItem via <see cref="ILibraryManager.GetItemList"/>.
+        ///   Introuvable ou non-Guid → drop (item supprimé / id halluciné).</item>
+        /// <item>source absente/autre : gardé tel quel (recos hors flux « ce
+        ///   soir », non concernées par la validation EPG).</item>
+        /// </list>
+        /// <b>Fail-open</b> : toute erreur transitoire (EPG/library indispo,
+        ///   parse JSON) renvoie le payload original inchangé — on ne vide
+        ///   jamais les recos sur un échec de requête. Ne lève pas.
+        /// </summary>
+        private string ValidateAndFilter(string payload, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(payload)) return payload;
+
+            JsonArray arr;
+            try
+            {
+                if (JsonNode.Parse(payload) is JsonArray a) arr = a;
+                else return payload; // Markdown libre / objet unique : rien à valider
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Tonight validation : parse JSON échoué ({0}) — payload conservé.", ex.Message);
+                return payload;
+            }
+
+            try
+            {
+                var now = DateTimeOffset.Now;
+                DateTimeOffset maxStart = TonightWindowEnd();
+
+                // Snapshot EPG : programmes des dernières 24 h jusqu'à la fin de
+                // la fenêtre « ce soir ». Couvre les programmes récemment
+                // diffusés (détection « Diffusé », gère la fraîcheur du cache
+                // jusqu'à ~24 h) + ceux à venir ce soir. Une seule requête.
+                Dictionary<string, BaseItemDto> epg;
+                try
+                {
+                    epg = new Dictionary<string, BaseItemDto>(StringComparer.OrdinalIgnoreCase);
+                    var q = new InternalItemsQuery
+                    {
+                        MinStartDate = now.AddDays(-1),
+                        MaxStartDate = maxStart,
+                        Limit = 2000
+                    };
+                    var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
+                    foreach (var p in programs)
+                    {
+                        if (p == null || string.IsNullOrEmpty(p.Id)) continue;
+                        epg[p.Id] = p;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] Tonight validation : snapshot EPG indispo ({0}) — recos live conservées non validées.", ex.Message);
+                    epg = null; // fail-open ciblé : on garde les live telles quelles
+                }
+
+                // Lookup bibliothèque (batché) pour source="recording"/"library".
+                var libIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var node in arr)
+                {
+                    if (!(node is JsonObject obj)) continue;
+                    string src = ObjStr(obj, "source");
+                    if (!string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(src, "library", StringComparison.OrdinalIgnoreCase)) continue;
+                    string id = ObjStr(obj, "id");
+                    if (!string.IsNullOrEmpty(id)) libIds.Add(id);
+                }
+                var libFound = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (libIds.Count > 0)
+                {
+                    // BaseItem.Id est un long sous Emby (et InternalItemsQuery.
+                    // ItemIds est long[]). Les id des recos recording/library
+                    // sont des longs sérialisés en chaîne.
+                    var longIds = new List<long>(libIds.Count);
+                    foreach (var s in libIds)
+                        if (long.TryParse(s, out var lid)) longIds.Add(lid);
+                    if (longIds.Count > 0)
+                    {
+                        try
+                        {
+                            var lq = new InternalItemsQuery
+                            {
+                                ItemIds = longIds.ToArray(),
+                                Limit = longIds.Count
+                            };
+                            var items = _library.GetItemList(lq) ?? Array.Empty<BaseItem>();
+                            foreach (var it in items)
+                                if (it != null) libFound.Add(it.Id.ToString());
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger?.Warn("[LLM_AI] Tonight validation : lookup bibliothèque indispo ({0}) — recos recording/library conservées non validées.", ex.Message);
+                            foreach (var s in libIds) libFound.Add(s); // fail-open ciblé
+                        }
+                    }
+                }
+
+                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0;
+                for (int i = arr.Count - 1; i >= 0; i--)
+                {
+                    if (!(arr[i] is JsonObject obj)) { kept++; continue; }
+                    string src = ObjStr(obj, "source");
+                    string id = ObjStr(obj, "id");
+
+                    if (string.Equals(src, "live", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (epg == null) { kept++; continue; } // EPG indispo → fail-open
+                        if (epg.TryGetValue(id ?? "", out var p))
+                        {
+                            if (p.EndDate.HasValue && p.EndDate.Value <= now)
+                                obj["aired"] = true;   // Diffusé : gardé, marqué
+                            else if (p.EndDate.HasValue)
+                                obj["end"] = p.EndDate.Value.ToString("o", CultureInfo.InvariantCulture);
+                            kept++;
+                        }
+                        else { arr.RemoveAt(i); dropped++; epgExpired++; }
+                    }
+                    else if (string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(src, "library", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (libFound.Contains(id ?? "")) kept++;
+                        else { arr.RemoveAt(i); dropped++; libMissing++; }
+                    }
+                    else
+                    {
+                        kept++; // source absente/autre : non concernée
+                    }
+                }
+
+                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}).",
+                    kept, dropped, epgExpired, libMissing);
+
+                return arr.ToJsonString();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Tonight validation : échec global ({0}) — payload conservé.", ex.Message);
+                return payload;
+            }
+        }
+
+        /// <summary>
+        /// Fin de la fenêtre « ce soir » (heure locale), répliquée depuis
+        /// <c>GetEmbyInfoTool.EpgTonight</c> : <see cref="PluginConfiguration.TonightWindowEnd"/>,
+        /// défaut 23:59, reportée au lendemain si l'heure de fin est antérieure
+        /// à maintenant. Borner le snapshot EPG de validation à « ce soir ».
+        /// </summary>
+        private DateTimeOffset TonightWindowEnd()
+        {
+            var now = DateTimeOffset.Now;
+            var today = now.Date;
+            var endStr = Plugin.Instance?.Configuration?.TonightWindowEnd;
+            if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
+            if (TryParseHHmm(endStr, out var et))
+            {
+                var d = today.Add(et);
+                if (d < now.LocalDateTime) d = d.AddDays(1);
+                return new DateTimeOffset(d, now.Offset);
+            }
+            return new DateTimeOffset(today.AddHours(23).AddMinutes(59), now.Offset);
+        }
+
+        /// <summary>Parse "HH:mm" (24 h) vers TimeSpan. Tolérant aux espaces.</summary>
+        private static bool TryParseHHmm(string s, out TimeSpan value)
+        {
+            value = TimeSpan.Zero;
+            if (string.IsNullOrWhiteSpace(s)) return false;
+            var parts = s.Trim().Split(':');
+            if (parts.Length != 2) return false;
+            if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return false;
+            if (h < 0 || h > 23 || m < 0 || m > 59) return false;
+            value = new TimeSpan(h, m, 0);
+            return true;
+        }
+
+        /// <summary>Lit une propriété string d'un JsonObject (null si absente/non-string).</summary>
+        private static string ObjStr(JsonObject obj, string key)
+        {
+            if (obj.TryGetPropertyValue(key, out var v) && v is JsonValue jv
+                && jv.TryGetValue<string>(out var s))
+                return s;
+            return null;
+        }
+
+        /// <summary>
+        /// Indique si <paramref name="itemPath"/> est situé sous le dossier
+        /// <paramref name="root"/> (comparaison insensible à la casse — Windows).
+        /// Sert à exclure la bibliothèque .strm des sondes bibliothèque.
+        /// Null/vide sur l'un ou l'autre → false (rien à exclure).
+        /// </summary>
+        private static bool IsUnderPath(string itemPath, string root)
+        {
+            if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(itemPath)) return false;
+            string r = root.TrimEnd('/', '\\', System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
+            if (string.Equals(itemPath, r, StringComparison.OrdinalIgnoreCase)) return true;
+            return itemPath.StartsWith(r + System.IO.Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || itemPath.StartsWith(r + System.IO.Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -339,7 +581,7 @@ namespace LLM_AI
         /// le LLM croise ce profil avec les programmes EPG de ce soir.
         /// <paramref name="compact"/> réduit le nombre de titres (modèle local).
         /// </summary>
-        private string BuildTasteProfile(User user, bool compact)
+        private string BuildTasteProfile(User user, bool compact, string excludedRoot)
         {
             int maxTitles = compact ? 10 : 25;
             var sb = new StringBuilder();
@@ -363,6 +605,9 @@ namespace LLM_AI
 
                 foreach (var it in items)
                 {
+                    // Exclut la bibliothèque .strm (recommendations à enregistrer)
+                    // : ses cartes ne sont pas du contenu réellement regardé.
+                    if (IsUnderPath(it?.Path, excludedRoot)) continue;
                     var episode = it as MediaBrowser.Controller.Entities.TV.Episode;
                     bool isEpisode = episode != null;
                     string title = isEpisode ? episode.SeriesName : it.Name;
@@ -510,7 +755,7 @@ namespace LLM_AI
         /// recommandations. Chaque entrée porte l'id Emby (Guid) pour
         /// <c>source="library"</c> + bouton « Regarder » (lecture bibliothèque).
         /// </summary>
-        private string BuildLibraryFallbackPool(User user, bool compact)
+        private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot)
         {
             var sb = new StringBuilder();
             try
@@ -532,6 +777,11 @@ namespace LLM_AI
                 foreach (var it in items)
                 {
                     if (it == null) continue;
+                    // Exclut la bibliothèque .strm (recommendations à enregistrer)
+                    // pour éviter la décision circulaire : un item recommandé
+                    // d'enregistrer ne doit pas revenir comme candidat « À
+                    // regarder ce soir » depuis la bibliothèque.
+                    if (IsUnderPath(it.Path, excludedRoot)) continue;
                     var episode = it as MediaBrowser.Controller.Entities.TV.Episode;
                     bool isEpisode = episode != null;
                     string title = isEpisode ? episode.SeriesName : it.Name;

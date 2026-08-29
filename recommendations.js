@@ -85,6 +85,19 @@ define([], function () {
         return it.image_url || "";
     }
 
+    // Badge de type : différencie une reco « À venir » (programme EPG du soir
+    // à regarder en direct / à enregistrer) d'une reco déjà disponible
+    // (enregistrement ou item de bibliothèque, prêts à lire maintenant). Un
+    // programme EPG déjà diffusé (aired=true, injecté par la validation
+    // backend) → « Diffusé » (carte conservée, actions masquées).
+    function sourceBadge(it) {
+        if (it.aired) return { cls: "ai-type-aired", icon: "✓", text: i18n.t("rec.type.aired") };
+        var s = String(it.source || "").toLowerCase();
+        if (s === "recording") return { cls: "ai-type-rec", icon: "📼", text: i18n.t("rec.type.recording") };
+        if (s === "library") return { cls: "ai-type-lib", icon: "📚", text: i18n.t("rec.type.library") };
+        return { cls: "ai-type-upcoming", icon: "⏰", text: i18n.t("rec.type.upcoming") };
+    }
+
     // Construit le HTML d'une carte pour un item de recommandation.
     // it = {title, kind, reason, priority, channel, start, showbizz_match,
     //       id, channel_id, rating, image_url}  (champs enrichis côté tâche).
@@ -109,13 +122,25 @@ define([], function () {
         // source="live" (ou absent) : programme EPG du soir → « Regarder en
         // direct » (si en cours) + « Programmer ».
         var isWatchItem = it.source === "recording" || it.source === "library";
+        // Un programme EPG déjà diffusé (aired, injecté par la validation
+        // backend) : on garde la carte mais on masque les actions obsolètes
+        // (Programmer / Regarder en direct) — l'usager voit la reco passée.
+        var isAired = !!it.aired;
+        var badge = sourceBadge(it);
+
+        // Méta-ligne : un item disponible (recording/library) n'a ni date ni
+        // canal — on affiche son libellé de disponibilité plutôt que « 📅  • 📺 — ».
+        // Un programme EPG (live, à venir ou diffusé) porte en plus date + canal,
+        // précédés du libellé de type (l'icône ⏰ « À venir » demandée).
+        var meta = esc(badge.icon) + " " + esc(badge.text);
+        if (!isWatchItem) meta += " · 📅 " + esc(dateStr) + " • 📺 " + esc(channel);
 
         // Bouton « Regarder en direct » : uniquement pour la section tonight
         // (it.section==="tonight"), source live, si le programme a déjà
         // commencé et qu'on dispose d'un channel_id, ET que la lecture client
         // est disponible (playbackManager via require).
         var watchLive = "";
-        if (it.section === "tonight" && !isWatchItem && (it.channel_id || it.channel_id === 0)
+        if (it.section === "tonight" && !isWatchItem && !isAired && (it.channel_id || it.channel_id === 0)
             && canWatch() && hasAiringStarted(it)) {
             watchLive = '<button class="ai-btn-watchlive" type="button" data-channel="' +
                 esc(it.channel_id) + '" title="' + esc(i18n.t("rec.tonight.watchLive")) +
@@ -142,9 +167,10 @@ define([], function () {
                 '">▶ ' + esc(i18n.t("rec.tonight.watch")) + '</button>';
         }
 
-        // « Programmer » : uniquement pour source live (un enregistrement / un
-        // item de bibliothèque n'a pas de timer à créer).
-        var recordBtn = isWatchItem ? '' :
+        // « Programmer » : uniquement pour source live non encore diffusé (un
+        // enregistrement / un item de bibliothèque n'a pas de timer à créer,
+        // et un programme déjà diffusé n'a plus rien à programmer).
+        var recordBtn = (isWatchItem || isAired) ? '' :
             '<button class="ai-btn-record" type="button"' +
                 (hasId ? '' : ' disabled') +
                 ' data-id="' + esc(it.id || "") + '"' +
@@ -154,15 +180,17 @@ define([], function () {
                 (hasId ? '' : ' title="' + esc(i18n.t("rec.btn.noId")) + '"') +
                 '>' + i18n.t("rec.btn.program") + '</button>';
 
-        return '<div class="ai-card" data-idx="' + idx + '">' +
+        return '<div class="ai-card"' + (isAired ? ' data-aired="1"' : '') + ' data-idx="' + idx + '">' +
             '<div class="ai-card-poster">' +
                 poster +
+                '<div class="ai-type-badge ' + badge.cls + '" title="' + esc(badge.text) + '">' +
+                    esc(badge.icon) + '</div>' +
                 '<div class="ai-priority-badge" style="background:' + pr.color + '">' + esc(pr.label) + '</div>' +
                 rating +
             '</div>' +
             '<div class="ai-card-info">' +
                 '<div class="ai-card-title" title="' + esc(title) + '">' + esc(title) + '</div>' +
-                '<div class="ai-card-meta">📅 ' + esc(dateStr) + ' • 📺 ' + esc(channel) + '</div>' +
+                '<div class="ai-card-meta">' + meta + '</div>' +
                 '<div class="ai-card-reason" title="' + esc(it.reason || "") + '">🤖 ' + esc(it.reason || "") + '</div>' +
                 '<div class="ai-card-actions">' +
                     watchLive +

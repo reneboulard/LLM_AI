@@ -502,9 +502,8 @@ namespace LLM_AI
                 int maxMatches = 50;
 
                 var lines = new List<string>();
-                foreach (var line in File.ReadLines(path))
+                foreach (var line in ReadLogLines(path, ct))
                 {
-                    ct.ThrowIfCancellationRequested();
                     lines.Add(line);
                 }
                 int totalLines = lines.Count;
@@ -569,9 +568,8 @@ namespace LLM_AI
             var buf = new Queue<(int line, string content)>();
             int seen = 0;
             int lineNo = 0;
-            foreach (var line in File.ReadLines(path))
+            foreach (var line in ReadLogLines(path, ct))
             {
-                ct.ThrowIfCancellationRequested();
                 lineNo++;
                 buf.Enqueue((lineNo, line));
                 seen++;
@@ -1365,8 +1363,16 @@ namespace LLM_AI
             catch (OperationCanceledException) { _systemInfoTried = false; throw; }
             catch (Exception ex)
             {
-                _logger?.Warn("[LLM_AI] system_audit GetSystemInfo a échoué (on bascule sur les " +
-                    "interfaces de chemins en repli) : {0}", ex.Message);
+                // Repli attendu et COUVERT : GetSystemInfo lève une NRE à
+                // l'intérieur d'Emby sur certains hôtes (observé sur Windows 11 —
+                // pas sur Linux avec la même version Emby ; la cause est dans le
+                // code d'Emby, on ne peut pas la corriger côté plugin). On log en
+                // Info (pas Warn) : le repli via IServerConfigurationManager.
+                // ApplicationPaths résout tous les chemins système utilisés par
+                // les sondes ; seule la liste des interfaces réseau manque, ce
+                // qui n'impacte aucun diagnostic. Voir ServerInfoAsync/ResolveEmbyPathsAsync.
+                _logger?.Info("[LLM_AI] system_audit GetSystemInfo indisponible (repli couvert " +
+                    "via IServerConfigurationManager.ApplicationPaths) : {0}", ex.Message);
                 _cachedSystemInfo = null;
             }
             return _cachedSystemInfo;
@@ -1572,6 +1578,35 @@ namespace LLM_AI
             }
             catch { }
             return (size, truncated);
+        }
+
+        /// <summary>
+        /// Énumère les lignes d'un fichier journal en lecture partagée. Sur
+        /// Windows, le logger Emby garde le fichier courant (ex. embyserver.txt)
+        /// ouvert en écriture exclusive : <see cref="File.ReadLines(string)"/>
+        /// échoue alors avec « The process cannot access the file ... because it
+        /// is being used by another process » (alors que sur Linux le logger
+        /// ouvre en partage de lecture — d'où le comportement divergent).
+        /// On ouvre donc en <see cref="FileShare.ReadWrite"/> |
+        /// <see cref="FileShare.Delete"/> pour relire le journal actif même sous
+        /// la plume du logger (sur Linux ce partage n'est pas requis mais reste
+        /// inoffensif). Lecture en flux, mémoire O(tampon lecture) — adaptée
+        /// aux journaux de grande taille. Le verrouillage du FS est préservé :
+        /// lecture seule, aucun droit d'écriture demandé.
+        /// </summary>
+        private static IEnumerable<string> ReadLogLines(string path, CancellationToken ct)
+        {
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                          FileShare.ReadWrite | FileShare.Delete))
+            using (var sr = new StreamReader(fs, Encoding.UTF8, true, 4096))
+            {
+                string line;
+                while ((line = sr.ReadLine()) != null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return line;
+                }
+            }
         }
 
         private static string Err(string msg) => JsonSerializer.Serialize(new { error = msg }, s_json);

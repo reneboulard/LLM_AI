@@ -93,6 +93,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Português`). Applies to both paths (recommendations + audit, single and deterministic
   modes) via a backward-compatible optional `LlmAgentService` parameter and an append to the
   deterministic-synthesis system prompt.
+- **i18n côté serveur (C#)** (`I18n.cs`) : dictionnaires inline FR/EN + résolution de
+  langue. **Deux buckets** : métadonnées (`ResolveMetaLangKey` — `<plot>` du `.nfo`,
+  synopsis TMDB, prose LLM → `ResponseLanguage` puis langue d'affichage puis legacy
+  `TmdbLanguage` puis en-US) et interface (`ResolveDisplayLangKey` — nom/description
+  des tâches planifiées → langue d'affichage Emby `UICulture`). Helpers `ToTmdbLang`
+  (clé 2 lettres → `fr-FR`/`en-US`…) et `ToLangName` (→ `French`/`English`… pour la
+  cible de traduction LLM). Localise les tâches planifiées (`task.*.name/desc`).
+  Extensible par la donnée (ajouter une entrée `s_res`).
+  **Server-side i18n (C#)** (`I18n.cs`): inline FR/EN dictionaries + language
+  resolution. **Two buckets**: metadata (`ResolveMetaLangKey` — `.nfo` `<plot>`, TMDB
+  overview, LLM prose → `ResponseLanguage` then display language then legacy
+  `TmdbLanguage` then en-US) and UI (`ResolveDisplayLangKey` — scheduled-task
+  name/description → Emby display language `UICulture`). Helpers `ToTmdbLang`
+  (2-letter key → `fr-FR`/`en-US`…) and `ToLangName` (→ `French`/`English`… for the LLM
+  translation target). Localizes scheduled tasks (`task.*.name/desc`). Data-driven
+  extensibility (add an `s_res` entry).
+- **Poster par défaut standardisé** (`DefaultImageApplier`) : pose un poster
+  `default_poster.jpg` (ressource embedded, JPEG) en `ImageType.Primary` sur la
+  collection `AI Tonight` (BoxSet) **et** la racine de la bibliothèque `.strm`
+  (CollectionFolder). **Idempotent** : ne pose l'image que si l'item n'en a pas déjà
+  une (`HasImage` false) — respecte une attribution manuelle ultérieure (« Edit
+  Images »). Best-effort (ne lève jamais) via `IProviderManager.SaveImage` +
+  `UpdateToRepository(ImageUpdate)`.
+  **Standardized default poster** (`DefaultImageApplier`): sets a `default_poster.jpg`
+  (embedded resource, JPEG) as `ImageType.Primary` on the `AI Tonight` collection
+  (BoxSet) **and** the `.strm` library root (CollectionFolder). **Idempotent**: only
+  sets the image if the item has none yet (`HasImage` false) — respects a later manual
+  assignment ("Edit Images"). Best-effort (never throws) via
+  `IProviderManager.SaveImage` + `UpdateToRepository(ImageUpdate)`.
+- **Identification des enregistrements orphelins** (`OrphanIdentifyTask`, tâche
+  planifiée quotidienne **04:00**) : repère les enregistrements DVR **non identifiés**
+  (aucun id IMDb/TMDB/TVDB — souvent des titres québécois absents du catalogue
+  TMDB/TVDB) et tente de les résoudre en deux stages :
+  - **S1 — nettoyage + recherche multilingue** : le titre EPG est débarrassé de son
+    bruit (`CleanEpgTitle` : HD, VOSTFR, « Rediff. », marqueurs saison/épisode,
+    parenthèses) puis recherché sur TMDB en plusieurs langues (en-US = titre original,
+    fr-FR = titre France, + langue de l'usager). Garde-fou de correspondance (titre
+    normalisé + année).
+  - **S2 — proposition LLM validée par TMDB** : le LLM propose un id IMDb/TMDB à partir
+    du titre + overview + chaîne ; la proposition est **validée** via TMDB `/find`
+    (`FindByExternalIdAsync`) ou détail par id (`LookupMetaByIdAsync`) — TMDB est la
+    source de vérité, un id halluciné renvoie null.
+  - **Application non destructive** : ne remplit que les ids provider absents, un
+    `Overview` vide, des `Genres` vides, un poster `Primary` manquant. **Le `Name` EPG
+    n'est jamais modifié** — il est **verrouillé** (`MetadataFields.Name`) pour
+    préserver le titre d'origine (réutilisé plus tard pour scanner l'EPG). Les champs
+    remplis sont aussi verrouillés (add-only — aucun verrou existant n'est retiré),
+    reflétant la pratique manuelle de l'usager.
+  - **Idempotence** via tags `llmai-identified` (résolu) / `llmai-needs-review`
+    (irrésolu — marqué pour revue). **Dry-run** (`OrphanIdentifyDryRun`) : aucune
+    écriture, log détaillé de la résolution proposée + bilan. Best-effort : un item en
+    erreur n'interrompt jamais le passage. Scope : enregistrements DVR uniquement.
+  **Orphan recording identification** (`OrphanIdentifyTask`, daily scheduled task
+  **4 AM**): finds **unidentified** DVR recordings (no IMDb/TMDB/TVDB id — often Quebec
+  titles missing from TMDB/TVDB) and tries to resolve them in two stages:
+  - **S1 — cleanup + multi-language search**: the EPG title is stripped of noise
+    (`CleanEpgTitle`: HD, VOSTFR, "Rediff.", season/episode markers, parentheses) then
+    searched on TMDB in several languages (en-US = original title, fr-FR = France
+    title, + user language). Match guard (normalized title + year).
+  - **S2 — LLM proposal validated by TMDB**: the LLM proposes an IMDb/TMDB id from the
+    title + overview + channel; the proposal is **validated** via TMDB `/find`
+    (`FindByExternalIdAsync`) or detail-by-id (`LookupMetaByIdAsync`) — TMDB is the
+    source of truth, a hallucinated id returns null.
+  - **Non-destructive apply**: only fills missing provider ids, an empty `Overview`,
+    empty `Genres`, a missing `Primary` poster. **The EPG `Name` is never changed** —
+    it is **locked** (`MetadataFields.Name`) to preserve the original title (reused
+    later to scan the EPG). Filled fields are also locked (add-only — no existing lock
+    is removed), mirroring the user's manual practice.
+  - **Idempotent** via `llmai-identified` (resolved) / `llmai-needs-review` (unresolved
+    — tagged for review) tags. **Dry-run** (`OrphanIdentifyDryRun`): no writes, detailed
+    log of the proposed resolution + summary. Best-effort: a failing item never aborts
+    the pass. Scope: DVR recordings only.
+  - **Config** : `OrphanIdentifyEnabled` (défaut `false`, opt-in — modifie des
+    enregistrements), `OrphanIdentifyDryRun` (défaut `false`). Page de config : section
+    « Identification des enregistrements orphelins ».
+    **Config**: `OrphanIdentifyEnabled` (default `false`, opt-in — mutates recordings),
+    `OrphanIdentifyDryRun` (default `false`). Config page: "Orphan recording
+    identification" section.
 
 ### Modifié / Changed
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la
@@ -145,6 +223,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **Cleanup task** (`AiTonightCleanupTask`, daily 03:00): removes the `AI Tonight`
     genre from all items **and** empties the collection daily (always active, not
     gated — sweeps leftovers).
+- **Bibliothèque `.strm` — enrichissement du `.nfo`** (`StrmLibraryGenerator`) :
+  - le `<plot>` commence désormais par le **synopsis natif de l'EPG** (langue d'origine
+    du programme, lu sur le `BaseItem` EPG sous-jacent), suivi de l'enrichissement
+    (synopsis TMDB + raison LLM + méta + diffusion à venir + lien fiche EPG) dans la
+    **langue de l'usager** (`ResponseLanguage`) — « best of both worlds » : l'usager lit
+    l'enrichissement dans sa langue tout en gardant le synopsis EPG d'origine. Aucune
+    déduction de la langue du programme nécessaire.
+  - ajout des **External IDs** `<tmdbid>` / `<imdbid>` / `<tvdbid>` au `.nfo` quand
+    ils sont disponibles (récupérés via `append_to_response=external_ids` de TMDB) →
+    Emby génère les **liens profonds** TMDB/IMDb/TVDB sur la fiche de la carte.
+  **`.strm` library — `.nfo` enrichment** (`StrmLibraryGenerator`):
+  - the `<plot>` now starts with the **EPG-native overview** (the program's original
+    language, read from the underlying EPG `BaseItem`), followed by the enrichment
+    (TMDB overview + LLM reason + meta + upcoming airings + EPG page link) in the
+    **user's language** (`ResponseLanguage`) — "best of both worlds": the user reads
+    the enrichment in their language while keeping the original EPG overview. No need
+    to deduce the program's language.
+  - added **External IDs** `<tmdbid>` / `<imdbid>` / `<tvdbid>` to the `.nfo` when
+    available (fetched via TMDB's `append_to_response=external_ids`) → Emby generates
+    the TMDB/IMDb/TVDB **deep links** on the card's detail page.
+- **`TmdbLookupTool`** — refactor + nouveaux points d'entrée pour la résolution
+  d'orphelins : extraction de `FetchDetailAsync` (détail `/movie|tv/{id}` +
+  `external_ids`, facteur commun recherche/`/find`), `LookupMetaMultiLangAsync`
+  (recherche multi-langue, S1), `FindByExternalIdAsync` (`/find/{id}` par
+  `imdb_id`/`tvdb_id`, valide un id proposé), `LookupMetaByIdAsync` (détail par id
+  TMDB, valide un `tmdb_id` proposé), `CleanEpgTitle` (regex de nettoyage de titre
+  EPG bruité). `TmdbMeta` gagne `TmdbId` / `ImdbId` / `TvdbId`.
+  **`TmdbLookupTool`** — refactor + new entry points for orphan resolution: extracted
+  `FetchDetailAsync` (detail `/movie|tv/{id}` + `external_ids`, shared by search/`/find`),
+  `LookupMetaMultiLangAsync` (multi-language search, S1), `FindByExternalIdAsync`
+  (`/find/{id}` by `imdb_id`/`tvdb_id`, validates a proposed id), `LookupMetaByIdAsync`
+  (detail by TMDB id, validates a proposed `tmdb_id`), `CleanEpgTitle` (regex cleanup of
+  noisy EPG titles). `TmdbMeta` gains `TmdbId` / `ImdbId` / `TvdbId`.
+- **`LlmRunner.ResolveIdsAsync`** : appel LLM one-shot (sans outils, multi-backend
+  avec repli) qui propose un id IMDb/TMDB + titre original + année + niveau de
+  confiance à partir d'un titre EPG + overview + chaîne. Calqué sur
+  `TranslateTextAsync`. Best-effort (retourne un `IdGuess` vide en cas d'échec). La
+  proposition est **toujours validée côté `OrphanIdentifyTask`** via TMDB — jamais
+  appliquée telle quelle.
+  **`LlmRunner.ResolveIdsAsync`**: one-shot LLM call (no tools, multi-backend with
+  fallback) proposing an IMDb/TMDB id + original title + year + confidence level from
+  an EPG title + overview + channel. Modeled on `TranslateTextAsync`. Best-effort
+  (returns an empty `IdGuess` on failure). The proposal is **always validated by
+  `OrphanIdentifyTask`** via TMDB — never applied as-is.
 - **Auto-programmation** (`AutoProgrammer`, option `AutoProgram` — défaut `false`, opt-in
   explicite) : après chaque run (tâche planifiée **et** login), les recommandations du
   **record bucket** (programmes EPG à venir non possédés, non déjà programmés, hors

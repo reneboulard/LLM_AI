@@ -481,8 +481,10 @@ namespace LLM_AI
         /// qu'un réponde. Résolution de clé par provider calquée sur
         /// <c>LlmAgentService.CallBackendAsync</c>. Lève si tous échouent.
         /// <see cref="OperationCanceledException"/> est propagée.
+        /// <para>Internal : réutilisé par <see cref="TranslateTextAsync"/> (tier-3
+        /// de la cascade TMDB du générateur .strm).</para>
         /// </summary>
-        private async System.Threading.Tasks.Task<string> ChatWithFallbackAsync(
+        internal async System.Threading.Tasks.Task<string> ChatWithFallbackAsync(
             List<LlmBackend> backends, string ollamaCloudKey, string geminiKey,
             string systemPrompt, string userPrompt, string label,
             System.Threading.CancellationToken ct)
@@ -516,6 +518,189 @@ namespace LLM_AI
                 }
             }
             throw new Exception("Tous les backends LLM ont échoué pour la synthèse d'audit.", last);
+        }
+
+        /// <summary>
+        /// Traduit un texte via le LLM (appel one-shot, sans boucle agent ni
+        /// outils) avec repli multi-backend. <paramref name="targetLangName"/> =
+        /// nom humain de la langue cible (ex. « Spanish » — voir
+        /// <see cref="I18n.ToLangName"/>). <b>Best-effort</b> : en cas d'échec
+        /// (annulation exceptée), logue un avertissement et renvoie le texte
+        /// original — l'appelant ne doit jamais casser à cause d'une traduction
+        /// indisponible. Sert au tier-3 de la cascade TMDB du générateur .strm
+        /// (<see cref="StrmLibraryGenerator"/>) : synopsis en-US → langue de
+        /// l'usager en dernier recours quand TMDB n'a pas de synopsis dans cette
+        /// langue.
+        /// </summary>
+        internal async System.Threading.Tasks.Task<string> TranslateTextAsync(
+            PluginConfiguration cfg, string text, string targetLangName,
+            System.Threading.CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(targetLangName))
+                return text;
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends == null || backends.Count == 0)
+                {
+                    _logger?.Warn("[LLM_AI] Traduction LLM en {0} impossible : aucun backend activé — texte original conservé.",
+                        targetLangName);
+                    return text;
+                }
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                const string system =
+                    "You are a professional translator. Translate the user's text into {0}. " +
+                    "Output ONLY the translation — no explanation, no quotation marks, no preamble. " +
+                    "Preserve names, titles, dates, numbers and formatting (line breaks).";
+                string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                    string.Format(System.Globalization.CultureInfo.InvariantCulture, system, targetLangName),
+                    text, "translate", ct).ConfigureAwait(false);
+                return string.IsNullOrWhiteSpace(reply) ? text : reply.Trim();
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Traduction LLM en {0} échouée ({1}) — texte original conservé.",
+                    targetLangName, ex.Message);
+                return text;
+            }
+        }
+
+        /// <summary>Proposition d'ids TMDB/IMDb issue du LLM (S2 de la tâche orphelins).</summary>
+        internal struct IdGuess
+        {
+            public string ImdbId;
+            public int TmdbId;
+            public string OriginalTitle;
+            public int? Year;
+            public string Confidence;
+            public bool IsEmpty =>
+                string.IsNullOrWhiteSpace(ImdbId) && TmdbId <= 0 && string.IsNullOrWhiteSpace(OriginalTitle);
+        }
+
+        /// <summary>
+        /// Demande au LLM de proposer l'équivalence TMDB/IMDb d'un titre EPG
+        /// (souvent québécois) — S2 de la tâche d'identification d'orphelins.
+        /// Appel one-shot (sans outils) via <see cref="ChatWithFallbackAsync"/>,
+        /// calqué sur <see cref="TranslateTextAsync"/>. <b>Best-effort</b> : la
+        /// proposition n'est JAMAIS appliquée telle quelle — l'appelant la valide
+        /// via <c>TmdbLookupTool.FindByExternalIdAsync</c> / <c>FetchDetailAsync</c>
+        /// (TMDB est la source de vérité). En cas d'échec (annulation exceptée),
+        /// logue un avertissement et renvoie un <see cref="IdGuess"/> vide (l'item
+        /// bascule en needs-review). Ne lève jamais.
+        /// </summary>
+        internal async System.Threading.Tasks.Task<IdGuess> ResolveIdsAsync(
+            PluginConfiguration cfg, string title, string kind, int? year,
+            string overview, string channel, System.Threading.CancellationToken ct)
+        {
+            var empty = new IdGuess();
+            if (cfg == null || string.IsNullOrWhiteSpace(title)) return empty;
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends == null || backends.Count == 0)
+                {
+                    _logger?.Warn("[LLM_AI] ResolveIds : aucun backend LLM activé — proposition vide.");
+                    return empty;
+                }
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                const string system =
+                    "Tu es un assistant de correspondance de métadonnées pour The Movie Database. " +
+                    "À partir d'un titre EPG (souvent un titre québécois qui peut différer du titre " +
+                    "France ou du titre original), + année/overview/chaîne optionnels, identifie LA " +
+                    "fiche TMDB la plus probable. Réponds UNIQUEMENT un objet JSON compact, sans " +
+                    "explication ni balises markdown : " +
+                    "{\"imdb_id\":\"tt...\",\"tmdb_id\":12345,\"original_title\":\"...\",\"year\":2020," +
+                    "\"confidence\":\"high|medium|low\"}. Champs vides (chaîne vide) ou 0 si inconnu.";
+
+                var user = new StringBuilder();
+                user.Append("Title: ").Append(title);
+                user.Append("\nKind: ").Append(string.IsNullOrEmpty(kind) ? "movie" : kind);
+                if (year.HasValue) user.Append("\nYear: ").Append(year.Value.ToString(CultureInfo.InvariantCulture));
+                if (!string.IsNullOrWhiteSpace(channel)) user.Append("\nChannel: ").Append(channel.Trim());
+                if (!string.IsNullOrWhiteSpace(overview))
+                    user.Append("\nOverview: ").Append(TruncateOverview(overview, 600));
+
+                string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                    system, user.ToString(), "resolve-ids", ct).ConfigureAwait(false);
+
+                return ParseIdGuess(reply);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] ResolveIds échoué pour « {0} » ({1}) — proposition vide.", title, ex.Message);
+                return empty;
+            }
+        }
+
+        internal static IdGuess ParseIdGuess(string reply)
+        {
+            var g = new IdGuess();
+            string json = ExtractJsonObject(reply);
+            if (string.IsNullOrWhiteSpace(json)) return g;
+            try
+            {
+                using (var doc = JsonDocument.Parse(json))
+                {
+                    var r = doc.RootElement;
+                    if (r.ValueKind != JsonValueKind.Object) return g;
+                    g.ImdbId = StrId(r, "imdb_id");
+                    if (r.TryGetProperty("tmdb_id", out var t) && t.TryGetInt32(out int tv)) g.TmdbId = tv;
+                    g.OriginalTitle = StrId(r, "original_title");
+                    if (r.TryGetProperty("year", out var y) && y.TryGetInt32(out int yv)) g.Year = yv;
+                    g.Confidence = StrId(r, "confidence");
+                }
+            }
+            catch { /* tolérant */ }
+            return g;
+        }
+
+        private static string StrId(JsonElement e, string name) =>
+            e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+        /// <summary>
+        /// Extrait un objet JSON propre depuis la réponse du LLM : retire les
+        /// balises markdown <c>```json … ```</c> et isole le premier
+        /// <c>{ … }</c> équilibré (en respectant les chaînes échappées). Vide si
+        /// aucun objet trouvé.
+        /// </summary>
+        internal static string ExtractJsonObject(string reply)
+        {
+            if (string.IsNullOrWhiteSpace(reply)) return string.Empty;
+            var s = reply.Trim();
+            if (s.StartsWith("```", StringComparison.Ordinal))
+            {
+                int nl = s.IndexOf('\n');
+                if (nl >= 0) s = s.Substring(nl + 1);
+                int fenceEnd = s.LastIndexOf("```", StringComparison.Ordinal);
+                if (fenceEnd >= 0) s = s.Substring(0, fenceEnd);
+                s = s.Trim();
+            }
+            int start = s.IndexOf('{');
+            if (start < 0) return string.Empty;
+            int depth = 0, end = -1; bool inStr = false; char prev = '\0';
+            for (int i = start; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (inStr) { if (c == '"' && prev != '\\') inStr = false; prev = c; continue; }
+                if (c == '"') inStr = true;
+                else if (c == '{') depth++;
+                else if (c == '}') { depth--; if (depth == 0) { end = i; break; } }
+                prev = c;
+            }
+            return end > start ? s.Substring(start, end - start + 1) : string.Empty;
+        }
+
+        private static string TruncateOverview(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            s = s.Trim();
+            return s.Length <= max ? s : s.Substring(0, max) + "…";
         }
 
         /// <summary>

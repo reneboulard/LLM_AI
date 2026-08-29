@@ -555,6 +555,32 @@ namespace LLM_AI
         public string StrmSecret { get; set; } = "";
 
         // ------------------------------------------------------------------
+        //  Identification des enregistrements orphelins (tâche planifiée
+        //  quotidienne). Repère les enregistrements DVR non identifiés (sans id
+        //  IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB),
+        //  tente de les résoudre (S1 nettoyage + recherche multilingue, puis S2
+        //  proposition LLM d'un id IMDb validé via TMDB /find), écrit l'id +
+        //  métadonnées + affiche, et verrouille le titre EPG pour qu'Emby ne
+        //  l'écrase pas. Indépendant de la recommandation.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : active la tâche
+        /// planifiée quotidienne d'identification des enregistrements orphelins.
+        /// <c>false</c> = la tâche est inactive (no-op). Mutant des métadonnées
+        /// d'enregistrements — d'où l'opt-in.
+        /// </summary>
+        public bool OrphanIdentifyEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Si <c>true</c>, la tâche n'écrit rien : elle logue seulement les
+        /// orphelins trouvés et la résolution proposée (S1/S2) + un bilan. Sert
+        /// à valider la qualité des résolutions avant de basculer en application
+        /// automatique. Défaut <c>false</c>.
+        /// </summary>
+        public bool OrphanIdentifyDryRun { get; set; } = false;
+
+        // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Indépendant de la recommandation : un run agent dédié interroge
         //  l'outil `system_audit` (12 actions : télémétrie, logs, transcodage,
