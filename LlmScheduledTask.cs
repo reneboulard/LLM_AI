@@ -190,6 +190,25 @@ namespace LLM_AI
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
 
+                // Badge « AI » sur les images EPG (opt-out, non destructif) :
+                // alimente le registre des programmes suggérés à enregistrer
+                // (record bucket — même filtre que .strm/AutoProgrammer).
+                // L'enrichisseur AiBadgeEnhancer badge ensuite leur image
+                // Primary dans le guide natif, au moment du service. Sémantique
+                // « tout remplacer » : les suggestions du run précédent ne
+                // badgent plus.
+                if (cfg.AiBadgeEnabled)
+                {
+                    try
+                    {
+                        AiBadgeRegistry.ApplyRecos(merged, _logger);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.ErrorException("[LLM_AI] Badge AI : {0}", ex, ex.Message);
+                    }
+                }
+
                 // Bibliothèque .strm dédiée (opt-in, indépendant de
                 // AutoProgram) : écrit une carte .strm+.nfo+poster par reco du
                 // record bucket. L'usager parcourt la bibliothèque ; lire une

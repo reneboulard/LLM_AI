@@ -91,14 +91,14 @@ namespace LLM_AI
         /// (<c>tool</c> = nom de l'outil, <c>result</c> = sortie JSON brute) —
         /// permet à l'appelant (tâche planifiée) d'enrichir les recommandations
         /// en matchant les titres aux items EPG qui portent l'Id/ChannelId.
+        /// Invocation mono-tour (paths recommandation et audit) : aucune
+        /// mémoire — pour la conversation multi-tours, voir
+        /// <see cref="RunChatAsync"/>.
         /// </summary>
         public async Task<(string reply, List<(string tool, string result)> toolResults)> RunAsync(
             string userTask, IReadOnlyList<ILlmTool> tools, CancellationToken ct)
         {
-            var byName = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
             var system = BuildSystemPrompt(tools, _ragDirectives, _workflow);
-            var toolResults = new List<(string tool, string result)>();
-
             if (_verbose)
             {
                 _logger?.Info("[LLM_AI] === SYSTEM PROMPT ===\n{0}", system);
@@ -110,6 +110,86 @@ namespace LLM_AI
                 new LlmClient.ChatMessage { Role = "system", Content = system },
                 new LlmClient.ChatMessage { Role = "user",   Content = userTask ?? string.Empty }
             };
+            return await RunLoopAsync(messages, tools, ct).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Nombre maximal de tours d'historique rejoués dans le prompt. La page
+        /// de config (chat) garde l'historique côté client et le re-poste à
+        /// chaque tour ; cette borne protège contre une requête malveillante
+        /// ou débuguée qui enverrait des mégaoctets de tours — on ne rejoue
+        /// que les derniers <see cref="MaxHistoryTurns"/>.
+        /// </summary>
+        private const int MaxHistoryTurns = 40;
+
+        /// <summary>
+        /// Tour de conversation multi-tours (chat config) : rejoue
+        /// <paramref name="priorTurns"/> (messages user/assistant — les
+        /// appels d'outils intermédiaires ne sont PAS conservés, seulement les
+        /// textes finaux) entre le system prompt et le nouveau message
+        /// <paramref name="userTask"/>, puis relance la même boucle agent
+        /// (l'LLM peut de nouveau appeler des outils). Le system prompt —
+        /// documentation complète des outils + directives RAG — est construit
+        /// ici, serveur-side, exactement UNE fois par conversation : le client
+        /// ne stocke/jamais ne renvoie que les tours user/assistant. Retourne
+        /// la réponse finale (Markdown) de l'agent.
+        /// </summary>
+        public async Task<string> RunChatAsync(
+            IReadOnlyList<LlmClient.ChatMessage> priorTurns, string userTask,
+            IReadOnlyList<ILlmTool> tools, CancellationToken ct)
+        {
+            var system = BuildSystemPrompt(tools, _ragDirectives, _workflow);
+            if (_verbose)
+            {
+                _logger?.Info("[LLM_AI] === SYSTEM PROMPT (chat) ===\n{0}", system);
+                _logger?.Info("[LLM_AI] === USER PROMPT (chat) ===\n{0}", userTask ?? string.Empty);
+            }
+
+            var messages = new List<LlmClient.ChatMessage>
+            {
+                new LlmClient.ChatMessage { Role = "system", Content = system }
+            };
+            int replayed = 0;
+            if (priorTurns != null)
+            {
+                // Borné : on ne rejoue que les derniers tours (le client borne
+                // aussi, mais on ne fait pas confiance au réseau).
+                int start = Math.Max(0, priorTurns.Count - MaxHistoryTurns);
+                for (int i = start; i < priorTurns.Count; i++)
+                {
+                    var m = priorTurns[i];
+                    // Seuls les rôles user/assistant sont rejoués : on n'accepte
+                    // jamais un « system » injecté par le client (le system
+                    // prompt est construit serveur-side, une seule fois).
+                    if (m == null || string.IsNullOrWhiteSpace(m.Content)) continue;
+                    if (!string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase)) continue;
+                    messages.Add(new LlmClient.ChatMessage { Role = m.Role, Content = m.Content });
+                    replayed++;
+                }
+            }
+            if (replayed > 0)
+                _logger?.Info("[LLM_AI] [CHAT] {0} tour(s) d'historique rejoué(s).", replayed);
+
+            messages.Add(new LlmClient.ChatMessage { Role = "user", Content = userTask ?? string.Empty });
+            var (reply, _) = await RunLoopAsync(messages, tools, ct).ConfigureAwait(false);
+            return reply;
+        }
+
+        /// <summary>
+        /// Boucle agent partagée par <see cref="RunAsync"/> (mono-tour) et
+        /// <see cref="RunChatAsync"/> (multi-tours) : appelle le LLM, exécute
+        /// les tableaux JSON d'appels d'outils et réinjecte les résultats,
+        /// jusqu'à la réponse finale (Markdown) ou la limite d'itérations.
+        /// <paramref name="messages"/> doit déjà être semé (system + éventuel
+        /// historique + tour user courant) ; la boucle y append ses propres
+        /// tours assistant/réinjections d'outils.
+        /// </summary>
+        private async Task<(string reply, List<(string tool, string result)> toolResults)> RunLoopAsync(
+            List<LlmClient.ChatMessage> messages, IReadOnlyList<ILlmTool> tools, CancellationToken ct)
+        {
+            var byName = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
+            var toolResults = new List<(string tool, string result)>();
 
             for (int iter = 0; iter < MaxIterations; iter++)
             {
@@ -129,12 +209,20 @@ namespace LLM_AI
                         _logger?.Warn("[LLM_AI] Itération {0} — tableau d'appels d'outils malformé ({1}). Demande de renvoi.",
                             iter, parsed.Error);
                         messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
+                        // Message de réparation : le format de sortie final dépend du
+                        // mode. En mode recommandation (_formatSection == null), on
+                        // réclame le tableau JSON de recos historique ; en mode sans
+                        // format (audit, chat — _formatSection == "") on réclame du
+                        // Markdown, cohérent avec le system prompt correspondant.
+                        string finalFormatHint = _formatSection == null
+                            ? "Si tu as terminé, réponds avec le tableau JSON des recommandations " +
+                              "(champs title, kind, reason, priority, channel, start)."
+                            : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.";
                         messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                             "Ton tableau d'appels d'outils est malformé (JSON invalide). " +
                             "Renvoie UNIQUEMENT un tableau JSON d'appels d'outils bien formé, " +
                             "ex. [{\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}], " +
-                            "sans texte autour ni backticks. Si tu as terminé, réponds avec le " +
-                            "tableau JSON des recommandations (champs title, kind, reason, priority, channel, start)." });
+                            "sans texte autour ni backticks. " + finalFormatHint });
                         continue;
                     }
                     return (reply, toolResults); // réponse finale (Markdown ou tableau de recos)

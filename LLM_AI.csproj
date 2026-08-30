@@ -30,6 +30,16 @@
       <HintPath>libs/MediaBrowser.Controller.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- SkiaSharp : embarqué dans tout serveur Emby (Emby.Drawing.Skia l'utilise
+         pour le redimensionnement des images ; la lib native est déjà chargée
+         dans le processus hôte). Référence de compilation uniquement — au
+         runtime, le plugin se lie à l'assembly fourni par l'hôte (même mécanisme
+         que les DLL MediaBrowser.* ci-dessus). Sert au dessin du badge « AI »
+         (AiBadgeEnhancer) — pas de dépendance externe à déployer. -->
+    <Reference Include="SkiaSharp">
+      <HintPath>libs/SkiaSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

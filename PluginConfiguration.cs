@@ -490,6 +490,61 @@ namespace LLM_AI
         /// </summary>
         public bool AutoProgram { get; set; } = false;
 
+        // ------------------------------------------------------------------
+        //  Badge « AI » sur les images EPG (AiBadgeEnhancer : overlay au moment
+        //  du service, jamais de mutation de l'artwork stocké). Les suggestions
+        //  d'enregistrement de la tâche planifiée (record bucket) ressortent
+        //  avec une pastille verte + icône étincelle dans le guide natif, sur
+        //  tous les clients — multilingue par design (icône sans texte).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Active le badge « AI » (pastille verte + icône étincelle, sans
+        /// texte) sur l'image <c>Primary</c> des programmes EPG suggérés à
+        /// enregistrer par la tâche planifiée. Implémenté par
+        /// <c>AiBadgeEnhancer</c> (pipeline <c>IImageEnhancer</c> d'Emby) :
+        /// <b>overlay au moment du service</b> — l'artwork stocké n'est jamais
+        /// modifié, donc l'enregistrement importé garde l'image d'origine (le
+        /// badge « disparaît » naturellement une fois l'émission enregistrée)
+        /// et un refresh EPG est sans effet. Défaut <c>true</c> (non destructif).
+        /// </summary>
+        public bool AiBadgeEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Active le badge « déjà possédé » (pastille jaune, sans icône) sur
+        /// l'image <c>Primary</c> des programmes EPG dont l'émission figure
+        /// déjà dans la bibliothèque (série par <c>SeriesName</c>, film par
+        /// <c>Name</c> — même rapprochement par nom normalisé que l'exclusion
+        /// biblio des outils <c>epg_series</c>/<c>epg_movies</c> :
+        /// <c>GetEmbyInfoTool.Norm</c>). L'usager sait ainsi dans le guide
+        /// qu'il n'a pas intérêt à enregistrer ce programme. Même mécanisme
+        /// que <see cref="AiBadgeEnabled"/> (overlay au service, artwork
+        /// jamais modifié), clé de cache distincte (transition AI → possédé
+        /// régénérée). Défaut <c>true</c> (non destructif).
+        /// <para>Coût maîtrisé : l'ensemble des noms possédés est reconstruit
+        /// au plus toutes les 10 minutes (2 requêtes library), jamais par
+        /// demande d'image. NB — granularité « émission » : le badge jaune
+        /// suit le <b>nom</b> de série/film, donc une <b>nouvelle saison</b>
+        /// d'une série possédée porte aussi le jaune (c'est le même nom) ;
+        /// le badge vert suit le record bucket (même filtre que .strm/
+        /// AutoProgrammer, qui excluent le possédé via <c>library_id</c>) —
+        /// les deux filtres restent cohérents entre eux.</para>
+        /// </summary>
+        public bool AiOwnedBadgeEnabled { get; set; } = true;
+
+        /// <summary>
+        /// <see cref="BaseItem.InternalId"/> (long) des programmes EPG
+        /// porteurs du badge « AI » — persistance <b>plugin-side</b> (pas
+        /// éditée dans la page de config, carry-forward JS comme
+        /// <see cref="StrmSecret"/>). Réécrite à chaque run de la tâche
+        /// planifiée (rapprochement « tout remplacer » : les suggestions de la
+        /// veille ne badgent plus) ; rechargée au démarrage du plugin
+        /// (<c>Plugin</c> ctor → <c>AiBadgeRegistry.LoadFrom</c>). Les entrées
+        /// périmées (<c>EndDate</c> passé) sont ignorées au moment du service
+        /// (<c>AiBadgeEnhancer.Supports</c>).
+        /// </summary>
+        public List<long> AiBadgeProgramIds { get; set; } = new List<long>();
+
         /// <summary>
         /// Active le popup (toast) au login + la notification cloche persistante
         /// qui signale ce soir ce que l'usager peut regarder (watch bucket :
@@ -671,5 +726,25 @@ namespace LLM_AI
         /// </list>
         /// </summary>
         public string AuditMode { get; set; } = "single";
+
+        // ------------------------------------------------------------------
+        //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat, section de la
+        //  page de config). Réutilise les backends LLM (priorités usager) et
+        //  TOUS les outils existants (recommandation + system_audit) : zéro
+        //  nouvel outil. Historique maintenu côté page (stateless serveur) ;
+        //  le system prompt (doc outils + directives RAG) est construit
+        //  serveur-side une seule fois par conversation.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Active l'endpoint de chat <c>POST /Plugins/LLMAI/Chat</c> et la
+        /// section « Chat » de la page de config. <c>false</c> = l'endpoint
+        /// renvoie une réponse désactivée (pas de run LLM). Défaut
+        /// <c>true</c> (feature non destructive, opt-out). Le chat reste
+        /// réservé aux administrateurs (vérifié côté endpoint) : il expose
+        /// l'état du serveur via <c>system_audit</c> — la remédiation y reste
+        /// gated par <see cref="AuditRemediationEnabled"/>.
+        /// </summary>
+        public bool ChatEnabled { get; set; } = true;
     }
 }

@@ -52,9 +52,9 @@ namespace LLM_AI
     /// <see cref="ICollectionManager.AddToCollection"/> (ajoute par
     /// <c>InternalId</c> long) et <see cref="ICollectionManager.RemoveFromCollection"/>
     /// (retire par <c>InternalId</c> long — n'efface jamais l'item référencé).
-    /// Les ids du watch bucket sont des Guid (chaînes) : résolus en
-    /// <see cref="BaseItem"/> via <see cref="ILibraryManager.GetItemById(Guid)"/>,
-    /// puis en <see cref="BaseItem.InternalId"/> (long) pour le gestionnaire de
+    /// Les ids du watch bucket sont des chaînes (InternalId, ou Guid hérité) :
+    /// résolus en <see cref="BaseItem"/> via <see cref="ItemIdResolver"/>, puis
+    /// en <see cref="BaseItem.InternalId"/> (long) pour le gestionnaire de
     /// collections. Les membres courants de la collection sont lus via
     /// <see cref="Folder.GetChildrenIds"/> (les membres d'un <see cref="BoxSet"/>
     /// sont ses enfants).</para>
@@ -76,12 +76,13 @@ namespace LLM_AI
 
         /// <summary>
         /// Garantit que la collection <see cref="CollectionName"/> existe et
-        /// contient exactement les items Emby dont l'id (Guid, chaîne) figure
-        /// dans <paramref name="itemGuidIds"/>. Crée la collection (avec ses
+        /// contient exactement les items Emby dont l'id (chaîne, cf.
+        /// <see cref="ItemIdResolver"/>) figure dans
+        /// <paramref name="itemGuidIds"/>. Crée la collection (avec ses
         /// membres initiaux) si elle n'existe pas ; sinon rapproche l'appartenance
-        /// par « tout retirer puis tout réajouter ». Best-effort : un id non-Guid,
-        /// un item introuvable ou un échec d'API collection sont logués et
-        /// n'interrompent pas le reste — la collection reste exploitable.
+        /// par « tout retirer puis tout réajouter ». Best-effort : un id non
+        /// résolvable, un item introuvable ou un échec d'API collection sont
+        /// logués et n'interrompent pas le reste — la collection reste exploitable.
         /// </summary>
         internal static async Task EnsureAsync(
             ICollectionManager collections, ILibraryManager library, ILogger logger,
@@ -90,20 +91,20 @@ namespace LLM_AI
             if (collections == null || library == null || itemGuidIds == null)
                 return;
 
-            // 1) Résoudre les ids Guid du watch bucket -> InternalId (long) du
-            //    gestionnaire de collections. Best-effort par id (déjà étiqueté
-            //    par AiGenreTagger avec la même logique de résolution).
+            // 1) Résoudre les ids du watch bucket (InternalId, ou Guid hérité —
+            //    cf. ItemIdResolver) -> InternalId (long) du gestionnaire de
+            //    collections. Best-effort par id (déjà étiqueté par AiGenreTagger
+            //    avec la même logique de résolution).
             var freshLongIds = new List<long>();
             int skipped = 0;
             foreach (var raw in itemGuidIds)
             {
                 ct.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(raw)) continue;
-                if (!Guid.TryParse(raw, out var guid)) { skipped++; continue; }
 
                 BaseItem item;
-                try { item = library.GetItemById(guid); }
-                catch (Exception ex) { logger?.Warn("[LLM_AI] Collection : GetItemById({0}) échoué : {1}", raw, ex.Message); continue; }
+                try { item = ItemIdResolver.Resolve(library, raw); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Collection : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
                 if (item == null) { skipped++; continue; }
 
                 freshLongIds.Add(item.InternalId);

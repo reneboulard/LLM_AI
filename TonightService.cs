@@ -344,9 +344,13 @@ namespace LLM_AI
         ///   Regarder en direct). Sinon on injecte <c>end</c> (date de fin
         ///   autoritaire). Id absent du snapshot → drop (EPG expiré ou id
         ///   halluciné).</item>
-        /// <item><c>source="recording"/"library"</c> : l'id (Guid Emby) doit
-        ///   résoudre un BaseItem via <see cref="ILibraryManager.GetItemList"/>.
-        ///   Introuvable ou non-Guid → drop (item supprimé / id halluciné).</item>
+        /// <item><c>source="recording"/"library"</c> : l'id (InternalId Emby,
+        ///   la forme DTO/REST — cf. <see cref="ItemIdResolver"/>) doit résoudre
+        ///   un BaseItem via <see cref="ILibraryManager.GetItemList"/>. Un id
+        ///   Guid hérité qui résout via <c>GetItemById</c> est normalisé en
+        ///   InternalId avant le check (le Guid n'est pas consommable côté
+        ///   REST/UI). Introuvable sous aucune forme → drop (item supprimé /
+        ///   id halluciné).</item>
         /// <item>source absente/autre : gardé tel quel (recos hors flux « ce
         ///   soir », non concernées par la validation EPG).</item>
         /// </list>
@@ -402,6 +406,25 @@ namespace LLM_AI
                     epg = null; // fail-open ciblé : on garde les live telles quelles
                 }
 
+                // Normalisation préalable des ids Guid hérités/déformés : un
+                // reco dont l'id n'est pas un long mais résout quand même via
+                // GetItemById(Guid) est réécrit en InternalId — le Guid n'est
+                // pas consommable par la couche REST/UI (bouton « Regarder »)
+                // ni par le batch ItemIds ci-dessous. Les ids non résolvables
+                // restent tels quels : ils seront drop plus bas.
+                foreach (var node in arr)
+                {
+                    if (!(node is JsonObject obj)) continue;
+                    string src = ObjStr(obj, "source");
+                    if (!string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(src, "library", StringComparison.OrdinalIgnoreCase)) continue;
+                    string id = ObjStr(obj, "id");
+                    if (string.IsNullOrEmpty(id) || long.TryParse(id, out _)) continue;
+                    var resolved = ItemIdResolver.Resolve(_library, id);
+                    if (resolved != null)
+                        obj["id"] = resolved.InternalId.ToString();
+                }
+
                 // Lookup bibliothèque (batché) pour source="recording"/"library".
                 var libIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var node in arr)
@@ -416,9 +439,10 @@ namespace LLM_AI
                 var libFound = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 if (libIds.Count > 0)
                 {
-                    // BaseItem.Id est un long sous Emby (et InternalItemsQuery.
-                    // ItemIds est long[]). Les id des recos recording/library
-                    // sont des longs sérialisés en chaîne.
+                    // Les id des recos recording/library sont des InternalId
+                    // (long) sérialisés en chaîne — la forme DTO/REST d'Emby
+                    // (BaseItem.Id, lui, est un Guid NON consommable par la
+                    // couche REST ; cf. ItemIdResolver).
                     var longIds = new List<long>(libIds.Count);
                     foreach (var s in libIds)
                         if (long.TryParse(s, out var lid)) longIds.Add(lid);
@@ -433,7 +457,7 @@ namespace LLM_AI
                             };
                             var items = _library.GetItemList(lq) ?? Array.Empty<BaseItem>();
                             foreach (var it in items)
-                                if (it != null) libFound.Add(it.Id.ToString());
+                                if (it != null) libFound.Add(it.InternalId.ToString());
                         }
                         catch (Exception ex)
                         {
@@ -752,8 +776,10 @@ namespace LLM_AI
         /// injectée dans le prompt comme source de complément : le LLM ne l'utilise
         /// QUE si l'EPG du soir + les enregistrements non visionnés produisent
         /// moins de <see cref="PluginConfiguration.TonightMinRecommendations"/>
-        /// recommandations. Chaque entrée porte l'id Emby (Guid) pour
-        /// <c>source="library"</c> + bouton « Regarder » (lecture bibliothèque).
+        /// recommandations. Chaque entrée porte l'id Emby (InternalId, la seule
+        /// forme comprise par la couche REST/UI — voir
+        /// <see cref="ItemIdResolver"/>) pour <c>source="library"</c> + bouton
+        /// « Regarder » (lecture bibliothèque).
         /// </summary>
         private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot)
         {
@@ -794,7 +820,7 @@ namespace LLM_AI
                     int? year = it.ProductionYear;
                     var genres = it.Genres ?? Array.Empty<string>();
 
-                    var line = new StringBuilder($"- id={it.Id} | title={title} | kind={kind}");
+                    var line = new StringBuilder($"- id={it.InternalId} | title={title} | kind={kind}");
                     if (year.HasValue) line.Append($" | year={year.Value}");
                     if (rating.HasValue) line.Append($" | rating={rating.Value:0.0}");
                     if (genres.Length > 0) line.Append($" | genres=[{string.Join(", ", genres)}]");

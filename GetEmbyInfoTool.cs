@@ -46,7 +46,7 @@ namespace LLM_AI
   ""type"": ""(library) movie | series | episode | audio | album | book — filtre IncludeItemTypes"",
   ""query"": ""(global_search) terme de recherche"",
   ""name"": ""(person) nom de personne à chercher"",
-  ""id"": ""(item_details / item_persons) identifiant Guid de l'item"",
+  ""id"": ""(item_details / item_persons) identifiant de l'item (id renvoyé par library/global_search)"",
   ""genre"": ""(library) filtre par genre"",
   ""sort_by"": ""(library) recent | year | rating | name (défaut: recent)"",
   ""min_rating"": ""(library) note communautaire minimale"",
@@ -173,14 +173,14 @@ namespace LLM_AI
 
             var proj = page.Select(i => new
             {
-                id = i.Id.ToString(),
+                id = i.InternalId.ToString(),
                 name = i.Name,
                 type = TypeLabel(i),
                 year = i.ProductionYear,
                 rating = i.CommunityRating,
                 genres = i.Genres,
                 overview = Truncate(i.Overview, 150),
-                image_url = ImageUrl(i.Id)
+                image_url = ImageUrl(i.InternalId)
             });
 
             return JsonSerializer.Serialize(new { total = items.Length, results = proj }, s_json);
@@ -208,12 +208,12 @@ namespace LLM_AI
 
             var proj = items.Select(i => new
             {
-                id = i.Id.ToString(),
+                id = i.InternalId.ToString(),
                 name = i.Name,
                 type = TypeLabel(i),
                 year = i.ProductionYear,
                 overview = Truncate(i.Overview, 100),
-                image_url = ImageUrl(i.Id)
+                image_url = ImageUrl(i.InternalId)
             });
 
             return JsonSerializer.Serialize(new { total = items.Length, results = proj }, s_json);
@@ -222,16 +222,18 @@ namespace LLM_AI
         private string ItemDetails(JsonElement args)
         {
             string idStr = OptString(args, "id");
-            if (string.IsNullOrWhiteSpace(idStr) || !Guid.TryParse(idStr, out var guid))
-                return Err("paramètre 'id' (Guid) requis pour item_details");
+            if (string.IsNullOrWhiteSpace(idStr))
+                return Err("paramètre 'id' requis pour item_details");
 
-            var item = _library.GetItemById(guid);
+            // Id interne (InternalId, forme renvoyée par library/global_search)
+            // ou Guid hérité — cf. ItemIdResolver.
+            var item = ItemIdResolver.Resolve(_library, idStr);
             if (item == null)
                 return Err($"item introuvable : {idStr}");
 
             var result = new
             {
-                id = item.Id.ToString(),
+                id = item.InternalId.ToString(),
                 name = item.Name,
                 type = TypeLabel(item),
                 year = item.ProductionYear,
@@ -241,7 +243,7 @@ namespace LLM_AI
                 official_rating = item.OfficialRating,
                 path = item.Path,
                 date_created = item.DateCreated,
-                image_url = ImageUrl(item.Id)
+                image_url = ImageUrl(item.InternalId)
             };
             return JsonSerializer.Serialize(result, s_json);
         }
@@ -249,10 +251,11 @@ namespace LLM_AI
         private string ItemPersons(JsonElement args)
         {
             string idStr = OptString(args, "id");
-            if (string.IsNullOrWhiteSpace(idStr) || !Guid.TryParse(idStr, out var guid))
-                return Err("paramètre 'id' (Guid) requis pour item_persons");
+            if (string.IsNullOrWhiteSpace(idStr))
+                return Err("paramètre 'id' requis pour item_persons");
 
-            var item = _library.GetItemById(guid);
+            // Id interne (InternalId) ou Guid hérité — cf. ItemIdResolver.
+            var item = ItemIdResolver.Resolve(_library, idStr);
             if (item == null)
                 return Err($"item introuvable : {idStr}");
 
@@ -287,12 +290,14 @@ namespace LLM_AI
                 var counts = t.Item2;
                 return new
                 {
-                    // Item1 est un BaseItem : son identifiant est Id (Guid).
-                    id = person?.Id.ToString(),
+                    // Item1 est un BaseItem : on émet son InternalId (long) —
+                    // la seule forme consommable par la couche REST/UI (son Id
+                    // Guid est rejeté par /emby/Items/{id}/...).
+                    id = person?.InternalId.ToString(),
                     name = person?.Name,
                     movie_count = counts?.MovieCount,
                     series_count = counts?.SeriesCount,
-                    image_url = person != null ? ImageUrl(person.Id) : null
+                    image_url = person != null ? ImageUrl(person.InternalId) : null
                 };
             });
             return JsonSerializer.Serialize(new { total = res?.TotalRecordCount ?? tuples.Length, results = proj }, s_json);
@@ -1255,10 +1260,10 @@ namespace LLM_AI
             return n.ToLowerInvariant();
         }
 
-        private string ImageUrl(Guid id)
+        private string ImageUrl(long internalId)
         {
             var base_ = EmbyUrl;
-            return string.IsNullOrEmpty(base_) ? null : base_.TrimEnd('/') + "/Items/" + id + "/Images/Primary";
+            return string.IsNullOrEmpty(base_) ? null : base_.TrimEnd('/') + "/Items/" + internalId + "/Images/Primary";
         }
 
         private static string Err(string msg) => JsonSerializer.Serialize(new { error = msg }, s_json);

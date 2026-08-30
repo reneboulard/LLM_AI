@@ -401,6 +401,9 @@ define(["loading"], function (loading) {
         var tmr = parseInt(cfg.TonightMinRecommendations, 10);
         view.querySelector("#numTonightMinRec").value = isNaN(tmr) ? 3 : tmr;
         view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
+        // Badge « AI » (opt-out, non destructif — défaut coché).
+        view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
+        view.querySelector("#chkAiOwnedBadgeEnabled").checked = cfg.AiOwnedBadgeEnabled !== false;
         view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
         var lps = parseInt(cfg.LoginPopupSeconds, 10);
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
@@ -417,6 +420,8 @@ define(["loading"], function (loading) {
         // Mode d'exécution de l'audit : single (boucle agent) | deterministic (rassemblement C# + synthèse).
         view.querySelector("#selAuditMode").value = cfg.AuditMode === "deterministic" ? "deterministic" : "single";
         view.querySelector("#txtAuditFocus").value = "";
+        // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
+        view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -461,6 +466,12 @@ define(["loading"], function (loading) {
             TonightRecordingsDays: parseInt(view.querySelector("#numTonightRecDays").value, 10) || 7,
             TonightMinRecommendations: parseInt(view.querySelector("#numTonightMinRec").value, 10) || 3,
             AutoProgram: view.querySelector("#chkAutoProgram").checked,
+            AiBadgeEnabled: view.querySelector("#chkAiBadgeEnabled").checked,
+            AiOwnedBadgeEnabled: view.querySelector("#chkAiOwnedBadgeEnabled").checked,
+            // Carry-forward : AiBadgeProgramIds est réécrit côté serveur par la
+            // tâche planifiée (registre du badge) — on le renvoie tel quel pour
+            // ne pas l'écraser (même contrainte que StrmSecret).
+            AiBadgeProgramIds: (loadedCfg && loadedCfg.AiBadgeProgramIds) || [],
             LoginPopup: view.querySelector("#chkLoginPopup").checked,
             LoginPopupSeconds: parseInt(view.querySelector("#numLoginPopupSeconds").value, 10) || 8,
             StrmLibraryEnabled: view.querySelector("#chkStrmLibraryEnabled").checked,
@@ -483,7 +494,9 @@ define(["loading"], function (loading) {
             AuditEnabled: view.querySelector("#chkAuditEnabled").checked,
             AuditRemediationEnabled: view.querySelector("#chkAuditRemediationEnabled").checked,
             AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
-            AuditPrompt: (loadedCfg && loadedCfg.AuditPrompt) || ""
+            AuditPrompt: (loadedCfg && loadedCfg.AuditPrompt) || "",
+            // Chat interactif — simple booléen, pas de carry-forward spécial.
+            ChatEnabled: view.querySelector("#chkChatEnabled").checked
         };
     }
 
@@ -597,6 +610,134 @@ define(["loading"], function (loading) {
                                 '</div>';
                         }
                     });
+                });
+            }
+
+            // Chat interactif : POST /Plugins/LLMAI/Chat avec le message
+            // courant + l'historique complet de la conversation. Le serveur
+            // est stateless — l'historique vit dans cette closure (page) et
+            // n'est jamais persisté ; seuls les tours user/assistant (textes
+            // finaux) sont stockés, pas les appels d'outils intermédiaires.
+            // Le system prompt (doc outils + directives) est construit
+            // serveur-side, une seule fois par conversation — le client ne
+            // le stocke ni ne le renvoie.
+            var chatHistory = [];
+            var chatBusy = false;
+
+            var chatLog = view.querySelector("#chatLog");
+            var chatInput = view.querySelector("#txtChatInput");
+            var chatSendBtn = view.querySelector("#btnSendChat");
+            var chatClearBtn = view.querySelector("#btnClearChat");
+
+            function chatTurnHtml(role, bodyHtml) {
+                var who = i18n.t(role === "user" ? "cfg.chat.you" : "cfg.chat.assistant");
+                return '<div class="chatTurn">' +
+                    '<div class="chatWho">' + esc(who) + '</div>' +
+                    '<div class="' + (role === "user" ? "chatMsg" : "chatMsg chatMarkdown") + '">' +
+                    bodyHtml + '</div></div>';
+            }
+
+            function appendChatTurn(role, bodyHtml) {
+                if (!chatLog) return;
+                // Retire l'indice initial (« posez une question… ») au 1er tour.
+                // :scope > : l'indice est un enfant direct de #chatLog — les
+                // bulles « réfléchit… » (.chatHint dans un .chatTurn) ne sont
+                // jamais touchées ici (elles vivent dans un tour complet).
+                var hint = chatLog.querySelector(":scope > .chatHint");
+                if (hint) hint.parentNode.removeChild(hint);
+                chatLog.insertAdjacentHTML("beforeend", chatTurnHtml(role, bodyHtml));
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+
+            // Retire la bulle « réfléchit… » (toujours le dernier enfant de
+            // #chatLog) avant d'afficher le résultat réel.
+            function removePendingTurn() {
+                if (!chatLog) return;
+                var pending = chatLog.querySelector(".chatTurn:last-child");
+                if (pending) pending.parentNode.removeChild(pending);
+            }
+
+            function sendChat() {
+                if (chatBusy || !chatInput || !chatSendBtn) return;
+                var msg = (chatInput.value || "").trim();
+                if (!msg) return;
+
+                chatBusy = true;
+                chatSendBtn.disabled = true;
+                chatInput.value = "";
+                appendChatTurn("user", "<p>" + esc(msg) + "</p>");
+                chatHistory.push({ role: "user", content: msg });
+                appendChatTurn("assistant",
+                    '<p class="chatHint">' + esc(i18n.t("cfg.chat.running")) + '</p>');
+
+                // Borné côté client aussi (le serveur borne de nouveau) :
+                // on ne re-poste que les derniers tours.
+                var payload = {
+                    Message: msg,
+                    History: chatHistory.slice(0, -1).slice(-40)
+                };
+
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/Chat"),
+                    type: "POST",
+                    data: JSON.stringify(payload),
+                    contentType: "application/json"
+                }).then(function (resp) {
+                    return resp.json();
+                }).then(function (data) {
+                    chatBusy = false;
+                    chatSendBtn.disabled = false;
+                    if (!data || data.Enabled === false) {
+                        // Désactivé côté serveur : on retire le tour en attente
+                        // et le message de l'historique pour permettre un retry.
+                        chatHistory.pop();
+                        removePendingTurn();
+                        appendChatTurn("assistant",
+                            '<p class="chatHint">' + esc(i18n.t("cfg.chat.disabled")) + '</p>');
+                        if (chatInput) chatInput.value = msg;
+                        return;
+                    }
+                    if (data.Error) {
+                        chatHistory.pop();
+                        removePendingTurn();
+                        appendChatTurn("assistant",
+                            '<p class="chatHint">' + esc(data.Error) + '</p>');
+                        if (chatInput) chatInput.value = msg;
+                        return;
+                    }
+                    // Remplace le « réfléchit… » par la réponse réelle.
+                    removePendingTurn();
+                    var reply = (data.Reply || "").trim();
+                    appendChatTurn("assistant", renderMarkdown(reply));
+                    chatHistory.push({ role: "assistant", content: reply });
+                }, function (err) {
+                    chatBusy = false;
+                    chatSendBtn.disabled = false;
+                    chatHistory.pop();
+                    removePendingTurn();
+                    appendChatTurn("assistant",
+                        '<p class="chatHint">' + esc(i18n.t("cfg.alert.saveError",
+                            (err && err.statusText ? err.statusText : err))) + '</p>');
+                    if (chatInput) chatInput.value = msg;
+                });
+            }
+
+            if (chatSendBtn) {
+                chatSendBtn.addEventListener("click", sendChat);
+                if (chatInput) {
+                    chatInput.addEventListener("keydown", function (e) {
+                        if (e.key === "Enter") { e.preventDefault(); sendChat(); }
+                    });
+                }
+            }
+            if (chatClearBtn) {
+                chatClearBtn.addEventListener("click", function () {
+                    if (chatBusy) return;
+                    chatHistory = [];
+                    if (chatLog) {
+                        chatLog.innerHTML = '<div class="chatHint">' +
+                            esc(i18n.t("cfg.chat.hint")) + '</div>';
+                    }
                 });
             }
 

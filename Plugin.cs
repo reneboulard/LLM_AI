@@ -42,6 +42,13 @@ namespace LLM_AI
             : base(applicationPaths, xmlSerializer)
         {
             Instance = this;
+            // NOTE — ne pas toucher <see cref="Configuration"/> ici : au moment
+            // du ctor, l'hôte n'a pas encore renseigné AssemblyFilePath (posé
+            // APRÈS la construction) et ConfigurationFilePath en dépend — un
+            // accès anticipé lève ArgumentNullException et fait échouer la
+            // création du plugin (« Error creating LLM_AI.Plugin », Instance
+            // cassée pour tout le serveur). Le registre du badge se charge donc
+            // paresseusement à la première consultation (AiBadgeRegistry.EnsureLoaded).
         }
 
         /// <summary>Nom affiché du plugin dans l'interface Emby.</summary>

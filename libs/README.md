@@ -1,10 +1,12 @@
 # libs/ — Emby reference assemblies
 
 Ce dossier contient les **assemblies de référence Emby** utilisées à la compilation :
-`MediaBrowser.Model.dll`, `MediaBrowser.Common.dll`, `MediaBrowser.Controller.dll`.
+`MediaBrowser.Model.dll`, `MediaBrowser.Common.dll`, `MediaBrowser.Controller.dll`
+(+ `SkiaSharp.dll`, aussi fournie par l'hôte Emby, utilisée par `AiBadgeEnhancer`).
 
 This folder contains the **Emby reference assemblies** used at compile time:
-`MediaBrowser.Model.dll`, `MediaBrowser.Common.dll`, `MediaBrowser.Controller.dll`.
+`MediaBrowser.Model.dll`, `MediaBrowser.Common.dll`, `MediaBrowser.Controller.dll`
+(plus `SkiaSharp.dll`, also provided by the Emby host, used by `AiBadgeEnhancer`).
 
 ## Pourquoi elles sont là / Why they're here
 
@@ -42,6 +44,7 @@ Pour aligner sur une autre version d'Emby installée localement :
 cp /opt/emby-server/system/MediaBrowser.Model.dll      libs/
 cp /opt/emby-server/system/MediaBrowser.Common.dll     libs/
 cp /opt/emby-server/system/MediaBrowser.Controller.dll libs/
+cp /opt/emby-server/system/SkiaSharp.dll               libs/
 ```
 
 (Adapte le chemin `/opt/emby-server/system` selon ton installation Emby.)

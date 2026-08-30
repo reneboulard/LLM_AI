@@ -52,9 +52,10 @@ namespace LLM_AI
 
         /// <summary>
         /// Ajoute <paramref name="genre"/> à chaque item Emby dont l'id figure
-        /// dans <paramref name="itemIds"/>. Best-effort : un id non-Guid, un
-        /// item introuvable ou une erreur de persistance sont logués et n'interrompent
-        /// pas le reste. Les ids sont dédupliqués.
+        /// dans <paramref name="itemIds"/>. Best-effort : un id non résolvable
+        /// (cf. <see cref="ItemIdResolver"/>), un item introuvable ou une erreur
+        /// de persistance sont logués et n'interrompent pas le reste. Les ids
+        /// sont dédupliqués.
         /// </summary>
         internal static Task AddAsync(
             ILibraryManager library, ILogger logger,
@@ -68,11 +69,10 @@ namespace LLM_AI
             {
                 ct.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(raw)) continue;
-                if (!Guid.TryParse(raw, out var guid)) { skipped++; continue; }
 
                 BaseItem item;
-                try { item = library.GetItemById(guid); }
-                catch (Exception ex) { logger?.Warn("[LLM_AI] Genre tag : GetItemById({0}) échoué : {1}", raw, ex.Message); continue; }
+                try { item = ItemIdResolver.Resolve(library, raw); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Genre tag : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
                 if (item == null) { skipped++; continue; }
 
                 var genres = item.Genres ?? Array.Empty<string>();

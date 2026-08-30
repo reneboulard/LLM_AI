@@ -233,6 +233,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `false` — re-processes needs-review items, useful to run S3 on them once SearXNG is
     configured; on success the `needs-review` tag becomes `identified`). Config page:
     "Orphan recording identification" section.
+- **Badges IA sur les images EPG** (`AiBadgeEnhancer` + `AiBadgeRegistry`,
+  auto-découverts par le scan d'assembly d'Emby) : deux badges dessinés **au moment du
+  service** (overlay `IImageEnhancer` — l'artwork stocké n'est JAMAIS modifié, donc le
+  badge disparaît gratuitement quand l'enregistrement est importé et l'image originale
+  est préservée) :
+  - **Badge « suggestion IA »** — puce verte `#21963F` + étincelle blanche à 4 branches,
+    coin haut droit, sur les programmes du **record bucket** de la tâche nocturne
+    (registre `AiBadgeRegistry`, remplacé à chaque run, persisté `AiBadgeProgramIds` ;
+    garde `EndDate > now` → auto-expiration des suggestions passées).
+  - **Badge « déjà possédé »** — puce jaune `#FBC02D` SANS étincelle, sur les programmes
+    dont la série (`SeriesName`) ou le film (`Name`) figure dans la bibliothèque —
+    réutilise la correspondance par nom normalisé (`GetEmbyInfoTool.Norm`) de
+    l'exclusion epg_series/epg_movies, ensemble de noms caché 10 min (jamais par
+    requête). Granularité nom de show : une nouvelle saison d'une série possédée est
+    jaune aussi. Le vert gagne en cas de conflit.
+  - Clé de cache propre à chaque type de badge (les transitions d'état régénèrent
+    l'image), dessin via **SkiaSharp** livré avec Emby (référencé `libs/SkiaSharp.dll`,
+    aucun changement de déploiement), repli = copie de l'original sur toute erreur
+    (l'enhancer ne lève jamais dans le pipeline d'images).
+  Config : `AiBadgeEnabled` + `AiOwnedBadgeEnabled` (défaut `true`, opt-out), cases à
+  cocher sur la page de config (FR/EN).
+  **AI badges on EPG images** (`AiBadgeEnhancer` + `AiBadgeRegistry`, auto-discovered by
+  Emby's assembly scan): two badges drawn **serve-time** (an `IImageEnhancer` overlay —
+  stored artwork is NEVER modified, so the badge disappears for free once the recording
+  is imported and the original image is preserved):
+  - **"AI suggestion" badge** — green chip `#21963F` + white 4-point sparkle, top-right,
+    on the nightly task's **record bucket** programs (`AiBadgeRegistry`, replaced on each
+    run, persisted `AiBadgeProgramIds`; `EndDate > now` guard → past suggestions
+    self-expire).
+  - **"Already owned" badge** — yellow chip `#FBC02D` WITHOUT the sparkle, on programs
+    whose series (`SeriesName`) or movie (`Name`) exists in the library — reuses the
+    normalized name matching (`GetEmbyInfoTool.Norm`) from the epg_series/epg_movies
+    exclusion, name set cached 10 min (never per request). Show-name granularity: a new
+    season of an owned series is yellow too. Green wins on conflict.
+  - Per-badge-kind cache key (state transitions regenerate the image), drawn with
+    **SkiaSharp** bundled with Emby (referenced from `libs/SkiaSharp.dll`, zero deploy
+    changes), fallback = copy of the original on any error (the enhancer never throws
+    into the image pipeline).
+  Config: `AiBadgeEnabled` + `AiOwnedBadgeEnabled` (default `true`, opt-out), config-page
+  checkboxes (FR/EN).
+- **Chat interactif avec l'assistant IA** (`ChatApiService` +
+  `LlmAgentService.RunChatAsync` + `LlmRunner.RunChatAsync`) : conversation multi-tours
+  avec l'agent LLM directement sur la page de config (`POST /Plugins/LLMAI/Chat`,
+  admin-only). Réutilise **tous les outils existants** (guide TV, bibliothèque,
+  TMDB/TVDB, web, Showbizz, `system_audit` — la remédiation reste gated par
+  `AuditRemediationEnabled`) et les **priorités de backends LLM configurées** — aucun
+  nouvel outil, aucun changement de backend. Le serveur est stateless : la page garde
+  l'historique (tours user/assistant uniquement, bornés à 40) et le re-poste à chaque
+  tour ; le system prompt — documentation complète des outils + directives RAG — est
+  construit côté serveur, injecté **une seule fois** par conversation et jamais renvoyé
+  par le client (un « system » forgé dans le corps est ignoré). Les réponses sont du
+  Markdown brut, rendu par le mini-convertisseur existant. La boucle agent partagée
+  (`RunLoopAsync`) est inchangée pour les chemins recommandation/audit ; le message de
+  réparation JSON est désormais adapté au mode (Markdown hors recommandation).
+  Config : `ChatEnabled` (défaut `true`, opt-out).
+  **Interactive chat with the AI assistant** (`ChatApiService` +
+  `LlmAgentService.RunChatAsync` + `LlmRunner.RunChatAsync`): multi-turn conversation
+  with the LLM agent right on the config page (`POST /Plugins/LLMAI/Chat`, admin-only).
+  Reuses **all existing tools** (TV guide, library, TMDB/TVDB, web, Showbizz,
+  `system_audit` — remediation stays gated by `AuditRemediationEnabled`) and the
+  **configured LLM backend priorities** — no new tool, no backend change. The server is
+  stateless: the page keeps the history (user/assistant turns only, capped at 40) and
+  re-posts it each turn; the system prompt — full tool documentation + RAG directives —
+  is built server-side, injected **once** per conversation, and never sent back by the
+  client (a forged "system" in the body is ignored). Replies are raw Markdown, rendered
+  by the existing mini converter. The shared agent loop (`RunLoopAsync`) is unchanged
+  for the recommendation/audit paths; the JSON repair message is now mode-aware
+  (Markdown outside recommendations).
+  Config: `ChatEnabled` (default `true`, opt-out).
 
 ### Modifié / Changed
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la
@@ -463,6 +532,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   "COUVERT et ATTENDU — do not flag as a critical defect", and the audit prompts (single +
   deterministic) add a "REPLI GetSystemInfo (À CONNAÎTRE)" section instructing the LLM to
   treat it at most as a ✅/ℹ️ info, never as "High Priority".
+- **Id Emby : Guid vs InternalId** (corrigé 2026-08-30, toutes les validations Tonight
+  échouaient) : `BaseItem.Id` est un Guid que la couche REST/UI d'Emby refuse
+  (`/emby/Items/{guid}/…` → 400/500 ; les ids acceptés sont les `InternalId` longs).
+  Le plugin émettait des Guids vers l'LLM et l'UI dans plusieurs chemins — les recos
+  issues du pool de repli bibliothèque ne passaient donc jamais la validation Tonight
+  (« items bibli. introuvables : 3 », toutes supprimées, sauf le run où l'LLM omettait
+  le champ `source`). Standardisation sur les chaînes **InternalId** à toutes les
+  bornes LLM/UI + nouveau `ItemIdResolver.Resolve` (bilingue : accepte les longs ET
+  les Guids historiques que le LLM peut échoer, jamais l'inverse). Touchés :
+  `TonightService` (pool de repli `BuildLibraryFallbackPool`, validation
+  `ValidateAndFilter` + normalisation pré-passe des ids résolubles), `LlmRunner`
+  (`FindLibraryItemId` → enrichissement `library_id`/`image_url`), `GetEmbyInfoTool`
+  (projections library/search/person/item + `ItemDetails`/`ItemPersons` bilingues),
+  `AiGenreTagger`, `AiTonightCollectionManager`.
+  **Emby ids: Guid vs InternalId** (fixed 2026-08-30, every Tonight validation was
+  failing): `BaseItem.Id` is a Guid that Emby's REST/UI layer rejects
+  (`/emby/Items/{guid}/…` → 400/500; accepted ids are the long `InternalId`s). The
+  plugin emitted Guids to the LLM and UI in several paths — so library-fallback-pool
+  recos never passed Tonight validation ("items bibli. introuvables : 3", all dropped,
+  except runs where the LLM omitted the `source` field). Standardized on **InternalId**
+  strings at all LLM/UI boundaries + new `ItemIdResolver.Resolve` (bilingual: accepts
+  longs AND legacy Guids the LLM may echo back, never the reverse). Touched:
+  `TonightService` (`BuildLibraryFallbackPool` fallback pool, `ValidateAndFilter`
+  validation + pre-pass normalizing resolvable ids), `LlmRunner` (`FindLibraryItemId` →
+  `library_id`/`image_url` enrichment), `GetEmbyInfoTool` (library/search/person/item
+  projections + bilingual `ItemDetails`/`ItemPersons`), `AiGenreTagger`,
+  `AiTonightCollectionManager`.
 
 ---
 

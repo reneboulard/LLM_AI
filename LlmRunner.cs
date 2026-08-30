@@ -423,6 +423,116 @@ namespace LLM_AI
             }
         }
 
+        // ------------------------------------------------------------------
+        //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat). Comme pour
+        //  l'audit, path séparé de la recommandation : mêmes backends LLM
+        //  (ResolveBackends réutilisé, priorités configurables par l'usager),
+        //  TOUS les outils déjà disponibles (BuildTools + system_audit —
+        //  zéro nouvel outil), system prompt d'assistant général, et réponse
+        //  brute en Markdown (pas d'extraction JSON ni d'enrichissement de
+        //  recommandations).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Rôle du LLM en mode chat interactif : assistant général de
+        /// l'administrateur, en conversation multi-tours. Contrairement à
+        /// l'intro par défaut (« en lecture seule »), le chat expose AUSSI
+        /// <c>system_audit</c> (dont la remédiation reste gated par
+        /// <see cref="PluginConfiguration.AuditRemediationEnabled"/> dans
+        /// l'outil lui-même) — le chat est réservé aux administrateurs.
+        /// </summary>
+        internal const string CHAT_ROLE_INTRO =
+            "Tu es un assistant Emby polyvalent, en conversation interactive avec " +
+            "l'administrateur du serveur. Tu disposes d'outils qui interrogent " +
+            "directement le serveur Emby in-process (pas d'API REST, pas de token) : " +
+            "guide TV (epg_series/epg_movies), bibliothèque et recherche, TMDB/TVDB, " +
+            "recherche web, Showbizz, et l'audit système system_audit (sondes de " +
+            "santé ; remédiation réservée aux administrateurs, possible seulement " +
+            "si explicitement activée en configuration). " +
+            "Utilise les outils pour répondre avec des données réelles du serveur " +
+            "plutôt que de spéculer.";
+
+        /// <summary>
+        /// Workflow du chat : comment gérer l'historique rejoué, quand appeler
+        /// les outils, quel niveau de détail produire.
+        /// </summary>
+        internal const string CHAT_WORKFLOW =
+            "### CONVERSATION INTERACTIVE\n" +
+            "Les tours précédents de la conversation (messages de l'usager et tes " +
+            "réponses finales) te sont fournis avant le nouveau message : tiens-en " +
+            "compte, ne redemande pas une information que l'usager a déjà donnée, " +
+            "et approfondis plutôt que de repartir de zéro quand il demande « plus " +
+            "de détails ».\n" +
+            "1. Pour chaque nouveau message, appelle les outils si l'information " +
+            "utile est disponible (EPG, bibliothèque, métadonnées, web, santé du " +
+            "serveur) — plusieurs appels dans le même tableau si nécessaire.\n" +
+            "2. Quand tu as la réponse, réponds en Markdown concis avec les " +
+            "valeurs réelles (titres, chaînes, horaires, chiffres) issues des " +
+            "outils.\n" +
+            "3. Si l'usager demande une action que tes outils ne permettent pas, " +
+            "explique comment la réaliser dans l'UI Emby.";
+
+        /// <summary>
+        /// Exécute un tour de chat interactif : résout les backends (priorités
+        /// LLM configurées par l'usager — aucun changement pour le chat),
+        /// construit <b>tous</b> les outils déjà disponibles (recommandation
+        /// via <see cref="BuildTools"/> + audit santé via
+        /// <see cref="BuildAuditTools"/> — aucun outil nouveau), puis délègue
+        /// à <see cref="LlmAgentService.RunChatAsync"/> qui rejoue
+        /// <paramref name="history"/> entre le system prompt (documentation
+        /// complète des outils + directives RAG, construit une seule fois
+        /// serveur-side) et le nouveau message. Retourne la réponse brute
+        /// (Markdown). Les services d'audit sont passés par l'appelant
+        /// (endpoint DI), comme sur le path audit.
+        /// <see cref="OperationCanceledException"/> est propagée.
+        /// </summary>
+        public async System.Threading.Tasks.Task<string> RunChatAsync(
+            PluginConfiguration cfg, string label,
+            IReadOnlyList<LlmClient.ChatMessage> history, string userMessage,
+            ISessionManager sessions, ITaskManager tasks, INotificationManager notifications,
+            System.Threading.CancellationToken ct)
+        {
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends.Count == 0)
+                {
+                    _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — chat ignoré.", label);
+                    return "Aucun backend LLM configuré/activé — impossible de discuter.";
+                }
+
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                // Agent chat : intro + workflow dédiés ; formatSection=""
+                // supprime le bloc « FORMAT DES RECOMMANDATIONS » (le chat
+                // produit du Markdown libre, pas un tableau JSON de recos).
+                var agent = new LlmAgentService(backends, cfg.RagDirectives, CHAT_WORKFLOW,
+                    ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
+                    CHAT_ROLE_INTRO, "", cfg.ResponseLanguage);
+
+                // Tous les outils existants : recommandation + audit santé.
+                var tools = BuildTools(cfg);
+                tools.AddRange(BuildAuditTools(cfg, sessions, tasks, notifications));
+
+                string reply = await agent.RunChatAsync(history, userMessage, tools, ct)
+                    .ConfigureAwait(false);
+
+                _logger.Info("[LLM_AI] [{0}] Réponse chat :\n{1}", label, reply);
+                return reply;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.Info("[LLM_AI] [{0}] Chat annulé.", label);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.ErrorException("[LLM_AI] [{0}] Échec du chat : {1}", ex, label, ex.Message);
+                return "Échec du chat : " + ex.Message;
+            }
+        }
+
         /// <summary>
         /// Mode déterministe (AuditMode=deterministic) : le C# rassemble toutes
         /// les sondes read-only via <see cref="SystemAuditTool.GatherAuditDigestAsync"/>
@@ -1138,12 +1248,12 @@ namespace LLM_AI
 
                 if (isLib)
                 {
-                    // Backfill l'id de lecture bibliothèque si le LLM l'a omis.
-                    if (string.IsNullOrEmpty(JsonStr(obj, "id"))) obj["id"] = libId;
+                    // Always backfill/overwrite with the real libId to prevent hallucinated GUIDs from breaking validation
+                    obj["id"] = libId;
                 }
                 else
                 {
-                    // source live : library_id pour le bouton « Regarder (bibli.) ».
+                    // source live : library_id for the button "Watch (library)".
                     obj["library_id"] = libId;
                 }
                 if (string.IsNullOrEmpty(JsonStr(obj, "image_url")))
@@ -1197,7 +1307,10 @@ namespace LLM_AI
         private string FindLibraryItemId(string title, string normKey)
         {
             var it = FindLibraryItem(title, normKey);
-            return it?.Id.ToString();
+            // InternalId (long) en chaîne : la seule forme consommable par la
+            // couche REST/UI (bouton « Regarder », image_url) ET par la
+            // validation ItemIds — BaseItem.Id est un Guid rejeté par REST.
+            return it?.InternalId.ToString();
         }
     }
 }
