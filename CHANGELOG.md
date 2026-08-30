@@ -499,6 +499,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AutoProgrammer` (dedup matching consistent with the EPG exclusion).
 
 ### Corrigé / Fixed
+- **« ç » et accents : les titres accentués ne matchaient jamais leurs
+  variantes non accentuées** (corrigé 2026-08-30, suspect n°1 du cas
+  « Comment tuer son mari en 10 leçons ») : les deux normalisateurs de titres
+  du plugin pliaient mal les diacritiques, chacun dans son sens :
+  (a) `GetEmbyInfoTool.Norm` (exclusion biblio de `epg_series`/`epg_movies`,
+  drop list, dédup) SUPPRIMAIT les diacritiques au lieu de les
+  translittérer — « leçons » → « le**ons** » ≠ « lecons » ; (b)
+  `LlmRunner.NormTitle` (rapprochement EPG↔reco et reco↔bibliothèque)
+  gardait le caractère accentué — « leçons » ≠ « lecons » aussi. Or l'EPG
+  Gracenote porte le titre accentué tandis que l'item bibliothèque porte
+  souvent la variante sans accents (nom de fichier, métadonnées du provider) :
+  l'exclusion « déjà possédé » ratait donc systématiquement ces titres.
+  Nouveau pliage partagé `GetEmbyInfoTool.FoldAscii` (décomposition Unicode
+  FormD + retrait des marques combinantes : é/è/ê→e, ç→c, à→a… +
+  ligatures œ→oe, æ→ae), appliqué dans `Norm` ET `NormTitle` —
+  « Comment tuer son mari en 10 leçons » ≡ « … en 10 lecons », vérifié
+  empiriquement sur accents multiples, ligatures, apostrophes et titres
+  identiques. Complément du garde-fou IMDb id (voir entrée précédente) :
+  le titre rapproche maintenant aussi les variantes accentuées.
+  **"ç" and accents: accented titles never matched their unaccented
+  variants** (fixed 2026-08-30, prime suspect of the "Comment tuer son mari
+  en 10 leçons" case): the plugin's two title normalizers folded diacritics
+  badly, each in its own direction: (a) `GetEmbyInfoTool.Norm` (library
+  exclusion of `epg_series`/`epg_movies`, drop list, dedup) DELETED
+  diacritics instead of transliterating them — "leçons" → "le**ons**" ≠
+  "lecons"; (b) `LlmRunner.NormTitle` (EPG↔reco and reco↔library matching)
+  kept the accented character — "leçons" ≠ "lecons" too. Since Gracenote's
+  EPG carries the accented title while the library item often carries the
+  unaccented variant (filename, provider metadata), the already-owned
+  exclusion systematically missed those titles. New shared folding
+  `GetEmbyInfoTool.FoldAscii` (Unicode FormD decomposition + combining-mark
+  stripping: é/è/ê→e, ç→c, à→a… + œ→oe, æ→ae ligatures), applied in both
+  `Norm` and `NormTitle` — "Comment tuer son mari en 10 leçons" ≡ "… en 10
+  lecons", empirically verified across multiple accents, ligatures,
+  apostrophes and identical titles. Complements the IMDb-id guard (previous
+  entry): title matching now also matches accented variants.
+- **Reco d'enregistrer un titre déjà possédé malgré l'id IMDb trouvé par le LLM**
+  (corrigé 2026-08-30, cas « Comment tuer son mari en 10 leçons ») : le LLM
+  établissait l'id IMDb du contenu via ses outils (tt22335046) mais (1) le format
+  de reco n'avait **pas de champ imdb_id** — l'id était perdu dans la réponse
+  finale, et (2) la tâche planifiée ne rapprochait **jamais** les recos de la
+  bibliothèque (`EnrichWithLibrary` n'était appelé que par la page Tonight) —
+  donc `library_id` restait vide et les garde-fous du record bucket
+  (.strm/Auto-program/badges), qui reposent sur `library_id`, laissaient passer
+  le film déjà possédé. Triple correctif :
+  (a) le format des recos demande désormais un champ **`imdb_id`** facultatif
+  (uniquement si un outil l'a établi) ;
+  (b) `EnrichWithLibrary` gagne un repli **par id IMDb** : si le titre ne matche
+  pas, l'item bibliothèque est résolu via `InternalItemsQuery.AnyProviderIdEquals`
+  (clé Provider « Imdb », films ET séries) — rapprochement indépendant du titre,
+  le plus fiable possible ; l'id est normalisé (accepte « 1234567 » → « tt1234567 »,
+  minuscules, 7–8 chiffres — protège des ids hallucinés) ;
+  (c) la tâche planifiée appelle `EnrichWithLibrary` sur le payload fusionné
+  avant persistance : une reco possédée reçoit `library_id` → **exclue du
+  record bucket** et affichée avec le bouton « Regarder (bibli.) » (déjà géré
+  par recommendations.js). La détection du « déjà possédé » ne repose plus
+  uniquement sur la classification `source` du LLM.
+  **Reco to record an already-owned title despite the LLM finding its IMDb id**
+  (fixed 2026-08-30, "Comment tuer son mari en 10 leçons" case): the LLM
+  established the content's IMDb id via its tools (tt22335046) but (1) the
+  reco format had **no imdb_id field** — the id was lost in the final reply,
+  and (2) the scheduled task **never** matched recos against the library
+  (`EnrichWithLibrary` was only called by the Tonight page) — so `library_id`
+  stayed empty and the record-bucket guards (.strm/Auto-program/badges), which
+  rely on `library_id`, let the already-owned film through. Triple fix:
+  (a) the reco format now asks for an optional **`imdb_id`** field (only when
+  established by a tool);
+  (b) `EnrichWithLibrary` gains an **IMDb-id fallback**: when the title
+  doesn't match, the library item is resolved via
+  `InternalItemsQuery.AnyProviderIdEquals` (Provider key "Imdb", movies AND
+  series) — a title-independent match, the most reliable possible; the id is
+  normalized (accepts "1234567" → "tt1234567", lowercase, 7–8 digits — guards
+  against hallucinated ids);
+  (c) the scheduled task runs `EnrichWithLibrary` on the merged payload before
+  persisting: an owned reco gets `library_id` → **excluded from the record
+  bucket** and rendered with the "Watch (library)" button (already handled by
+  recommendations.js). Owned-detection no longer relies solely on the LLM's
+  `source` classification.
 - **Cartes .strm sans poster alors que l'EPG en affiche une** (corrigé 2026-08-30,
   cas « Moonflower Murders on Masterpiece ») : le repli poster
   `TryCopyProgramPoster` ne gérait que les fichiers locaux — mais les programmes
