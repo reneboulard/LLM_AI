@@ -953,18 +953,21 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Normalise un titre pour le rapprochement : minuscules + retrait de
-        /// tout ce qui n'est pas alphanumérique. Équivalent C# du
-        /// <c>preg_replace('/[^a-z0-9]/i',''</c> + <c>mb_strtolower</c> du PHP
-        /// (absent_series.php / ai_section.php) et du <c>Norm</c> de
-        /// <see cref="GetEmbyInfoTool"/>. « Star Trek » et « star-trek! » →
-        /// « startrek ».
+        /// Normalise un titre pour le rapprochement : pliage d'accents
+        /// (<see cref="GetEmbyInfoTool.FoldAscii"/> : « leçons » ≡ « lecons » —
+        /// l'ancienne version gardait le « ç », donc la variante accentuée EPG
+        /// et la variante non accentuée bibliothèque ne matchaient pas) +
+        /// minuscules + retrait de tout ce qui n'est pas alphanumérique.
+        /// Équivalent C# du <c>preg_replace('/[^a-z0-9]/i',''</c> +
+        /// <c>mb_strtolower</c> du PHP (absent_series.php / ai_section.php) et
+        /// du <c>Norm</c> de <see cref="GetEmbyInfoTool"/>. « Star Trek » et
+        /// « star-trek! » → « startrek ».
         /// </summary>
         public static string NormTitle(string s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
             var sb = new StringBuilder(s.Length);
-            foreach (var c in s)
+            foreach (var c in GetEmbyInfoTool.FoldAscii(s))
             {
                 if (char.IsLetterOrDigit(c)) sb.Append(char.ToLowerInvariant(c));
             }
@@ -1219,7 +1222,10 @@ namespace LLM_AI
         /// d'enregistrements injectée par <see cref="TonightApiService"/>).</item>
         /// </list>
         /// Recherche par <c>Name</c> exact (indexé, peu coûteux) puis repli flou
-        /// <c>NameContains</c>, confirmé par <see cref="NormTitle"/>.
+        /// <c>NameContains</c>, confirmé par <see cref="NormTitle"/> ; repli
+        /// final par <c>imdb_id</c> (si le LLM l'a établi via ses outils) via
+        /// <see cref="InternalItemsQuery.AnyProviderIdEquals"/> — attrape les
+        /// titres possédés dont le titre EPG diffère du titre bibliothèque.
         /// </summary>
         public string EnrichWithLibrary(string payload)
         {
@@ -1244,6 +1250,28 @@ namespace LLM_AI
                 if (string.IsNullOrEmpty(key)) continue;
 
                 string libId = FindLibraryItemId(title, key);
+
+                // Repli IMDb : si le titre ne matche pas mais que le LLM a
+                // établi l'id IMDb du contenu (via ses outils), on cherche
+                // l'item bibliothèque par ProviderId — indépendant du titre
+                // (le titre EPG peut différer du titre de bibliothèque :
+                // « Comment tuer son mari en 10 leçons » vs titre original).
+                // Trouvé = possédé → library_id → exclue du record bucket.
+                if (string.IsNullOrEmpty(libId))
+                {
+                    string imdbId = NormalizeImdbId(JsonStr(obj, "imdb_id"));
+                    if (imdbId != null)
+                    {
+                        var owned = FindLibraryItemByImdb(imdbId);
+                        if (owned != null)
+                        {
+                            libId = owned.InternalId.ToString();
+                            _logger?.Info("[LLM_AI] Enrichissement bibliothèque : « {0} » déjà possédé (IMDb {1} → « {2} »).",
+                                title, imdbId, owned.Name);
+                        }
+                    }
+                }
+
                 if (string.IsNullOrEmpty(libId)) continue;
 
                 if (isLib)
@@ -1311,6 +1339,48 @@ namespace LLM_AI
             // couche REST/UI (bouton « Regarder », image_url) ET par la
             // validation ItemIds — BaseItem.Id est un Guid rejeté par REST.
             return it?.InternalId.ToString();
+        }
+
+        /// <summary>
+        /// Normalise un id IMDb proposé par le LLM : accepte « tt1234567 » ou
+        /// « 1234567 » (préfixe <c>tt</c> ré-ajouté), en minuscules. Retourne
+        /// <c>null</c> si la valeur n'est pas un id IMDb plausible (7–8
+        /// chiffres) — protège des ids hallucinés.
+        /// </summary>
+        private static string NormalizeImdbId(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            string s = raw.Trim().ToLowerInvariant();
+            if (s.StartsWith("tt", StringComparison.Ordinal)) s = s.Substring(2);
+            if (s.Length < 7 || s.Length > 8) return null;
+            foreach (char c in s) if (c < '0' || c > '9') return null;
+            return "tt" + s;
+        }
+
+        /// <summary>
+        /// Cherche l'item de bibliothèque (film/série) portant l'id IMDb
+        /// donné, via <see cref="InternalItemsQuery.AnyProviderIdEquals"/>
+        /// (clé Provider « Imdb » — utilisée pour les films ET les séries).
+        /// C'est le rapprochement le plus fiable possible : un id IMDb
+        /// identique désigne le même contenu indépendamment du titre. Null si
+        /// non trouvé ou requête impossible.
+        /// </summary>
+        private BaseItem FindLibraryItemByImdb(string imdbId)
+        {
+            if (string.IsNullOrEmpty(imdbId)) return null;
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    AnyProviderIdEquals = new Dictionary<string, string> { { "Imdb", imdbId } },
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    Limit = 2,
+                    EnableTotalRecordCount = false
+                };
+                return (_library.GetItemList(q) ?? Array.Empty<BaseItem>()).FirstOrDefault();
+            }
+            catch { return null; }
         }
     }
 }

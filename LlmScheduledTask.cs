@@ -187,6 +187,17 @@ namespace LLM_AI
                 // Fusionne les deux tableaux JSON en un payload unique. La page
                 // Recommandations split par kind (series/movie) en deux sections.
                 var merged = LlmRunner.MergeJsonArrays(p1, p2);
+
+                // Owned-guard déterministe : rapproche les recos de la
+                // bibliothèque (titre, puis id IMDb si le LLM l'a établi via
+                // ses outils). Une reco possédée reçoit library_id → exclue du
+                // record bucket (.strm/Auto-program/badges) et affichée avec
+                // le bouton « Regarder (bibli.) ». Sans ce rapprochement, la
+                // détection du « déjà possédé » repose uniquement sur la
+                // classification source du LLM (cas vécu : reco d'enregistrer
+                // « Comment tuer son mari en 10 leçons » alors que le film,
+                // même titre ET même id IMDb, était déjà en bibliothèque).
+                merged = _runner.EnrichWithLibrary(merged);
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
 

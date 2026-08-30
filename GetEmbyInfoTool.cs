@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -1161,11 +1162,54 @@ namespace LLM_AI
             return map;
         }
 
-        /// <summary>Normalise un titre pour la comparaison (lower + [^a-z0-9] retiré).</summary>
+        /// <summary>
+        /// Pliage d'accents vers l'ASCII : décomposition Unicode FormD puis
+        /// retrait des marques combinantes, donc « é/è/ê » → « e », « ç » → « c »,
+        /// « à » → « a »… Les ligatures non décomposables sont mappées à la main
+        /// (« œ » → « oe », « æ » → « ae »). Casse et caractères non-alnum
+        /// préservés tels quels — ce pliage ne fait QUE la translittération.
+        /// </summary>
+        /// <remarks>
+        /// Indispensable pour la comparaison EPG ↔ bibliothèque : l'EPG
+        /// Gracenote porte souvent le titre accentué (« … en 10 leçons »)
+        /// tandis que l'item bibliothèque porte la variante non accentuée
+        /// (« … en 10 lecons », nom de fichier ou métadonnées du provider).
+        /// Avant ce pliage, <see cref="Norm"/> SUPPRIMAIT les diacritiques au
+        /// lieu de les translittérer (« leçons » → « leons » ≠ « lecons ») :
+        /// l'exclusion biblio ratait le film déjà possédé, que le LLM
+        /// recommandait d'enregistrer. <see cref="LlmRunner.NormTitle"/> avait
+        /// le défaut symétrique (il gardait le « ç », donc « leçons » ≠
+        /// « lecons » aussi).
+        /// </remarks>
+        internal static string FoldAscii(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s ?? string.Empty;
+            string d;
+            try { d = s.Normalize(NormalizationForm.FormD); }
+            catch (ArgumentException) { return s; }   // caractère Unicode non mappable : tel quel
+            var sb = new StringBuilder(d.Length);
+            foreach (var c in d)
+            {
+                switch (c)
+                {
+                    case 'œ': case 'Œ': sb.Append("oe"); continue;
+                    case 'æ': case 'Æ': sb.Append("ae"); continue;
+                }
+                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark) continue;
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Normalise un titre pour la comparaison : pliage d'accents
+        /// (<see cref="FoldAscii"/> : « leçons » ≡ « lecons ») + minuscules +
+        /// article de tête retiré + tout ce qui n'est pas a-z0-9 retiré.
+        /// </summary>
         internal static string Norm(string s)
         {
             if (string.IsNullOrEmpty(s)) return string.Empty;
-            var lower = s.ToLowerInvariant();
+            var lower = FoldAscii(s).ToLowerInvariant();
             // Retire un article de tête (FR/EN) séparé par une espace, de sorte
             // que « Le suspect », « The Suspect » et « Suspect » normalisent tous
             // vers « suspect ». Indispensable pour l'exclusion biblio/timers :
