@@ -287,6 +287,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Markdown brut, rendu par le mini-convertisseur existant. La boucle agent partagée
   (`RunLoopAsync`) est inchangée pour les chemins recommandation/audit ; le message de
   réparation JSON est désormais adapté au mode (Markdown hors recommandation).
+  **Page dédiée** « Chat LLM AI » (`chat.html`/`chat.js`) dans le menu admin (dashboard,
+  section « Serveur ») — chat plein cadre, historique propre à chaque visite de la page ;
+  la page de config ne garde que le flag `ChatEnabled`. Outil admin : PAS
+  d'`EnableInUserMenu` (la sécurité est celle d'Emby — seuls les admins voient la section
+  Serveur ; l'endpoint re-vérifie de toute façon `IsAdministrator`).
   Config : `ChatEnabled` (défaut `true`, opt-out).
   **Interactive chat with the AI assistant** (`ChatApiService` +
   `LlmAgentService.RunChatAsync` + `LlmRunner.RunChatAsync`): multi-turn conversation
@@ -301,6 +306,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   by the existing mini converter. The shared agent loop (`RunLoopAsync`) is unchanged
   for the recommendation/audit paths; the JSON repair message is now mode-aware
   (Markdown outside recommendations).
+  **Dedicated page** "LLM AI Chat" (`chat.html`/`chat.js`) in the admin menu (dashboard,
+  "Server" section) — full-frame chat, history scoped to each page visit; the config
+  page only keeps the `ChatEnabled` flag. Admin tool: NO `EnableInUserMenu` (security is
+  Emby's — only admins see the Server section; the endpoint still re-checks
+  `IsAdministrator`).
   Config: `ChatEnabled` (default `true`, opt-out).
 
 ### Modifié / Changed

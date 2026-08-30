@@ -297,6 +297,7 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `ShowbizzTool.cs` | … | Specialized LLM tools (see [LLM tools](#llm-tools)). `TmdbLookupTool` additionally exposes `LookupMetaAsync`/`LookupMetaMultiLangAsync` (search, S1), `FindByExternalIdAsync` (`/find`, validates a proposed id), `LookupMetaByIdAsync` (detail by id), `CleanEpgTitle` — reused by `StrmLibraryGenerator` and `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Configuration page (entry of the fields above). |
 | `recommendations.html` / `recommendations.js` | — | Recommendations page (renders the 3 sections, cards, buttons). |
+| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history (stateless server), shared Markdown rendering. |
 | `i18n.js` | — | Localized FR/EN strings + `web/ConfigurationPage?name=LLMAII18n` endpoint. |
 | `deploy.sh` | — | Build + deploy + restart (see [Installation](#installation)). |
 

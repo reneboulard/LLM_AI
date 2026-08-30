@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat LLM AI</title>
+</head>
+<body>
+    <!--
+        Page dashboard « Chat LLM AI » — conversation interactive multi-tours
+        avec l'agent LLM, sur sa propre page (plein écran) au lieu de la section
+        compacte de la page de config.
+
+        Apparaît dans le menu admin (dashboard, section « Serveur ») :
+        EnableInMainMenu + MenuSection="server" côté Plugin.cs — PAS dans le
+        menu utilisateur (outils admin, la sécurité est celle d'Emby : seuls
+        les admins voient la section Serveur). L'endpoint POST
+        /Plugins/LLMAI/Chat reste gated admin côté serveur.
+
+        Réutilise les mêmes clés i18n que l'ancienne section de config
+        (cfg.chat.*) via le module LLMAII18n. Le contrôleur est le module AMD
+        chat.js (data-controller) — un <script> inline n'est pas exécuté par
+        le dashboard moderne qui injecte via innerHTML.
+    -->
+    <div data-role="page"
+         class="type-interior LLMAIChatPage"
+         data-require="emby-button,emby-input"
+         data-controller="__plugin/LLMAIChatPageJS">
+
+        <style>
+            .LLMAIChatPage {
+                /* Fallback sombre, cohérent avec la page Recommandations. */
+                background-color: #101010;
+                min-height: 100%;
+            }
+            .LLMAIChatPage .sectionTitle {
+                color: #e8e8e8 !important;
+            }
+            .LLMAIChatPage .content-primary {
+                background-color: #181818 !important;
+                padding: 1.5em !important;
+                border-radius: 6px !important;
+                display: flex;
+                flex-direction: column;
+                /* Chat plein cadre : la page tient dans le viewport, le log
+                   défile à l'intérieur (pas la page entière). */
+                height: calc(100vh - 160px);
+                min-height: 420px;
+                box-sizing: border-box;
+            }
+            .LLMAIChatPage .chatDesc {
+                color: #9a9a9a;
+                font-size: 0.9em;
+                margin: 0 0 1em 0;
+            }
+            .LLMAIChatPage .chatLog {
+                flex: 1 1 auto;
+                overflow-y: auto;
+                padding: 0.6em 0.8em;
+                background: rgba(0,0,0,0.28);
+                border-radius: 6px;
+                font-size: 14px;
+                line-height: 1.55;
+                white-space: normal;
+            }
+            .LLMAIChatPage .chatTurn {
+                margin: 0.8em 0;
+            }
+            .LLMAIChatPage .chatTurn + .chatTurn {
+                border-top: 1px solid rgba(255,255,255,0.08);
+                padding-top: 0.8em;
+            }
+            .LLMAIChatPage .chatWho {
+                color: #8ab4f8;
+                font-size: 11px;
+                font-weight: bold;
+                margin-bottom: 0.25em;
+            }
+            .LLMAIChatPage .chatTurn.user .chatWho {
+                color: #7ec97e;
+            }
+            .LLMAIChatPage .chatUser {
+                color: #e0e0e0;
+            }
+            .LLMAIChatPage .chatHint {
+                color: #888;
+                font-size: 12px;
+            }
+            .LLMAIChatPage .chatMarkdown h1,
+            .LLMAIChatPage .chatMarkdown h2,
+            .LLMAIChatPage .chatMarkdown h3 { margin: 0.6em 0 0.3em; color: #e8e8e8; }
+            .LLMAIChatPage .chatMarkdown h2 { font-size: 1.15em; }
+            .LLMAIChatPage .chatMarkdown h3 { font-size: 1.05em; }
+            .LLMAIChatPage .chatMarkdown ul { margin: 0.3em 0; padding-left: 1.4em; color: #d0d0d0; }
+            .LLMAIChatPage .chatMarkdown li { margin: 0.2em 0; }
+            .LLMAIChatPage .chatMarkdown p { margin: 0.4em 0; color: #d0d0d0; }
+            .LLMAIChatPage .chatMarkdown code {
+                background: rgba(0,0,0,0.45); padding: 0 0.3em; border-radius: 3px;
+                font-family: monospace; color: #e8e8e8;
+            }
+            .LLMAIChatPage .chatInputRow {
+                display: flex;
+                gap: 0.5em;
+                margin-top: 0.8em;
+                align-items: stretch;
+            }
+            .LLMAIChatPage .chatInputRow input {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+        </style>
+
+        <div data-role="content">
+            <div class="content-primary">
+                <h2 class="sectionTitle"><span data-i18n="chat.title">💬 Chat LLM AI</span></h2>
+                <div class="chatDesc" data-i18n-html="cfg.chat.desc">
+                    Conversation interactive multi-tours avec l'agent LLM. Celui-ci dispose de
+                    <b>tous les outils déjà disponibles</b> (guide TV, bibliothèque, TMDB/TVDB,
+                    recherche web, Showbizz, audit système) et utilise les <b>priorités de backends
+                    LLM configurées</b>. L'historique est maintenu par la page ; la directive et la
+                    documentation des outils sont envoyées au LLM une seule fois, au début de la
+                    conversation. Réservé aux administrateurs.
+                </div>
+                <div id="chatLog" class="chatLog">
+                    <div class="chatHint" data-i18n="cfg.chat.hint">
+                        Posez une question à l'assistant — il interrogera vos données Emby
+                        (EPG, bibliothèque, santé du serveur) pour répondre.
+                    </div>
+                </div>
+                <div class="chatInputRow">
+                    <input is="emby-input" type="text" id="txtChatInput"
+                           data-i18n-label="cfg.chat.input"
+                           data-i18n-ph="cfg.chat.placeholder"
+                           placeholder="ex. que peux-tu me dire sur ce qui passe ce soir ?" />
+                    <button is="emby-button" type="button" class="raised" id="btnSendChat" data-i18n="cfg.chat.send">
+                        Envoyer
+                    </button>
+                    <button is="emby-button" type="button" class="raised" id="btnClearChat" data-i18n="cfg.chat.clear">
+                        Effacer la conversation
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

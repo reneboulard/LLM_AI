@@ -49,6 +49,8 @@
     <EmbeddedResource Include="config.js" />
     <EmbeddedResource Include="recommendations.html" />
     <EmbeddedResource Include="recommendations.js" />
+    <EmbeddedResource Include="chat.html" />
+    <EmbeddedResource Include="chat.js" />
     <!-- Module i18n (FR/EN) : dictionnaires + walker DOM, dépendance
          __plugin/LLMAII18n des pages config et recommandations. -->
     <EmbeddedResource Include="i18n.js" />

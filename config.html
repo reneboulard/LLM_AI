@@ -735,7 +735,8 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.chat.h">Chat avec l'assistant IA</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.desc">
-                            Conversation interactive multi-tours avec l'agent LLM. Celui-ci dispose de
+                            Conversation interactive multi-tours avec l'agent LLM, sur sa propre page
+                            (menu <b>Serveur</b> → <b>Chat LLM AI</b>). Celui-ci dispose de
                             <b>tous les outils déjà disponibles</b> (guide TV, bibliothèque, TMDB/TVDB, recherche web,
                             Showbizz, audit système) et utilise les <b>priorités de backends LLM configurées</b> ci-dessus.
                             L'historique est maintenu par la page ; la directive et la documentation des outils sont
@@ -746,61 +747,6 @@
                             <input type="checkbox" is="emby-checkbox" id="chkChatEnabled" />
                             <span class="checkboxLabel" data-i18n="cfg.chat.enabled">Activer le chat interactif (/Plugins/LLMAI/Chat)</span>
                         </label>
-
-                        <style>
-                            .LLMAIConfigPage .chatLog {
-                                margin: 0.8em 0;
-                                padding: 1em 1.2em;
-                                background: rgba(0,0,0,0.18);
-                                border-radius: 6px;
-                                max-height: 50vh;
-                                overflow: auto;
-                                font-size: 13px;
-                                line-height: 1.5;
-                                white-space: normal;
-                            }
-                            .LLMAIConfigPage .chatTurn { margin: 0.6em 0; }
-                            .LLMAIConfigPage .chatTurn + .chatTurn { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.6em; }
-                            .LLMAIConfigPage .chatWho {
-                                color: #888; font-size: 11px; margin-bottom: 0.2em; font-weight: bold;
-                            }
-                            /* Le corps Markdown des réponses réutilise le rendu du rapport
-                               d'audit (mêmes règles) : le bulle assistant porte chatMarkdown. */
-                            .LLMAIConfigPage .chatMarkdown h1,
-                            .LLMAIConfigPage .chatMarkdown h2,
-                            .LLMAIConfigPage .chatMarkdown h3 { margin: 0.6em 0 0.3em; }
-                            .LLMAIConfigPage .chatMarkdown h2 { font-size: 1.15em; }
-                            .LLMAIConfigPage .chatMarkdown h3 { font-size: 1.05em; }
-                            .LLMAIConfigPage .chatMarkdown ul { margin: 0.3em 0; padding-left: 1.4em; }
-                            .LLMAIConfigPage .chatMarkdown li { margin: 0.2em 0; }
-                            .LLMAIConfigPage .chatMarkdown p { margin: 0.4em 0; }
-                            .LLMAIConfigPage .chatMarkdown code {
-                                background: rgba(0,0,0,0.25); padding: 0 0.3em; border-radius: 3px;
-                                font-family: monospace;
-                            }
-                            .LLMAIConfigPage .chatHint { color: #888; font-size: 12px; }
-                        </style>
-                        <div id="chatLog" class="chatLog">
-                            <div class="chatHint" data-i18n="cfg.chat.hint">
-                                Posez une question à l'assistant — il interrogera vos données Emby
-                                (EPG, bibliothèque, santé du serveur) pour répondre.
-                            </div>
-                        </div>
-                        <div class="inputContainer" style="max-width:640px;margin-top:0.4em;">
-                            <input is="emby-input" type="text" id="txtChatInput"
-                                   label="Votre message"
-                                   data-i18n-label="cfg.chat.input"
-                                   data-i18n-ph="cfg.chat.placeholder"
-                                   placeholder="ex. que peux-tu me dire sur ce qui passe ce soir ?" />
-                        </div>
-                        <div style="margin:0.8em 0;display:flex;gap:0.5em;">
-                            <button is="emby-button" type="button" class="raised" id="btnSendChat" data-i18n="cfg.chat.send">
-                                Envoyer
-                            </button>
-                            <button is="emby-button" type="button" class="raised" id="btnClearChat" data-i18n="cfg.chat.clear">
-                                Effacer la conversation
-                            </button>
-                        </div>
 
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">

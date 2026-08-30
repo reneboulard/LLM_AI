@@ -133,6 +133,24 @@ namespace LLM_AI
             },
             new PluginPageInfo
             {
+                Name = "LLMAIChatPage",
+                EmbeddedResourcePath = "LLM_AI.chat.html",
+                // Menu admin (dashboard) : section « Serveur ». Chat = outil
+                // admin (tous les outils, dont system_audit) : PAS de
+                // EnableInUserMenu — la sécurité est celle d'Emby, seuls les
+                // admins voient la section Serveur (l'endpoint re-vérifie
+                // de toute façon Policy.IsAdministrator).
+                EnableInMainMenu = true,
+                MenuSection = "server",
+                DisplayName = "Chat LLM AI"
+            },
+            new PluginPageInfo
+            {
+                Name = "LLMAIChatPageJS",
+                EmbeddedResourcePath = "LLM_AI.chat.js"
+            },
+            new PluginPageInfo
+            {
                 // Image de fond de la page Recommandations : module AMD exportant
                 // une data URI (ASCII), servi sur web/ConfigurationPage?name=LLMAIBg
                 // et chargé par recommendations.js via require(). L'endpoint sert les
