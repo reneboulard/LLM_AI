@@ -140,9 +140,16 @@ namespace LLM_AI
                 // EnableInUserMenu — la sécurité est celle d'Emby, seuls les
                 // admins voient la section Serveur (l'endpoint re-vérifie
                 // de toute façon Policy.IsAdministrator).
+                // NB DisplayName : le serveur trie TOUTES les pages de plugins
+                // par DisplayName (ordre alphabétique) et le dashboard lie le
+                // plugin de la liste à sa PREMIÈRE page triée de type
+                // PluginConfiguration — « Chat LLM AI » triait AVANT
+                // «LLM_AI» (la page de config) et volait le clic du plugin.
+                // « LLM_AI Chat » trie juste après (règle du préfixe), la
+                // page de config reste la page liée au plugin.
                 EnableInMainMenu = true,
                 MenuSection = "server",
-                DisplayName = "Chat LLM AI"
+                DisplayName = "LLM_AI Chat"
             },
             new PluginPageInfo
             {
