@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -184,9 +185,35 @@ namespace LLM_AI
                 string epgOverview = (epgProgram?.Overview ?? string.Empty).Trim();
 
                 TmdbMeta meta = null;
-                try { meta = await tmdb.LookupMetaAsync(r.Title, kind, null, userTmdb, ct).ConfigureAwait(false); }
+                string queryTitle = r.Title;
+                try { meta = await tmdb.LookupMetaAsync(queryTitle, kind, null, userTmdb, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB échoué pour « {0} » ({1}).", r.Title, ex.Message); }
+
+                // Suffixe « on <chaîne> » : les titres Gracenote du type
+                // « Moonflower Murders on Masterpiece » n'ont PAS de match TMDB
+                // sous leur forme complète (l'entrée TMDB s'appelle « Moonflower
+                // Murders »). Si le lookup complet échoue, on retente UNE fois
+                // sans le suffixe — inoffensif : la forme complète est toujours
+                // essayée d'abord, donc un titre légitime contenant « on »
+                // (p.ex. « Attack on Titan ») n'est tronqué que si son lookup
+                // complet a déjà raté. Le repli poster EPG couvre le reste.
+                if (meta == null)
+                {
+                    string stripped = StripChannelSuffix(queryTitle);
+                    if (!string.IsNullOrEmpty(stripped))
+                    {
+                        try { meta = await tmdb.LookupMetaAsync(stripped, kind, null, userTmdb, ct).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB (titre sans suffixe) échoué pour « {0} » ({1}).", stripped, ex.Message); }
+
+                        if (meta != null)
+                        {
+                            _logger?.Info("[LLM_AI] Strm library : match TMDB pour « {0} » trouvé via « {1} » (suffixe « on … » retiré).", r.Title, stripped);
+                            queryTitle = stripped;   // le tier 2 (en-US) re-cherche sur ce titre.
+                        }
+                    }
+                }
 
                 // Cascade TMDB (tiers 2 + 3) :
                 //  Tier 1 : langue de l'usager (userTmdb) — déjà fait ci-dessus.
@@ -199,7 +226,7 @@ namespace LLM_AI
                     && (meta == null || string.IsNullOrWhiteSpace(meta.Overview)))
                 {
                     TmdbMeta metaEn = null;
-                    try { metaEn = await tmdb.LookupMetaAsync(r.Title, kind, null, "en-US", ct).ConfigureAwait(false); }
+                    try { metaEn = await tmdb.LookupMetaAsync(queryTitle, kind, null, "en-US", ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB en-US échoué pour « {0} » ({1}).", r.Title, ex.Message); }
 
@@ -270,12 +297,14 @@ namespace LLM_AI
                     catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster TMDB pour « {0} » ({1}).", r.Title, ex.Message); }
                 }
 
-                // Repli : copie l'affiche Primary du programme EPG pointé par r.Id
-                // (téléfilm/titre régional absent de TMDB mais dont la chaîne fournit
-                // déjà un poster, souvent un vrai portrait 2:3).
+                // Repli : récupère l'affiche Primary du programme EPG pointé par
+                // r.Id (téléfilm/titre régional absent de TMDB mais dont la
+                // chaîne fournit déjà un poster, souvent un vrai portrait 2:3).
+                // L'affiche peut être un fichier local OU une URL distante
+                // (Gracenote/TMS référence presque toujours une URL http).
                 if (!posterWritten)
                 {
-                    try { posterWritten = TryCopyProgramPoster(root, r, epgProgram); }
+                    try { posterWritten = await TryCopyProgramPosterAsync(root, r, epgProgram, ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
                 }
@@ -641,6 +670,37 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Nettoyage du titre pour la requête TMDB
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Suffixe « on &lt;chaîne/brand&gt; » en fin de titre (1 à 3 mots) :
+        /// convention Gracenote/PBS du type « Moonflower Murders on Masterpiece »
+        /// — l'entrée TMDB correspondante s'appelle « Moonflower Murders ».
+        /// </summary>
+        private static readonly Regex s_channelSuffix = new Regex(
+            @"\s+on\s+[\p{L}0-9'&]+(?:\s+[\p{L}0-9'&]+){0,2}\s*$",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// Retire le suffixe de chaîne d'un titre EPG pour la requête TMDB :
+        /// « Moonflower Murders on Masterpiece » → « Moonflower Murders ».
+        /// Retourne <c>null</c> si aucun suffixe détachable (le titre doit rester
+        /// tel quel). Conservateur : la forme complète est TOUJOURS essayée
+        /// d'abord par l'appelant — ce tronquage n'intervient qu'après un échec
+        /// du lookup complet. Le titre de la carte (dossier/.nfo) n'est jamais
+        /// modifié, ceci ne sert qu'à la requête.
+        /// </summary>
+        private static string StripChannelSuffix(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return null;
+            Match m = s_channelSuffix.Match(title);
+            if (!m.Success) return null;
+            string stripped = title.Substring(0, m.Index).Trim();
+            return stripped.Length >= 3 ? stripped : null;
+        }
+
+        // ------------------------------------------------------------------
         //  Poster TMDB
         // ------------------------------------------------------------------
 
@@ -712,40 +772,82 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Repli de poster : copie l'image <see cref="ImageType.Primary"/> du
+        /// Repli de poster : récupère l'image <see cref="ImageType.Primary"/> du
         /// programme EPG (<paramref name="program"/>, déjà résolu par
         /// <see cref="TryGetEpgProgram"/>) vers <c>poster.jpg</c> dans le dossier
         /// de la carte. Comble le cas fréquent où <see cref="DownloadPosterAsync"/>
         /// ne trouve pas de match TMDB (téléfilm/titre régional absent du
         /// catalogue) alors que le programme EPG possède déjà une affiche — souvent
         /// un vrai poster portrait fourni par la chaîne, donc de meilleure facture
-        /// que le poster par défaut générique. Best-effort, ne lève jamais.
-        /// <c>true</c> si poster écrit.
+        /// que le poster par défaut générique.
+        /// <para>L'affiche EPG peut être un <b>fichier local</b> (image en cache
+        /// sur disque) OU une <b>URL distante</b> : les programmes Gracenote/TMS
+        /// référencent presque toujours une URL <c>ebyl.tmsimg.com</c> dans le
+        /// champ Path de leur image Primary — un <c>File.Exists</c> seul échoue
+        /// donc systématiquement sur ce type de source (bug des cartes sans
+        /// poster alors que l'EPG en affiche une). Le chemin http est alors
+        /// téléchargé avec le <see cref="HttpClient"/> partagé du générateur.</para>
+        /// Best-effort, ne lève jamais. Chaque garde logue sa raison (Info) pour
+        /// rendre les « carte sans poster » diagnosticables. <c>true</c> si
+        /// poster écrit.
         /// </summary>
-        private bool TryCopyProgramPoster(string root, AutoProgrammer.Reco r, BaseItem program)
+        private async Task<bool> TryCopyProgramPosterAsync(string root, AutoProgrammer.Reco r, BaseItem program, CancellationToken ct)
         {
-            if (program == null || string.IsNullOrWhiteSpace(r.Title)) return false;
-            if (!program.HasImage(ImageType.Primary, 0)) return false;
+            // Logue la raison du renoncement puis retourne false — remplace les
+            // return false silencieux d'origine (cartes sans poster indiagnosticables).
+            bool Skip(string why)
+            {
+                _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, why);
+                return false;
+            }
 
-            string src;
-            try { src = program.GetImageInfo(ImageType.Primary, 0)?.Path; }
-            catch (Exception) { return false; }
-            if (string.IsNullOrWhiteSpace(src) || !File.Exists(src)) return false;
-
-            string safe = SanitizeName(r.Title);
-            if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
-            string folder = Path.Combine(root, safe);
-            if (!Directory.Exists(folder)) return false;
+            if (program == null) return Skip("programme EPG introuvable");
+            if (string.IsNullOrWhiteSpace(r.Title)) return Skip("titre absent de la reco");
 
             try
             {
-                File.Copy(src, Path.Combine(folder, "poster.jpg"), overwrite: true);
-                _logger?.Info("[LLM_AI] Strm library : poster EPG copié pour « {0} » (depuis programme {1}).", r.Title, r.Id);
+                if (!program.HasImage(ImageType.Primary, 0)) return Skip("programme sans image Primary");
+
+                string src = program.GetImageInfo(ImageType.Primary, 0)?.Path;
+                if (string.IsNullOrWhiteSpace(src)) return Skip("chemin d'image indisponible");
+
+                string safe = SanitizeName(r.Title);
+                if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
+                string folder = Path.Combine(root, safe);
+                if (!Directory.Exists(folder)) return Skip("dossier de carte absent : " + folder);
+
+                string dst = Path.Combine(folder, "poster.jpg");
+                bool isLocal = File.Exists(src);
+                if (isLocal)
+                {
+                    // Image en cache sur disque : simple copie.
+                    File.Copy(src, dst, overwrite: true);
+                }
+                else if (Uri.TryCreate(src, UriKind.Absolute, out Uri uri)
+                    && (uri.Scheme == "http" || uri.Scheme == "https"))
+                {
+                    // Affiche distante (Gracenote/TMS) : téléchargement via le
+                    // HttpClient partagé, comme un poster TMDB.
+                    using (var resp = await s_http.GetAsync(src, ct).ConfigureAwait(false))
+                    {
+                        resp.EnsureSuccessStatusCode();
+                        using (var fs = File.Create(dst))
+                            await (await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false)).CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    return Skip("source ni fichier local ni URL : " + src);
+                }
+
+                _logger?.Info("[LLM_AI] Strm library : poster EPG {0} pour « {1} » (depuis programme {2}).",
+                    isLocal ? "copié" : "téléchargé", r.Title, r.Id);
                 return true;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : copie échouée ({1}).", r.Title, ex.Message);
+                _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : récupération échouée ({1}).", r.Title, ex.Message);
                 return false;
             }
         }

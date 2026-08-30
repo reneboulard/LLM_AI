@@ -499,6 +499,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AutoProgrammer` (dedup matching consistent with the EPG exclusion).
 
 ### Corrigé / Fixed
+- **Cartes .strm sans poster alors que l'EPG en affiche une** (corrigé 2026-08-30,
+  cas « Moonflower Murders on Masterpiece ») : le repli poster
+  `TryCopyProgramPoster` ne gérait que les fichiers locaux — mais les programmes
+  EPG Gracenote/TMS référencent presque toujours une **URL distante**
+  (`ebyl.tmsimg.com/…`) dans le champ Path de leur image Primary. Le garde
+  `File.Exists(URL)` échouait donc silencieusement (`return false` sans log) et la
+  carte restait sans affiche quand le lookup TMDB échouait aussi (titres suffixés
+  du type « … on Masterpiece » introuvables sur TMDB). Le repli télécharge
+  désormais les URL http(s) via le `HttpClient` partagé (les fichiers locaux
+  restent copiés) et **chaque garde logue sa raison** (programme introuvable,
+  sans image, chemin absent, dossier absent…) — plus de `return false` muet.
+  Complément : si le lookup TMDB échoue sur le titre complet, le générateur
+  retente **une fois** sans le suffixe de chaîne « on … » (convention Gracenote/
+  PBS : « Moonflower Murders on Masterpiece » → entrée TMDB « Moonflower
+  Murders ») — la forme complète est toujours essayée d'abord, un titre
+  légitime contenant « on » n'est donc tronqué qu'après échec ; le titre de la
+  carte (dossier/.nfo) reste inchangé, seule la requête est nettoyée.
+  **STRM cards with no poster while the EPG shows one** (fixed 2026-08-30,
+  "Moonflower Murders on Masterpiece" case): the poster fallback
+  `TryCopyProgramPoster` only handled local files — but Gracenote/TMS EPG
+  programs almost always reference a **remote URL** (`ebyl.tmsimg.com/…`) in
+  their Primary image's Path field. The `File.Exists(URL)` guard failed
+  silently (`return false`, no log) and the card was left posterless whenever
+  the TMDB lookup also failed (suffixed titles like "… on Masterpiece" have no
+  TMDB match). The fallback now downloads http(s) URLs via the shared
+  `HttpClient` (local files are still copied) and **every guard logs its
+  reason** (missing program, no image, missing path, missing folder…) — no more
+  silent `return false`. Complement: if the TMDB lookup fails on the full
+  title, the generator retries **once** with the "on …" channel suffix
+  stripped (Gracenote/PBS convention: "Moonflower Murders on Masterpiece" →
+  TMDB entry "Moonflower Murders") — the full form is always tried first, so a
+  legitimate title containing "on" is only stripped after a failed lookup; the
+  card title (folder/.nfo) is unchanged, only the query is cleaned.
 - **Crash NaN/Infinity en JSON** : `disk_storage` divisait par `TotalSize == 0` (volumes
   tels `/var/snap/lxd`, `/sys/…`), produisant `NaN`/`∞` que `System.Text.Json` refusait de
   sérialiser — l'exception escapait le digest déterministe et faisait échouer tout l'audit.
