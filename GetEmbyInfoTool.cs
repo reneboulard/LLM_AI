@@ -1165,9 +1165,12 @@ namespace LLM_AI
         /// <summary>
         /// Pliage d'accents vers l'ASCII : décomposition Unicode FormD puis
         /// retrait des marques combinantes, donc « é/è/ê » → « e », « ç » → « c »,
-        /// « à » → « a »… Les ligatures non décomposables sont mappées à la main
-        /// (« œ » → « oe », « æ » → « ae »). Casse et caractères non-alnum
-        /// préservés tels quels — ce pliage ne fait QUE la translittération.
+        /// « à » → « a »… Les lettres SANS décomposition FormD (ligatures et
+        /// traits nordiques/germaniques) sont mappées à la main :
+        /// « œ » → « oe », « æ » → « ae », « ø » → « o », « đ » → « d »,
+        /// « ł » → « l », « ß » → « ss », « ð » → « d », « þ » → « th ».
+        /// Casse et caractères non-alnum préservés tels quels — ce pliage ne
+        /// fait QUE la translittération.
         /// </summary>
         /// <remarks>
         /// Indispensable pour la comparaison EPG ↔ bibliothèque : l'EPG
@@ -1192,8 +1195,15 @@ namespace LLM_AI
             {
                 switch (c)
                 {
+                    // Non décomposables en FormD : translittération à la main.
                     case 'œ': case 'Œ': sb.Append("oe"); continue;
                     case 'æ': case 'Æ': sb.Append("ae"); continue;
+                    case 'ø': case 'Ø': sb.Append("o"); continue;
+                    case 'đ': case 'Đ': sb.Append("d"); continue;
+                    case 'ł': case 'Ł': sb.Append("l"); continue;
+                    case 'ß': sb.Append("ss"); continue;
+                    case 'ð': case 'Ð': sb.Append("d"); continue;
+                    case 'þ': case 'Þ': sb.Append("th"); continue;
                 }
                 if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark) continue;
                 sb.Append(c);
