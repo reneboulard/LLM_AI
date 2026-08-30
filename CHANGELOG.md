@@ -512,12 +512,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   souvent la variante sans accents (nom de fichier, métadonnées du provider) :
   l'exclusion « déjà possédé » ratait donc systématiquement ces titres.
   Nouveau pliage partagé `GetEmbyInfoTool.FoldAscii` (décomposition Unicode
-  FormD + retrait des marques combinantes : é/è/ê→e, ç→c, à→a… +
-  ligatures œ→oe, æ→ae), appliqué dans `Norm` ET `NormTitle` —
-  « Comment tuer son mari en 10 leçons » ≡ « … en 10 lecons », vérifié
-  empiriquement sur accents multiples, ligatures, apostrophes et titres
-  identiques. Complément du garde-fou IMDb id (voir entrée précédente) :
-  le titre rapproche maintenant aussi les variantes accentuées.
+  FormD + retrait des marques combinantes : é/è/ê→e, ç→c, à→a… MAJUSCULES
+  comprises, tout accent latin décomposable) + map manuel des lettres NON
+  décomposables (œ→oe, æ→ae, ø→o, đ→d, ł→l, ß→ss, ð→d, þ→th), appliqué dans
+  `Norm` ET `NormTitle` — « Comment tuer son mari en 10 leçons » ≡ « … en 10
+  lecons », vérifié empiriquement sur accents multiples, ligatures,
+  nordiques/germaniques, apostrophes et titres identiques. Complément du
+  garde-fou IMDb id (voir entrée précédente) : le titre rapproche maintenant
+  aussi les variantes accentuées.
   **"ç" and accents: accented titles never matched their unaccented
   variants** (fixed 2026-08-30, prime suspect of the "Comment tuer son mari
   en 10 leçons" case): the plugin's two title normalizers folded diacritics
@@ -534,7 +536,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `Norm` and `NormTitle` — "Comment tuer son mari en 10 leçons" ≡ "… en 10
   lecons", empirically verified across multiple accents, ligatures,
   apostrophes and identical titles. Complements the IMDb-id guard (previous
-  entry): title matching now also matches accented variants.
+  entry): title matching now also matches accented variants. The manual map
+  covers the letters WITHOUT a FormD decomposition (œ→oe, æ→ae, ø→o, đ→d,
+  ł→l, ß→ss, ð→d, þ→th).
 - **Reco d'enregistrer un titre déjà possédé malgré l'id IMDb trouvé par le LLM**
   (corrigé 2026-08-30, cas « Comment tuer son mari en 10 leçons ») : le LLM
   établissait l'id IMDb du contenu via ses outils (tt22335046) mais (1) le format
