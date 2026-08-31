@@ -26,12 +26,16 @@ namespace LLM_AI
     /// suggéré à enregistrer par la tâche planifiée (appartenance au
     /// <see cref="AiBadgeRegistry"/>). « Ce programme a été recommandé par
     /// l'IA. »</item>
-    /// <item><b>Déjà possédé</b> (jaune <c>#FBC02D</c>, sans icône) : l'émission
-    /// (série via <c>SeriesName</c>, film via <c>Name</c>) figure déjà dans la
-    /// bibliothèque — même rapprochement par nom normalisé
-    /// (<see cref="GetEmbyInfoTool.Norm"/>) que les outils
-    /// <c>epg_series</c>/<c>epg_movies</c> utilisent pour exclure le possédé
-    /// des suggestions. « Ne l'enregistre pas, tu l'as déjà. »</item>
+    /// <item><b>Déjà possédé</b> (jaune <c>#FBC02D</c>, sans icône) : pour un
+    /// film, le film (<c>Name</c>) figure déjà dans la bibliothèque — même
+    /// rapprochement par nom normalisé (<see cref="GetEmbyInfoTool.Norm"/>)
+    /// que les outils <c>epg_series</c>/<c>epg_movies</c>. Pour un épisode de
+    /// série, <b>cet épisode précis</b> (n° saison/épisode, puis titre
+    /// d'épisode) doit y figurer : une série possédée ne badge pas toutes ses
+    /// diffusions — seuls les épisodes réellement possédés le sont. Repli
+    /// conservateur : un programme sans n° saison/épisode dont le titre ne
+    /// matche aucun épisode possédé retombe sur le niveau série (comportement
+    /// historique). « Ne l'enregistre pas, tu l'as déjà. »</item>
     /// </list>
     /// <para>Les deux étant <b>exclusifs par construction</b> (le record bucket
     /// exclut le possédé), l'ordre de priorité AI &gt; possédé ne sert qu'aux
@@ -45,17 +49,29 @@ namespace LLM_AI
     /// effet (réapplication à chaque demande).</para>
     /// <para><b>Coût</b> : <see cref="Supports"/> est consulté à chaque demande
     /// d'image — les gardes bon marché (type, flag, dates) passent avant le
-    /// rapprochement bibliothèque, et l'ensemble des noms possédés est
-    /// reconstruit au plus toutes les <see cref="OwnedCacheTtl"/> (2 requêtes
-    /// library), jamais par demande.</para>
+    /// rapprochement bibliothèque, et l'index des contenus possédés (noms +
+    /// clés d'épisodes) est reconstruit au plus toutes les
+    /// <see cref="OwnedCacheTtl"/> (3 requêtes library : Series, Movie,
+    /// Episode), jamais par demande.</para>
     /// </remarks>
     public class AiBadgeEnhancer : IImageEnhancer
     {
-        /// <summary>Clé de cache des images badgées « AI » (suggestion).</summary>
-        public const string CacheKeyAi = "aibadge-v1";
+        /// <summary>
+        /// Clé de cache des images badgées « AI » (suggestion). <b>Scopée par
+        /// item</b> (suffixe <c>InternalId</c>) : les épisodes d'une série
+        /// partagent la même pochette Gracenote (URL unique au niveau série),
+        /// et la clé de cache fait partie du chemin du fichier caché — sans
+        /// suffixe, le badge d'un programme serait resservi à tous les
+        /// épisodes partageant la même image.
+        /// </summary>
+        public const string CacheKeyAi = "aibadge-v2";
 
-        /// <summary>Clé de cache des images badgées « déjà possédé ».</summary>
-        public const string CacheKeyOwned = "ownedbadge-v1";
+        /// <summary>
+        /// Clé de cache des images badgées « déjà possédé ». <b>Scopée par
+        /// item</b> pour la même raison que <see cref="CacheKeyAi"/> (pochette
+        /// partagée entre épisodes d'une même série).
+        /// </summary>
+        public const string CacheKeyOwned = "ownedbadge-v2";
 
         /// <summary>Diamètre du badge = 14 % de la largeur (borné 24–72 px).</summary>
         private const float BadgeSizeRatio = 0.14f;
@@ -76,6 +92,13 @@ namespace LLM_AI
 
         /// <summary>Noms possédés normalisés (Norm) — cache partagé TTL.</summary>
         private static HashSet<string> s_ownedNames;
+
+        /// <summary>
+        /// Clés d'épisodes par série possédée (norm(series) → {s{S}e{E},
+        /// t:{titre}}) — cache partagé TTL, reconstruit avec
+        /// <see cref="s_ownedNames"/>.
+        /// </summary>
+        private static Dictionary<string, HashSet<string>> s_ownedEpisodes;
         private static DateTime s_ownedNamesAtUtc;
         private static readonly object s_ownedLock = new object();
 
@@ -134,14 +157,20 @@ namespace LLM_AI
         public MetadataProviderPriority Priority => MetadataProviderPriority.Last;
 
         /// <inheritdoc />
-        /// <remarks><b>Par état</b> : la clé fait partie du chemin du fichier
-        /// caché, donc basculer AI ↔ possédé (ex. la série vient d'être
-        /// importée en bibliothèque) régénère l'image au lieu de resservir
-        /// l'ancien badge.</remarks>
+        /// <remarks><b>Par état ET par item</b> : la clé fait partie du chemin
+        /// du fichier caché, donc basculer AI ↔ possédé (ex. la série vient
+        /// d'être importée en bibliothèque) régénère l'image au lieu de
+        /// resservir l'ancien badge. Le suffixe <c>InternalId</c> sépare les
+        /// épisodes d'une même série : ils partagent la même pochette Gracenote
+        /// (URL unique au niveau série), et sans ce suffixe la première image
+        /// badgée serait resservie à tous les épisodes partageant l'artwork,
+        /// ce qui ferait fuiter le badge d'un épisode sur les autres.</remarks>
         public string GetConfigurationCacheKey(BaseItem item, ImageType imageType)
-            => (item is LiveTvProgram p && ComputeBadgeKind(p) == BadgeKind.Owned)
-                ? CacheKeyOwned
-                : CacheKeyAi;
+        {
+            var owned = item is LiveTvProgram p && ComputeBadgeKind(p) == BadgeKind.Owned;
+            var key = owned ? CacheKeyOwned : CacheKeyAi;
+            return key + "-" + (item?.InternalId ?? 0);
+        }
 
         /// <inheritdoc />
         /// <remarks>Le badge ne change pas la taille de l'image.</remarks>
@@ -203,10 +232,23 @@ namespace LLM_AI
         /// <summary>
         /// Kind de badge pour un programme : <b>AI prioritaire</b> (le record
         /// bucket exclut déjà le possédé, ce priority ne couvre que la
-        /// transition), sinon « déjà possédé » si l'émission figure dans la
-        /// bibliothèque (série par <c>SeriesName</c>, film par <c>Name</c> —
-        /// même rapprochement <see cref="GetEmbyInfoTool.Norm"/> que
-        /// l'exclusion biblio des outils <c>epg_series</c>/<c>epg_movies</c>).
+        /// transition), sinon « déjà possédé » si le contenu figure dans la
+        /// bibliothèque :
+        /// <list type="bullet">
+        /// <item><b>Film</b> (pas de <c>SeriesName</c>) : rapprochement par
+        /// <c>Name</c> normalisé, comme l'exclusion biblio des outils
+        /// <c>epg_series</c>/<c>epg_movies</c>.</item>
+        /// <item><b>Épisode de série</b> : la série doit être possédée
+        /// (<c>SeriesName</c> normalisé — garde bon marché), PUIS <b>cet
+        /// épisode précis</b> doit y figurer : n° saison/épisode
+        /// (<c>s{S}e{E}</c>) d'abord, titre d'épisode normalisé en second.
+        /// Un épisode numéroté absent de la bibliothèque n'est PAS badgé
+        /// (contrôle précis négatif) — c'est le comportement voulu : posséder
+        /// la série ne badge pas toutes ses diffusions. Repli conservateur :
+        /// un programme SANS n° saison/épisode dont le titre ne matche aucun
+        /// épisode possédé retombe sur le niveau série (comportement
+        /// historique, on ne peut pas prouver que l'épisode est absent).</item>
+        /// </list>
         /// </summary>
         private BadgeKind ComputeBadgeKind(LiveTvProgram program)
         {
@@ -218,32 +260,73 @@ namespace LLM_AI
             if (!owned || _library == null)
                 return BadgeKind.None;
 
-            var title = !string.IsNullOrEmpty(program.SeriesName) ? program.SeriesName : program.Name;
-            var key = GetEmbyInfoTool.Norm(title);
+            var (names, episodes) = GetOwnedIndex();
+
+            // Épisode de série : garde bon marché sur le nom de série, puis
+            // contrôle précis au niveau épisode.
+            if (!string.IsNullOrEmpty(program.SeriesName))
+            {
+                var seriesKey = GetEmbyInfoTool.Norm(program.SeriesName);
+                if (string.IsNullOrEmpty(seriesKey) || !names.Contains(seriesKey))
+                    return BadgeKind.None;
+
+                if (!episodes.TryGetValue(seriesKey, out var keys))
+                    return BadgeKind.None;   // série possédée sans épisode indexé
+
+                // 1) Numérotation saison/épisode (contrôle précis — positif
+                //    OU négatif tranché).
+                bool hasSE = program.ParentIndexNumber.HasValue && program.IndexNumber.HasValue;
+                if (hasSE && keys.Contains("s" + program.ParentIndexNumber.Value + "e" + program.IndexNumber.Value))
+                    return BadgeKind.Owned;
+
+                // 2) Titre d'épisode normalisé (numérotation EPG absente ou
+                //    décalée — les titres québécois/EPG diffèrent parfois de
+                //    la biblio).
+                var titleKey = GetEmbyInfoTool.Norm(program.Name);
+                if (!string.IsNullOrEmpty(titleKey) && keys.Contains("t:" + titleKey))
+                    return BadgeKind.Owned;
+
+                // 3) Sans numérotation EPG, on ne peut pas prouver que
+                //    l'épisode est absent → repli conservateur au niveau
+                //    série (comportement historique). Avec numérotation et
+                //    sans match : épisode précis absent → pas de badge.
+                return hasSE ? BadgeKind.None : BadgeKind.Owned;
+            }
+
+            // Film / programme non épisodique : rapprochement par nom.
+            var key = GetEmbyInfoTool.Norm(program.Name);
             if (string.IsNullOrEmpty(key)) return BadgeKind.None;
 
-            return GetOwnedNames().Contains(key) ? BadgeKind.Owned : BadgeKind.None;
+            return names.Contains(key) ? BadgeKind.Owned : BadgeKind.None;
         }
 
         /// <summary>
-        /// Noms possédés normalisés (biblio <c>Series</c> + <c>Movie</c>),
-        /// reconstruits au plus toutes les <see cref="OwnedCacheTtl"/> — jamais
-        /// par demande d'image. Un échec de requête library rend un ensemble
-        /// vide (aucun badge possédé servi, jamais d'exception dans le
-        /// pipeline d'image) ; il sera retenté au TTL suivant.
+        /// Index des contenus possédés, reconstruit au plus toutes les
+        /// <see cref="OwnedCacheTtl"/> — jamais par demande d'image :
+        /// <list type="bullet">
+        /// <item><c>names</c> : noms normalisés (biblio <c>Series</c> +
+        /// <c>Movie</c>) — garde bon marché du niveau série/film ;</item>
+        /// <item><c>episodes</c> : par série possédée, les clés de ses épisodes
+        /// (<c>s{S}e{E}</c> et <c>t:{titre normalisé}</c>) — contrôle précis du
+        /// badge « déjà possédé » par épisode.</item>
+        /// </list>
+        /// Un échec de requête library rend un ensemble vide (aucun badge
+        /// possédé servi, jamais d'exception dans le pipeline d'image) ; il
+        /// sera retenté au TTL suivant.
         /// </summary>
-        private HashSet<string> GetOwnedNames()
+        private (HashSet<string> names, Dictionary<string, HashSet<string>> episodes) GetOwnedIndex()
         {
             var now = DateTime.UtcNow;
             if (s_ownedNames != null && now - s_ownedNamesAtUtc < OwnedCacheTtl)
-                return s_ownedNames;
+                return (s_ownedNames, s_ownedEpisodes);
 
             lock (s_ownedLock)
             {
                 if (s_ownedNames != null && now - s_ownedNamesAtUtc < OwnedCacheTtl)
-                    return s_ownedNames;
+                    return (s_ownedNames, s_ownedEpisodes);
 
                 var set = new HashSet<string>();
+                var eps = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
                 foreach (var itemType in new[] { "Series", "Movie" })
                 {
                     try
@@ -268,11 +351,47 @@ namespace LLM_AI
                     }
                 }
 
+                // Index des épisodes par série possédée (une seule requête —
+                // 3 000 épisodes typiques, projection immédiate en clés).
+                try
+                {
+                    var q = new InternalItemsQuery
+                    {
+                        IncludeItemTypes = new[] { "Episode" },
+                        Recursive = true,
+                        EnableTotalRecordCount = false
+                    };
+                    foreach (var item in _library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                    {
+                        if (item is not MediaBrowser.Controller.Entities.TV.Episode ep) continue;
+                        if (string.IsNullOrEmpty(ep.SeriesName)) continue;
+                        var sk = GetEmbyInfoTool.Norm(ep.SeriesName);
+                        if (string.IsNullOrEmpty(sk)) continue;
+                        if (!eps.TryGetValue(sk, out var keys))
+                        {
+                            keys = new HashSet<string>(StringComparer.Ordinal);
+                            eps[sk] = keys;
+                        }
+                        if (ep.ParentIndexNumber.HasValue && ep.IndexNumber.HasValue)
+                            keys.Add("s" + ep.ParentIndexNumber.Value + "e" + ep.IndexNumber.Value);
+                        var tn = GetEmbyInfoTool.Norm(ep.Name);
+                        if (!string.IsNullOrEmpty(tn)) keys.Add("t:" + tn);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Info("[LLM_AI] Badge « déjà possédé » : requête library Episode échouée ({0}).",
+                        ex.Message);
+                }
+
                 s_ownedNames = set;
+                s_ownedEpisodes = eps;
                 s_ownedNamesAtUtc = now;
-                _logger?.Info("[LLM_AI] Badge « déjà possédé » : {0} nom(s) biblio (Series+Movie) mis en cache (TTL {1} min).",
-                    set.Count, (int)OwnedCacheTtl.TotalMinutes);
-                return set;
+                _logger?.Info("[LLM_AI] Badge « déjà possédé » : {0} nom(s) biblio (Series+Movie), {1} série(s) / {2} clé(s) épisode mis en cache (TTL {3} min).",
+                    set.Count, eps.Count,
+                    eps.Values.Aggregate(0, (acc, ks) => acc + ks.Count),
+                    (int)OwnedCacheTtl.TotalMinutes);
+                return (set, eps);
             }
         }
 

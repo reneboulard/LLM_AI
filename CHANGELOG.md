@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.1.0.0] — 2026-08-31
 
 ### Ajouté / Added
 - **Audit santé du serveur** (`SystemAuditTool` + `AuditApiService`, endpoint à la
@@ -242,14 +242,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     coin haut droit, sur les programmes du **record bucket** de la tâche nocturne
     (registre `AiBadgeRegistry`, remplacé à chaque run, persisté `AiBadgeProgramIds` ;
     garde `EndDate > now` → auto-expiration des suggestions passées).
-  - **Badge « déjà possédé »** — puce jaune `#FBC02D` SANS étincelle, sur les programmes
-    dont la série (`SeriesName`) ou le film (`Name`) figure dans la bibliothèque —
-    réutilise la correspondance par nom normalisé (`GetEmbyInfoTool.Norm`) de
-    l'exclusion epg_series/epg_movies, ensemble de noms caché 10 min (jamais par
-    requête). Granularité nom de show : une nouvelle saison d'une série possédée est
-    jaune aussi. Le vert gagne en cas de conflit.
-  - Clé de cache propre à chaque type de badge (les transitions d'état régénèrent
-    l'image), dessin via **SkiaSharp** livré avec Emby (référencé `libs/SkiaSharp.dll`,
+  - **Badge « déjà possédé »** — puce jaune `#FBC02D` SANS étincelle : pour un film,
+    le film (`Name`) figure dans la bibliothèque ; pour un épisode de série,
+    **cet épisode précis** doit y figurer (n° saison/épisode `s{S}e{E}` d'abord, puis
+    titre d'épisode normalisé) — posséder la série ne badge **pas** toutes ses
+    diffusions, seuls les épisodes réellement possédés le sont (vérifié empiriquement :
+    les épisodes EPG partagent la même pochette Gracenote au niveau série, mais le
+    rapprochement et la clé de cache sont désormais par épisode). Repli conservateur :
+    un programme EPG sans numérotation dont le titre ne matche aucun épisode possédé
+    retombe sur le niveau série (comportement historique — on ne peut pas prouver que
+    l'épisode est absent). Réutilise la correspondance par nom normalisé
+    (`GetEmbyInfoTool.Norm`) de l'exclusion epg_series/epg_movies ; index noms +
+    clés d'épisodes biblio caché 10 min (jamais par requête). Le vert gagne en cas
+    de conflit.
+  - **Clé de cache par état ET par item** (`ownedbadge-v2`/`aibadge-v2` + suffixe
+    `InternalId`) : les épisodes d'une même série partagent la même pochette Gracenote
+    (URL unique au niveau série) — sans suffixe par item, le badge du premier épisode
+    servi serait resservi à tous les épisodes partageant l'artwork, faisant fuiter le
+    badge d'un épisode (ou d'une suggestion AI d'un programme) sur les autres. Le
+    suffixe par item sépare les entrées de cache ; les transitions d'état régénèrent
+    l'image. Dessin via **SkiaSharp** livré avec Emby (référencé `libs/SkiaSharp.dll`,
     aucun changement de déploiement), repli = copie de l'original sur toute erreur
     (l'enhancer ne lève jamais dans le pipeline d'images).
   Config : `AiBadgeEnabled` + `AiOwnedBadgeEnabled` (défaut `true`, opt-out), cases à
@@ -262,12 +274,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     on the nightly task's **record bucket** programs (`AiBadgeRegistry`, replaced on each
     run, persisted `AiBadgeProgramIds`; `EndDate > now` guard → past suggestions
     self-expire).
-  - **"Already owned" badge** — yellow chip `#FBC02D` WITHOUT the sparkle, on programs
-    whose series (`SeriesName`) or movie (`Name`) exists in the library — reuses the
-    normalized name matching (`GetEmbyInfoTool.Norm`) from the epg_series/epg_movies
-    exclusion, name set cached 10 min (never per request). Show-name granularity: a new
-    season of an owned series is yellow too. Green wins on conflict.
-  - Per-badge-kind cache key (state transitions regenerate the image), drawn with
+  - **"Already owned" badge** — yellow chip `#FBC02D` WITHOUT the sparkle: for a movie,
+    the movie (`Name`) exists in the library; for a series episode, **that specific
+    episode** must exist there (season/episode number `s{S}e{E}` first, then normalized
+    episode title) — owning a series does **not** badge all its airings, only the
+    actually-owned episodes get the chip (empirically verified: EPG episodes share the
+    series-level Gracenote artwork, but both the match and the cache key are now
+    per-episode). Conservative fallback: an EPG program with no episode numbering whose
+    title matches no owned episode falls back to series level (historical behavior —
+    the episode's absence cannot be proven). Reuses the normalized name matching
+    (`GetEmbyInfoTool.Norm`) from the epg_series/epg_movies exclusion; library names +
+    episode keys cached 10 min (never per request). Green wins on conflict.
+  - **Cache key per state AND per item** (`ownedbadge-v2`/`aibadge-v2` + `InternalId`
+    suffix): episodes of the same series share the same Gracenote artwork (one
+    series-level URL) — without a per-item suffix, the first served episode's badge
+    would be re-served to every episode sharing the artwork, leaking one episode's
+    badge (or one program's AI suggestion) onto the others. The per-item suffix
+    separates the cache entries; state transitions regenerate the image. Drawn with
     **SkiaSharp** bundled with Emby (referenced from `libs/SkiaSharp.dll`, zero deploy
     changes), fallback = copy of the original on any error (the enhancer never throws
     into the image pipeline).
@@ -321,6 +344,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Config: `ChatEnabled` (default `true`, opt-out).
 
 ### Modifié / Changed
+- **Outil `new_releases` : généralisation multi-sources de `showbizz_new_releases`**
+  (fichier `ShowbizzTool.cs` renommé `NewReleasesTool.cs`). Le scraper « nouveautés »
+  n'est plus lié à Showbizz.net ni au Québec : toute source web devient utilisable.
+  **`new_releases` tool: multi-source generalization of `showbizz_new_releases`**
+  (`ShowbizzTool.cs` renamed to `NewReleasesTool.cs`). The new-releases scraper is no
+  longer tied to Showbizz.net or Québec: any web source works.
+  - **Config `NewReleaseSources`** (une source par ligne, remplace la paire
+    `ShowbizzUrl`/`ShowbizzPattern`) : URL seule = flux **RSS 2.0/Atom
+    auto-détecté** (XDocument, aucun paquet externe) ; `URL :: @showbizz` =
+    extracteur Showbizz.net intégré (blocs « Saison 1 », inchangé) ; `URL :: regex .NET`
+    = extraction personnalisée **par source** (groupe `title` requis, `url`/`date`
+    optionnels). Regex invalide → Warn + source ignorée (l'outil ne lève jamais).
+    Vide = outil désactivé.
+    **`NewReleaseSources` config** (one source per line, replaces the
+    `ShowbizzUrl`/`ShowbizzPattern` pair): bare URL = auto-detected **RSS 2.0/Atom
+    feed** (XDocument, no external package); `URL :: @showbizz` = built-in
+    Showbizz.net extractor ("Saison 1" blocks, unchanged); `URL :: .NET regex` =
+    custom extraction **per source** (required `title` group, optional
+    `url`/`date`). Invalid regex → Warn + source skipped (the tool never throws).
+    Empty = tool disabled.
+  - **Migration transparente** : tant que `NewReleaseSources` n'a jamais été
+    sauvegardé, son getter reconstruit la liste équivalente depuis l'ancienne paire
+    (`ShowbizzUrl` + sources Showbizz.net par défaut, regex globale appliquée à
+    toutes les sources si elle existait) — comportement strictement préservé, et la
+    page de config affiche/sauvegarde la liste migrée.
+    **Transparent migration**: until `NewReleaseSources` has ever been saved, its
+    getter rebuilds the equivalent list from the legacy pair (`ShowbizzUrl` + the
+    default Showbizz.net sources, global regex applied to all sources if it
+    existed) — behavior strictly preserved, and the config page displays/saves the
+    migrated list.
+  - **Alias `showbizz_new_releases`** : l'ancien nom reste enregistré (transfert
+    vers le nouvel outil) pour ne pas casser les prompts sauvegardés ; les défauts
+    `ScheduleTask`/`ScheduleTaskMovies` citent désormais `new_releases`. Le champ
+    de sortie `showbizz_match` garde son nom (contrat JSON persisté).
+    **`showbizz_new_releases` alias**: the old name stays registered (forwards to
+    the new tool) so saved prompts keep working; the `ScheduleTask`/
+    `ScheduleTaskMovies` defaults now mention `new_releases`. The `showbizz_match`
+    output field keeps its name (persisted JSON contract).
+  - **Cache 24h invalidé par la config** : la clé de cache est le SHA256 des
+    sources effectives — modifier la liste re-scrappe **sans redémarrer Emby**
+    (supprime le piège « restart pour re-tester »).
+    **Config-invalidated 24h cache**: the cache key is the SHA256 of the effective
+    sources — editing the list re-scrapes **without restarting Emby** (removes the
+    "restart to re-test" gotcha).
+  - **Description dynamique** (première du plugin) : générique, sans mention de
+    Showbizz/S01E01, liste les hôtes configurés — le LLM sait ce que l'outil
+    retourne, d'où qu'il soit installé. Entités HTML décodées via
+    `WebUtility.HtmlDecode` (corrige `&#039;` des titres Wikipedia).
+    **Dynamic description** (the plugin's first): generic, no Showbizz/S01E01
+    wording, lists the configured hosts — the LLM knows what the tool returns
+    wherever it is installed. HTML entities decoded via
+    `WebUtility.HtmlDecode` (fixes Wikipedia titles' `&#039;`).
 - **Surfaces natives des recommandations** — trois leviers opt-in (générés par la
   tâche planifiée) pour exposer les recos directement dans Emby, au-delà de la
   page web `recommendations.html` :
@@ -499,6 +574,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `AutoProgrammer` (dedup matching consistent with the EPG exclusion).
 
 ### Corrigé / Fixed
+- **Recos FILMS sans id EPG (run 3am 2026-08-31 — 0/6 matchées)** : avec
+  `ResponseLanguage=English`, le LLM (gemma4:26b local) émettait les **titres TMDB
+  anglais** (« Big Night ») au lieu des titres EPG français (« À table! ») dans sa
+  réponse finale — l'ancienne directive disait que les titres « restent dans leur
+  langue d'origine », ce que le modèle interprétait comme « utiliser le titre en
+  langue d'origine de l'œuvre » (juste après avoir vu les titres anglais dans les
+  résultats `tmdb_lookup`). L'enrichissement (`EnrichRecommendations`), qui
+  rapproche par titre normalisé, matchait donc 0/6 → recos sans `id` : pas de
+  poster, programmation impossible, exclues du record bucket (pas de carte
+  `.strm`, pas de timer auto-program, pas de badge). Les séries du même run
+  matchaient 9/9 par coïncidence (chaînes anglophones — titres EPG déjà anglais).
+  Triple correctif :
+  (a) **directive reformulée sans ambiguïté** (`BuildLanguageDirective`) : les
+  titres et noms de chaînes ne se traduisent JAMAIS — recopier le `title`
+  EXACTEMENT tel qu'il figure dans les résultats de `get_emby_info`, même si
+  `tmdb_lookup` renvoie le titre dans une autre langue ;
+  (b) **repli chaîne+heure** dans `EnrichRecommendations` (`FindByChannelStart`) :
+  quand le titre ne matche pas, la reco est rattachée au programme EPG diffusé sur
+  la même chaîne (nom normalisé) à la même heure (±10 min, la plus proche gagne) —
+  une chaîne ne diffuse qu'un programme à une heure donnée, et `channel`/`start`
+  sont des champs obligatoires que le LLM recopie correctement ; chaque
+  rattachement est logué (Info) avec le titre EPG retrouvé ;
+  (c) **log Warn quand 0 reco matchée** (avant : Info silencieux) avec la cause
+  probable et l'impact (pas de programmation, ni carte `.strm`, ni badge) ;
+  (d) **porte de validation stricte** dans `EnrichRecommendations` : une reco
+  *intracable* au pool EPG que le plugin a lui-même fourni au LLM — ni par
+  titre, ni par chaîne+heure, ni par id de programme recopié du pool — est
+  **écartée du payload** avec un Warn listant les titres écartés. On ne
+  publie que ce qui peut être rattaché à un programme EPG réellement envoyé
+  au LLM : l'intracable est soit une hallucination (programme jamais dans le
+  pool), soit une reco entièrement reformulée — dans les deux cas elle n'est
+  pas programmable et ne passerait de toute façon aucun garde-fou du record
+  bucket ; autant l'écarter plutôt que d'afficher une carte morte. La ligne
+  de bilan compte maintenant les écartées. Une reco purement « Showbizz »
+  (nouveauté sans entrée EPG) est écartée aussi — délibéré : sans programme
+  EPG, elle ne peut pas être enregistrée.
+  **MOVIE recos with no EPG id (3am run 2026-08-31 — 0/6 matched)**: with
+  `ResponseLanguage=English`, the LLM (local gemma4:26b) emitted the **English TMDB
+  titles** ("Big Night") instead of the French EPG titles ("À table!") in its final
+  reply — the old directive said titles "stay in their original language", which
+  the model read as "use the work's original-language title" (right after seeing
+  the English titles in the `tmdb_lookup` results). Enrichment
+  (`EnrichRecommendations`), which matches by normalized title, therefore matched
+  0/6 → recos with no `id`: no poster, no possible scheduling, excluded from the
+  record bucket (no `.strm` card, no auto-program timer, no badge). The same run's
+  series matched 9/9 by coincidence (English-language channels — EPG titles were
+  already English). Triple fix:
+  (a) **unambiguous directive wording** (`BuildLanguageDirective`): titles and
+  channel names are NEVER translated — copy the `title` EXACTLY as it appears in
+  the `get_emby_info` results, even when `tmdb_lookup` returns the title in
+  another language;
+  (b) **channel+time fallback** in `EnrichRecommendations`
+  (`FindByChannelStart`): when the title doesn't match, the reco is attached to
+  the EPG program airing on the same channel (normalized name) at the same time
+  (±10 min, nearest wins) — a channel broadcasts only one program at a given time,
+  and `channel`/`start` are mandatory fields the LLM copies correctly; each
+  attachment is logged (Info) with the recovered EPG title;
+  (c) **Warn log when 0 recos match** (previously a silent Info) with the likely
+  cause and impact (no scheduling, no .strm card, no badge);
+  (d) **strict validation gate** in `EnrichRecommendations`: a reco *untraceable*
+  to the EPG pool the plugin itself fed the LLM — not by title, not by
+  channel+time, not by a program id copied from the pool — is **dropped from the
+  payload** with a Warn listing the dropped titles. Only what can be tied back
+  to an EPG program actually sent to the LLM gets published: untraceable means
+  either a hallucination (a program never in the pool) or a fully rewritten
+  reco — in both cases it cannot be scheduled and would fail every record-bucket
+  guard anyway; better dropped than a dead card. The summary line now counts the
+  dropped recos. A purely "Showbizz" reco (new release with no EPG entry) is
+  dropped too — deliberate: without an EPG program it cannot be recorded.
 - **« ç » et accents : les titres accentués ne matchaient jamais leurs
   variantes non accentuées** (corrigé 2026-08-30, suspect n°1 du cas
   « Comment tuer son mari en 10 leçons ») : les deux normalisateurs de titres
@@ -730,3 +874,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   LLM orchestration extracted into shared `LlmRunner`.
 
 [1.0.0.0]: ../../releases/tag/v1.0.0
+[1.1.0.0]: ../../releases/tag/v1.1.0.0

@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using MediaBrowser.Model.Plugins;
 
 namespace LLM_AI
@@ -23,7 +25,7 @@ namespace LLM_AI
         public string Provider { get; set; } = "ollama_local";
 
         /// <summary>
-        /// URL de base : Ollama local (ex. http://192.168.11.2:11434),
+        /// URL de base : Ollama local (ex. http://localhost:11434),
         /// Ollama cloud (https://ollama.com), Gemini
         /// (https://generativelanguage.googleapis.com/v1beta). Vide = défaut
         /// selon <see cref="Provider"/>.
@@ -85,7 +87,7 @@ namespace LLM_AI
             {
                 case LlmProvider.OllamaCloud: return "https://ollama.com";
                 case LlmProvider.Gemini:       return "https://generativelanguage.googleapis.com/v1beta";
-                default:                       return "http://192.168.11.2:11434";
+                default:                       return "http://localhost:11434";
             }
         }
     }
@@ -108,13 +110,13 @@ namespace LLM_AI
         /// tâche planifiée construit un backend unique depuis ce champ. La
         /// page de config ne l'édite plus (elle gère <see cref="LlmBackends"/>).
         /// </summary>
-        public string LlmUrl { get; set; } = "http://192.168.11.2:11434";
+        public string LlmUrl { get; set; } = "http://localhost:11434";
 
         /// <summary>
-        /// URL publique d'Emby (ex. http://192.168.11.2:8096) utilisée pour
+        /// URL publique d'Emby (ex. http://localhost:8096) utilisée pour
         /// construire les <c>image_url</c> retournés au LLM (affichage uniquement).
         /// </summary>
-        public string EmbyPublicUrl { get; set; } = "http://192.168.11.2:8096";
+        public string EmbyPublicUrl { get; set; } = "http://localhost:8096";
 
         /// <summary>
         /// Nom du modèle Ollama (legacy, mono-serveur). Conservé pour la
@@ -152,7 +154,7 @@ namespace LLM_AI
 
         /// <summary>
         /// URL de base d'une instance SearXNG auto-hébergée (ex.
-        /// <c>http://192.168.11.24</c> ou <c>http://searxng.local:8888</c>),
+        /// <c>http://localhost:8888</c> ou <c>http://searxng.local:8888</c>),
         /// utilisée comme backend alternatif pour l'outil <c>web_search</c>.
         /// L'outil interroge <c>{url}/search?q=…&amp;format=json</c>. Si renseigné,
         /// SearXNG est privilégié (gratuit, sans quota, résultats JSON) ; sinon
@@ -187,18 +189,61 @@ namespace LLM_AI
         public string GeminiApiKey { get; set; } = "";
 
         /// <summary>
-        /// URL de la page « nouveautés » de Showbizz.net à scraper via l'outil
-        /// <c>showbizz_new_releases</c>. Laisser vide pour désactiver l'outil.
+        /// [Legacy — migré vers <see cref="NewReleaseSources"/>] URL de la page
+        /// « nouveautés » de Showbizz.net de l'ancien outil
+        /// <c>showbizz_new_releases</c>. Plus éditée par la page de config ;
+        /// lue seulement par la migration de <see cref="NewReleaseSources"/>.
         /// </summary>
         public string ShowbizzUrl { get; set; } = "";
 
         /// <summary>
-        /// Regex .NET appliqué au HTML de <see cref="ShowbizzUrl"/> pour extraire
-        /// les titres (groupe nommé « title » ; groupe « url » optionnel). Laisser
-        /// vide pour un repli générique (texte des balises &lt;a&gt;). À régler
-        /// selon la structure réelle de la page.
+        /// [Legacy — migré vers <see cref="NewReleaseSources"/>] Regex .NET de
+        /// l'ancienne extraction globale, appliquée à toutes les sources.
         /// </summary>
         public string ShowbizzPattern { get; set; } = "";
+
+        private string _newReleaseSources;
+
+        /// <summary>
+        /// Sources de l'outil <c>new_releases</c> — une par ligne :
+        /// <list type="bullet">
+        /// <item>« URL » : flux RSS/Atom auto-détecté ;</item>
+        /// <item>« URL :: @showbizz » : extracteur intégré (blocs
+        /// <c>/emissions/</c> + « Saison 1 », portage du scraper PHP) ;</item>
+        /// <item>« URL :: regex .NET » : extraction personnalisée (groupe nommé
+        /// « title » requis, « url »/« date » optionnels), p. ex.
+        /// <c>https://…/Category:2026_Canadian_television_series_debuts :: &lt;li&gt;&lt;a href="(?&lt;url&gt;/wiki/[^:"]+)"[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;</c>.</item>
+        /// </list>
+        /// Vide = outil désactivé. Migration transparente : tant que cette
+        /// valeur n'a jamais été sauvegardée (backing field null) et que
+        /// l'ancienne paire <see cref="ShowbizzUrl"/>/<see cref="ShowbizzPattern"/>
+        /// existe, le getter retourne la liste migrée (sources Showbizz.net
+        /// par défaut + ancienne URL, toutes avec l'ancien comportement :
+        /// regex globale si elle était définie, sinon « @showbizz »).
+        /// </summary>
+        public string NewReleaseSources
+        {
+            get
+            {
+                if (_newReleaseSources != null) return _newReleaseSources;
+                if (string.IsNullOrWhiteSpace(ShowbizzUrl)) return "";
+
+                // Migration fidèle : l'ancien outil scrapait toujours les 2
+                // sources par défaut + l'URL config, et la regex (si définie)
+                // remplaçait l'extraction pour TOUTES les sources.
+                var urls = new List<string>(NewReleasesTool.LegacyDefaultSources);
+                string legacyUrl = ShowbizzUrl.Trim();
+                if (!urls.Contains(legacyUrl, StringComparer.OrdinalIgnoreCase))
+                    urls.Add(legacyUrl);
+                string pattern = (ShowbizzPattern ?? "").Trim();
+
+                var lines = new List<string>(urls.Count);
+                foreach (var u in urls)
+                    lines.Add(pattern.Length == 0 ? u + " :: @showbizz" : u + " :: " + pattern);
+                return string.Join("\n", lines);
+            }
+            set { _newReleaseSources = value ?? ""; }
+        }
 
         /// <summary>
         /// Directives RAG : prompt système envoyé au LLM (role: system)
@@ -224,7 +269,7 @@ namespace LLM_AI
         /// La planification (gauche du '|') fixe les triggers par défaut ;
         /// le prompt (droite du '|') est envoyé au LLM comme message utilisateur.
         /// </summary>
-        public string ScheduleTask { get; set; } = "Daily 03:00 | Recommande des enregistrements de SÉRIES : 1) les nouvelles séries (S01E01) à venir dans l'EPG mais absentes de ma bibliothèque (get_emby_info action=epg_series premieres_only=true), enrichis-les via tmdb_lookup/tvdb_search quand le synopsis EPG est vide, et croise avec showbizz_new_releases ; 2) les nouvelles saisons à venir des séries que je possède déjà mais qui ne sont pas dans mes enregistrements planifiés (get_emby_info action=epg_series new_seasons=true). Les filtres chaines/genres et les flags Kids/News/Sports s'appliquent. Recommande les drames, thrillers, comédies de fiction et scifi dignes d'être enregistrés. Retourne un tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] où kind vaut \"series\".";
+        public string ScheduleTask { get; set; } = "Daily 03:00 | Recommande des enregistrements de SÉRIES : 1) les nouvelles séries (S01E01) à venir dans l'EPG mais absentes de ma bibliothèque (get_emby_info action=epg_series premieres_only=true), enrichis-les via tmdb_lookup/tvdb_search quand le synopsis EPG est vide, et croise avec new_releases ; 2) les nouvelles saisons à venir des séries que je possède déjà mais qui ne sont pas dans mes enregistrements planifiés (get_emby_info action=epg_series new_seasons=true). Les filtres chaines/genres et les flags Kids/News/Sports s'appliquent. Recommande les drames, thrillers, comédies de fiction et scifi dignes d'être enregistrés. Retourne un tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] où kind vaut \"series\".";
 
         /// <summary>
         /// Prompt de la tâche FILMS (sans partie planification — la
