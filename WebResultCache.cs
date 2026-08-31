@@ -9,7 +9,7 @@ namespace LLM_AI
     /// (<see cref="WebSearchTool"/>, <see cref="WebFetchTool"/>). Économise le
     /// quota de l'API cloud Ollama (web_search/web_fetch sont comptés) en
     /// servant les requêtes identiques depuis le cache pendant 24h — même
-    /// fenêtre de fraîcheur que le scraper Showbizz. Cohérent avec l'usage de
+    /// fenêtre de fraîcheur que l'outil new_releases. Cohérent avec l'usage de
     /// l'agent (tâche de recommandation quotidienne : l'info d'une série ne
     /// bouge pas en 24h).
     /// <para>Ne cache QUE les résultats réussis (l'appelant décide de n'appeler

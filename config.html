@@ -161,8 +161,8 @@
                             <input is="emby-input" type="text" id="txtEmbyPublicUrl"
                                    label="URL publique Emby"
                                    data-i18n-label="cfg.embyurl.label"
-                                   placeholder="http://192.168.11.2:8096" />
-                            <div class="fieldDescription" data-i18n-html="cfg.embyurl.desc">URL d'accès Emby (ex. http://192.168.11.2:8096) — sert à construire les liens d'images retournés au LLM.</div>
+                                   placeholder="http://localhost:8096" />
+                            <div class="fieldDescription" data-i18n-html="cfg.embyurl.desc">URL d'accès Emby (ex. http://localhost:8096) — sert à construire les liens d'images retournés au LLM.</div>
                         </div>
 
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
@@ -286,7 +286,7 @@
                             <input is="emby-input" type="text" id="txtSearXngUrl"
                                    label="URL SearXNG (recherche web — optionnel)"
                                    data-i18n-label="cfg.searxng.label"
-                                   placeholder="http://192.168.11.24" />
+                                   placeholder="http://localhost:8888" />
                             <div class="fieldDescription" data-i18n-html="cfg.searxng.desc">
                                 Instance SearXNG auto-hébergée (méta-moteur). Si renseigné,
                                 l'outil <b>web_search</b> l'utilise en priorité (gratuit, sans
@@ -321,21 +321,22 @@
                         </div>
 
                         <div class="inputContainer">
-                            <input is="emby-input" type="text" id="txtShowbizzUrl"
-                                   label="URL nouveautés Showbizz"
-                                   data-i18n-label="cfg.showbizz.label"
-                                   placeholder="https://www.showbizz.net/..." />
-                            <div class="fieldDescription" data-i18n-html="cfg.showbizz.desc">Active l'outil showbizz_new_releases. La page d'accueil + la liste saisonnière sont scrapées par défaut ; cette URL (si différente) est ajoutée comme source supplémentaire. Laisser vide désactive l'outil.</div>
-                        </div>
-
-                        <div class="inputContainer">
-                            <textarea is="emby-textarea" id="txtShowbizzPattern"
-                                      label="Regex extraction Showbizz (optionnel)"
-                                      data-i18n-label="cfg.showbizz.regex.label"
-                                      rows="2"
-                                      data-i18n-ph="cfg.showbizz.regex.ph"
-                                      placeholder="Vide = extraction auto (blocs emissions / Saison 1)"></textarea>
-                            <div class="fieldDescription" data-i18n-html="cfg.showbizz.regex.desc">Vide = extraction automatique des nouveautés « Saison 1 » (portage du scraper showbizz_scraper.php : blocs &lt;a href="/emissions/..."&gt; + titre &lt;h3&gt;/&lt;h4&gt; + date « Dès le »). Renseigné = regex .NET override (groupes « title », « url »/« date » optionnels).</div>
+                            <textarea is="emby-textarea" id="txtNewReleaseSources"
+                                      label="Sources nouveautés web (outil new_releases)"
+                                      data-i18n-label="cfg.newreleases.label"
+                                      rows="4"
+                                      data-i18n-ph="cfg.newreleases.ph"
+                                      placeholder="https://exemple.com/flux.rss&#10;https://exemple.com/nouveautes :: &lt;li&gt;&lt;a href=&quot;(?&lt;url&gt;/[^&quot;]+)&quot;[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;"></textarea>
+                            <div class="fieldDescription" data-i18n-html="cfg.newreleases.desc">
+                                Une source par ligne pour l'outil <b>new_releases</b> (alias de l'ancien
+                                showbizz_new_releases) : <b>URL</b> seule = flux RSS/Atom auto-détecté ;
+                                <b>URL :: @showbizz</b> = extracteur intégré Showbizz.net (blocs
+                                « Saison 1 ») ; <b>URL :: regex .NET</b> = extraction personnalisée
+                                (groupe « title » requis, « url »/« date » optionnels). Exemple :
+                                <code>https://en.wikipedia.org/wiki/Category:2026_Canadian_television_series_debuts :: &lt;li&gt;&lt;a href="(?&lt;url&gt;/wiki/[^:"]+)"[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;</code>.
+                                Vide = outil désactivé. Modifier la liste re-scrappe sans redémarrer
+                                (cache 24h clé sur les sources).
+                            </div>
                         </div>
 
                         <div class="inputContainer">

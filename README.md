@@ -1,14 +1,15 @@
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.0.0.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.1.0.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
-Plugin Emby qui utilise un grand modèle de langage (LLM — Ollama local, Ollama Cloud ou
+Plugin Emby qui utilise un grand modèle de langage (LLM — [Ollama](https://ollama.com) local, Ollama Cloud ou
 Google Gemini) pour produire des **recommandations de séries et de films à enregistrer**
 (planifiées au niveau serveur) et une section personnalisée **« À regarder ce soir »**
 par usager. Le LLM dispose d'outils pour interroger la bibliothèque Emby, l'EPG, TMDB,
-TVDB, le web et une source « Showbizz » de nouveautés ; il décide lui-même des appels
+TVDB, le web et des sources « nouveautés » configurables (flux RSS/Atom ou page HTML
++ regex — outil `new_releases`) ; il décide lui-même des appels
 d'outils à effectuer (boucle d'agent / tool-calling).
 
 Il expose aussi un **audit santé du serveur** à la demande (`GET /Plugins/LLMAI/Audit`,
@@ -110,7 +111,7 @@ activé de plus haute priorité est le backend **primaire**. Chaque backend :
 | Champ | Rôle |
 |---|---|
 | `Provider` | `OllamaLocal`, `OllamaCloud` ou `Gemini` |
-| `Url` | URL de l'API (ex. `http://localhost:11434` pour Ollama local) |
+| `Url` | URL de l'API (ex. `http://localhost:11434` pour [Ollama](https://ollama.com) local) |
 | `Model` | Nom du modèle (ex. `llama3.1`, `gemini-1.5-flash`) |
 | `Enabled` | Activer ce backend |
 | `Priority` | Ordre de préférence (plus haut = primaire) |
@@ -201,8 +202,9 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 
 ### Divers
 
-`TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée), `WebFetchDirect`,
-`ShowbizzUrl` / `ShowbizzPattern`, `RagDirectives` (directives additionnelles injectées
+`TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée — [SearXNG](https://docs.searxng.org/)), `WebFetchDirect`,
+`NewReleaseSources` (sources de l'outil `new_releases`, une par ligne — migré depuis
+l'ancienne paire `ShowbizzUrl` / `ShowbizzPattern`), `RagDirectives` (directives additionnelles injectées
 dans le prompt), `ResponseLanguage` (langue de sortie du LLM — voir ci-dessous),
 `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planifiée),
 `DebugVerbose`.
@@ -213,8 +215,11 @@ dans le prompt), `ResponseLanguage` (langue de sortie du LLM — voir ci-dessous
 recommandations** (champ `reason` des cartes) **et** le **rapport d'audit**. Vide / `Auto`
 = aucune directive (l'LLM suit la langue du prompt, ici le français — comportement par
 défaut). Toute autre valeur (ex. `English`, `Español`, `Deutsch`…) injecte une directive
-en fin de system prompt : l'LLM rédige alors dans cette langue. Les titres de films/séries,
-noms de chaînes et noms de champs JSON techniques restent inchangés (langue d'origine).
+en fin de system prompt : l'LLM rédige alors dans cette langue. Les titres de films/séries
+et les noms de chaînes ne se **traduisent jamais** : la directive demande de recopier le
+`title` **exactement tel qu'il figure dans les résultats de `get_emby_info`** (même si
+`tmdb_lookup` renvoie le titre dans une autre langue — un titre modifié casse le
+rattachement au programme EPG). Les noms de champs JSON techniques restent inchangés.
 Select sur la page de config : `Auto`, `Français`, `English`, `Español`, `Deutsch`,
 `Italiano`, `Português`. S'applique aux deux paths (recommandation + audit, modes single
 et déterministe).
@@ -288,7 +293,7 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`) → S3 (recherche web SearXNG → id IMDb, même porte d'acceptation), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
-| `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour les programmes déjà en bibliothèque (matching `Norm` réutilisé). Dessin SkiaSharp (livré avec Emby), clé de cache par type de badge, repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
+| `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette Gracenote de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (statique) | Registre des programmes suggérés par la tâche nocturne : remplacé à chaque run (`ApplyRecos`, filtres record bucket), persisté `AiBadgeProgramIds`, rechargement paresseux au 1er `Supports` (le constructeur du plugin ne touche jamais `Configuration` — `AssemblyFilePath` n'est posé qu'après construction). |
 | `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
@@ -300,7 +305,7 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour les paths audit et chat (sans toucher aux appelants recommandation). `RunChatAsync` : entrée multi-tours qui rejoue l'historique (user/assistant, borné) entre le system prompt et le nouveau message — même boucle partagée (`RunLoopAsync`). |
 | `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). |
 | `GetEmbyInfoTool.cs` | `GetEmbyInfoTool` | Outil `get_emby_info` (voir [Outils](#outils-llm)). Expose en outre le pliage d'accents partagé `FoldAscii` (FormD + marques combinantes + map manuel œ/æ/ø/đ/ł/ß/ð/þ → « leçons » ≡ « lecons »), utilisé par `Norm` (exclusion biblio `epg_series`/`epg_movies`, drop list) et `LlmRunner.NormTitle`. |
-| `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `ShowbizzTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
+| `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |
 | `recommendations.html` / `recommendations.js` | — | Page Recommandations (rendu des 3 sections, cartes, boutons). |
 | `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite (serveur stateless), rendu Markdown partagé. |
@@ -313,7 +318,7 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
 1. Cron `ScheduleTask`/`ScheduleTaskMovies` → `LlmScheduledTask.Execute`.
 2. `LlmRunner.ResolveBackends` choisit le backend primaire.
 3. Prompt + outils → `LlmAgentService` boucle d'agent (le LLM appelle `get_emby_info`
-   `epg_series`/`epg_movies`, `tmdb_lookup`, `web_search`/`web_fetch`, `showbizz…`).
+   `epg_series`/`epg_movies`, `tmdb_lookup`, `web_search`/`web_fetch`, `new_releases…`).
 4. `EnrichRecommendations` → posters/notes/id/chaîne.
 5. `EnrichWithLibrary` → garde-fou « déjà possédé » déterministe (titre, puis
    id IMDb si le LLM l'a établi) : reco possédée → `library_id` (exclue du
@@ -334,9 +339,9 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `get_emby_info` | **Interrogation Emby** — actions : `summary` (résumé bibliothèque), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (EPG séries à venir), `epg_movies` (EPG films à venir), `epg_tonight` (EPG dans la fenêtre « ce soir », `HasAired=false`, marque `is_scheduled`), `scheduled` / `planning` (timers programmés). Applique whitelists, flags, drop list, déduplication par titre. |
 | `tmdb_lookup` | Recherche / détails TMDB (note, poster, résumé, casting) via `TmdbApiKey`. |
 | `tvdb_search` | Recherche TVDB (séries) via `TvdbApiKey`. |
-| `web_search` | Recherche web (SearXng `SearXngUrl` ou fournisseur intégré). |
+| `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web (`WebFetchDirect` pour lecture brute). |
-| `showbizz_new_releases` | Nouveautés depuis une source « Showbizz » (`ShowbizzUrl` + `ShowbizzPattern`). |
+| `new_releases` | Nouveautés TV depuis les sources web de `NewReleaseSources` (une par ligne) : URL seule = flux RSS/Atom auto-détecté ; `URL :: @showbizz` = extracteur Showbizz.net intégré (blocs « Saison 1 ») ; `URL :: regex .NET` = extraction personnalisée (groupe `title` requis, `url`/`date` optionnels). Alias `showbizz_new_releases` (prompts existants). Cache 24h invalidé par tout changement de sources (sans redémarrage). |
 | `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 15 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata` ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---
@@ -636,7 +641,8 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
      pas de synopsis (retour à année + titre). Le verdict + la justification sont logués.
 3. **S3 — recherche web (SearXNG) → id IMDb** (si S1 et S2 échouent, et
    `OrphanSearXngEnabled`). La tâche interroge l'instance **SearXNG** auto-hébergée
-   (champ `SearXngUrl`, déjà utilisé par l'outil `web_search` du LLM ; repli Ollama
+   (champ `SearXngUrl`, déjà utilisé par l'outil `web_search` du LLM —
+   [SearXNG](https://docs.searxng.org/) ; repli Ollama
    cloud), extrait les **ids IMDb** des URLs de résultats (regex
    `imdb.com/.../title/tt…`, ordre d'apparition = pertinence SearXNG), puis valide
    chaque id via `FindByExternalIdAsync` + la **même porte d'acceptation** (année + juge

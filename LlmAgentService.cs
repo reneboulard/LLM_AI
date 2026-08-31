@@ -80,8 +80,11 @@ namespace LLM_AI
             return "### LANGUE DE RÉPONSE\n" +
                    "Rédige TOUTE ta sortie en langage naturel — les raisons des recommandations, " +
                    "le rapport d'audit, les explications — en " + lang.Trim() + ". " +
-                   "Les titres de films/séries et les noms de chaînes restent dans leur langue " +
-                   "d'origine. Les noms des champs JSON techniques sont inchangés.";
+                   "Les titres de films/séries et les noms de chaînes ne se traduisent JAMAIS : " +
+                   "recopie le title EXACTEMENT tel qu'il figure dans les résultats de get_emby_info " +
+                   "(epg_series/epg_movies/epg_tonight), MÊME SI tmdb_lookup renvoie le titre dans " +
+                   "une autre langue (un titre modifié casse le rattachement au programme EPG). " +
+                   "Les noms des champs JSON techniques sont inchangés.";
         }
 
         /// <summary>
@@ -420,7 +423,8 @@ namespace LLM_AI
                 sb.AppendLine("start (date/heure de diffusion, format ISO 8601, ex. 2026-08-26T21:00:00), ");
                 sb.AppendLine("imdb_id (facultatif : id IMDb « tt1234567 » du contenu, UNIQUEMENT si un de tes ");
                 sb.AppendLine("outils l'a établi — sert à détecter un titre déjà possédé en bibliothèque), ");
-                sb.AppendLine("et showbizz_match (booléen ou nom de l'émission Showbizz correspondante). ");
+                sb.AppendLine("et showbizz_match (booléen ou titre de la nouveauté web correspondante, ");
+                sb.AppendLine("issue de l'outil new_releases). ");
                 sb.AppendLine("Les champs channel et start sont OBLIGATOIRES (servent à programmer l'enregistrement) : ");
                 sb.AppendLine("reprends-les tels quels depuis les résultats de get_emby_info (epg_series/epg_movies). ");
                 sb.AppendLine("priority reflète l'intérêt de la recommandation (high = à ne pas manquer, ");

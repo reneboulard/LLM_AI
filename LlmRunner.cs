@@ -152,8 +152,16 @@ namespace LLM_AI
             if (!string.IsNullOrWhiteSpace(cfg.TvdbApiKey) ||
                 !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TVDB_API_KEY")))
                 tools.Add(new TvdbSearchTool(_logger));
-            if (!string.IsNullOrWhiteSpace(cfg.ShowbizzUrl))
-                tools.Add(new ShowbizzTool(_logger));
+            // new_releases : source(s) « nouveautés » configurée(s) —
+            // migrées au besoin depuis l'ancienne paire ShowbizzUrl/Pattern.
+            var newReleaseSources = NewReleasesTool.ParseSources(cfg.NewReleaseSources);
+            if (newReleaseSources.Count > 0)
+            {
+                var nrTool = new NewReleasesTool(newReleaseSources, _logger);
+                tools.Add(nrTool);
+                // Alias compatibilité : l'ancien nom reste appelable.
+                tools.Add(new NewReleasesTool.AliasTool(nrTool));
+            }
             // web_search : SearXNG (auto-hébergé) OU Ollama cloud.
             bool webSearchConfigured = !string.IsNullOrWhiteSpace(cfg.SearXngUrl) ||
                 !string.IsNullOrWhiteSpace(cfg.OllamaApiKey) ||
@@ -446,7 +454,7 @@ namespace LLM_AI
             "l'administrateur du serveur. Tu disposes d'outils qui interrogent " +
             "directement le serveur Emby in-process (pas d'API REST, pas de token) : " +
             "guide TV (epg_series/epg_movies), bibliothèque et recherche, TMDB/TVDB, " +
-            "recherche web, Showbizz, et l'audit système system_audit (sondes de " +
+            "recherche web, la source nouveautés new_releases, et l'audit système system_audit (sondes de " +
             "santé ; remédiation réservée aux administrateurs, possible seulement " +
             "si explicitement activée en configuration). " +
             "Utilise les outils pour répondre avec des données réelles du serveur " +
@@ -1057,6 +1065,23 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Entrée EPG pour le repli <b>chaîne + heure</b> de
+        /// <see cref="EnrichRecommendations"/> : titre brut (log de diagnostic),
+        /// nom de chaîne normalisé et date de diffusion. Une chaîne ne diffuse
+        /// qu'un programme à une heure donnée — la clé (chaîne, heure) est donc
+        /// aussi précise que le titre.
+        /// </summary>
+        private sealed class EpgEntry
+        {
+            public readonly string Title;
+            public readonly EpgMatch Match;
+            public readonly string ChannelNorm;
+            public readonly DateTimeOffset? Start;
+            public EpgEntry(string title, EpgMatch match, string channelNorm, DateTimeOffset? start)
+            { Title = title; Match = match; ChannelNorm = channelNorm; Start = start; }
+        }
+
+        /// <summary>
         /// Enrichit le payload de recommandations (tableau JSON
         /// <c>[{title,kind,reason,priority,channel,start,showbizz_match}]</c>)
         /// en rapprochant chaque titre des résultats d'outils
@@ -1067,9 +1092,16 @@ namespace LLM_AI
         /// l'id Emby.
         /// <para>Portage C# du matching par titre du PHP : on construit une
         /// lookup <c>norm(title) → EpgMatch</c>, puis pour chaque reco on
-        /// cherche <c>norm(reco.title)</c>. Si pas de match (titre rewordé par
-        /// le LLM), la reco est gardée telle quelle (pas de poster, Programmer
-        /// désactivé côté UI). Retourne le payload inchangé si ce n'est pas un
+        /// cherche <c>norm(reco.title)</c>. Si pas de match (titre rewordé ou
+        /// traduit par le LLM — cas vécu : titres TMDB anglais au lieu des
+        /// titres EPG), un <b>repli chaîne+heure</b>
+        /// (<see cref="FindByChannelStart"/>) rattache la reco au programme
+        /// EPG diffusé sur la même chaîne à la même heure. Une reco
+        /// <b>intracable</b> au pool EPG (ni titre, ni chaîne+heure, ni id
+        /// recopié du pool) est <b>écartée</b> du payload avec un Warn —
+        /// validation stricte contre les hallucinations : on ne publie que
+        /// ce qui peut être rattaché à un programme que le plugin a lui-même
+        /// fourni au LLM. Retourne le payload inchangé si ce n'est pas un
         /// tableau JSON.</para>
         /// </summary>
         public string EnrichRecommendations(string payload,
@@ -1085,6 +1117,8 @@ namespace LLM_AI
             //    disposé à la sortie du bloc using — on ne garde aucune référence
             //    à ses JsonElement).
             var lookup = new Dictionary<string, EpgMatch>(StringComparer.Ordinal);
+            var entries = new List<EpgEntry>();
+            var epgIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var tr in toolResults)
             {
                 if (string.IsNullOrEmpty(tr.result)) continue;
@@ -1116,6 +1150,17 @@ namespace LLM_AI
                         // série sur plusieurs chaînes ; on garde la 1re occurrence.
                         if (!lookup.ContainsKey(key))
                             lookup[key] = new EpgMatch(id, channelId, rating);
+
+                        // Repli chaîne+heure : on collecte aussi le nom de chaîne
+                        // et la date de diffusion (bruts, hors JsonDocument).
+                        string channel = item.TryGetProperty("channel", out var chEl) && chEl.ValueKind == JsonValueKind.String
+                            ? chEl.GetString() : null;
+                        DateTimeOffset? startDt = null;
+                        if (item.TryGetProperty("start", out var stEl) && stEl.ValueKind == JsonValueKind.String
+                            && DateTimeOffset.TryParse(stEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var stv))
+                            startDt = stv;
+                        entries.Add(new EpgEntry(title, lookup[key], NormTitle(channel), startDt));
+                        if (!string.IsNullOrEmpty(id)) epgIds.Add(id);
                     }
                 }
             }
@@ -1142,7 +1187,9 @@ namespace LLM_AI
                 return payload;
             }
 
-            int enriched = 0, matched = 0;
+            int enriched = 0, matched = 0, fallback = 0;
+            var dropped = new List<string>();
+            var toRemove = new List<System.Text.Json.Nodes.JsonNode>();
             foreach (var node in arr)
             {
                 if (node is not System.Text.Json.Nodes.JsonObject obj) continue;
@@ -1168,10 +1215,21 @@ namespace LLM_AI
                     continue;
                 }
 
-                if (!obj.TryGetPropertyValue("title", out var titleNode)) continue;
-                string title = titleNode?.GetValue<string>();
+                if (!obj.TryGetPropertyValue("title", out var titleNode) || titleNode == null)
+                {
+                    // Reco sans titre : intracable par construction → écartée.
+                    dropped.Add("(sans titre)");
+                    toRemove.Add(node);
+                    continue;
+                }
+                string title = titleNode.GetValue<string>();
                 string key = NormTitle(title);
-                if (string.IsNullOrEmpty(key)) continue;
+                if (string.IsNullOrEmpty(key))
+                {
+                    dropped.Add("(titre vide)");
+                    toRemove.Add(node);
+                    continue;
+                }
 
                 if (lookup.TryGetValue(key, out var epg))
                 {
@@ -1193,21 +1251,119 @@ namespace LLM_AI
                 }
                 else
                 {
-                    // Pas de match EPG : si la reco porte déjà un id (ex. LLM qui
-                    // a fourni un id de programme), on bâtit quand même le poster.
-                    string exId = JsonStr(obj, "id");
-                    if (!string.IsNullOrEmpty(exId) && string.IsNullOrEmpty(JsonStr(obj, "image_url")))
+                    // Repli chaîne+heure : le LLM a parfois reformulé/traduit le
+                    // titre (cas vécu 2026-08-31 : ResponseLanguage=English →
+                    // titres TMDB anglais au lieu des titres EPG français) alors
+                    // qu'il recopie correctement channel/start (champs
+                    // OBLIGATOIRES du format). Une chaîne ne diffuse qu'un
+                    // programme à une heure donnée : la clé (chaîne normalisée,
+                    // ±10 min) rattache la reco au bon programme même avec un
+                    // titre cassé.
+                    var fb = FindByChannelStart(entries, JsonStr(obj, "channel"), JsonStr(obj, "start"));
+                    if (fb != null)
                     {
-                        obj["image_url"] = "/emby/Items/" + exId + "/Images/Primary?maxWidth=400";
-                        enriched++;
+                        matched++; fallback++;
+                        _logger?.Info("[LLM_AI] Enrichissement : reco « {0} » sans match titre → rattachée par chaîne+heure à « {1} » ({2}).",
+                            title, fb.Title,
+                            string.IsNullOrEmpty(fb.Match.Id) ? "sans id" : "id " + fb.Match.Id);
+                        if (!string.IsNullOrEmpty(fb.Match.Id))
+                        {
+                            obj["id"] = fb.Match.Id;
+                            obj["image_url"] = "/emby/Items/" + fb.Match.Id + "/Images/Primary?maxWidth=400";
+                            enriched++;
+                        }
+                        if (!string.IsNullOrEmpty(fb.Match.ChannelId))
+                            obj["channel_id"] = fb.Match.ChannelId;
+                        if (fb.Match.Rating.HasValue)
+                            obj["rating"] = fb.Match.Rating.Value;
+                    }
+                    else
+                    {
+                        // Troisième clé de traçage : un id de programme que le LLM
+                        // a recopié du pool EPG. Si la reco porte un id présent
+                        // dans les entrées émises par le plugin, elle est
+                        // traçable → on garde (et on bâtit le poster).
+                        string exId = JsonStr(obj, "id");
+                        if (!string.IsNullOrEmpty(exId) && epgIds.Contains(exId))
+                        {
+                            matched++;
+                            if (string.IsNullOrEmpty(JsonStr(obj, "image_url")))
+                            {
+                                obj["image_url"] = "/emby/Items/" + exId + "/Images/Primary?maxWidth=400";
+                                enriched++;
+                            }
+                        }
+                        else
+                        {
+                            // INTRACABLE : ni le titre, ni la (chaîne, heure), ni
+                            // l'id ne rattachent cette reco à une entrée EPG que
+                            // le plugin a lui-même fournie au LLM. Presque
+                            // certainement une hallucination (programme jamais
+                            // dans le pool) ou une reco entièrement reformulée —
+                            // dans les deux cas elle n'est pas programmable et ne
+                            // passerait de toute façon aucun garde-fou du record
+                            // bucket. On l'écarte du payload (validation stricte)
+                            // plutôt que d'afficher une carte morte.
+                            dropped.Add(title);
+                            toRemove.Add(node);
+                        }
                     }
                 }
             }
 
-            _logger?.Info("[LLM_AI] Enrichissement : {0}/{1} reco matchées, {2} avec id/image_url.",
-                matched, arr.Count, enriched);
+            // Éviction des recos intracables (collectées pendant la boucle —
+            // on ne retire pas un JsonNode pendant qu'on énumère son parent).
+            foreach (var n in toRemove)
+                arr.Remove(n);
+
+            if (dropped.Count > 0)
+            {
+                _logger?.Warn("[LLM_AI] Enrichissement : {0} reco(s) écartée(s) — intracable(s) au pool EPG fourni au LLM (ni titre, ni chaîne+heure, ni id) : {1}.",
+                    dropped.Count, string.Join(" | ", dropped));
+            }
+
+            if (arr.Count > 0)
+            {
+                _logger?.Info("[LLM_AI] Enrichissement : {0}/{1} reco matchées ({2} par chaîne+heure), {3} avec id/image_url, {4} écartée(s) hors-pool EPG.",
+                    matched, arr.Count, fallback, enriched, dropped.Count);
+            }
+            else if (dropped.Count > 0)
+            {
+                _logger?.Warn("[LLM_AI] Enrichissement : TOUTES les recos ont été écartées ({0}) — pool EPG vs réponse du LLM sans aucun rattachement.",
+                    dropped.Count);
+            }
 
             return arr.ToJsonString();
+        }
+
+        /// <summary>
+        /// Repli <b>chaîne + heure</b> de <see cref="EnrichRecommendations"/> :
+        /// cherche l'entrée EPG diffusée sur la même chaîne (nom normalisé) à la
+        /// même heure (±10 min, la plus proche gagne). Retourne null si la
+        /// chaîne ou l'heure de la reco est absente/invalide, ou si aucune
+        /// entrée EPG ne cadre — l'appelant tente alors le rattachement par id,
+        /// sinon écarte la reco.
+        /// </summary>
+        private static EpgEntry FindByChannelStart(List<EpgEntry> entries, string channel, string start)
+        {
+            if (entries == null || entries.Count == 0 ||
+                string.IsNullOrWhiteSpace(channel) || string.IsNullOrWhiteSpace(start))
+                return null;
+            if (!DateTimeOffset.TryParse(start, CultureInfo.InvariantCulture, DateTimeStyles.None, out var recoStart))
+                return null;
+            string chKey = NormTitle(channel);
+            if (string.IsNullOrEmpty(chKey)) return null;
+
+            EpgEntry best = null;
+            var bestDiff = TimeSpan.MaxValue;
+            foreach (var e in entries)
+            {
+                if (e.Start == null || e.ChannelNorm != chKey) continue;
+                var diff = (e.Start.Value - recoStart).Duration();
+                if (diff > TimeSpan.FromMinutes(10)) continue;
+                if (best == null || diff < bestDiff) { best = e; bestDiff = diff; }
+            }
+            return best;
         }
 
         /// <summary>

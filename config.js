@@ -259,7 +259,7 @@ define(["loading"], function (loading) {
     }
 
     var PROVIDER_DEFAULTS = {
-        "ollama_local": { url: "http://192.168.11.2:11434", model: "gemma4:26b" },
+        "ollama_local": { url: "http://localhost:11434", model: "gemma4:26b" },
         "ollama_cloud": { url: "https://ollama.com",         model: "gemma4:31b" },
         "gemini":       { url: "",                           model: "gemini-2.5-flash" }
     };
@@ -298,7 +298,7 @@ define(["loading"], function (loading) {
             +     '</div>'
             +     '<div class="inputContainer">'
             +       '<input is="emby-input" type="text" class="beUrl" '
-            +             'label="' + esc(i18n.t("cfg.backend.url.label")) + '" placeholder="http://192.168.11.2:11434" value="' + url + '" />'
+            +             'label="' + esc(i18n.t("cfg.backend.url.label")) + '" placeholder="http://localhost:11434" value="' + url + '" />'
             +     '</div>'
             +     '<div class="inputContainer">'
             +       '<input is="emby-input" type="text" class="beModel" '
@@ -374,8 +374,10 @@ define(["loading"], function (loading) {
         view.querySelector("#txtOllamaApiKey").value = cfg.OllamaApiKey || "";
         view.querySelector("#txtSearXngUrl").value = cfg.SearXngUrl || "";
         view.querySelector("#txtGeminiApiKey").value = cfg.GeminiApiKey || "";
-        view.querySelector("#txtShowbizzUrl").value = cfg.ShowbizzUrl || "";
-        view.querySelector("#txtShowbizzPattern").value = cfg.ShowbizzPattern || "";
+        // Sources de l'outil new_releases — le getter serveur migre
+        // automatiquement l'ancienne paire ShowbizzUrl/ShowbizzPattern :
+        // la page affiche et sauvegarde la liste migrée telle quelle.
+        view.querySelector("#txtNewReleaseSources").value = cfg.NewReleaseSources || "";
         view.querySelector("#txtRagDirectives").value = cfg.RagDirectives || "";
         view.querySelector("#chkDebugVerbose").checked = !!cfg.DebugVerbose;
         view.querySelector("#chkWebFetchDirect").checked = cfg.WebFetchDirect !== false;
@@ -445,8 +447,10 @@ define(["loading"], function (loading) {
             OllamaApiKey: view.querySelector("#txtOllamaApiKey").value,
             SearXngUrl: view.querySelector("#txtSearXngUrl").value.trim(),
             GeminiApiKey: view.querySelector("#txtGeminiApiKey").value,
-            ShowbizzUrl: view.querySelector("#txtShowbizzUrl").value,
-            ShowbizzPattern: view.querySelector("#txtShowbizzPattern").value,
+            // new_releases : sources multi-lignes (legacy ShowbizzUrl/Pattern
+            // abandonnés — non postés, ils se vident à la première sauvegarde
+            // puisque la liste migrée vit désormais dans NewReleaseSources).
+            NewReleaseSources: view.querySelector("#txtNewReleaseSources").value,
             RagDirectives: view.querySelector("#txtRagDirectives").value,
             DebugVerbose: view.querySelector("#chkDebugVerbose").checked,
             WebFetchDirect: view.querySelector("#chkWebFetchDirect").checked,
