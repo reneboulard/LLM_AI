@@ -15,3 +15,6 @@ obj/
 .nuget/
 ## Packaging output (package.sh)
 dist/
+
+## Claude Code local instructions
+CLAUDE.md
