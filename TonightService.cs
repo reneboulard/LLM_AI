@@ -394,11 +394,33 @@ namespace LLM_AI
                         Limit = 2000
                     };
                     var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
+                    if (programs.Length == 0)
+                    {
+                        // Même bug de build que epg_tonight (cf. GetEmbyInfoTool) :
+                        // GetPrograms n'honore pas MinStartDate/MaxStartDate ici —
+                        // la fenêtre retourne 0 programme, le snapshot serait VIDE
+                        // et la validation dropperait TOUTES les recos « live »
+                        // comme « hors-snapshot » (vécu 2026-09-01 : 4/4 enrichies
+                        // puis 4/4 supprimées). Requête sans fenêtre — ni
+                        // HasAired=false : le snapshot couvre aussi les 24
+                        // dernières heures pour la détection « Diffusé » — puis
+                        // filtre StartDate en C#.
+                        var fq = new InternalItemsQuery { };
+                        var pool = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
+                        programs = pool
+                            .Where(p => p.StartDate.HasValue
+                                && p.StartDate >= now.AddDays(-1) && p.StartDate <= maxStart)
+                            .OrderBy(p => p.StartDate)
+                            .ToArray();
+                        _logger?.Info("[LLM_AI] Tonight validation : fenêtre SQL 0 résultat → fallback mémoire {0} programme(s) dans la fenêtre (pool brut {1}).",
+                            programs.Length, pool.Length);
+                    }
                     foreach (var p in programs)
                     {
                         if (p == null || string.IsNullOrEmpty(p.Id)) continue;
                         epg[p.Id] = p;
                     }
+                    _logger?.Info("[LLM_AI] Tonight validation : snapshot EPG {0} programme(s).", epg.Count);
                 }
                 catch (Exception ex)
                 {
