@@ -1,20 +1,24 @@
 // Page « Recommandations LLM AI » — module AMD chargé par le dashboard via
 // data-controller="__plugin/LLMAIRecommendationsPageJS". Relit la dernière
-// réponse de l'agent depuis la config du plugin (champs Recommendations /
-// RecommendationsDate) et l'affiche sous forme de **grille de cartes**
-// actionnables (poster, badge priorité, ⭐, date/chaîne, raison, boutons
+// réponse de l'agent depuis l'endpoint plugin /Plugins/LLMAI/Recos (champs
+// Recommendations / RecommendationsDate de la config, servis sans exiger
+// ManageServer) et l'affiche sous forme de **grille de cartes** actionnables
+// (poster, badge priorité, ⭐, date/chaîne, raison, boutons
 // Programmer / Oublier). Réplique de la section IA de absent_series.php.
 //
 // Programmer : POST /LiveTv/SeriesTimers {ProgramId, RecordNewOnly, SkipEpisodesInLibrary, ChannelId}
 //   via ApiClient.ajax (gère le token admin) — réplique de record_series.php.
-// Oublier : round-trip config — getPluginConfiguration → ajoute le titre à
-//   DroppedTitles (JSON array, dedup case-insensitive) → updatePluginConfiguration
-//   (renvoie la cfg complète, les autres champs sont préservés) → fade out de la
-//   carte. Exclusion effective à la prochaine exécution (epg_series lit DroppedTitles).
+// Lecture des recos : GET /Plugins/LLMAI/Recos (endpoint plugin authentifié
+//   standard). PAS getPluginConfiguration : l'endpoint hôte
+//   /Plugins/{id}/Configuration est réservé ManageServer (admin) et renvoyait
+//   403 aux usagers non-admin — la page est pourtant servie dans le menu
+//   utilisateur (EnableInUserMenu).
+// Oublier : POST /Plugins/LLMAI/Forget {Title} — l'écriture de la drop list
+//   DroppedTitles se fait serveur-side (même raison : le round-trip config
+//   get/update est admin-only). Réponse {Added} — false = déjà présent.
+//   Exclusion effective à la prochaine exécution (epg_series lit DroppedTitles).
 define([], function () {
     "use strict";
-
-    var pluginId = "e7d3dee6-ef19-46a9-985f-06318b682e60";
 
     // Module i18n (FR/EN) : chargé comme ressource plugin via require() sur
     // « web/ConfigurationPage?name=LLMAII18n » (même mécanisme que le
@@ -423,8 +427,9 @@ define([], function () {
         });
     }
 
-    // Ajoute le titre à la drop list persistante (DroppedTitles) via round-trip
-    // config, puis fade out de la carte (réplique de drop_series.php + exclusion).
+    // Ajoute le titre à la drop list persistante (DroppedTitles) via l'endpoint
+    // plugin POST /Plugins/LLMAI/Forget (écriture serveur-side — le round-trip
+    // config admin est interdit aux non-admin), puis fade out de la carte.
     function dropSeries(btn) {
         if (btn.classList.contains("loading")) return;
         var title = (btn.getAttribute("data-title") || "").trim();
@@ -435,39 +440,20 @@ define([], function () {
         btn.classList.add("loading");
         btn.innerText = "…";
 
-        ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-            cfg = cfg || {};
-            var arr = [];
-            try {
-                var parsed = JSON.parse(cfg.DroppedTitles || "[]");
-                if (Array.isArray(parsed)) arr = parsed;
-            } catch (e) { arr = []; }
-
-            // Dedup case-insensitive.
-            var lower = arr.map(function (t) { return String(t || "").toLowerCase(); });
-            if (lower.indexOf(title.toLowerCase()) >= 0) {
-                // Déjà présent : on ferme la carte sans réécrire la config.
-                finishDrop(card, btn);
-                return;
-            }
-            arr.push(title);
-            cfg.DroppedTitles = JSON.stringify(arr);
-
-            ApiClient.updatePluginConfiguration(pluginId, cfg).then(function () {
-                finishDrop(card, btn);
-            }, function (err) {
-                btn.classList.remove("loading");
-                btn.innerText = original;
-                if (typeof Dashboard !== "undefined" && Dashboard.alert) {
-                    Dashboard.alert(i18n.t("rec.alert.dropSave",
-                        (err && err.statusText ? err.statusText : "erreur")));
-                }
-            });
+        ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/Forget"),
+            type: "POST",
+            data: JSON.stringify({ Title: title }),
+            contentType: "application/json"
+        }).then(function (data) {
+            // Added=false (déjà présent) : on ferme la carte pareillement —
+            // le titre est exclu, inutile de réécrire la config.
+            finishDrop(card, btn);
         }, function (err) {
             btn.classList.remove("loading");
             btn.innerText = original;
             if (typeof Dashboard !== "undefined" && Dashboard.alert) {
-                Dashboard.alert(i18n.t("rec.alert.cfgRead",
+                Dashboard.alert(i18n.t("rec.alert.dropSave",
                     (err && err.statusText ? err.statusText : "erreur")));
             }
         });
@@ -644,8 +630,24 @@ define([], function () {
                     view.style.backgroundRepeat = "no-repeat";
                 }, function () { /* échec chargement : on garde le fallback CSS */ });
 
-                ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
-                    render(view, cfg || {});
+                // Lecture des recommandations via l'endpoint plugin (usager
+                // standard), PAS getPluginConfiguration (admin-only → 403).
+                // Mêmes champs que ceux que render() consommait dans la cfg.
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/Recos"),
+                    type: "GET",
+                    dataType: "json"
+                }).then(function (data) {
+                    data = data || {};
+                    if (data.Error) {
+                        view.querySelector("#recContent").innerHTML =
+                            '<div class="recEmpty">' + esc(data.Error) + '</div>';
+                        return;
+                    }
+                    render(view, {
+                        Recommendations: data.Items || "",
+                        RecommendationsDate: data.Date || ""
+                    });
                     // Section « À regarder ce soir » : appel endpoint plugin
                     // personnalisé (asynchrone, peut prendre 10–60 s la 1re fois).
                     // Lancé après le rendu des sections planifiées (non bloquant).

@@ -47,6 +47,24 @@
             .LLMAIConfigPage .fieldDescription {
                 color: #666;
             }
+            /* Bandeau « nouvelle version disponible » (config.js le montre en
+               display:flex quand GET /Plugins/LLMAI/Update trouve plus récent). */
+            .LLMAIConfigPage .updateBanner {
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 0.4em;
+                background: #e8f4fd;
+                border: 1px solid #b6d8f0;
+                border-radius: 6px;
+                padding: 0.7em 0.9em;
+                margin: 0.8em 0 1.2em;
+                color: #1c5a8a;
+            }
+            .LLMAIConfigPage .updateBanner a {
+                color: #1c5a8a;
+                font-weight: 600;
+            }
             /* Ligne d'un backend LLM (URL + modèle + priorité + activé + supprimer). */
             .LLMAIConfigPage .llmBackendRow {
                 border: 1px solid #dcdcdc;
@@ -138,6 +156,12 @@
                 <form class="LLMAIConfigForm">
                     <div class="verticalSection">
                         <h2 class="sectionTitle" data-i18n="cfg.title">LLM AI — Configuration</h2>
+
+                        <!-- Bandeau « nouvelle version GitHub disponible » : rempli
+                             par config.js depuis GET /Plugins/LLMAI/Update (cache
+                             serveur 1 h). Caché par défaut ; aucune version plus
+                             récente ou erreur réseau = rien affiché. -->
+                        <div id="updateBanner" class="updateBanner" style="display:none;"></div>
 
                         <h3 class="sectionTitle" style="margin-top:1.2em;" data-i18n="cfg.backends.h">Serveurs LLM (repli par priorité)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.backends.desc">
@@ -243,6 +267,23 @@
                                        min="5" max="200" />
                                 <div class="fieldDescription" data-i18n-html="cfg.maxmovies.desc">Max de films soumis au LLM (après pré-tri). Défaut 30.</div>
                             </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.gtx.h">Traduction des genres (IA)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.gtx.desc">Détecte les genres de l'EPG non mappés par le plugin <b>GenreCleaner</b> et propose, via le LLM, une traduction vers votre vocabulaire curaté (<b>AllowedGenres</b>). Vous validez chaque proposition avant écriture dans <b>GenreCleaner.xml</b> — les recommandations l'utilisent aussitôt (sans redémarrage) ; un redémarrage du serveur est ensuite requis pour que GenreCleaner lui-même l'adopte (bannière Emby « redémarrage requis »).</div>
+                        <div class="inputContainer">
+                            <button is="emby-button" type="button" class="raised block" id="btnGenreAnalyze" data-i18n="cfg.gtx.analyze">
+                                Analyser les genres non mappés
+                            </button>
+                            <div id="genreProposalsInfo" class="fieldDescription" style="display:none;"></div>
+                            <div id="genreProposals" class="wlBox" style="display:none;"></div>
+                            <div id="genreSuggestLabel" class="fieldDescription" style="display:none;margin-top:0.8em;font-weight:600;" data-i18n="cfg.gtx.suggest.h">Genres sans équivalent — nouveaux genres suggérés</div>
+                            <div id="genreSuggestions" class="wlBox" style="display:none;"></div>
+                            <div id="genreOrphans" class="fieldDescription" style="display:none;"></div>
+                            <button is="emby-button" type="button" class="raised button-submit block" id="btnGenreApply" style="display:none;" data-i18n="cfg.gtx.apply">
+                                Appliquer les mappages sélectionnés
+                            </button>
+                            <div id="genreApplyResult" class="fieldDescription" style="display:none;"></div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.apikeys.h">Clés API — services externes</h3>

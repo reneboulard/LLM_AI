@@ -362,7 +362,13 @@ namespace LLM_AI
 
             // Défaut des genres exclus : seulement en mode premieres_only
             // (emby-ai-suggest.sh exclut news + documentary). Sinon aucun.
-            string[] defGenres = premieresOnly ? new[] { "documentary", "news" } : Array.Empty<string>();
+            // Défauts bilingues : l'EPG (Gracenote) émet souvent l'anglais, mais
+            // un EPG français émet « Documentaire »/« Nouvelles » — et avec le
+            // mapping GenreCleaner les genres deviennent français. On exclut
+            // les deux formes (le matching essaie brute ET mappée).
+            string[] defGenres = premieresOnly
+                ? new[] { "documentary", "news", "documentaire", "nouvelles" }
+                : Array.Empty<string>();
             var excludeGenres = NormGenreSet(OptStringArray(args, "exclude_genres") ?? defGenres);
 
             // Plafond dur côté serveur : le LLM peut demander moins (limit),
@@ -446,7 +452,7 @@ namespace LLM_AI
                 if (excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;              // dédupliquer par série (unique_by)
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
-                if (IsExcludedGenre(genres, excludeGenres)) continue;
+                if (IsExcludedGenre(genres, excludeGenres, series: true)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
                     wlFiltered++; wlRejected++;
@@ -499,7 +505,9 @@ namespace LLM_AI
                     id = p.Id,
                     channel_id = p.ChannelId,
                     overview = Truncate(p.Overview, 300),
-                    genres = t.genres ?? Array.Empty<string>(),
+                    // Genres curatés (mapping GenreCleaner séries) : aligne le
+                    // vocabulaire EPG sur celui de la bibliothèque.
+                    genres = GenreCleanerMap.MapGenres(t.genres, true),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
                     start = p.StartDate,
@@ -582,7 +590,7 @@ namespace LLM_AI
                 if (excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
-                if (IsExcludedGenre(genres, excludeGenres)) continue;
+                if (IsExcludedGenre(genres, excludeGenres, series: false)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
                     wlFiltered++; wlRejected++;
@@ -626,7 +634,8 @@ namespace LLM_AI
                     id = p.Id,
                     channel_id = p.ChannelId,
                     overview = Truncate(p.Overview, 300),
-                    genres = t.genres ?? Array.Empty<string>(),
+                    // Genres curatés (mapping GenreCleaner films).
+                    genres = GenreCleanerMap.MapGenres(t.genres, false),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
                     start = p.StartDate,
@@ -711,6 +720,26 @@ namespace LLM_AI
                 Limit = POOL
             };
             var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
+            if (programs.Length == 0)
+            {
+                // Fallback mémoire : ce build d'Emby n'honore pas MinStartDate/
+                // MaxStartDate sur GetPrograms — la fenêtre « ce soir » retourne
+                // 0 programme alors que l'EPG en contient (vérifié en base :
+                // MediaItems Type=27, StartDate en secondes unix, ~200 programmes
+                // par soirée). On relance SANS fenêtre (à venir uniquement, sans
+                // limite) puis on filtre par StartDate en C# et on plafonne au
+                // POOL (les programmes les plus tôt de la soirée) — même sémantique
+                // que la requête fenêtrée quand elle fonctionne.
+                var fq = new InternalItemsQuery { HasAired = false };
+                var pool = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
+                programs = pool
+                    .Where(p => p.StartDate.HasValue && p.StartDate >= minStart && p.StartDate <= maxStart)
+                    .OrderBy(p => p.StartDate)
+                    .Take(POOL)
+                    .ToArray();
+                _logger?.Info("[LLM_AI] epg_tonight : fenêtre SQL 0 résultat → fallback mémoire {0} programme(s) dans la fenêtre (pool brut {1}).",
+                    programs.Length, pool.Length);
+            }
 
             var genreMap = BuildGenreMap(q);
 
@@ -739,7 +768,7 @@ namespace LLM_AI
                 if (excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;              // dédupliquer par titre
                 var genres = GenreFor(p, genreMap);
-                if (IsExcludedGenre(genres, excludeGenres)) continue;
+                if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p))) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
                     wlFiltered++; wlRejected++;
@@ -784,7 +813,10 @@ namespace LLM_AI
                     id = p.Id,
                     channel_id = p.ChannelId,
                     overview = Truncate(p.Overview, 200),
-                    genres = t.genres ?? Array.Empty<string>(),
+                    // Genres curatés (mapping GenreCleaner, table selon le type
+                    // du programme) : même vocabulaire que le profil de goût
+                    // de l'usager (bibliothèque, déjà curatée par GenreCleaner).
+                    genres = GenreCleanerMap.MapGenres(t.genres, SeriesCtx(p)),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
                     start = p.StartDate,
@@ -799,6 +831,18 @@ namespace LLM_AI
                     is_scheduled = t.isScheduled
                 });
             }
+            // Recensement des genres émis au LLM (POST-mapping GenreCleaner) :
+            // rend visible dans le log le vocabulaire curaté envoyé au LLM
+            // (« Comédie », « Drame », « Suspense »…) côte à côte avec les
+            // genres bruts non mappés (« Talk », « Educational »…). Vérifie
+            // d'un coup d'œil que le pont GenreCleaner est actif.
+            var emittedGenres = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in kept)
+                foreach (var g in GenreCleanerMap.MapGenres(t.genres, SeriesCtx(t.p)))
+                    emittedGenres.Add(g);
+            _logger?.Info("[LLM_AI] epg_tonight : {0} genre(s) émis au LLM (pool de {1}) : {2}",
+                emittedGenres.Count, kept.Count,
+                string.Join(", ", emittedGenres.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
             _logger?.Info("[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
                 kept.Count, results.Count, wlFiltered, limit);
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
@@ -965,12 +1009,11 @@ namespace LLM_AI
 
             if (f.Genres != null && f.Genres.Count > 0)
             {
-                bool hasGenre = false;
-                if (genres != null)
-                    foreach (var g in genres)
-                        if (!string.IsNullOrEmpty(g) && f.Genres.Contains(g.ToLowerInvariant()))
-                        { hasGenre = true; break; }
-                if (!hasGenre) return false;
+                // Clés brute + mappée (GenreCleaner) : une whitelist saisie
+                // dans l'UI (vocabulaire EPG brut) continue de matcher après
+                // activation du mapping, et vice versa.
+                if (!GenreCleanerMap.GenreKeys(genres, SeriesCtx(p)).Overlaps(f.Genres))
+                    return false;
             }
             return true;
         }
@@ -986,9 +1029,8 @@ namespace LLM_AI
             double s = (p.CommunityRating ?? 0) * 2.0;
             if (wl.Genres != null && wl.Genres.Count > 0 && genres != null)
             {
-                foreach (var g in genres)
-                    if (!string.IsNullOrEmpty(g) && wl.Genres.Contains(g.ToLowerInvariant()))
-                    { s += 2.0; break; }
+                if (GenreCleanerMap.GenreKeys(genres, SeriesCtx(p)).Overlaps(wl.Genres))
+                    s += 2.0;
             }
             if (!string.IsNullOrWhiteSpace(p.Overview)) s += 0.5;
             return s;
@@ -1248,12 +1290,25 @@ namespace LLM_AI
             return set;
         }
 
-        private static bool IsExcludedGenre(string[] genres, HashSet<string> exclude)
+        private static bool IsExcludedGenre(string[] genres, HashSet<string> exclude, bool? series = null)
         {
             if (genres == null || exclude.Count == 0) return false;
-            foreach (var g in genres)
-                if (!string.IsNullOrEmpty(g) && exclude.Contains(g.ToLowerInvariant())) return true;
-            return false;
+            // Clés brute + mappée (GenreCleaner) : l'exclusion attrape le genre
+            // tel que l'EPG l'émet ET sa forme curatée française.
+            return GenreCleanerMap.GenreKeys(genres, series).Overlaps(exclude);
+        }
+
+        /// <summary>
+        /// Contexte de type d'un programme EPG pour les tables de mapping
+        /// GenreCleaner (les mappings diffèrent entre films et séries : « Kids »
+        /// → « Enfant » côté séries, « Children » → « Familial » côté films).
+        /// </summary>
+        private static bool? SeriesCtx(BaseItemDto p)
+        {
+            if (p == null) return null;
+            if (p.IsSeries == true) return true;
+            if (p.IsMovie == true) return false;
+            return null;
         }
 
         // ------------------------------------------------------------------
