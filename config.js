@@ -521,6 +521,25 @@ define(["loading"], function (loading) {
                     fill(loadedCfg, view);
                 });
 
+                // Bandeau « nouvelle version disponible » : GET /Plugins/LLMAI/Update
+                // (le serveur interroge l'API GitHub releases/latest, cache 1 h).
+                // Silencieux en cas d'échec réseau — un bandeau absent n'est pas
+                // une erreur à signaler à l'usager.
+                ApiClient.ajax({ url: ApiClient.getUrl("Plugins/LLMAI/Update"), type: "GET" })
+                    .then(function (resp) { return resp.json(); })
+                    .then(function (data) {
+                        var banner = view.querySelector("#updateBanner");
+                        if (!banner || !data || !data.Available || !data.Latest) return;
+                        banner.innerHTML = "🆕 " +
+                            esc(i18n.t("cfg.update.available", data.Latest, data.Current || "?")) +
+                            ' <a href="' + esc(data.ReleaseUrl || "#") + '" target="_blank" rel="noopener">' +
+                            esc(i18n.t("cfg.update.link")) + "</a>" +
+                            // L'ETag des pages plugin dépend de id+version : un F5
+                            // post-installation suffit (pas de hard-reload).
+                            " — " + esc(i18n.t("cfg.update.hint"));
+                        banner.style.display = "flex";
+                    }, function () { /* silencieux : pas de bandeau */ });
+
             // Ajouter un backend.
             var addBtn = view.querySelector("#btnAddBackend");
             if (addBtn) {
@@ -612,6 +631,211 @@ define(["loading"], function (loading) {
                                 esc(i18n.t("cfg.alert.saveError",
                                     (err && err.statusText ? err.statusText : err))) +
                                 '</div>';
+                        }
+                    });
+                });
+            }
+
+            // Traduction des genres (IA) : GET /Plugins/LLMAI/GenreProposals
+            // (détection + LLM, lecture seule) puis POST
+            // /Plugins/LLMAI/GenreApply des mappages cochés. Admin-only côté
+            // serveur (la page de config est déjà un contexte admin).
+            var genreAnalyzeBtn = view.querySelector("#btnGenreAnalyze");
+            if (genreAnalyzeBtn) {
+                genreAnalyzeBtn.addEventListener("click", function () {
+                    var infoEl = view.querySelector("#genreProposalsInfo");
+                    var listEl = view.querySelector("#genreProposals");
+                    var suggestLabelEl = view.querySelector("#genreSuggestLabel");
+                    var suggestEl = view.querySelector("#genreSuggestions");
+                    var orphansEl = view.querySelector("#genreOrphans");
+                    var applyBtn = view.querySelector("#btnGenreApply");
+                    var resultEl = view.querySelector("#genreApplyResult");
+                    if (resultEl) { resultEl.style.display = "none"; }
+
+                    genreAnalyzeBtn.disabled = true;
+                    var prevLabel = genreAnalyzeBtn.textContent;
+                    genreAnalyzeBtn.textContent = i18n.t("cfg.gtx.analyzing");
+                    if (infoEl) {
+                        infoEl.style.display = "block";
+                        infoEl.textContent = i18n.t("cfg.gtx.analyzing");
+                    }
+                    if (listEl) listEl.style.display = "none";
+                    if (suggestLabelEl) suggestLabelEl.style.display = "none";
+                    if (suggestEl) suggestEl.style.display = "none";
+                    if (orphansEl) orphansEl.style.display = "none";
+                    if (applyBtn) applyBtn.style.display = "none";
+
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/GenreProposals"),
+                        type: "GET",
+                        dataType: "json"
+                    }).then(function (data) {
+                        genreAnalyzeBtn.disabled = false;
+                        genreAnalyzeBtn.textContent = prevLabel;
+
+                        if (!data) data = {};
+                        if (data.Error) {
+                            if (infoEl) infoEl.textContent = data.Error;
+                            return;
+                        }
+                        var props = data.Proposals || [];
+                        var orphans = data.Orphans || [];
+                        if (infoEl) {
+                            infoEl.textContent = data.Message ||
+                                i18n.t("cfg.gtx.counts", data.UnmappedMovies || 0, data.UnmappedSeries || 0);
+                        }
+                        // Genres que le LLM n'a pu placer nulle part :
+                        // information seulement (aucune action possible).
+                        if (orphansEl) {
+                            if (orphans.length) {
+                                orphansEl.style.display = "block";
+                                orphansEl.textContent = i18n.t("cfg.gtx.orphans",
+                                    orphans.length, orphans.join(", "));
+                            } else {
+                                orphansEl.style.display = "none";
+                            }
+                        }
+                        if (!props.length) return;
+
+                        // Deux blocs : propositions (cibles du vocabulaire
+                        // existant) et suggestions de NOUVEAUX genres (cible
+                        // absente du vocabulaire, ajoutée à AllowedGenres à
+                        // l'application).
+                        var html = "";
+                        var suggestHtml = "";
+                        props.forEach(function (p) {
+                            if (!p || !p.Genre) return;
+                            if (p.New) {
+                                var nTargets = [];
+                                if (p.InMovies) nTargets.push(esc(p.New) + " (" + i18n.t("cfg.gtx.movies") + ")");
+                                if (p.InSeries) nTargets.push(esc(p.New) + " (" + i18n.t("cfg.gtx.series") + ")");
+                                if (!nTargets.length) return;
+                                suggestHtml += '<label class="wlItem">' +
+                                    '<input type="checkbox" is="emby-checkbox" class="genreSuggestCheck" checked' +
+                                    ' data-name="' + esc(p.Genre) + '"' +
+                                    ' data-new="' + esc(p.New) + '"' +
+                                    ' data-inmovies="' + (p.InMovies ? "1" : "") + '"' +
+                                    ' data-inseries="' + (p.InSeries ? "1" : "") + '">' +
+                                    '<span class="checkboxLabel">' + esc(p.Genre) + ' → ' + nTargets.join(" · ") +
+                                    ' <em>' + esc(i18n.t("cfg.gtx.newgenre")) + '</em></span></label>';
+                                return;
+                            }
+                            var targets = [];
+                            if (p.Movies) targets.push(esc(p.Movies) + " (" + i18n.t("cfg.gtx.movies") + ")");
+                            if (p.Series) targets.push(esc(p.Series) + " (" + i18n.t("cfg.gtx.series") + ")");
+                            if (!targets.length) return;
+                            html += '<label class="wlItem">' +
+                                '<input type="checkbox" is="emby-checkbox" class="genreCheck" checked' +
+                                ' data-name="' + esc(p.Genre) + '"' +
+                                ' data-movies="' + esc(p.Movies || "") + '"' +
+                                ' data-series="' + esc(p.Series || "") + '">' +
+                                '<span class="checkboxLabel">' + esc(p.Genre) + ' → ' +
+                                targets.join(" · ") + '</span></label>';
+                        });
+                        if (listEl) {
+                            if (html) {
+                                listEl.innerHTML = html;
+                                listEl.style.display = "block";
+                            } else {
+                                listEl.style.display = "none";
+                            }
+                        }
+                        if (suggestEl) {
+                            if (suggestHtml) {
+                                suggestEl.innerHTML = suggestHtml;
+                                if (suggestLabelEl) suggestLabelEl.style.display = "block";
+                                suggestEl.style.display = "block";
+                            } else {
+                                suggestEl.style.display = "none";
+                                if (suggestLabelEl) suggestLabelEl.style.display = "none";
+                            }
+                        }
+                        if (applyBtn && (html || suggestHtml)) applyBtn.style.display = "block";
+                    }, function (err) {
+                        genreAnalyzeBtn.disabled = false;
+                        genreAnalyzeBtn.textContent = prevLabel;
+                        if (infoEl) {
+                            infoEl.style.display = "block";
+                            infoEl.textContent = i18n.t("cfg.gtx.error",
+                                (err && err.statusText ? err.statusText : err));
+                        }
+                    });
+                });
+            }
+
+            var genreApplyBtn = view.querySelector("#btnGenreApply");
+            if (genreApplyBtn) {
+                genreApplyBtn.addEventListener("click", function () {
+                    var mappings = [];
+                    view.querySelectorAll(".genreCheck:checked").forEach(function (chk) {
+                        var name = chk.getAttribute("data-name");
+                        var movies = chk.getAttribute("data-movies");
+                        var series = chk.getAttribute("data-series");
+                        if (movies) mappings.push({ Name: name, Value: movies, Section: "movie" });
+                        if (series) mappings.push({ Name: name, Value: series, Section: "series" });
+                    });
+                    // Nouveaux genres suggérés : la cible est AJOUTÉE aux
+                    // AllowedGenres de chaque section concernée + mappage.
+                    view.querySelectorAll(".genreSuggestCheck:checked").forEach(function (chk) {
+                        var name = chk.getAttribute("data-name");
+                        var nw = chk.getAttribute("data-new");
+                        if (!nw) return;
+                        if (chk.getAttribute("data-inmovies")) mappings.push({ Name: name, Value: nw, Section: "movie", NewGenre: true });
+                        if (chk.getAttribute("data-inseries")) mappings.push({ Name: name, Value: nw, Section: "series", NewGenre: true });
+                    });
+                    var resultEl = view.querySelector("#genreApplyResult");
+                    var infoEl = view.querySelector("#genreProposalsInfo");
+                    if (!mappings.length) {
+                        if (resultEl) {
+                            resultEl.style.display = "block";
+                            resultEl.textContent = i18n.t("cfg.gtx.noneSelected");
+                        }
+                        return;
+                    }
+
+                    genreApplyBtn.disabled = true;
+                    var prevLabel = genreApplyBtn.textContent;
+                    genreApplyBtn.textContent = i18n.t("cfg.gtx.applying");
+
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/GenreApply"),
+                        type: "POST",
+                        data: JSON.stringify({ Mappings: mappings }),
+                        contentType: "application/json",
+                        dataType: "json"
+                    }).then(function (data) {
+                        genreApplyBtn.disabled = false;
+                        genreApplyBtn.textContent = prevLabel;
+                        if (!data) data = {};
+                        if (resultEl) {
+                            resultEl.style.display = "block";
+                            if (data.Error) {
+                                resultEl.textContent = data.Error;
+                            } else {
+                                resultEl.textContent = data.RestartRequired
+                                    ? i18n.t("cfg.gtx.applied.restart", data.Applied || 0)
+                                    : i18n.t("cfg.gtx.applied.norestart", data.Applied || 0);
+                            }
+                        }
+                        // Les mappages ajoutés sont déjà dans le XML : masque
+                        // les listes et rafraîchit le compteur d'info.
+                        var listEl = view.querySelector("#genreProposals");
+                        if (listEl) listEl.style.display = "none";
+                        var suggestLabelEl = view.querySelector("#genreSuggestLabel");
+                        var suggestEl = view.querySelector("#genreSuggestions");
+                        var orphansEl = view.querySelector("#genreOrphans");
+                        if (suggestEl) suggestEl.style.display = "none";
+                        if (suggestLabelEl) suggestLabelEl.style.display = "none";
+                        if (orphansEl) orphansEl.style.display = "none";
+                        genreApplyBtn.style.display = "none";
+                        if (infoEl && !data.Error) infoEl.textContent = "";
+                    }, function (err) {
+                        genreApplyBtn.disabled = false;
+                        genreApplyBtn.textContent = prevLabel;
+                        if (resultEl) {
+                            resultEl.style.display = "block";
+                            resultEl.textContent = i18n.t("cfg.gtx.error",
+                                (err && err.statusText ? err.statusText : err));
                         }
                     });
                 });

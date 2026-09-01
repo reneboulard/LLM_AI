@@ -18,6 +18,15 @@ report** (severity-tagged findings + recommended actions). **Remediation** (stop
 session, trigger a task, notify a user) is disabled by default (opt-in). See
 [Server health audit](#server-health-audit).
 
+The plugin also ships two bridges: an **AI genre translation** feature that teams up
+with **GenreCleaner** (the official Emby-catalog genre-cleanup plugin) — for every EPG genre
+GenreCleaner doesn't cover yet, the LLM proposes an equivalent from your curated
+vocabulary, or even a **new genre** to add, and the accepted mappings are written
+straight into `GenreCleaner.xml` (see
+[AI genre translation](#ai-genre-translation-genrecleaner)) — and an **admin LLM chat**
+("LLM_AI Chat" page, the agent's full toolset in a conversation, see
+[LLM chat](#llm-chat-admin)).
+
 ---
 
 ## Table of contents
@@ -32,10 +41,12 @@ session, trigger a task, notify a user) is disabled by default (opt-in). See
 8. [Native recommendation surfaces](#native-recommendation-surfaces)
 9. [Server health audit](#server-health-audit)
 10. [Orphan recording identification](#orphan-recording-identification)
-11. [HTTP API](#http-api)
-12. [i18n (FR / EN)](#i18n-fr--en)
-13. [Troubleshooting](#troubleshooting)
-14. [Changelog](#changelog)
+11. [AI genre translation (GenreCleaner)](#ai-genre-translation-genrecleaner)
+12. [LLM chat (admin)](#llm-chat-admin)
+13. [HTTP API](#http-api)
+14. [i18n (FR / EN)](#i18n-fr--en)
+15. [Troubleshooting](#troubleshooting)
+16. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -80,8 +91,11 @@ Card buttons let you **Schedule** (SeriesTimer for a series, single Timer for a 
    service (`emby-server`), removes the old `mon-plugin.dll`, copies the DLL, and
    restarts Emby. Optional env vars: `EMBY_PLUGINS_DIR`, `EMBY_SERVICE`.
 4. In Emby: **Plugins** → **LLM_AI** → configure (see [Configuration](#configuration)).
-5. Clear the browser cache / hard-reload the page (the plugin's JS files are served by
-   Emby and cached aggressively).
+5. Simply reload the page (**F5**) once Emby has restarted. The ETag Emby serves for a
+   plugin's pages derives from its **id + version**: as soon as the version changes, the
+   browser's conditional revalidation receives the new HTML/JS. A hard reload
+   (Ctrl+Shift+R) remains necessary only when redeploying **at a constant version**
+   (development iterations).
 
 ### From source (developer)
 
@@ -267,6 +281,19 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   `llmai-needs-review` items (instead of skipping them) to run S3 on them; on success
   the tag becomes `llmai-identified`. Already-identified items stay skipped.
 
+### AI genre translation (GenreCleaner)
+
+**Admin** section of the config page (**Analyze** button → proposals → **Apply**).
+No dedicated flag: analysis and writing are admin-only (they spend LLM tokens and
+modify another plugin's config). Full details:
+[AI genre translation (GenreCleaner)](#ai-genre-translation-genrecleaner).
+
+### LLM chat (admin)
+
+- `ChatEnabled` (bool, default `true` — opt-out) — enables the **LLM_AI Chat** page
+  (admin menu, "Server" section) and the `POST /Plugins/LLMAI/Chat` endpoint.
+  See [LLM chat (admin)](#llm-chat-admin).
+
 ---
 
 ## Components
@@ -292,6 +319,10 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}]}` (stateless server — the page keeps the history), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities). The system prompt (tool docs + directives) is built server-side, once per conversation. |
+| `GenreApiService.cs` | `GenreApiService : BaseApiService` | **AI genre translation** endpoints (admin): `GET /Plugins/LLMAI/GenreProposals` (collects EPG genres of **upcoming** programs not covered by GenreCleaner, per movie/series section, capped at 60/section, then a one-shot LLM call via `ChatWithFallbackAsync` proposes for each a curated-vocabulary target, a new genre, or nothing) and `POST /Plugins/LLMAI/GenreApply` (re-validates then writes into `GenreCleaner.xml` via `GenreCleanerMap`, records into `GenreAliasApplied`, triggers `NotifyPendingRestart`). Suggestion language = `ResolveMetaLangKey` cascade (`ResponseLanguage`). See [AI genre translation](#ai-genre-translation-genrecleaner). |
+| `GenreCleanerMap.cs` | `GenreCleanerMap` (internal static) | **GenreCleaner.xml bridge**: reading (`Allowed`/`IsMapped`/`IsCovered` — a genre is covered when mapped OR present as-is in AllowedGenres), idempotent writing (`AddMappings` — dedup by normalized key, AllowedGenres add for `new` entries, identity mappings like `Action→Action` rejected except new genres) and **self-healing** (`HealApplied`: re-writes into the XML the mappings recorded in `GenreAliasApplied` that went missing — `new:true` also restores the AllowedGenres entry). |
+| `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Serves **only** those two fields — never the full config (API keys, prompts). |
+| `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 12 system-audit actions (sessions, tasks, transcoding, disks, logs, host metrics, processes, library) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
@@ -681,6 +712,130 @@ never aborts the pass (per-item try/catch). Scope: **library `Movie`/`Series` it
 
 ---
 
+## AI genre translation (GenreCleaner)
+
+**GenreCleaner** (an official Emby catalog plugin) normalizes genres: on every
+scan/refresh it remaps raw item genres to a **curated vocabulary** (`AllowedGenres` —
+e.g. your French list "Comédie", "Documentaire", "Sport"…) through a `GenreMappings`
+table (`raw → curated`), and drops anything not covered. The two plugins form a
+**closed loop**:
+
+- **GenreCleaner acts** — it writes the library and EPG genres;
+- **LLM_AI curates** — it detects the genres GenreCleaner doesn't know yet and has the
+  LLM propose the missing mappings, which the admin validates before they are written
+  straight into `GenreCleaner.xml`.
+
+Without this bridge, maintaining the `GenreMappings` table by hand is endless work:
+the Gracenote EPG emits hundreds of raw variants (`Bus./financial`, `Track/field`,
+`Political News Satire & Talk`…), and a single themed channel can introduce ten
+unknown genres in one EPG update.
+
+### Curated genres inside the EPG tools
+
+The bridge goes beyond writing mappings: the LLM's EPG tools (`epg_series`,
+`epg_movies`, `epg_tonight`) **emit curated genres themselves** —
+`GenreCleanerMap.MapGenres` applies the section's table (movies/series) to the raw
+genres before injecting them into results. The LLM therefore sees the **same
+vocabulary** as the user's taste profile (the library, already curated by GenreCleaner):
+"Comédie", "Drame", "Sport"… instead of `Sitcom`, `Dark comedy`, `Track/field`.
+
+Genre **whitelists and exclusions** (`GenreWhitelist`, the `documentary`/`news`
+exclusions in premieres_only mode) match the **raw AND mapped** keys
+(`GenreCleanerMap.GenreKeys`): a whitelist typed in the raw EPG vocabulary keeps
+matching after the mapping is enabled — and vice versa. Default exclusions are
+bilingual (`documentary`/`news` + `documentaire`/`nouvelles`).
+
+### Analysis ("Analyze" button)
+
+`GET /Plugins/LLMAI/GenreProposals` (admin):
+
+1. **Collection** — `CollectUnmapped` queries the **upcoming** EPG programs
+   (`IncludeItemTypes=Program`, `HasAired=false` — those are the ones recommendations
+   emit), separately for the movie class (`IsMovie=true`) and series class
+   (`IsSeries=true`), and keeps every genre **not covered**: neither mapped in its
+   section's table nor present as-is in its `AllowedGenres`. Library-level query
+   modeled on `BuildGenreMap` (this build's `GetPrograms` DTOs carry no `Genres`).
+   Cap: 60 unmapped genres per section.
+2. **LLM prompt** — a one-shot call (`ChatWithFallbackAsync`, same backends/priorities
+   as the rest of the plugin, multi-backend fallback) receives both lists **and** both
+   curated vocabularies. Proposal language follows the plugin's language cascade
+   (`ResponseLanguage` → Emby display language → `TmdbLanguage`).
+3. **Three-tier response:**
+
+| Tier | Display (config page) | "Apply" action |
+|---|---|---|
+| **Proposal** — the LLM found an equivalent in the existing vocabulary | `Genre → Target` checkbox (`Movies · Series` per sections where the genre appears) | adds the `Genre → Target` mapping to `GenreMappings` |
+| **New-genre suggestion** — no equivalent; the LLM proposes a short, general name (e.g. a cluster of technical genres → "Technologie"), tagged *new genre* | `Genre → NewName` checkbox + *new genre* badge | adds `NewName` to `AllowedGenres` **and** the `Genre → NewName` mapping — one click |
+| **Orphan** — the LLM deems the genre too specific/untranslatable | information line "no possible equivalent (no action)" | nothing (information only) |
+
+The admin **checks/unchecks** every line before applying — nothing is written without
+explicit validation.
+
+### Apply, restart, self-healing
+
+`POST /Plugins/LLMAI/GenreApply` re-validates server-side (target in vocabulary except
+new genres, identity mappings like `Action → Action` rejected), writes into
+`GenreCleaner.xml` **idempotently** (dedup by normalized key — applying twice creates
+nothing), records every applied mapping in `PluginConfiguration.GenreAliasApplied`,
+and triggers `NotifyPendingRestart()` — Emby's "restart required" banner.
+
+> ⚠️ **Adoption order**: LLM_AI recommendations read `GenreCleaner.xml` **live** and use
+> freshly written mappings right away; but GenreCleaner loaded its config **at startup**
+> — the restart signaled by the banner is required for GenreCleaner itself to adopt the
+> rewritten file.
+
+**Self-healing** — if the XML reverts to an older version (a restore, or a save from
+GenreCleaner's own config page, which serializes its in-memory copy), `GenreCleanerMap.HealApplied`
+(on the analysis GET and on every scheduled-task run) re-writes the `GenreAliasApplied`
+mappings that went missing; `new:true` entries also restore the matching `AllowedGenres`
+entry. Nothing is lost.
+
+### Why curated genres improve recommendations
+
+The benefit goes beyond item-page aesthetics — **the whole recommendation pipeline
+works on clean genres**:
+
+1. **Unfragmented taste profile.** `BuildTasteProfile` aggregates the genres of the
+   user's played items to describe their tastes to the LLM. With raw genres, "Comedy"
+   splinters into `Sitcom`, `Talk`, `Variety`, `Dark comedy`, `Musical comedy`…: the
+   profile counts fifteen one-item micro-genres and the LLM sees no dominant taste.
+   With the curated vocabulary they all converge to "Comédie" — the profile reveals
+   **what the user actually watches**.
+2. **Filters that actually filter.** LLM_AI's `GenreWhitelist` (and any genre filter
+   on the Emby side) only matches when the raw genre already equals yours; normalized
+   upstream, a single whitelist term covers all its EPG variants.
+3. **Cleaner LLM prompts.** The EPG lists injected into prompts show coherent, few
+   genres — less token noise, less confusion (especially on a local model), better
+   justifications.
+4. **Coherent Emby surfaces.** `.strm` cards (`.nfo` genres), badges, genre filters in
+   any client: the user browses "Documentaire" and finds `Nature` as well as `How-to`
+   and `Consumer` — instead of thirty redundant labels scattered across the UI.
+5. **The loop closes.** Better recommendations → better watched → an even sharper
+   profile. And when a new channel introduces unknown genres, the analysis catches
+   them on the next pass — vocabulary maintenance becomes one click instead of a
+   manual XML editing session.
+
+---
+
+## LLM chat (admin)
+
+The **"LLM_AI Chat"** page (admin menu, "Server" section, `chat.html`/`chat.js`): a
+**full-frame** multi-turn conversation with the LLM agent — the same tools as the
+scheduled task (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
+**not** the audit remediation actions), the plugin's backends/priorities.
+
+- **Endpoint:** `POST /Plugins/LLMAI/Chat`, body
+  `{Message, History:[{role,content}]}` — the server is **stateless** (the page keeps
+  the history, scoped to each page visit), roles other than user/assistant are
+  filtered, and the system prompt (tool docs + directives) is built server-side.
+- **Gating:** `ChatEnabled` (default `true`, opt-out). **Admin only** — the page is
+  not published in the user menu (no `EnableInUserMenu`): it exposes library and EPG
+  introspection.
+- Usage: explore the library in natural language, prepare/evaluate an evening, ask
+  the agent what it could recommend — without spending a full run.
+
+---
+
 ## HTTP API
 
 ```
@@ -746,6 +901,86 @@ curl -H "X-Emby-Token: <admin-token>" \
   "http://localhost:8096/emby/Plugins/LLMAI/Audit?focus=transcoding"
 ```
 
+```
+GET /Plugins/LLMAI/Recos
+```
+
+**Recommendations for the user page**: latest scheduled-task recommendations (raw JSON
+payload + run date). Route created for **non-admin users** — `recommendations.js`
+previously read plugin config through the host endpoint
+`/Plugins/{id}/Configuration` (ManageServer-only → 403).
+
+**Response:** `{ Items, Date, Error }` — `Items` is the recommendations JSON string
+(same shape as the config's `Recommendations` field).
+
+**Authentication:** any authenticated user (session token or API key). The route serves
+**only** `Recommendations`/`RecommendationsDate` — never the full config (API keys,
+prompts, paths).
+
+```
+POST /Plugins/LLMAI/Forget        body: {"Title":"..."}
+```
+
+**Server-side "Forget" button**: adds the title to the persistent `DroppedTitles`
+drop list (via `SaveConfiguration`). Previously done page-side through an admin config
+round-trip, hence 403 for a non-admin.
+
+**Response:** `{ Added, Error }` — `Added=false` when already present (idempotent).
+
+**Authentication:** any authenticated user.
+
+```
+POST /Plugins/LLMAI/Chat          body: {Message, History:[{role,content}]}
+```
+
+**Admin LLM chat**: one conversation turn with the agent (all tools, plugin
+backends/priorities). Stateless server — `History` is sent back by the page, filtered
+to user/assistant roles. See [LLM chat (admin)](#llm-chat-admin).
+
+**Authentication:** admin only.
+
+```
+GET /Plugins/LLMAI/GenreProposals
+```
+
+**EPG genre analysis** (admin): collects the genres of **upcoming** programs not
+covered by GenreCleaner (per movie/series section) and returns the three-tier LLM
+proposals (existing targets / suggested new genres / orphans). Nothing is written at
+this stage. See [AI genre translation](#ai-genre-translation-genrecleaner).
+
+**Response:** `{ Proposals:[{Genre, Movies, Series, New, InMovies, InSeries}],
+UnmappedMovies, UnmappedSeries, Orphans:[], Message, Error }`.
+
+```
+POST /Plugins/LLMAI/GenreApply    body: {Mappings:[{Name, Value, Section, NewGenre}]}
+```
+
+**Writes the accepted mappings** (admin): server-side re-validation (vocabulary,
+identity-mapping rejection), idempotent write into `GenreCleaner.xml` (AllowedGenres +
+GenreMappings), recording into `GenreAliasApplied` (self-healing), `NotifyPendingRestart`.
+
+**Response:** `{ Applied, RestartRequired, Error }`.
+
+**Authentication:** admin only (both GenreProposals and GenreApply).
+
+```
+GET /Plugins/LLMAI/Update
+```
+
+**Update check**: compares the latest GitHub release tag of the plugin
+(`reneboulard/LLM_AI`, `release.yml` workflow) with the installed assembly version.
+**Read-only** — no download or install; the config page shows a banner linking to the
+release. 1 h lock-guarded cache (GitHub API limit); `?Force=1` bypasses it (debug).
+
+**Response:** `{ Current, Latest, Available, ReleaseUrl, ZipUrl, CheckedAt, Error }`.
+Network error → `Error` (no banner, no noise).
+
+**Test:**
+```bash
+curl -H "X-Emby-Token: <token>" \
+  "http://localhost:8096/emby/Plugins/LLMAI/Update?Force=1"
+```
+
 ---
 
 ## i18n (FR / EN)
@@ -784,6 +1019,14 @@ local backend has the highest `Priority`, or use a cloud backend.
 Check `TonightWindowStart`/`TonightWindowEnd` (`HH:mm` format) and that the EPG is
 populated. The "library reserve" fallback still guarantees `TonightMinRecommendations`
 recos.
+
+**Genre analysis says "everything is already covered" while genres seem missing:**
+The analysis only covers **upcoming** EPG programs (`HasAired=false`) — that is the
+recommendations' scope; a genre present only on already-aired programs is not
+proposed. Also check GenreCleaner has **restarted** since the last mapping write
+("restart required" banner): without a restart, GenreCleaner works from its in-memory
+copy and may rewrite the XML without your mappings — self-healing restores them on the
+next pass.
 
 **`.strm` library: "library not found":**
 `StrmLibraryName` must match the **exact name** shown in the Emby dashboard. The

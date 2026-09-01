@@ -332,6 +332,20 @@ namespace LLM_AI
         public string DroppedTitles { get; set; } = "";
 
         /// <summary>
+        /// Mappages de genres écrits par l'outil « Traduction des genres (IA) »
+        /// de la page de config dans <c>GenreCleaner.xml</c> — tableau JSON
+        /// <c>[{"name":"Sitcom","value":"Comédie","section":"series"}]</c>.
+        /// Source de vérité pour l'auto-réparation : si une sauvegarde de la
+        /// page de config de GenreCleaner réécrit le fichier XML depuis sa
+        /// copie mémoire (Emby charge le plugin une fois au démarrage), les
+        /// mappages manquants sont ré-ajoutés au run suivant (voir
+        /// <see cref="GenreCleanerMap.HealApplied"/>). Après un redémarrage du
+        /// serveur, la copie mémoire inclut nos entrées et les sauvegardes
+        /// les préservent. Vide = aucun mappage appliqué par l'IA.
+        /// </summary>
+        public string GenreAliasApplied { get; set; } = "";
+
+        /// <summary>
         /// Whitelist de chaines (tableau JSON de noms, ex.
         /// <c>["TF1","Arte"]</c>) : seuls les programmes EPG diffusés sur ces
         /// chaines sont renvoyés à l'agent par <c>get_emby_info</c>

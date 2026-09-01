@@ -38,10 +38,19 @@ namespace LLM_AI
         /// </summary>
         public static Plugin Instance { get; private set; }
 
+        /// <summary>
+        /// Chemins de l'hôte, posés au constructeur — utilisés par
+        /// <see cref="GenreCleanerMap"/> pour localiser le fichier de config
+        /// du plugin GenreCleaner (dossier des configurations de plugins).
+        /// Ne touche PAS <see cref="Configuration"/> (voir NOTE du ctor).
+        /// </summary>
+        internal static IApplicationPaths Paths { get; private set; }
+
         public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
             : base(applicationPaths, xmlSerializer)
         {
             Instance = this;
+            Paths = applicationPaths;
             // NOTE — ne pas toucher <see cref="Configuration"/> ici : au moment
             // du ctor, l'hôte n'a pas encore renseigné AssemblyFilePath (posé
             // APRÈS la construction) et ConfigurationFilePath en dépend — un

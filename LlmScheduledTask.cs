@@ -145,6 +145,12 @@ namespace LLM_AI
 
             progress?.Report(10);
 
+            // Auto-réparation des mappages de genres IA : la page de config de
+            // GenreCleaner sérialise sa copie mémoire au prochain enregistrement
+            // — toute écriture externe postérieure au chargement (et antérieure
+            // à un redémarrage) est perdue ; on ré-écrit les entrées manquantes.
+            GenreCleanerMap.HealApplied(cfg.GenreAliasApplied, _logger);
+
             // Deux prompts : séries (ScheduleTask) et films (ScheduleTaskMovies).
             // La planification (gauche du '|') ne vient que de ScheduleTask ; on
             // n'en tient pas compte ici à l'exécution (juste le texte du prompt).

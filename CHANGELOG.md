@@ -10,6 +10,129 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Non publié / Unreleased]
+
+### Ajouté / Added
+
+- **Traduction IA des genres EPG — pont GenreCleaner** (`GenreApiService` +
+  `GenreCleanerMap` + section « Traduction des genres (IA) » de la page de config) :
+  LLM_AI devient le **curateur** du plugin GenreCleaner (catalogue officiel Emby) —
+  il détecte les genres EPG que la table `GenreMappings`/`AllowedGenres` de
+  GenreCleaner ne couvre pas encore et fait proposer par le LLM les mappages
+  manquants, que l'admin valide avant écriture directement dans `GenreCleaner.xml`.
+  Admin-only (tokens LLM + config d'un autre plugin).
+  **AI translation of EPG genres — GenreCleaner bridge** (`GenreApiService` +
+  `GenreCleanerMap` + "AI genre translation" config-page section): LLM_AI becomes the
+  **curator** of the GenreCleaner plugin (official Emby catalog) — it detects the EPG genres that
+  GenreCleaner's `GenreMappings`/`AllowedGenres` doesn't cover yet and has the LLM
+  propose the missing mappings, which the admin validates before they are written
+  straight into `GenreCleaner.xml`. Admin-only (LLM tokens + another plugin's config).
+  - **`GET /Plugins/LLMAI/GenreProposals`** — collecte les genres des programmes EPG
+    **à venir** (`HasAired=false`, requête library calquée sur `BuildGenreMap` — les
+    DTO de `GetPrograms` ne portent pas `Genres` sur ce build) non couverts (mappés OU
+    présents dans AllowedGenres), séparément films/séries (plafond 60/section), puis
+    un appel LLM one-shot (`ChatWithFallbackAsync`, repli multi-backend) propose pour
+    chacun : une cible du vocabulaire curaté, un **nouveau genre** (nom court, général,
+    dans la langue de réponse du plugin — cascade `ResolveMetaLangKey` :
+    `ResponseLanguage` → langue d'affichage Emby → `TmdbLanguage`), ou rien (orphelin).
+    Réponse à trois niveaux : propositions / suggestions de nouveaux genres (ajout
+    AllowedGenres **et** mappage en un clic) / orphelins (information seulement).
+    **`GET /Plugins/LLMAI/GenreProposals`** — collects the genres of **upcoming** EPG
+    programs (`HasAired=false`, library query modeled on `BuildGenreMap` — this
+    build's `GetPrograms` DTOs carry no `Genres`) not covered (mapped OR present in
+    AllowedGenres), separately for movies/series (60/section cap), then a one-shot LLM
+    call (`ChatWithFallbackAsync`, multi-backend fallback) proposes for each: a
+    curated-vocabulary target, a **new genre** (short, general name, in the plugin's
+    response language — `ResolveMetaLangKey` cascade: `ResponseLanguage` → Emby display
+    language → `TmdbLanguage`), or nothing (orphan). Three-tier response: proposals /
+    new-genre suggestions (AllowedGenres add **and** mapping in one click) / orphans
+    (information only).
+  - **`POST /Plugins/LLMAI/GenreApply`** — re-validation serveur (cible dans le
+    vocabulaire sauf nouveaux genres, rejet des mappages identité `Action → Action`),
+    écriture **idempotente** dans `GenreCleaner.xml` (dedup par clé normalisée),
+    enregistrement de chaque mappage appliqué dans `PluginConfiguration.GenreAliasApplied`
+    et déclenchement de `NotifyPendingRestart()` (bannière Emby « redémarrage requis » —
+    les recommandations LLM_AI adoptent les mappages sans redémarrage, GenreCleaner lui
+    ne les adopte qu'au redémarrage).
+    **`POST /Plugins/LLMAI/GenreApply`** — server-side re-validation (target in
+    vocabulary except new genres, identity mappings `Action → Action` rejected),
+    **idempotent** write into `GenreCleaner.xml` (normalized-key dedup), every applied
+    mapping recorded in `PluginConfiguration.GenreAliasApplied`, and
+    `NotifyPendingRestart()` triggered (Emby's "restart required" banner — LLM_AI
+    recommendations adopt the mappings without a restart; GenreCleaner only adopts them
+    on restart).
+  - **Auto-guérison** — si le XML revient à une version antérieure (restauration, ou
+    sauvegarde depuis la page de config de GenreCleaner qui sérialise sa copie mémoire),
+    `GenreCleanerMap.HealApplied` (au GET analyse et à chaque run de la tâche planifiée)
+    ré-écrit les mappages enregistrés qui manquent ; les entrées `new:true` restaurent
+    **aussi** l'entrée `AllowedGenres` correspondante. Rien ne se perd.
+    **Self-healing** — if the XML reverts to an older version (a restore, or a save from
+    GenreCleaner's own config page which serializes its in-memory copy),
+    `GenreCleanerMap.HealApplied` (on the analysis GET and every scheduled-task run)
+    re-writes the recorded mappings that went missing; `new:true` entries also restore
+    the matching `AllowedGenres` entry. Nothing is lost.
+  - **Genres curatés dans les outils EPG** — `epg_series`/`epg_movies`/`epg_tonight`
+    émettent des genres curatés (`GenreCleanerMap.MapGenres`, table de la section
+    films/séries du programme) : le LLM voit le même vocabulaire que le profil de goût
+    de l'usager (bibliothèque déjà curatée). Whitelists et exclusions de genres matchent
+    la clé **brute ET mappée** (`GenreCleanerMap.GenreKeys`) — une whitelist saisie en
+    vocabulaire EPG brut continue de matcher après activation du mapping ; exclusions
+    par défaut bilingues (`documentary`/`news` + `documentaire`/`nouvelles`).
+    **Curated genres inside the EPG tools** — `epg_series`/`epg_movies`/`epg_tonight`
+    emit curated genres (`GenreCleanerMap.MapGenres`, the program's movie/series
+    section table): the LLM sees the same vocabulary as the user's taste profile
+    (library already curated). Genre whitelists and exclusions match the **raw AND
+    mapped** keys (`GenreCleanerMap.GenreKeys`) — a whitelist typed in the raw EPG
+    vocabulary keeps matching once the mapping is enabled; default exclusions are
+    bilingual (`documentary`/`news` + `documentaire`/`nouvelles`).
+
+- **Routes API usager pour la page Recommandations** (`RecosApiService`) :
+  `GET /Plugins/LLMAI/Recos` (dernières recommandations de la tâche planifiée + date)
+  et `POST /Plugins/LLMAI/Forget {Title}` (bouton « Oublier » → `DroppedTitles`,
+  écriture serveur-side via `SaveConfiguration`). La page `recommendations.js` lisait
+  auparavant la config plugin via l'endpoint hôte `/Plugins/{id}/Configuration` —
+  réservé ManageServer : un usager non-admin recevait **403** et la page ne rendait
+  rien. Les routes ne servent **que** `Recommendations`/`RecommendationsDate` —
+  jamais la config complète (clés API, prompts, chemins).
+  **User API routes for the Recommendations page** (`RecosApiService`):
+  `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date) and
+  `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button → `DroppedTitles`, written
+  server-side via `SaveConfiguration`). The `recommendations.js` page previously read
+  plugin config through the host endpoint `/Plugins/{id}/Configuration` —
+  ManageServer-only: a non-admin user got **403** and the page rendered nothing. The
+  routes serve **only** `Recommendations`/`RecommendationsDate` — never the full
+  config (API keys, prompts, paths).
+
+- **Bannière de mise à jour GitHub** (`UpdateApiService`, `GET /Plugins/LLMAI/Update`) :
+  compare le tag de la dernière release GitHub (`reneboulard/LLM_AI`, workflow
+  `release.yml` sur tag `v*`) à la version d'assembly installée → bandeau sur la page
+  de config avec le lien de la release. **Lecture seule** (aucun téléchargement ni
+  installation — Emby n'auto-met à jour que les plugins de son catalogue officiel),
+  cache 1 h sous verrou (limite API GitHub non authentifiée), `Force=1` pour bypasser,
+  ne lève jamais (erreur réseau → pas de bandeau).
+  **GitHub update banner** (`UpdateApiService`, `GET /Plugins/LLMAI/Update`): compares
+  the latest GitHub release tag (`reneboulard/LLM_AI`, `release.yml` workflow on `v*`
+  tags) with the installed assembly version → config-page banner linking to the
+  release. **Read-only** (no download or install — Emby only auto-updates official
+  catalog plugins), 1 h lock-guarded cache (unauthenticated GitHub API limit),
+  `Force=1` bypass, never throws (network error → no banner).
+
+### Corrigé / Fixed
+
+- **`epg_tonight` : fenêtre « ce soir » vide sur ce build d'Emby** — `GetPrograms`
+  n'honore pas `MinStartDate`/`MaxStartDate` (0 programme alors que l'EPG en contient
+  ~200 par soirée) : repli en mémoire — relance sans fenêtre (`HasAired=false`) puis
+  filtre C# par `StartDate` sur la fenêtre `TonightWindowStart`→`TonightWindowEnd`,
+  plafonné au pool. Ajout d'un **recensement des genres** dans le log (genres émis au
+  LLM post-mapping GenreCleaner) qui rend visible d'un coup d'œil que le pont est
+  actif.
+  **`epg_tonight`: empty "tonight" window on this Emby build** — `GetPrograms`
+  ignores `MinStartDate`/`MaxStartDate` (0 programs although the EPG holds ~200 per
+  evening): in-memory fallback — re-query without a window (`HasAired=false`) then
+  C#-filter by `StartDate` over the `TonightWindowStart`→`TonightWindowEnd` window,
+  capped to the pool. Added a **genre census** log line (genres emitted to the LLM
+  post-GenreCleaner-mapping) that makes bridge activity visible at a glance.
+
 ## [1.1.0.0] — 2026-08-31
 
 ### Ajouté / Added
