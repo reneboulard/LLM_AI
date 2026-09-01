@@ -935,14 +935,19 @@ namespace LLM_AI
 
             var s = reply.Trim();
 
-            // Retire les balises de code markdown éventuelles.
-            if (s.StartsWith("```", StringComparison.Ordinal))
+            // Balises de code markdown ```json … ``` — même précédées de prose :
+            // vécu 2026-09-01, glm-5.3:cloud préface parfois son tableau d'un
+            // commentaire (« Tonight's EPG is thin… ») AVANT le bloc fenced, et
+            // l'ancien StartsWith("```") ratait alors la paire. On prend le
+            // contenu entre la fin de la ligne d'ouverture de la PREMIÈRE
+            // balise et la DERNIÈRE balise fermante.
+            int fenceOpen = s.IndexOf("```", StringComparison.Ordinal);
+            if (fenceOpen >= 0)
             {
-                int nl = s.IndexOf('\n');
-                if (nl >= 0) s = s.Substring(nl + 1);
+                int nl = s.IndexOf('\n', fenceOpen);
                 int fenceEnd = s.LastIndexOf("```", StringComparison.Ordinal);
-                if (fenceEnd >= 0) s = s.Substring(0, fenceEnd);
-                s = s.Trim();
+                if (nl >= 0 && fenceEnd > nl)
+                    s = s.Substring(nl + 1, fenceEnd - nl - 1).Trim();
             }
 
             // Déjà un tableau JSON ?

@@ -133,6 +133,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   capped to the pool. Added a **genre census** log line (genres emitted to the LLM
   post-GenreCleaner-mapping) that makes bridge activity visible at a glance.
 
+- **« À regarder ce soir » : toutes les recos `live` supprimées par la validation** —
+  le snapshot EPG de `ValidateAndFilter` (TonightService) reposait sur la même requête
+  fenêtrée `GetPrograms` qui retourne 0 sur ce build : dictionnaire VIDE → chaque reco
+  `live` était droppée « hors-snapshot » (vécu : 4/4 enrichies puis 4/4 supprimées →
+  erreur « toutes les recommandations pointaient vers des items introuvables »). Même
+  repli en mémoire que `epg_tonight` (sans `HasAired=false` : le snapshot couvre aussi
+  les 24 dernières heures pour la détection « Diffusé »), + log de la taille du snapshot.
+  **"Watch tonight": all `live` recos dropped by validation** — the EPG snapshot in
+  `ValidateAndFilter` (TonightService) relied on the same windowed `GetPrograms` query
+  that returns 0 on this build: EMPTY dictionary → every `live` reco was dropped as
+  "out-of-snapshot" (seen live: 4/4 enriched then 4/4 deleted → "all recommendations
+  pointed to unfindable items" error). Same in-memory fallback as `epg_tonight`
+  (without `HasAired=false`: the snapshot also covers the last 24 hours for the
+  "Aired" detection), + snapshot-size log line.
+
+- **Réponses finales LLM non-JSON tolérées jusqu'à l'affichage brut** — vécu avec
+  glm-5.3:cloud : prose autour du tableau fenced, guillemets internes non échappés
+  (`S07E06 "The Truck Stops Here"`), ou écho du format demandé — le parse aval
+  échouait silencieusement (enrichissement + validation ignorés, markdown brut servi
+  sur la page). Deux garde-fous : `ExtractJsonPayload` retire les balises ``` même
+  précédées de prose, et la boucle agent (mode recommandation) vérifie que la réponse
+  finale est un tableau JSON parseable — sinon **réparation bornée** (2 tentatives) :
+  le message d'erreur est réinjecté au modèle, même mécanisme que le renvoi des
+  appels d'outils malformés.
+  **Non-JSON final LLM answers tolerated all the way to raw display** — seen with
+  glm-5.3:cloud: prose around the fenced array, unescaped inner quotes
+  (`S07E06 "The Truck Stops Here"`), or an echo of the requested format — downstream
+  parsing failed silently (enrichment + validation skipped, raw markdown served to
+  the page). Two safeguards: `ExtractJsonPayload` strips ``` fences even when preceded
+  by prose, and the agent loop (recommendation mode) checks that the final answer is
+  a parseable JSON array — otherwise a **bounded repair** (2 attempts) re-injects the
+  error to the model, same mechanism as the malformed-tool-call resend.
+
 ## [1.1.0.0] — 2026-08-31
 
 ### Ajouté / Added

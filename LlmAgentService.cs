@@ -194,6 +194,13 @@ namespace LLM_AI
             var byName = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
             var toolResults = new List<(string tool, string result)>();
 
+            // Bornes de la réparation « réponse finale non-JSON » (mode reco) :
+            // sans elle, une réponse invalide part telle quelle en aval —
+            // enrichissement et validation l'ignorent, la page affiche le
+            // markdown brut (vécu 2026-09-01 avec glm-5.3:cloud).
+            const int MaxReplyRepairs = 2;
+            int replyRepairs = 0;
+
             for (int iter = 0; iter < MaxIterations; iter++)
             {
                 var reply = await ChatAsync(messages, ct).ConfigureAwait(false);
@@ -228,6 +235,42 @@ namespace LLM_AI
                             "sans texte autour ni backticks. " + finalFormatHint });
                         continue;
                     }
+
+                    // Mode recommandation : la réponse finale DOIT être un tableau
+                    // JSON exploitable. Vécu 2026-09-01 (glm-5.3:cloud) : prose
+                    // autour du tableau, guillemets internes non échappés
+                    // (S07E06 "The Truck Stops Here"), ou écho du format demandé
+                    // — le parse aval échoue silencieusement (enrichissement +
+                    // validation ignorés, markdown brut affiché). Réparation
+                    // bornée, même mécanisme que le renvoi d'appels d'outils :
+                    // on signale et on continue la boucle.
+                    if (_formatSection == null && replyRepairs < MaxReplyRepairs)
+                    {
+                        var probe = LlmRunner.ExtractJsonPayload(reply);
+                        bool validArray = false;
+                        try
+                        {
+                            using (var doc = JsonDocument.Parse(probe))
+                                validArray = doc.RootElement.ValueKind == JsonValueKind.Array;
+                        }
+                        catch { }
+                        if (!validArray)
+                        {
+                            replyRepairs++;
+                            _logger?.Warn("[LLM_AI] Itération {0} — réponse finale non parsable en tableau JSON. Demande de renvoi ({1}/{2}).",
+                                iter, replyRepairs, MaxReplyRepairs);
+                            messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
+                            messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                                "Ta réponse finale n'est pas un tableau JSON exploitable " +
+                                "(texte autour du tableau, guillemets non échappés, ou format non respecté). " +
+                                "Renvoie UNIQUEMENT le tableau JSON des recommandations " +
+                                "(champs title, kind, reason, priority, channel, start), sans texte " +
+                                "avant/après ni balises ```, et avec tous les guillemets internes " +
+                                "échappés (\\\") dans les valeurs de type chaîne." });
+                            continue;
+                        }
+                    }
+
                     return (reply, toolResults); // réponse finale (Markdown ou tableau de recos)
                 }
 
