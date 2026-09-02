@@ -6,6 +6,21 @@
 define(["loading"], function (loading) {
     "use strict";
 
+    // Cache-busting : compare la version du build qui a servi ce JS à celle
+    // du serveur (module généré asset_version.js, chargé via require() comme
+    // LLMAII18n). Tâche de fond non bloquante : si le JS servi est périmé
+    // (cache disque), les entrées de cache HTTP sont réécrites puis la page
+    // rechargée — une seule fois par session (voir asset_version_template.js).
+    // Toute erreur est silencieuse : la page reste pleinement fonctionnelle.
+    (function checkAssetVersion() {
+        try {
+            var url = ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAIAssetVersion" });
+            require([url], function (av) {
+                if (av && typeof av.checkForUpdate === "function") av.checkForUpdate(ApiClient);
+            }, function () { /* module absent : silencieux */ });
+        } catch (e) { /* require/ApiClient indisponible : silencieux */ }
+    })();
+
     var pluginId = "e7d3dee6-ef19-46a9-985f-06318b682e60";
 
     // Config chargée depuis le serveur au viewshow. Servira à carry-forward

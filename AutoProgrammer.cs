@@ -413,6 +413,12 @@ namespace LLM_AI
             public string Reason;
             public string Channel;
             public string Start;
+            /// <summary>Année de PRODUCTION/première diffusion : injectée de façon
+            /// déterministe par l'enrichissement (EPG matché, item bibliothèque)
+            /// ou fournie par le LLM (tmdb_lookup). Distincte de <c>Start</c> (date
+            /// de DIFFUSION du programme à enregistrer) — sert au <c>&lt;year&gt;</c>
+            /// du .nfo (→ ProductionYear dans Emby).</summary>
+            public int? Year;
         }
 
         internal static List<Reco> ParseRecommendations(string payload)
@@ -437,6 +443,7 @@ namespace LLM_AI
                             Reason = Str(el, "reason"),
                             Channel = Str(el, "channel"),
                             Start = Str(el, "start"),
+                            Year = IntOpt(el, "year"),
                         });
                     }
                 }
@@ -452,6 +459,20 @@ namespace LLM_AI
         {
             if (obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String)
                 return v.GetString();
+            return null;
+        }
+
+        /// <summary>
+        /// Entier optionnel : accepte un JSON number OU une chaîne (« 2024 » —
+        /// certains LLM émettent les nombres entre guillemets). Null sinon.
+        /// </summary>
+        private static int? IntOpt(JsonElement obj, string key)
+        {
+            if (!obj.TryGetProperty(key, out var v)) return null;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out int n)) return n;
+            if (v.ValueKind == JsonValueKind.String &&
+                int.TryParse(v.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
+                return n;
             return null;
         }
     }

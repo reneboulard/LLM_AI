@@ -21,7 +21,7 @@ namespace LLM_AI
     /// complète — pas de clés API, chemins ni prompts).
     /// </summary>
     /// <remarks>
-    /// Deux routes :
+    /// Trois routes :
     /// <list type="bullet">
     /// <item><c>GET /Plugins/LLMAI/Recos</c> — dernières recommandations de la
     /// tâche planifiée (payload brut + date), pour tout usager authentifié ;</item>
@@ -30,6 +30,8 @@ namespace LLM_AI
     /// fait côté page par un round-trip config admin (get/update), donc 403
     /// pour un non-admin ; l'écriture se fait maintenant serveur-side via
     /// <see cref="MediaBrowser.Common.Plugins.BasePlugin.SaveConfiguration"/>.</item>
+    /// <item><c>GET /Plugins/LLMAI/Version</c> — version courante du plugin,
+    /// handshake de cache-busting du module généré <c>asset_version.js</c>.</item>
     /// </list>
     /// Service ServiceStack découvert par scanning d'assembly : hérite
     /// <see cref="BaseApiService"/> (auth Emby standard par token, aucune
@@ -87,6 +89,29 @@ namespace LLM_AI
             public string Error { get; set; }
         }
 
+        /// <summary>
+        /// Requête GET <c>/Plugins/LLMAI/Version</c> (aucun paramètre) :
+        /// version courante du plugin (assembly, pilotée par <c>&lt;Version&gt;</c>
+        /// du csproj). Sert au cache-busting client — le module généré
+        /// <c>asset_version.js</c> compare la version du build QUI L'A SERVI
+        /// à cette réponse ; en cas d'écart, le JS en cache disque est
+        /// périmé → la page rafraîchit les entrées de cache HTTP puis se
+        /// recharge (voir asset_version_template.js).
+        /// </summary>
+        [Route("/Plugins/LLMAI/Version", "GET")]
+        public class VersionRequest : IReturn<object>
+        {
+        }
+
+        /// <summary>
+        /// Réponse GET : <c>Version</c> en chaîne (ex. « 1.1.0.0 »), vide si
+        /// l'instance n'est pas résolue (le client n'agit pas sur vide).
+        /// </summary>
+        public class VersionResponse
+        {
+            public string Version { get; set; }
+        }
+
         // ------------------------------------------------------------------
         //  Handler GET : dernières recommandations
         // ------------------------------------------------------------------
@@ -105,6 +130,23 @@ namespace LLM_AI
                 Items = cfg.Recommendations ?? "",
                 Date = cfg.RecommendationsDate ?? ""
             };
+        }
+
+        // ------------------------------------------------------------------
+        //  Handler GET : version du plugin (cache-busting client)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Version courante du plugin pour le handshake de cache-busting
+        /// (<c>asset_version.js</c>). Lecture seule, aucune donnée
+        /// sensible — un usager authentifié quelconque peut l'appeler (les
+        /// pages servies dans le menu utilisateur en ont besoin).
+        /// </summary>
+        public object Get(VersionRequest req)
+        {
+            // BasePlugin.Version : sealed, renseignée par l'hôte depuis
+            // <AssemblyVersion> du csproj au chargement du plugin.
+            return new VersionResponse { Version = Plugin.Instance?.Version?.ToString() ?? "" };
         }
 
         // ------------------------------------------------------------------

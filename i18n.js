@@ -236,6 +236,10 @@ define([], function () {
             "rec.tonight.watchLive": "Regarder en direct",
             "rec.tonight.watch": "Regarder",
             "rec.tonight.watchLib": "Regarder (bibli.)",
+            // Préfixe de la raison, section « À regarder ce soir » SEULEMENT :
+            // les recos d'enregistrement (.strm, sections séries/films) portent
+            // l'emoji 🤖 seul.
+            "rec.tonight.why": "🤖 Pourquoi ce soir : ",
             "rec.type.upcoming": "À venir",
             "rec.type.recording": "Disponible · Enregistrement",
             "rec.type.library": "Disponible · Bibliothèque",
@@ -449,6 +453,10 @@ define([], function () {
             "rec.tonight.watchLive": "Watch live",
             "rec.tonight.watch": "Watch",
             "rec.tonight.watchLib": "Watch (library)",
+            // Prefix of the reason, "Watch tonight" section ONLY: record
+            // recommendations (.strm, series/films sections) carry the 🤖
+            // emoji alone.
+            "rec.tonight.why": "🤖 Why tonight: ",
             "rec.type.upcoming": "Upcoming",
             "rec.type.recording": "Available · Recording",
             "rec.type.library": "Available · Library",

@@ -20,6 +20,21 @@
 define([], function () {
     "use strict";
 
+    // Cache-busting : compare la version du build qui a servi ce JS à celle
+    // du serveur (module généré asset_version.js, chargé via require() comme
+    // LLMAII18n). Tâche de fond non bloquante : si le JS servi est périmé
+    // (cache disque), les entrées de cache HTTP sont réécrites puis la page
+    // rechargée — une seule fois par session (voir asset_version_template.js).
+    // Toute erreur est silencieuse : la page reste pleinement fonctionnelle.
+    (function checkAssetVersion() {
+        try {
+            var url = ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAIAssetVersion" });
+            require([url], function (av) {
+                if (av && typeof av.checkForUpdate === "function") av.checkForUpdate(ApiClient);
+            }, function () { /* module absent : silencieux */ });
+        } catch (e) { /* require/ApiClient indisponible : silencieux */ }
+    })();
+
     // Module i18n (FR/EN) : chargé comme ressource plugin via require() sur
     // « web/ConfigurationPage?name=LLMAII18n » (même mécanisme que le
     // viewmanager pour les data-controller). Pas de dépendance AMD
@@ -104,13 +119,17 @@ define([], function () {
 
     // Construit le HTML d'une carte pour un item de recommandation.
     // it = {title, kind, reason, priority, channel, start, showbizz_match,
-    //       id, channel_id, rating, image_url}  (champs enrichis côté tâche).
+    //       id, channel_id, rating, year, image_url}  (champs enrichis côté tâche).
     function cardHtml(it, idx) {
         var title = it.title || it.name || "?";
         var pr = priorityStyle(it.priority);
         var hasId = !!it.id;
         var src = posterSrc(it);
         var isMovie = kindIsMovie(it.kind);
+        // Année de production : injectée côté tâche (EPG matché, tmdb_lookup
+        // ou item bibliothèque). Tolère number et "2024" ; ignore le bruit.
+        var yr = parseInt(it.year, 10);
+        var year = (!isNaN(yr) && yr > 1900 && yr < 2100) ? yr : null;
         var poster = src
             ? '<img src="' + esc(src) + '" alt="' + esc(title) + '" loading="lazy" referrerpolicy="no-referrer">'
             : '<div class="ai-poster-placeholder">' + (isMovie ? "🎬" : "📺") + '</div>';
@@ -135,8 +154,10 @@ define([], function () {
         // Méta-ligne : un item disponible (recording/library) n'a ni date ni
         // canal — on affiche son libellé de disponibilité plutôt que « 📅  • 📺 — ».
         // Un programme EPG (live, à venir ou diffusé) porte en plus date + canal,
-        // précédés du libellé de type (l'icône ⏰ « À venir » demandée).
+        // précédés du libellé de type (l'icône ⏰ « À venir » demandée) et de
+        // l'année de production (🎬) quand les métadonnées la fournissent.
         var meta = esc(badge.icon) + " " + esc(badge.text);
+        if (year) meta += " · 🎬 " + year;
         if (!isWatchItem) meta += " · 📅 " + esc(dateStr) + " • 📺 " + esc(channel);
 
         // Bouton « Regarder en direct » : uniquement pour la section tonight
@@ -195,7 +216,12 @@ define([], function () {
             '<div class="ai-card-info">' +
                 '<div class="ai-card-title" title="' + esc(title) + '">' + esc(title) + '</div>' +
                 '<div class="ai-card-meta">' + meta + '</div>' +
-                '<div class="ai-card-reason" title="' + esc(it.reason || "") + '">🤖 ' + esc(it.reason || "") + '</div>' +
+                // Raison : libellé localisé « 🤖 Pourquoi ce soir / Why tonight »
+                // UNIQUEMENT pour les cartes de la section « À regarder ce soir »
+                // (it.section==="tonight") ; les recos d'enregistrement (sections
+                // séries/films, cartes .strm) portent l'emoji 🤖 seul.
+                '<div class="ai-card-reason" title="' + esc(it.reason || "") + '">' +
+                esc((it.section === "tonight" ? i18n.t("rec.tonight.why") : "🤖 ") + (it.reason || "")) + '</div>' +
                 '<div class="ai-card-actions">' +
                     watchLive +
                     watchLib +

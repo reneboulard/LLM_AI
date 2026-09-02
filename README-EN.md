@@ -176,9 +176,15 @@ recommendations are only visible on the web page. Two levers make recos
   Timer for a movie). They then show up in the **native EPG guide** with a record
   badge on every client, including TV. **No scheduling while unchecked.**
 - `LoginPopup` (bool, default `true` — independent of `AutoProgram`): on user
-  login, a **toast** surfaces what to watch tonight (unwatched recordings,
-  library), plus a persistent **bell notification** (deep-link) as fallback.
-  `LoginPopupSeconds` (default 8) sets the toast duration.
+  login, a **popup sequence** — one per "watch tonight" suggestion (unwatched
+  recordings, library **and** live EPG programs) — plays on the connecting
+  client: "🤖 À regarder ce soir (1/3) — Title (channel · time · type)".
+  Pacing is **adapted per client**: 4 s on the web client (its toast ignores
+  `TimeoutMs` and fades on a fixed ~3 s animation), otherwise
+  `LoginPopupSeconds` (default 8 s), honored by the Android TV app. An
+  **Emby notification** accompanies the sequence — delivered through the
+  configured notifiers (e.g. SMTP email, see
+  [Watch bucket → login popup](#watch-bucket--login-popup)).
 
 > ⚠️ Auto-programming occupies tuners/disk: it's an opt-in action. The user can
 > cancel an unwanted timer in Emby. The login popup shows even without
@@ -450,10 +456,36 @@ On user login, `TonightLoginService` (`IServerEntryPoint`,
    logged in at once (shared endpoint + login cache).
 
 The **toast** (`SendMessageCommand`, gated `DisplayMessage` in
-`SupportedCommands`) lists the watch-bucket titles (unwatched recordings /
-library). The persistent **bell** (`INotificationManager`) deep-links to
-the Recommendations page and survives if the session closes before the run
-finishes. `LoginPopup` is **independent** of `AutoProgram`: watch
+`SupportedCommands`) is a **popup sequence** — one per "watch tonight"
+suggestion (unwatched recordings, library **and** live EPG programs, capped
+at 5), formatted "🤖 À regarder ce soir (i/n) — Title (channel · time ·
+type)". Observed client behavior (tested 2026-09-02):
+
+- The `MessageCommand` `Header` field is **not rendered** by the web /
+  Android clients — everything (🤖, label, i/n counter) lives in the `Text`.
+- The **web** client ignores `TimeoutMs`: its toast fades on a fixed CSS
+  animation (~3 s). The sequence therefore sends the next popup after **4 s**
+  on web (no dead air), and after `LoginPopupSeconds` (default 8 s) elsewhere.
+- The **Android TV** app honors `TimeoutMs`: each popup lives the configured
+  duration there.
+
+An **Emby notification** (`INotificationManager`) always accompanies the
+sequence, with a **multi-line** description (one suggestion per line + its 🤖
+reason; line breaks are preserved in the email). ⚠️ Stock Emby clients have
+**no built-in inbox**: the notification is only visible if **activated in the
+notifications plugin**.
+
+**Receiving notifications (e.g. SMTP email)**:
+
+1. Install a notifier (e.g. the `MediaBrowser.Plugins.SmtpNotifications` SMTP
+   plugin).
+2. In the user's settings → **Notifications**, configure the service (SMTP
+   server, recipient…).
+3. **Enable the "External notification via emby API" type** for that user —
+   it is the type under which notifications sent by LLM_AI (login popup,
+   scheduled-task recommendations, task failures) are delivered.
+
+`LoginPopup` is **independent** of `AutoProgram`: watch
 suggestions show at login even without auto-programming.
 
 > **Gating `AutoProgram` (absolute rule)**: no timer is created while

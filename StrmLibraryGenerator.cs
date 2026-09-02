@@ -470,13 +470,16 @@ namespace LLM_AI
 
         /// <summary>
         /// Construit le NFO <c>&lt;movie&gt;</c> : titre (suffixe « (série)/(series) »
-        /// pour kind=series), <c>&lt;plot&gt;</c> enrichi du synopsis TMDB +
+        /// pour kind=series), <c>&lt;tagline&gt;</c> = raison LLM (emoji 🤖 seul
+        /// en préfixe, mise en évidence par Emby sur la fiche),
+        /// <c>&lt;plot&gt;</c> enrichi du synopsis TMDB +
         /// ligne méta (note/genres/année) + raison LLM + info de diffusion +
         /// lien interne vers la fiche EPG (en clair, visible dans l'Overview —
         /// Emby n'affichant pas <c>&lt;website&gt;</c>), studio = chaine, genres
-        /// « AI Suggestion » + genres réels TMDB + priority, premiered depuis
-        /// start, et le même lien EPG dans <c>&lt;website&gt;</c>
-        /// (<c>asSeries=true</c> pour une série seulement).
+        /// « AI Suggestion » + genres réels TMDB + priority, premiered = date de
+        /// diffusion, year = année de PRODUCTION (reco enrichie, sinon TMDB —
+        /// jamais dérivée de la date de diffusion), et le même lien EPG dans
+        /// <c>&lt;website&gt;</c> (<c>asSeries=true</c> pour une série seulement).
         /// <para>Structure du <c>&lt;plot&gt;</c> : (0) synopsis EPG natif
         /// (<paramref name="epgOverview"/>) — description du diffuseur dans la
         /// langue de la chaîne, indépendante de <c>ResponseLanguage</c> — placé en
@@ -544,8 +547,11 @@ namespace LLM_AI
             string reason = (r.Reason ?? string.Empty).Trim();
             if (!string.IsNullOrEmpty(reason))
             {
+                // Une carte .strm est une reco D'ENREGISTRER : l'emoji 🤖 seul
+                // (pas de libellé « Pourquoi ce soir / Why tonight », réservé aux
+                // suggestions « À regarder ce soir » de la page Recommandations).
                 if (plot.Length > 0) plot.Append("\n\n");
-                plot.Append(I18n.S("nfo.why", langKey)).Append(reason);
+                plot.Append("🤖 ").Append(reason);
             }
 
             {
@@ -573,6 +579,14 @@ namespace LLM_AI
             sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n");
             sb.Append("<movie>\n");
             sb.Append("  <title>").Append(XmlEsc(title)).Append("</title>\n");
+            // Tagline (affichée sous le titre sur la fiche Emby) : la raison LLM
+            // précédée du seul emoji 🤖 (pas de libellé « Pourquoi ce soir /
+            // Why tonight » — court, le champ est mis en évidence sur la fiche).
+            // Même contenu que la section correspondante du <plot>, mais dans le
+            // champ qu'Emby met en évidence. <outline> garde la raison brute
+            // pour les clients qui lisent ce champ.
+            if (!string.IsNullOrEmpty(reason))
+                sb.Append("  <tagline>").Append(XmlEsc("🤖 " + reason)).Append("</tagline>\n");
             sb.Append("  <plot>").Append(XmlEsc(plot.ToString())).Append("</plot>\n");
             sb.Append("  <outline>").Append(XmlEsc(reason)).Append("</outline>\n");
             if (!string.IsNullOrWhiteSpace(r.Channel))
@@ -592,12 +606,18 @@ namespace LLM_AI
                 sb.Append("  <genre>priority:").Append(XmlEsc(r.Priority.Trim())).Append("</genre>\n");
             if (!string.IsNullOrWhiteSpace(r.Kind))
                 sb.Append("  <genre>kind:").Append(XmlEsc(r.Kind.Trim())).Append("</genre>\n");
+            // <premiered> = date de DIFFUSION du programme à enregistrer ;
+            // <year> = année de PRODUCTION (champ ProductionYear d'Emby) : la
+            // reco enrichie de façon déterministe (EPG matché / bibliothèque),
+            // puis le lookup TMDB en repli. Un film de 1995 diffusé en 2026
+            // doit montrer 1995 — on ne dérive PLUS l'année de la date de
+            // diffusion (ancien comportement : toujours l'année courante).
             string premiered = ParsePremiered(r.Start);
             if (!string.IsNullOrEmpty(premiered))
-            {
                 sb.Append("  <premiered>").Append(premiered).Append("</premiered>\n");
-                sb.Append("  <year>").Append(premiered.Length >= 4 ? premiered.Substring(0, 4) : "").Append("</year>\n");
-            }
+            int? prodYear = r.Year ?? meta?.Year;
+            if (prodYear.HasValue)
+                sb.Append("  <year>").Append(prodYear.Value.ToString(CultureInfo.InvariantCulture)).Append("</year>\n");
             // External IDs (provider ids) : Emby lit ces éléments NFO et peuple
             // BaseItem.ProviderIds, ce qui génère les liens profonds vers les bases
             // externes (TMDB/IMDb/TVDB) dans la section « External IDs » de la fiche.

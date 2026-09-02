@@ -217,7 +217,9 @@ namespace LLM_AI
                     // --- NFO scaffolding ---
                     ["nfo.rating"] = "note {0}/10",
                     ["nfo.genres"] = "genres : {0}",
-                    ["nfo.why"] = "🤖 Pourquoi ce soir : ",
+                    // (plus de « nfo.why » : les NFO .strm portent l'emoji 🤖 seul —
+                    // le libellé « Pourquoi ce soir / Why tonight » est côté client,
+                    // clé i18n.js « rec.tonight.why », section À regarder ce soir)
                     ["nfo.airs.prefix"] = "Diffusion à venir",
                     ["nfo.airs.chan"] = " sur {0}",
                     ["nfo.airs.date"] = " le {0}",
@@ -238,7 +240,9 @@ namespace LLM_AI
                     // --- NFO scaffolding ---
                     ["nfo.rating"] = "rating {0}/10",
                     ["nfo.genres"] = "genres: {0}",
-                    ["nfo.why"] = "🤖 Why tonight: ",
+                    // (no more "nfo.why": .strm NFOs carry the 🤖 emoji alone —
+                    // the "Why tonight" label is client-side, i18n.js key
+                    // "rec.tonight.why", Watch-tonight section)
                     ["nfo.airs.prefix"] = "Airs",
                     ["nfo.airs.chan"] = " on {0}",
                     ["nfo.airs.date"] = ", {0}",

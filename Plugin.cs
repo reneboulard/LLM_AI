@@ -173,6 +173,16 @@ namespace LLM_AI
                 // ressources en UTF-8 : un binaire serait corrompu, d'où la data URI.
                 Name = "LLMAIBg",
                 EmbeddedResourcePath = "LLM_AI.bg.js"
+            },
+            new PluginPageInfo
+            {
+                // Module de cache-busting (GÉNÉRÉ par la cible GenerateAssetVersionJs
+                // du csproj : version du build + logique de vérification). Chargé via
+                // require() par les trois pages JS, qui comparent sa version gravée à
+                // GET /Plugins/LLMAI/Version — un JS périmé dans le cache disque est
+                // auto-remplacé (fetch cache:'reload' + reload, une fois par session).
+                Name = "LLMAIAssetVersion",
+                EmbeddedResourcePath = "LLM_AI.asset_version.js"
             }
         };
     }

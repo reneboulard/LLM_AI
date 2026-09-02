@@ -248,7 +248,10 @@ namespace LLM_AI
         private async Task SendToastAsync(User user, string sessionId, string payload, int programmed, CancellationToken ct)
         {
             string toast = BuildToastText(payload, programmed);
-            if (string.IsNullOrEmpty(toast)) { SendBellNotification(user, toast); return; }
+            // Cloche : texte multi-lignes propre (une reco par ligne + raison),
+            // PAS le texte toast « • »-joint — les \n passent dans le courriel.
+            string bell = BuildBellText(payload, programmed);
+            if (string.IsNullOrEmpty(toast)) { SendBellNotification(user, bell); return; }
 
             // Attend que le client déclare DisplayMessage (au login, les
             // capacités ne sont pas encore postées — elles arrivent ~15 ms
@@ -267,19 +270,13 @@ namespace LLM_AI
 
                 try
                 {
-                    var msg = new MessageCommand
-                    {
-                        Header = string.Empty,
-                        Text = toast,
-                        TimeoutMs = (long)(Math.Max(2, Plugin.Instance?.Configuration?.LoginPopupSeconds ?? 8) * 1000),
-                    };
-                    await _sessions.SendMessageCommand(sessionId, sessionId, msg, ct).ConfigureAwait(false);
-                    _logger?.Info("[LLM_AI] Toast envoyé à la session « {0} » (DisplayMessage).", user.Name);
+                    await SendToastSequenceAsync(sessionId, payload, programmed, ct).ConfigureAwait(false);
+                    _logger?.Info("[LLM_AI] Toast(s) envoyé(s) à la session « {0} » (DisplayMessage).", user.Name);
                 }
                 catch (Exception ex)
                 {
-                    // Session fermée avant la fin du run → la cloche prend le
-                    // relais. On ne logue qu'en info.
+                    // Session fermée avant/après la fin du run → la cloche prend
+                    // le relais. On ne logue qu'en info.
                     _logger?.Info("[LLM_AI] Toast échoué pour « {0} » (session fermée ?) : {1}", user.Name, ex.Message);
                 }
             }
@@ -288,11 +285,150 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] Session « {0} » sans DisplayMessage (sous 10 s) → cloche seule.", user.Name);
             }
 
-            // Cloche persistante (deep-link) — toujours, même si le toast a
-            // réussi : elle survive si l'usager ferme le toast, et deep-link
-            // vers la page Recommandations (web). Sur la TV native, la cloche
-            // est le canal principal (le toast texte seul n'est pas jouable).
-            SendBellNotification(user, toast);
+            // Cloche (deep-link) — toujours, même si le toast a réussi :
+            // livrée via les notifiers configurés par l'usager (ex. SMTP —
+            // test 2026-09-02 : courriel multi-lignes OK ; le client web
+            // standard n'a PAS de boîte de réception intégrée, la cloche
+            // dépend donc d'un notifier).
+            SendBellNotification(user, bell);
+        }
+
+        // ------------------------------------------------------------------
+        //  Séquence de toasts : une popup PAR recommandation
+        // ------------------------------------------------------------------
+
+        // Plafond d'items de la séquence : 5 popups ≈ 40 s au login (à 8 s
+        // par popup), assez pour les recos utiles sans spammer l'usager.
+        private const int ToastSequenceMax = 5;
+
+        // Rythme du client WEB : son toast ignore TimeoutMs (test 2026-09-02 —
+        // popup TEST à TimeoutMs=60000 sur Chrome Windows : fondu ~3 s) et
+        // vit sur une animation CSS fixe (~3,3 s). On envoie donc le suivant
+        // à 4 s : le toast vit ses ~3 s, le suivant arrive juste après — pas
+        // de temps mort, pas de chevauchement.
+        private const int WebPopupGapMs = 4000;
+
+        /// <summary>
+        /// Détermine si la session est un client web (toast à durée fixe —
+        /// cf. <see cref="WebPopupGapMs"/>). Les autres clients (Android TV,
+        /// qui honore TimeoutMs — vécu ComSkipper) utilisent
+        /// <see cref="PopupDurationMs"/> comme durée ET intervalle.
+        /// </summary>
+        private bool IsWebClient(string sessionId)
+        {
+            try
+            {
+                var s = _sessions.Sessions?.FirstOrDefault(x => x.Id == sessionId);
+                return s != null && (s.Client ?? string.Empty)
+                    .IndexOf("web", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Envoie le « À regarder ce soir » au client : UNE popup PAR
+        /// suggestion du payload Tonight (enregistrements, bibliothèque et
+        /// programmes EPG live — la sélection complète de la section), en
+        /// séquence (une seule popup avec toutes les recos s'est révélée
+        /// illisible — texte dense, clients qui collapse les séparateurs).
+        /// <para>Vécu 2026-09-02 (test web + Android) :
+        /// <see cref="MessageCommand.Header"/> n'est PAS rendu par ces
+        /// clients — tout (🤖, libellé, compteur i/n) vit donc dans
+        /// <see cref="MessageCommand.Text"/> :
+        /// « 🤖 À regarder ce soir (i/n) — Titre (chaîne · heure · type) ».</para>
+        /// <para>Chaque popup reste à l'écran sa durée complète puis est
+        /// remplacé par le suivant — au rythme ADAPTÉ au client (test
+        /// 2026-09-02 : le web ignore TimeoutMs, toast à durée fixe ~3 s ;
+        /// Android TV honore TimeoutMs) : web → <see cref="WebPopupGapMs"/>,
+        /// autres → <see cref="PopupDurationMs"/> (= LoginPopupSeconds,
+        /// défaut 8 s, réglable). Le bilan « N programmé(s) » est accolé au
+        /// dernier toast.
+        /// 0 ou 1 item → toast unique (texte résumé). Une session fermée en
+        /// cours de séquence jette <see cref="ISessionManager.SendMessageCommand"/>
+        /// → interrompt la boucle, la cloche (résumé complet) prend le relais.</para>
+        /// </summary>
+        private async Task SendToastSequenceAsync(string sessionId, string payload, int programmed, CancellationToken ct)
+        {
+            var watch = ExtractWatchItems(payload);
+            int total = Math.Min(watch.Count, ToastSequenceMax);
+            // Rythme adapté au client : web → 4 s (toast à durée fixe ~3 s,
+            // pas de temps mort) ; Android TV & autres → LoginPopupSeconds
+            // (défaut 8 s) comme durée demandée ET intervalle.
+            int popupMs = IsWebClient(sessionId) ? WebPopupGapMs : PopupDurationMs();
+
+            if (total <= 1)
+            {
+                // Une seule reco (ou aucune) : un toast unique, texte résumé
+                // (préfixé 🤖 — le Header n'est pas rendu par les clients).
+                var single = new MessageCommand
+                {
+                    Header = string.Empty,
+                    Text = "🤖 " + BuildToastText(payload, programmed),
+                    TimeoutMs = popupMs,
+                };
+                await _sessions.SendMessageCommand(sessionId, sessionId, single, ct).ConfigureAwait(false);
+                return;
+            }
+
+            for (int i = 0; i < total; i++)
+            {
+                bool last = (i == total - 1);
+                string text = string.Format(CultureInfo.InvariantCulture,
+                    "🤖 À regarder ce soir ({0}/{1}) — {2}", i + 1, total, BuildItemToastText(watch[i]));
+                if (last && programmed > 0)
+                {
+                    text += string.Format(CultureInfo.InvariantCulture, " • {0} {1}",
+                        programmed, programmed > 1 ? "enregistrements programmés" : "enregistrement programmé");
+                }
+                if (last && watch.Count > total)
+                    text += " …";
+
+                var msg = new MessageCommand
+                {
+                    // Header vide : les clients web/Android ne le rendent pas
+                    // (vécu 2026-09-02) — tout est dans le Text.
+                    Header = string.Empty,
+                    Text = text,
+                    // Chaque popup vit sa durée complète ; le suivant le
+                    // remplace juste au moment où il expire.
+                    TimeoutMs = popupMs,
+                };
+                await _sessions.SendMessageCommand(sessionId, sessionId, msg, ct).ConfigureAwait(false);
+
+                if (!last)
+                {
+                    try { await Task.Delay(popupMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
+            }
+        }
+
+        /// <summary>Durée (ms) de CHAQUE popup de la séquence (et du toast
+        /// unique) : <see cref="PluginConfiguration.LoginPopupSeconds"/>,
+        /// plancher 4 s (en dessous, pas le temps de lire titre + méta ;
+        /// défaut 8 s ≈ 24 s de séquence pour 3 recos).</summary>
+        private static int PopupDurationMs() =>
+            (int)(Math.Max(4, Plugin.Instance?.Configuration?.LoginPopupSeconds ?? 8) * 1000);
+
+        /// <summary>
+        /// Texte d'un toast D'UNE reco : titre + méta entre parenthèses
+        /// (chaîne · heure de début · type). Court — une popup, une reco.
+        /// Partagé avec <see cref="BuildToastText"/> (même rendu par item).
+        /// </summary>
+        private static string BuildItemToastText(WatchItem it)
+        {
+            string s = it.Title ?? "";
+            var meta = new List<string>();
+            if (!string.IsNullOrWhiteSpace(it.Channel)) meta.Add(it.Channel);
+            if (it.Start.HasValue) meta.Add(it.Start.Value.LocalDateTime.ToString("HH:mm", CultureInfo.InvariantCulture));
+            if (!string.IsNullOrWhiteSpace(it.Kind))
+            {
+                string k = string.Equals(it.Kind, "series", StringComparison.OrdinalIgnoreCase) ? "série"
+                          : string.Equals(it.Kind, "movie", StringComparison.OrdinalIgnoreCase) ? "film" : it.Kind;
+                meta.Add(k);
+            }
+            if (meta.Count > 0) s += " (" + string.Join(" · ", meta) + ")";
+            return s;
         }
 
         /// <summary>
@@ -331,10 +467,11 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Construit le texte du toast : titres du watch bucket (à regarder
-        /// maintenant) + bilan d'auto-programmation. Court (toast) :
-        /// « À regarder ce soir : X, Y, Z. » + « N enregistrement(s) programmé(s). »
-        /// (seulement si <paramref name="programmed"/> &gt;= 0).
+        /// Construit le texte RÉSUMÉ (toast unique + cloche persistante) :
+        /// titres de TOUTES les suggestions Tonight + bilan
+        /// d'auto-programmation. « À regarder ce soir : X, Y, Z. » +
+        /// « N enregistrement(s) programmé(s). » (seulement si
+        /// <paramref name="programmed"/> ≥ 0).
         /// </summary>
         private static string BuildToastText(string payload, int programmed)
         {
@@ -343,23 +480,10 @@ namespace LLM_AI
             if (watch.Count > 0)
             {
                 sb.Append("À regarder ce soir : ");
-                // Plafond à 4 titres pour rester lisible dans un toast.
+                // Plafond à 4 titres pour rester lisible dans un résumé.
                 var parts = new List<string>();
                 foreach (var it in watch.Take(4))
-                {
-                    string s = it.Title ?? "";
-                    var meta = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(it.Channel)) meta.Add(it.Channel);
-                    if (it.Start.HasValue) meta.Add(it.Start.Value.LocalDateTime.ToString("HH:mm"));
-                    if (!string.IsNullOrWhiteSpace(it.Kind))
-                    {
-                        string k = string.Equals(it.Kind, "series", StringComparison.OrdinalIgnoreCase) ? "série"
-                                  : string.Equals(it.Kind, "movie", StringComparison.OrdinalIgnoreCase) ? "film" : it.Kind;
-                        meta.Add(k);
-                    }
-                    if (meta.Count > 0) s += " (" + string.Join(" · ", meta) + ")";
-                    parts.Add(s);
-                }
+                    parts.Add(BuildItemToastText(it));
                 // Séparateur « • » : reste lisible même si le client collapse
                 // les newlines. Le toast est texte seul (pas d'image, pas de
                 // HTML : le client web HTML-encode Header/Text avant rendu).
@@ -398,7 +522,9 @@ namespace LLM_AI
             {
                 var req = new NotificationRequest
                 {
-                    Title = "LLM AI — À regarder ce soir",
+                    // 🤖 en préfixe du titre : même marque que les popups
+                    // (la cloche est le canal principal sur les clients TV).
+                    Title = "🤖 LLM AI — À regarder ce soir",
                     Description = text,
                     Url = ResolveEmbyUrl(),
                     Date = DateTimeOffset.UtcNow,
@@ -412,6 +538,39 @@ namespace LLM_AI
             {
                 _logger?.ErrorException("[LLM_AI] Cloche à « {0} » échouée : {1}", ex, user.Name, ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Construit la description MULTI-LIGNE de la cloche (notification
+        /// Emby → notifiers configurés, ex. SMTP — test 2026-09-02 : les
+        /// retours à la ligne passent tels quels dans le courriel). Contraire-
+        /// ment au toast (texte souvent collapsé → séparateur « • » sur une
+        /// ligne), chaque suggestion a SES lignes : méta, puis la raison 🤖
+        /// en retrait — le courriel est l'endroit où la raison LLM complète
+        /// a sa place (jamais dans un toast).
+        /// </summary>
+        private static string BuildBellText(string payload, int programmed)
+        {
+            var watch = ExtractWatchItems(payload);
+            var sb = new System.Text.StringBuilder();
+            if (watch.Count > 0)
+            {
+                sb.Append("À regarder ce soir :");
+                foreach (var it in watch)
+                {
+                    sb.Append("\n• ").Append(BuildItemToastText(it));
+                    if (!string.IsNullOrWhiteSpace(it.Reason))
+                        sb.Append("\n    🤖 ").Append(it.Reason);
+                }
+                if (programmed > 0)
+                    sb.Append("\n").Append(programmed)
+                      .Append(programmed > 1 ? " enregistrements programmés." : " enregistrement programmé.");
+            }
+            else
+            {
+                sb.Append("Suggestions LLM AI prêtes.");
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -437,7 +596,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Extraction des titres du watch bucket (pour le toast)
+        //  Extraction des suggestions « À regarder ce soir » (pour les popups)
         // ------------------------------------------------------------------
 
         private struct WatchItem
@@ -446,14 +605,19 @@ namespace LLM_AI
             public string Channel;
             public DateTimeOffset? Start;
             public string Kind;
+            public string Reason;
         }
 
         /// <summary>
-        /// Extrait les items du watch bucket (source="recording" ou "library",
-        /// ou live possédée via library_id) — ce que l'usager peut regarder
-        /// maintenant. Récupère titre + chaîne + heure de début + kind pour
-        /// enrichir le toast (le toast est texte seul : pas d'image, pas de
-        /// HTML — le client web HTML-encode Header/Text avant rendu).
+        /// Extrait TOUTES les suggestions du payload Tonight — enregistrements
+        /// non visionnés, items de bibliothèque ET programmes EPG live (vécu
+        /// 2026-09-02 : un run 100 % live → 0 item « watchable now » → popup
+        /// unique générique « Suggestions prêtes », alors que la sélection
+        /// avait 3 recos à annoncer). Le popup publie la sélection complète
+        /// « À regarder ce soir », comme la section homonyme de la page.
+        /// Récupère titre + chaîne + heure de début + kind pour enrichir le
+        /// toast (texte seul : pas d'image, pas de HTML — le client web
+        /// HTML-encode Header/Text avant rendu).
         /// </summary>
         private static List<WatchItem> ExtractWatchItems(string payload)
         {
@@ -467,16 +631,6 @@ namespace LLM_AI
                     foreach (var el in doc.RootElement.EnumerateArray())
                     {
                         if (el.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
-                        if (!el.TryGetProperty("source", out var s) || s.ValueKind != System.Text.Json.JsonValueKind.String) continue;
-                        string source = s.GetString();
-                        bool watch = string.Equals(source, "recording", StringComparison.OrdinalIgnoreCase)
-                                     || string.Equals(source, "library", StringComparison.OrdinalIgnoreCase);
-                        // Live possédée (library_id) = à regarder depuis la biblio.
-                        if (!watch && string.Equals(source, "live", StringComparison.OrdinalIgnoreCase)
-                            && el.TryGetProperty("library_id", out var lid) && lid.ValueKind == System.Text.Json.JsonValueKind.String
-                            && !string.IsNullOrEmpty(lid.GetString()))
-                            watch = true;
-                        if (!watch) continue;
 
                         var it = new WatchItem();
                         if (el.TryGetProperty("title", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String)
@@ -488,6 +642,10 @@ namespace LLM_AI
                             it.Start = dto;
                         if (el.TryGetProperty("kind", out var k) && k.ValueKind == System.Text.Json.JsonValueKind.String)
                             it.Kind = k.GetString();
+                        // Raison LLM : pas pour le toast (trop long), mais pour
+                        // la cloche multi-lignes (courriel) où elle a sa place.
+                        if (el.TryGetProperty("reason", out var rs) && rs.ValueKind == System.Text.Json.JsonValueKind.String)
+                            it.Reason = rs.GetString()?.Trim();
                         if (!string.IsNullOrWhiteSpace(it.Title)) items.Add(it);
                         if (items.Count >= 8) break;
                     }

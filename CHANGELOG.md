@@ -117,6 +117,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   catalog plugins), 1 h lock-guarded cache (unauthenticated GitHub API limit),
   `Force=1` bypass, never throws (network error → no banner).
 
+- **Année de production dans les recommandations** : ajoutée à tous les étages —
+  schéma de prompt (`year` facultatif, repris de `epg_series`/`epg_movies`/`epg_tonight`
+  ou de `tmdb_lookup`, jamais inventé), injection déterministe lors du rapprochement
+  EPG (`EnrichRecommendations`, 3 clés de traçage) puis repli bibliothèque
+  (`ProductionYear`), carte UI « 🎬 1995 », `<year>` du NFO `.strm` (année de
+  PRODUCTION, distincte de `<premiered>` = date de diffusion, omise si inconnue).
+  **Production year in recommendations**: added at every layer — prompt schema
+  (optional `year`, copied from the EPG/TMDB tool results, never invented),
+  deterministic injection at EPG-match time (3 tracing keys) then library fallback,
+  "🎬 1995" on the UI card, `.strm` NFO `<year>` (PRODUCTION year, distinct from
+  `<premiered>` = air date, omitted when unknown).
+
+- **Auto-récupération du cache JS client (cache-busting)** : `asset_version.js`
+  **généré au build** (cible MSBuild `GenerateAssetVersionJs` : template
+  `asset_version_template.js` + `<Version>` du csproj — la version embarquée ne peut
+  jamais dériver de celle de la DLL) + endpoint `GET /Plugins/LLMAI/Version` + un
+  contrôle au chargement des 3 pages JS : version du module servi ≠ serveur →
+  `fetch(cache:'reload')` des 9 modules + `location.reload()` (garde sessionStorage,
+  une fois par version). Un module PÉRIMÉ se détecte lui-même (version gravée au
+  build) → banner de secours demandant un Ctrl+Shift+R si le reload ne suffit pas.
+  **Client JS cache self-healing**: `asset_version.js` **generated at build time**
+  (MSBuild target stamping the csproj `<Version>` into the template — the embedded
+  version can never drift from the DLL's) + `GET /Plugins/LLMAI/Version` endpoint +
+  a load-time check in all 3 page modules: served module version ≠ server →
+  `fetch(cache:'reload')` of the 9 modules + `location.reload()` (sessionStorage
+  once-per-version guard). A STALE module detects itself (build-time baked version)
+  → fallback banner asking for Ctrl+Shift+R.
+
+- **Popup au login : une popup PAR suggestion, en séquence** (au lieu d'un toast
+  unique dense) : « 🤖 À regarder ce soir (i/n) — Titre (chaîne · heure · type) »,
+  plafond 5, bilan « N programmé(s) » sur la dernière. La séquence couvre TOUTES
+  les suggestions (enregistrements, bibliothèque **et** programmes EPG live — vécu :
+  un run 100 % live donnait le toast générique « Suggestions prêtes »). Comportements
+  clients constatés (tests 2026-09-02) : `MessageCommand.Header` **non rendu** par
+  web/Android (tout dans le `Text`) ; le client **web ignore `TimeoutMs`** (fondu
+  CSS fixe ~3 s) → rythme **adapté** : 4 s sur web, `LoginPopupSeconds` (défaut 8 s)
+  ailleurs (Android TV honore `TimeoutMs`).
+  **Login popup: one popup PER suggestion, in sequence** (instead of one dense
+  toast): "🤖 À regarder ce soir (i/n) — Title (channel · time · type)", capped at 5,
+  "N scheduled" summary on the last one. The sequence covers ALL suggestions
+  (recordings, library **and** live EPG programs). Observed client behavior
+  (2026-09-02 tests): `MessageCommand.Header` **not rendered** by web/Android
+  (everything in the `Text`); the **web** client ignores `TimeoutMs` (fixed ~3 s CSS
+  fade) → **adaptive pacing**: 4 s on web, `LoginPopupSeconds` (default 8 s)
+  elsewhere (Android TV honors `TimeoutMs`).
+
+- **Notifications multi-lignes via les notifiers Emby (ex. courriel SMTP)** : la
+  notification qui accompagne le popup porte maintenant une description **une
+  suggestion par ligne + sa raison 🤖** (les retours à la ligne passent tels quels
+  dans le courriel — testé). ⚠️ Les clients standard Emby n'ont **pas de boîte de
+  réception intégrée** : pour recevoir les notifications de LLM_AI, activer un
+  notifier (plugin SMTP) ET le type **« External notification via emby API »**
+  dans les paramètres Notifications de l'usager — c'est le type sous lequel les
+  notifications du plugin sont livrées (popup login, recos de la tâche planifiée,
+  échecs de tâche).
+  **Multi-line notifications via Emby notifiers (e.g. SMTP email)**: the
+  notification accompanying the popup now carries a **one-suggestion-per-line +
+  its 🤖 reason** description (line breaks pass through in the email — tested).
+  ⚠️ Stock Emby clients have **no built-in inbox**: to receive LLM_AI's
+  notifications, enable a notifier (SMTP plugin) AND the **"External notification
+  via emby API"** type in the user's Notifications settings — that is the type
+  under which the plugin's notifications (login popup, scheduled-task recos, task
+  failures) are delivered.
+
+- **Tagline NFO `.strm`** : la raison LLM va dans le champ `<tagline>` (mise en
+  évidence par Emby sur la fiche), préfixée du seul emoji 🤖 — le libellé complet
+  « 🤖 Pourquoi ce soir / Why tonight : » est réservé aux cartes de la section
+  « À regarder ce soir » de la page (clé i18n `rec.tonight.why`) ; les recos
+  d'enregistrement (sections séries/films, `.strm`) portent l'emoji seul.
+  **`.strm` NFO tagline**: the LLM reason goes into the `<tagline>` field
+  (highlighted by Emby on the item page), prefixed with the 🤖 emoji alone — the
+  full "🤖 Pourquoi ce soir / Why tonight:" label is reserved for the "Watch
+  tonight" section cards (i18n key `rec.tonight.why`); record recommendations
+  (series/movies sections, `.strm`) carry the emoji only.
+
 ### Corrigé / Fixed
 
 - **`epg_tonight` : fenêtre « ce soir » vide sur ce build d'Emby** — `GetPrograms`
@@ -165,6 +240,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   by prose, and the agent loop (recommendation mode) checks that the final answer is
   a parseable JSON array — otherwise a **bounded repair** (2 attempts) re-injects the
   error to the model, same mechanism as the malformed-tool-call resend.
+
+- **Tâche planifiée : un run LLM vide n'efface plus les recommandations**
+  (vécu 2026-09-02 03:01, serveur principal : LLM local étouffé — SÉRIES a répondu
+  `[]`, FILMS un appel d'outil malformé `[{"action":"epg_movies"}]` passé comme
+  réponse finale → fusion vide persistée → recos de la veille effacées, et les
+  consommateurs « tout remplacer » (badges, `CleanPrevious` des cartes `.strm`)
+  auraient tout balayé). Trois garde-fous :
+  **Scheduled task: an empty LLM run no longer wipes the recommendations**
+  (seen 2026-09-02 03:01, main server: choked local LLM — SERIES answered `[]`,
+  MOVIES emitted a malformed tool call `[{"action":"epg_movies"}]` that passed as a
+  final answer → empty merge persisted → previous day's recos wiped, and the
+  replace-all consumers (badges, `.strm` `CleanPrevious`) would have swept
+  everything). Three safeguards:
+  - la **réparation finale** est étendue : en mode recommandation, un tableau non
+    vide dont AUCUN item ne porte `title` (écho d'appel d'outil) déclenche une
+    demande de renvoi (un `[]` honnête reste accepté) / the **final-answer repair**
+    is extended: in recommendation mode, a non-empty array where NO item has a
+    `title` (tool-call echo) triggers a bounded re-emit (an honest `[]` stays
+    accepted);
+  - **garde anti-effacement** dans `LlmScheduledTask` : run à 0 reco alors que le
+    payload précédent en a → l'ancien est conservé, tous les consommateurs aval
+    (persistance, badges, `.strm`, auto-program) sont sautés, log Warn /
+    **anti-wipe guard** in `LlmScheduledTask`: zero-reco run while the previous
+    payload has some → old payload kept, all downstream consumers (persist, badges,
+    `.strm`, auto-program) skipped, Warn log;
+  - **notification d'échec** (via notifier configuré) dans les deux cas : run vide
+    (« recommandations précédentes conservées ») et exception (les deux runs ont
+    jeté) / **failure notification** (via configured notifier) in both cases: empty
+    run ("previous recommendations kept") and exception (both runs threw).
 
 ## [1.1.0.0] — 2026-08-31
 
