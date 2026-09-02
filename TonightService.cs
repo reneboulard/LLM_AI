@@ -90,8 +90,10 @@ namespace LLM_AI
             "la programmation). Tu peux enrichir via tmdb_lookup/web_search si c'est utile, mais " +
             "reste pratique et rapide — l'objectif est une courte sélection personnalisée pour ce " +
             "soir, pas un audit exhaustif. Retourne un tableau JSON " +
-            "[{title, kind, reason, priority, source, channel, start, id, showbizz_match}] " +
-            "(id pour source=\"recording\"/\"library\" ; channel/start pour source=\"live\").";
+            "[{title, kind, reason, priority, source, channel, start, id, year, showbizz_match}] " +
+            "(id pour source=\"recording\"/\"library\" ; channel/start pour source=\"live\" ; " +
+            "year = année de production reprise du champ year d'epg_tonight/tmdb_lookup si " +
+            "présent, ne l'invente jamais).";
 
         // ------------------------------------------------------------------
         //  Résultat de génération

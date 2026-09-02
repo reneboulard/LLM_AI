@@ -178,10 +178,15 @@ rendent les recos **discoverables sur la TV** :
   alors dans le **guide EPG natif** (badge d’enregistrement) sur tous les
   clients, TV comprise. **Aucune programmation tant que décoché.**
 - `LoginPopup` (bool, défaut `true` — indépendant de `AutoProgram`) : à la
-  connexion d’un usager, un **toast** signale ce soir ce qu’il peut regarder
-  (enregistrements non visionnés, bibliothèque), + une **notification cloche**
-  persistante (deep-link) en repli. `LoginPopupSeconds` (défaut 8) règle la
-  durée du toast.
+  connexion d’un usager, une **séquence de popups** — une par suggestion
+  « À regarder ce soir » (enregistrements non visionnés, bibliothèque **et**
+  programmes EPG live) — défile sur le client connecté : « 🤖 À regarder ce
+  soir (1/3) — Titre (chaîne · heure · type) ». Le rythme est **adapté au
+  client** : 4 s sur le client web (son toast ignore `TimeoutMs` et se fond
+  sur une animation fixe ~3 s), sinon `LoginPopupSeconds` (défaut 8 s),
+  honoré par l’app Android TV. Une **notification Emby** accompagne la
+  séquence — livrée via les notifiers configurés (ex. courriel SMTP, voir
+  [Watch bucket → popup au login](#watch-bucket--popup-au-login)).
 
 > ⚠️ L’auto-programmation occupe des tuners/disque : c’est une action opt-in.
 > L’utilisateur peut annuler un timer indésirable dans Emby. Le popup au login
@@ -451,11 +456,36 @@ pattern `Emby.ComSkipper`) branche `SessionManager.SessionStarted` :
    connectés à la fois (cache partagé endpoint + login).
 
 Le **toast** (`SendMessageCommand`, gated `DisplayMessage` dans
-`SupportedCommands`) liste les titres du watch bucket (enregistrements non
-visionnés / bibliothèque). La **cloche** persistante (`INotificationManager`)
-deep-link vers la page Recommandations et survive si la session ferme avant la
-fin du run. `LoginPopup` est **indépendant** de `AutoProgram` : les suggestions
-à regarder s’affichent au login même sans auto-programmation.
+`SupportedCommands`) est une **séquence de popups** — une par suggestion « À
+regarder ce soir » (enregistrements non visionnés, bibliothèque **et**
+programmes EPG live, plafond 5), au format « 🤖 À regarder ce soir (i/n) —
+Titre (chaîne · heure · type) ». Comportements constatés (tests 2026-09-02) :
+
+- Le champ `Header` de `MessageCommand` **n’est pas rendu** par les clients
+  web / Android — tout (🤖, libellé, compteur) vit donc dans le `Text`.
+- Le client **web** ignore `TimeoutMs` : son toast se fond sur une animation
+  CSS fixe (~3 s). La séquence envoie donc le popup suivant à **4 s** sur le
+  web (pas de temps mort), et à `LoginPopupSeconds` (défaut 8 s) ailleurs.
+- L’app **Android TV** honore `TimeoutMs` : chaque popup y vit la durée
+  configurée.
+
+Une **notification Emby** (`INotificationManager`) accompagne toujours la
+séquence, avec une description **multi-lignes** (une suggestion par ligne +
+raison 🤖, retours à la ligne préservés dans le courriel). ⚠️ Les clients
+standard Emby n’ont **pas de boîte de réception intégrée** : la notification
+n’est visible que si elle est **activée dans le plugin de notifications**.
+
+**Recevoir les notifications (ex. courriel SMTP)** :
+
+1. Installer un notifier (ex. plugin SMTP `MediaBrowser.Plugins.SmtpNotifications`).
+2. Dans les paramètres de l’usager → **Notifications**, configurer le service
+   (serveur SMTP, destinataire…).
+3. **Activer le type « External notification via emby API »** pour cet usager —
+   c’est le type sous lequel les notifications envoyées par LLM_AI (popup au
+   login, recommandations de la tâche planifiée, échecs de tâche) sont livrées.
+
+`LoginPopup` est **indépendant** de `AutoProgram` : les suggestions à regarder
+s’affichent au login même sans auto-programmation.
 
 > **Gating `AutoProgram` (règle absolue)** : aucun timer n’est créé tant que
 > `cfg.AutoProgram == false`. Le flag est vérifié dans les deux chemins

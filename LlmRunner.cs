@@ -1065,8 +1065,9 @@ namespace LLM_AI
             public readonly string Id;
             public readonly string ChannelId;
             public readonly double? Rating;
-            public EpgMatch(string id, string channelId, double? rating)
-            { Id = id; ChannelId = channelId; Rating = rating; }
+            public readonly int? Year;
+            public EpgMatch(string id, string channelId, double? rating, int? year)
+            { Id = id; ChannelId = channelId; Rating = rating; Year = year; }
         }
 
         /// <summary>
@@ -1124,6 +1125,9 @@ namespace LLM_AI
             var lookup = new Dictionary<string, EpgMatch>(StringComparer.Ordinal);
             var entries = new List<EpgEntry>();
             var epgIds = new HashSet<string>(StringComparer.Ordinal);
+            // id programme → EpgMatch : 3e clé de traçage (id recopié du pool),
+            // pour injecter year/rating même quand le titre a été reformulé.
+            var epgById = new Dictionary<string, EpgMatch>(StringComparer.Ordinal);
             foreach (var tr in toolResults)
             {
                 if (string.IsNullOrEmpty(tr.result)) continue;
@@ -1150,11 +1154,15 @@ namespace LLM_AI
                         double? rating = null;
                         if (item.TryGetProperty("rating", out var rEl) && rEl.ValueKind == JsonValueKind.Number)
                             rating = rEl.GetDouble();
+                        int? year = null;
+                        if (item.TryGetProperty("year", out var yEl) && yEl.ValueKind == JsonValueKind.Number
+                            && yEl.TryGetInt32(out int yv))
+                            year = yv;
 
                         // Premier vu gagne (dedup) — les EPG peuvent lister la même
                         // série sur plusieurs chaînes ; on garde la 1re occurrence.
                         if (!lookup.ContainsKey(key))
-                            lookup[key] = new EpgMatch(id, channelId, rating);
+                            lookup[key] = new EpgMatch(id, channelId, rating, year);
 
                         // Repli chaîne+heure : on collecte aussi le nom de chaîne
                         // et la date de diffusion (bruts, hors JsonDocument).
@@ -1165,7 +1173,7 @@ namespace LLM_AI
                             && DateTimeOffset.TryParse(stEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var stv))
                             startDt = stv;
                         entries.Add(new EpgEntry(title, lookup[key], NormTitle(channel), startDt));
-                        if (!string.IsNullOrEmpty(id)) epgIds.Add(id);
+                        if (!string.IsNullOrEmpty(id) && epgById.TryAdd(id, lookup[key])) epgIds.Add(id);
                     }
                 }
             }
@@ -1253,6 +1261,8 @@ namespace LLM_AI
                         obj["channel_id"] = epg.ChannelId;
                     if (epg.Rating.HasValue)
                         obj["rating"] = epg.Rating.Value;
+                    if (epg.Year.HasValue)
+                        obj["year"] = epg.Year.Value;
                 }
                 else
                 {
@@ -1281,6 +1291,8 @@ namespace LLM_AI
                             obj["channel_id"] = fb.Match.ChannelId;
                         if (fb.Match.Rating.HasValue)
                             obj["rating"] = fb.Match.Rating.Value;
+                        if (fb.Match.Year.HasValue)
+                            obj["year"] = fb.Match.Year.Value;
                     }
                     else
                     {
@@ -1297,6 +1309,8 @@ namespace LLM_AI
                                 obj["image_url"] = "/emby/Items/" + exId + "/Images/Primary?maxWidth=400";
                                 enriched++;
                             }
+                            if (epgById.TryGetValue(exId, out var byId) && byId.Year.HasValue)
+                                obj["year"] = byId.Year.Value;
                         }
                         else
                         {
@@ -1410,7 +1424,8 @@ namespace LLM_AI
                 string key = NormTitle(title);
                 if (string.IsNullOrEmpty(key)) continue;
 
-                string libId = FindLibraryItemId(title, key);
+                BaseItem libItem = FindLibraryItem(title, key);
+                string libId = libItem?.InternalId.ToString();
 
                 // Repli IMDb : si le titre ne matche pas mais que le LLM a
                 // établi l'id IMDb du contenu (via ses outils), on cherche
@@ -1427,6 +1442,7 @@ namespace LLM_AI
                         if (owned != null)
                         {
                             libId = owned.InternalId.ToString();
+                            libItem = owned;
                             _logger?.Info("[LLM_AI] Enrichissement bibliothèque : « {0} » déjà possédé (IMDb {1} → « {2} »).",
                                 title, imdbId, owned.Name);
                         }
@@ -1447,6 +1463,11 @@ namespace LLM_AI
                 }
                 if (string.IsNullOrEmpty(JsonStr(obj, "image_url")))
                     obj["image_url"] = "/emby/Items/" + libId + "/Images/Primary?maxWidth=400";
+                // Année de production depuis l'item bibliothèque : comble une
+                // reco sans year (EPG muet, LLM omis) — l'UI l'affiche sur la
+                // carte. Un year déjà présent (EPG matché, tmdb_lookup) prime.
+                if (libItem != null && libItem.ProductionYear > 0 && obj["year"] == null)
+                    obj["year"] = libItem.ProductionYear;
                 matched++;
             }
             _logger?.Info("[LLM_AI] Enrichissement bibliothèque : {0} reco(s) rapprochée(s).", matched);
@@ -1491,15 +1512,6 @@ namespace LLM_AI
             }
             catch { }
             return null;
-        }
-
-        private string FindLibraryItemId(string title, string normKey)
-        {
-            var it = FindLibraryItem(title, normKey);
-            // InternalId (long) en chaîne : la seule forme consommable par la
-            // couche REST/UI (bouton « Regarder », image_url) ET par la
-            // validation ItemIds — BaseItem.Id est un Guid rejeté par REST.
-            return it?.InternalId.ToString();
         }
 
         /// <summary>

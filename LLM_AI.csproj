@@ -12,9 +12,9 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Version du plugin : BasePlugin.Version est sealed et renseignée par
          l'hôte Emby depuis la version de l'assembly au chargement. -->
-    <Version>1.1.0.0</Version>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.1.5.0</Version>
+    <AssemblyVersion>1.1.5.0</AssemblyVersion>
+    <FileVersion>1.1.5.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -54,6 +54,13 @@
     <!-- Module i18n (FR/EN) : dictionnaires + walker DOM, dépendance
          __plugin/LLMAII18n des pages config et recommandations. -->
     <EmbeddedResource Include="i18n.js" />
+    <!-- Module de cache-busting : GÉNÉRÉ par la cible GenerateAssetVersionJs
+         ci-dessous (template asset_version_template.js + $(Version)). Servi
+         sur web/ConfigurationPage?name=LLMAIAssetVersion, chargé par les
+         trois pages JS pour comparer la version du build servi à celle du
+         serveur (GET /Plugins/LLMAI/Version) et auto-récupérer un JS
+         périmé du cache disque. Ne pas committer le fichier généré. -->
+    <EmbeddedResource Include="asset_version.js" />
     <!-- Image de la pastille du plugin (IHasThumbImage), servie sur
          /Plugins/{Id}/Thumb. 800x450 PNG 16:9. -->
     <EmbeddedResource Include="thumb.png" />
@@ -73,4 +80,28 @@
          UTF-8 ConfigurationPage. -->
     <EmbeddedResource Include="recording_activated.mp4" />
   </ItemGroup>
+
+  <!-- Génération de asset_version.js (cache-busting client) : le template
+       asset_version_template.js porte le marqueur __PLUGIN_VERSION__, remplacé
+       par $(Version) du csproj — la version embarquée dans le JS ne peut donc
+       JAMAIS dériver de celle de la DLL (le csproj fait partie des Inputs :
+       un bump de <Version> régénère le module). Cible exécutée avant
+       AssignTargetPaths (moment où les EmbeddedResource sont consommés) ;
+       Inputs/Outputs la saute quand rien n'a changé → build incrémental
+       (timestamp du fichier préservé). -->
+  <Target Name="GenerateAssetVersionJs" BeforeTargets="AssignTargetPaths"
+          Inputs="$(MSBuildProjectDirectory)/asset_version_template.js;$(MSBuildProjectFile)"
+          Outputs="$(MSBuildProjectDirectory)/asset_version.js">
+    <PropertyGroup>
+      <_TemplatePath>$(MSBuildProjectDirectory)/asset_version_template.js</_TemplatePath>
+      <_OutPath>$(MSBuildProjectDirectory)/asset_version.js</_OutPath>
+      <_TemplateText>$([System.IO.File]::ReadAllText('$(_TemplatePath)'))</_TemplateText>
+      <_GeneratedText>$([System.String]::Copy('$(_TemplateText)').Replace('__PLUGIN_VERSION__', '$(Version)'))</_GeneratedText>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_TemplatePath)')"
+           Text="asset_version_template.js introuvable — nécessaire à la génération de asset_version.js." />
+    <WriteLinesToFile File="$(_OutPath)"
+                      Lines="$(_GeneratedText)"
+                      Overwrite="true" />
+  </Target>
 </Project>

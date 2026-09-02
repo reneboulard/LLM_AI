@@ -248,10 +248,24 @@ namespace LLM_AI
                     {
                         var probe = LlmRunner.ExtractJsonPayload(reply);
                         bool validArray = false;
+                        bool anyTitle = false;
+                        int itemCount = 0;
                         try
                         {
                             using (var doc = JsonDocument.Parse(probe))
-                                validArray = doc.RootElement.ValueKind == JsonValueKind.Array;
+                            {
+                                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    validArray = true;
+                                    foreach (var el in doc.RootElement.EnumerateArray())
+                                    {
+                                        itemCount++;
+                                        if (el.ValueKind == JsonValueKind.Object &&
+                                            el.TryGetProperty("title", out _))
+                                            anyTitle = true;
+                                    }
+                                }
+                            }
                         }
                         catch { }
                         if (!validArray)
@@ -267,6 +281,33 @@ namespace LLM_AI
                                 "(champs title, kind, reason, priority, channel, start), sans texte " +
                                 "avant/après ni balises ```, et avec tous les guillemets internes " +
                                 "échappés (\\\") dans les valeurs de type chaîne." });
+                            continue;
+                        }
+
+                        // Vécu 2026-09-02 03:01 (serveur principal) : LLM local dégradé
+                        // qui émet un APPEL D'OUTIL MALFORMÉ comme réponse finale —
+                        // [{ "action":"epg_movies" }] sans l'enveloppe tool/arguments.
+                        // Le tableau parse donc comme « valide » (garde ci-dessus
+                        // passée), puis la validation aval écarte l'item sans title →
+                        // run « réussi » à ZÉRO reco (et la tâche effaçait les recos
+                        // de la veille). Un tableau NON VIDE dont aucun item ne porte
+                        // « title » (champ obligatoire du format reco) n'est ni un
+                        // tableau de recos ni un appel d'outil bien formé → renvoi.
+                        // Un tableau VIDE ([] = « rien à recommander ») reste accepté.
+                        if (itemCount > 0 && !anyTitle)
+                        {
+                            replyRepairs++;
+                            _logger?.Warn("[LLM_AI] Itération {0} — réponse finale : tableau de {1} item(s) SANS aucun « title » (appel d'outil malformé ?). Demande de renvoi ({2}/{3}).",
+                                iter, itemCount, replyRepairs, MaxReplyRepairs);
+                            messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
+                            messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                                "Ta réponse est un tableau JSON dont AUCUN item n'est une " +
+                                "recommandation (champ « title » absent partout) : elle ressemble " +
+                                "à un appel d'outil malformé. Renvoie soit un tableau d'appels " +
+                                "d'outils BIEN FORMÉ [{\"tool\":\"...\",\"arguments\":{...}}], " +
+                                "soit, si tu as terminé, le tableau JSON des recommandations " +
+                                "(champs title, kind, reason, priority, channel, start) — sans " +
+                                "texte autour ni balises ```." });
                             continue;
                         }
                     }
@@ -466,6 +507,9 @@ namespace LLM_AI
                 sb.AppendLine("start (date/heure de diffusion, format ISO 8601, ex. 2026-08-26T21:00:00), ");
                 sb.AppendLine("imdb_id (facultatif : id IMDb « tt1234567 » du contenu, UNIQUEMENT si un de tes ");
                 sb.AppendLine("outils l'a établi — sert à détecter un titre déjà possédé en bibliothèque), ");
+                sb.AppendLine("year (facultatif : année de production/première diffusion du contenu, reprise ");
+                sb.AppendLine("telle quelle du champ year des résultats epg_series/epg_movies/epg_tonight ");
+                sb.AppendLine("ou de tmdb_lookup si présent — ne l'invente jamais), ");
                 sb.AppendLine("et showbizz_match (booléen ou titre de la nouveauté web correspondante, ");
                 sb.AppendLine("issue de l'outil new_releases). ");
                 sb.AppendLine("Les champs channel et start sont OBLIGATOIRES (servent à programmer l'enregistrement) : ");

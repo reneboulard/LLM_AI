@@ -204,6 +204,29 @@ namespace LLM_AI
                 // « Comment tuer son mari en 10 leçons » alors que le film,
                 // même titre ET même id IMDb, était déjà en bibliothèque).
                 merged = _runner.EnrichWithLibrary(merged);
+
+                // Garde anti-effacement (vécu 2026-09-02 03:01 sur le serveur
+                // principal : LLM local étouffé — SÉRIES a répondu [], FILMS un
+                // appel d'outil malformé [{ "action":"epg_movies" }] passé comme
+                // réponse finale). Les deux runs étaient « ok », donc la fusion
+                // donnait un tableau vide qui, persisté tel quel, EFFAÇAIT les
+                // recommandations de la veille et déclenchait les consommateurs
+                // en sémantique « tout remplacer » (badges, bibliothèque .strm :
+                // CleanPrevious balayerait toutes les cartes). Un run vide n'est
+                // pas un signal utile : on CONSERVE le payload précédent, on
+                // saute tous les consommateurs aval, et on notifie l'échec.
+                int newCount = LlmRunner.CountRecommendations(merged);
+                int oldCount = LlmRunner.CountRecommendations(cfg.Recommendations);
+                if (newCount == 0 && oldCount > 0)
+                {
+                    _logger?.Warn("[LLM_AI] Run terminé SANS aucune recommandation — probable LLM indisponible/dégradé (voir les réponses [SÉRIES]/[FILMS] ci-dessus). {0} recommandation(s) précédente(s) conservées, consommateurs (badges/.strm/auto-program) non exécutés.",
+                        oldCount);
+                    SendFailureNotification(string.Format(CultureInfo.InvariantCulture,
+                        "Aucune recommandation produite (LLM indisponible ou réponse invalide) — recommandations précédentes ({0}) conservées.",
+                        oldCount));
+                    return;
+                }
+
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
 
@@ -270,6 +293,11 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 _logger.ErrorException("[LLM_AI] Échec de l'agent LLM : {0}", ex, ex.Message);
+                // Notifie aussi l'échec dur (ex. les DEUX runs agent ont jeté une
+                // exception — tous backends épuisés) : sans cela, la tâche « a
+                // échoué » seulement dans le journal, et l'usager croit à tort
+                // que les recos de la veille ont été rafraîchies.
+                SendFailureNotification("Échec de la tâche recommandations : " + ex.Message);
                 throw;
             }
             finally
@@ -513,6 +541,59 @@ namespace LLM_AI
                 }
             }
             _logger?.Info("[LLM_AI] Notification envoyée à {0}/{1} utilisateur(s).", sent, users.Count);
+        }
+
+        /// <summary>
+        /// Notification d'échec (cloche) à tous les utilisateurs : la tâche
+        /// n'a rien produit — soit run « réussi » mais vide (garde
+        /// anti-effacement, LLM indisponible/dégradé), soit exception
+        /// (les deux runs agent ont jeté). Même boucle utilisateurs que
+        /// <see cref="SendRecommendationNotification"/> ; <c>Severity</c>
+        /// plus élevée pour la distinguer du carillon « nouvelles recos ».
+        /// Best-effort : jamais d'exception au-delà de cette méthode.
+        /// </summary>
+        private void SendFailureNotification(string reason)
+        {
+            if (_notifications == null || string.IsNullOrWhiteSpace(reason)) return;
+
+            List<User> users;
+            try
+            {
+                users = _users.GetUserList(new UserQuery()).ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger?.ErrorException("[LLM_AI] Récupération utilisateurs pour notification d'échec : {0}", ex, ex.Message);
+                return;
+            }
+            if (users.Count == 0) return;
+
+            string url = ResolveEmbyUrl();
+            var now = DateTimeOffset.UtcNow;
+
+            int sent = 0;
+            foreach (var u in users)
+            {
+                try
+                {
+                    var req = new NotificationRequest
+                    {
+                        Title = "LLM AI",
+                        Description = reason,
+                        Url = url,
+                        Date = now,
+                        Severity = LogSeverity.Error,
+                        User = u
+                    };
+                    _notifications.SendNotification(req);
+                    sent++;
+                }
+                catch (Exception ex)
+                {
+                    _logger?.ErrorException("[LLM_AI] Notification d'échec à « {0} » : {1}", ex, u.Name, ex.Message);
+                }
+            }
+            _logger?.Info("[LLM_AI] Notification d'échec envoyée à {0}/{1} utilisateur(s).", sent, users.Count);
         }
 
         /// <summary>
