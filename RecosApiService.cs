@@ -227,6 +227,30 @@ namespace LLM_AI
                 }
             }
 
+            // Journalisation du rejet pour la boucle de rétroaction hebdo
+            // (opt-in) : un « Oublier » est le signal négatif le plus fort
+            // dont dispose l'analyse (RecoAnalysisTask). Best-effort — n'affecte
+            // jamais le résultat du drop lui-même.
+            if (cfg.RecoFeedbackEnabled)
+            {
+                try
+                {
+                    RecoFeedback.AppendLog(cfg, new[]
+                    {
+                        new RecoLogEntry
+                        {
+                            User = user.Id.ToString(),
+                            Kind = "drop",
+                            Title = title,
+                            Source = "",
+                            Id = "",
+                            Date = DateTimeOffset.UtcNow
+                        }
+                    }, Logger);
+                }
+                catch { /* best-effort */ }
+            }
+
             return new ForgetResponse { Added = !already };
         }
 

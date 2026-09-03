@@ -172,6 +172,15 @@ namespace LLM_AI
                 return OneOutcome.OwnedOrDropped;
             }
 
+            // Watched-guard : épisode/film déjà visionné par l'usager (rediffusion
+            // EPG marquée par la validation Tonight) — un timer n'enregistrerait
+            // que du déjà-vu.
+            if (r.Watched)
+            {
+                _logger?.Info("[LLM_AI] Auto-program : « {0} » déjà visionné (watched) → non programmé.", r.Title);
+                return OneOutcome.OwnedOrDropped;
+            }
+
             // Drop list : titre exclu par l'usager.
             string norm = GetEmbyInfoTool.Norm(r.Title ?? string.Empty);
             var dropped = GetEmbyInfoTool.DroppedTitlesSet();
@@ -409,6 +418,11 @@ namespace LLM_AI
             public string Priority;
             public string Id;
             public string LibraryId;
+            /// <summary>Marqueur watched-guard : contenu déjà visionné par
+            /// l'usager (rediffusion EPG marquée par la validation Tonight).
+            /// Rien à programmer ni à enregistrer — on n'expose ce contenu
+            /// que pour l'affichage.</summary>
+            public bool Watched;
             // Champs extraits pour la génération .nfo (bibliothèque .strm).
             public string Reason;
             public string Channel;
@@ -444,6 +458,7 @@ namespace LLM_AI
                             Channel = Str(el, "channel"),
                             Start = Str(el, "start"),
                             Year = IntOpt(el, "year"),
+                            Watched = BoolOpt(el, "watched"),
                         });
                     }
                 }
@@ -475,5 +490,13 @@ namespace LLM_AI
                 return n;
             return null;
         }
+
+        /// <summary>
+        /// Bool optionnel : vrai seulement si la propriété est un booléen JSON
+        /// <c>true</c> (le marqueur <c>watched</c> est injecté côté serveur par
+        /// la validation Tonight — pas de variante chaîne à tolérer).
+        /// </summary>
+        private static bool BoolOpt(JsonElement obj, string key)
+            => obj.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.True;
     }
 }

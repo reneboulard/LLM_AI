@@ -548,6 +548,69 @@
                             </div>
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightBingeEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.binge.flag">Signaler les séries « prêtes à dévorer » (stock d'épisodes enregistrés non visionnés)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.binge.desc">
+                            Option <b>opt-in</b>. Détecte les séries que l'usager est en train d'enregistrer et dont il
+                            accumule volontairement les épisodes non visionnés (il attend d'en avoir plusieurs avant de
+                            commencer) : quand le stock atteint le seuil, le run « ce soir » propose de commencer
+                            (« il est temps de regarder X, N épisodes en attente »). <b>Anti-spam</b> : chaque série
+                            n'est signalée qu'<b>une seule fois</b> ; la suggestion ne se ré-arme qu'après que le
+                            compte non visionné repasse sous le seuil (l'usager a commencé à regarder). Une série
+                            dormante (jamais commencée, conservée « pour un jour de pluie ») ne déclenche
+                            <b>jamais</b> la suggestion : seules les séries encore actives — au moins un épisode
+                            arrivé récemment — sont signalées.
+                        </div>
+
+                        <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numTonightBingeThreshold"
+                                       label="Seuil d'épisodes en attente"
+                                       data-i18n-label="cfg.tonight.binge.threshold"
+                                       min="1" max="30" />
+                                <div class="fieldDescription" data-i18n-html="cfg.tonight.binge.threshold.desc">Nombre d'épisodes non visionnés à partir duquel une série est « prête à dévorer ». Défaut 4.</div>
+                            </div>
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numTonightBingeActiveDays"
+                                       label="Fenêtre d'activité (jours)"
+                                       data-i18n-label="cfg.tonight.binge.days"
+                                       min="1" max="365" />
+                                <div class="fieldDescription" data-i18n-html="cfg.tonight.binge.days.desc">Au moins un épisode de la série doit avoir été ajouté à la bibliothèque dans ces N derniers jours (signal « enregistrement actif »). Défaut 14.</div>
+                            </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.feedback.h">Boucle de rétroaction des recommandations</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.feedback.desc">
+                            <b>Opt-in</b>. Chaque recommandation (« À regarder ce soir », tâche planifiée
+                            d'enregistrement) et chaque rejet (« Oublier ») est journalisé. Une fois par
+                            semaine (dimanche 4 h), une tâche d'analyse rapproche ce journal de ce que
+                            l'usager a <b>réellement regardé</b> et fait produire au LLM une directive
+                            concise (ce qui a plu / ignoré / manqué) réinjectée dans les prompts des runs
+                            suivants — les recommandations s'améliorent d'elles-mêmes au fil des semaines.
+                            Fail-open : sans directive, les prompts sont inchangés.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkRecoFeedbackEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.feedback.flag">Activer la boucle de rétroaction (analyse hebdo + directives de recommandation)</span>
+                        </label>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtPromptDirectives"
+                                      label="Directives actives (par usager, JSON)"
+                                      data-i18n-label="cfg.feedback.directive"
+                                      rows="4"></textarea>
+                            <div class="fieldDescription" data-i18n-html="cfg.feedback.directive.desc">
+                                Directives produites par la dernière analyse (une par usager). <b>Éditable</b> :
+                                l'admin peut corriger ou vider ce JSON
+                                <code>[{"u":"userId","n":"nom","d":"date","text":"…"}]</code> —
+                                vider le champ (ou un « text ») retire la directive des prompts jusqu'à la
+                                prochaine analyse.
+                            </div>
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.autoprog.h">Auto-programmation &amp; popup au login</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.desc">
                             Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML :

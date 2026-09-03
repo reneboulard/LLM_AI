@@ -37,16 +37,17 @@ conversation, voir [Chat LLM](#chat-llm-admin)).
 4. [Composants](#composants)
 5. [Outils LLM](#outils-llm)
 6. [« À regarder ce soir »](#à-regarder-ce-soir)
-7. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
-8. [Surfaces natives des recommandations](#surfaces-natives-des-recommandations)
-9. [Audit santé](#audit-santé)
-10. [Identification des enregistrements orphelins](#identification-des-enregistrements-orphelins)
-11. [Traduction IA des genres EPG (GenreCleaner)](#traduction-ia-des-genres-epg-genrecleaner)
-12. [Chat LLM (admin)](#chat-llm-admin)
-13. [API HTTP](#api-http)
-14. [i18n (FR / EN)](#i18n-fr--en)
-15. [Dépannage](#dépannage)
-16. [Changelog](#changelog)
+7. [Boucle de rétroaction des recommandations](#boucle-de-rétroaction-des-recommandations)
+8. [Auto-programmation & popup au login](#auto-programmation--popup-au-login)
+9. [Surfaces natives des recommandations](#surfaces-natives-des-recommandations)
+10. [Audit santé](#audit-santé)
+11. [Identification des enregistrements orphelins](#identification-des-enregistrements-orphelins)
+12. [Traduction IA des genres EPG (GenreCleaner)](#traduction-ia-des-genres-epg-genrecleaner)
+13. [Chat LLM (admin)](#chat-llm-admin)
+14. [API HTTP](#api-http)
+15. [i18n (FR / EN)](#i18n-fr--en)
+16. [Dépannage](#dépannage)
+17. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -163,6 +164,28 @@ Les clés API sont stockées dans la config **OU** lues dans des variables d'env
 - `TonightCacheHours` (défaut 4) — TTL du cache par usager.
 - `TonightRecordingsDays` (défaut 7) — fenêtre « enregistrés il y a moins de N jours ».
 - `TonightMinRecommendations` (défaut 3) — minimum garanti (voir [À regarder ce soir](#à-regarder-ce-soir)).
+- `TonightBingeEnabled` (bool, **défaut `false` — opt-in explicite**) — signale les séries
+  « prêtes à dévorer » : l'usager enregistre une série et attend d'avoir plusieurs épisodes
+  avant de commencer ; quand le stock non visionné atteint le seuil, le run « ce soir »
+  propose de commencer (une seule fois par cycle, voir
+  [À regarder ce soir](#à-regarder-ce-soir)).
+- `TonightBingeThreshold` (défaut 4) — nombre d'épisodes non visionnés à partir duquel la
+  suggestion « temps de commencer » se déclenche.
+- `TonightBingeActiveDays` (défaut 14) — fenêtre d'activité : au moins un épisode de la
+  série doit être arrivé dans ces N derniers jours (signal « enregistrement actif » qui
+  distingue une accumulation en cours d'une série dormante jamais commencée).
+
+### Boucle de rétroaction des recommandations
+
+- `RecoFeedbackEnabled` (bool, **défaut `false` — opt-in explicite**) : active la
+  boucle de rétroaction — le plugin apprend de ses recommandations passées (voir
+  [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations)).
+- `PromptDirectives` (JSON `[{"u":"userId","n":"nom","d":"date","text":"…"}]`) —
+  directives produites par l'analyse hebdo, réinjectées dans les prompts des runs.
+  **Affichées et éditables** dans la page de config : l'admin peut corriger ou
+  vider le JSON pour retirer une directive des prompts.
+- `RecoLog` (interne) — journal roulant des recos/rejets (30 jours, plafond 500
+  entrées), maintenu côté serveur (carry-forward par la page de config).
 
 ### Auto-programmation & popup au login
 
@@ -315,13 +338,15 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + backends multi-source. |
 | `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie les notifications. Délègue l'orchestration à `LlmRunner`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
-| `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, run LLM, enrichissement, **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
+| `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
 | `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
 | `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB (retry sans suffixe « on <chaîne> » si le titre complet n'a pas de match). Repli poster : **télécharge l'affiche Primary du programme EPG** — fichier local OU URL distante Gracenote/TMS (`[domaine-retire]`) — avec raison loguée à chaque garde. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique puis stream `recording_activated.mp4`. Gated par `StrmSecret`. |
 | `AiGenreTagger.cs` | `AiGenreTagger` (statique) | Étiquetage genre `AI Tonight` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). |
+| `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:00, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
+| `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internes) | Helpers de la boucle de rétroaction : journal roulant `RecoLog` (parse/persist/prune), directives `PromptDirectives` (parse/persist/troncature), blocs de prompt réinjectés (par usager pour Tonight, fusionnés pour la tâche d'enregistrement). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`) → S3 (recherche web SearXNG → id IMDb, même porte d'acceptation), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette Gracenote de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
@@ -371,7 +396,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 
 | `Name` | Action(s) / Description |
 |---|---|
-| `get_emby_info` | **Interrogation Emby** — actions : `summary` (résumé bibliothèque), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (EPG séries à venir), `epg_movies` (EPG films à venir), `epg_tonight` (EPG dans la fenêtre « ce soir », `HasAired=false`, marque `is_scheduled`), `scheduled` / `planning` (timers programmés). Applique whitelists, flags, drop list, déduplication par titre. |
+| `get_emby_info` | **Interrogation Emby** — actions : `summary` (résumé bibliothèque), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (EPG séries à venir), `epg_movies` (EPG films à venir), `epg_tonight` (EPG dans la fenêtre « ce soir », `HasAired=false`, marque `is_scheduled`, déduplication par titre « meilleure diffusion » — l'inédit l'emporte sur la rediffusion), `scheduled` / `planning` (timers programmés). Applique whitelists, flags, drop list. |
 | `tmdb_lookup` | Recherche / détails TMDB (note, poster, résumé, casting) via `TmdbApiKey`. |
 | `tvdb_search` | Recherche TVDB (séries) via `TvdbApiKey`. |
 | `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |
@@ -400,11 +425,47 @@ pré-fetchés, injectés comme **réserve**, à utiliser **seulement si** le LLM
 **moins de `TonightMinRecommendations`** recommandations. Garantit au moins N recos même
 si l'EPG est vide.
 
+**Séries « prêtes à dévorer » (opt-in)** — `TonightBingeEnabled` : l'usager qui enregistre
+une série et attend d'avoir plusieurs épisodes avant de commencer reçoit un signal
+opportuniste quand le stock est suffisant. Détection **déterministe C#** (`BuildBingeReadySeries`,
+pas de tool LLM) : épisodes non visionnés agrégés par série ; une série qualifie quand
+(1) son stock atteint `TonightBingeThreshold` (défaut 4) **et** (2) au moins un épisode est
+arrivé récemment (`TonightBingeActiveDays`, défaut 14) — le signal « enregistrement actif »
+qui distingue une accumulation en cours d'une série **dormante** jamais commencée (une
+série conservée « pour un jour de pluie » n'est **jamais** signalée). La série franchissant
+le seuil est injectée dans le prompt (AU PLUS UNE recommandation par run,
+`source="recording"` si elle figure aussi dans les enregistrements non visionnés, sinon
+`source="library"` ; id du **premier épisode à regarder**, ordre saison/épisode) avec
+mention du nombre d'épisodes en attente dans la raison.
+
+> 📌 **Anti-spam** : le gate persistant `BingeNotified` (par usager et par série) ne
+> signale chaque série qu'**une seule fois par cycle d'accumulation**. La suggestion se
+> ré-arme quand le compte non visionné repasse sous le seuil — c'est-à-dire quand
+> l'usager commence à regarder ; le cycle suivant d'accumulation re-déclenchera la
+> suggestion. La bibliothèque `.strm` est exclue (garde anti-circulaire) et la détection
+> est fail-open (une erreur ne casse jamais le run).
+
+**Watched-guard (rediffusions)** — Une rediffusion EPG d'un épisode/ film que l'usager a
+**déjà visionné** n'est plus recommandée comme du contenu neuf. Deux garde-fous
+déterministes C# :
+
+- **Déduplication « meilleure diffusion »** dans `epg_tonight` : pour chaque titre, la
+  diffusion au contenu le plus récent gagne (n° saison/épisode le plus haut, repli sur
+  l'heure la plus tardive) — la rediffusion de 19 h ne masque plus l'épisode inédit de
+  21 h, seul visible du LLM.
+- **Marquage `watched=true`** (`BuildWatchedIndex` + `ValidateAndFilter`) : index
+  per-usager des épisodes joués (clés « s{S}e{E} », repli nom d'épisode) et des films
+  joués ; toute reco live correspondante est **marquée, pas droppée** (le minimum de
+  recos reste garanti) : badge « Déjà visionné », actions Programmer / Regarder en
+  direct masquées, **aucun timer créé**, exclusion des popups et de la cloche.
+  Fail-open (index indisponible → recos non marquées, jamais vidées) ; bibliothèque
+  `.strm` exclue de l'index (anti-circulaire).
+
 **Champ `source`** de chaque recommandation (drive les boutons de la carte) :
 
 | `source` | Sens | Boutons |
 |---|---|---|
-| `live` | Programme EPG de ce soir | Programmer · Regarder en direct (si déjà commencé) · Regarder (bibli.) si possédé · Oublier |
+| `live` | Programme EPG de ce soir | Programmer · Regarder en direct (si déjà commencé) · Regarder (bibli.) si possédé · Oublier — actions masquées si déjà diffusé (`aired`) ou déjà visionné (`watched`) |
 | `recording` | Enregistrement récent non visionné | Regarder · Oublier |
 | `library` | Réserve bibliothèque (fallback) | Regarder · Oublier |
 
@@ -416,6 +477,37 @@ contexte complet.
 
 **Cache par usager** — `Dictionary<userId, CacheEntry>` + verrou, TTL
 `TonightCacheHours`. `Refresh=1` force un nouveau run (bouton **Rafraîchir**).
+
+## Boucle de rétroaction des recommandations
+
+**Opt-in** (`RecoFeedbackEnabled`, défaut off) — le plugin apprend de ses
+recommandations passées : une fois par semaine, il analyse l'écart entre *ce
+qu'il a recommandé* et *ce que l'usager a réellement regardé*, en tire une
+directive, et l'injecte dans les prompts des runs suivants.
+
+**1. Journalisation** — chaque reco (« À regarder ce soir » : par usager ;
+tâche planifiée d'enregistrement : globale au foyer) et chaque rejet explicite
+(bouton **Oublier**, le signal négatif le plus fort) est ajouté au journal
+`RecoLog` (fenêtre roulante 30 jours, plafond 500 entrées).
+
+**2. Analyse hebdo** (`RecoAnalysisTask`, dimanche 4 h) — pour chaque usager
+ayant du signal, un tableau de corrélation est construit **en C# déterministe**
+(zéro LLM pour le rassemblement) : recos **REGARDÉES** (l'item/la série a été
+joué après la reco — date exacte via `IUserDataManager`) vs **IGNORÉES**,
+rejets explicites, et **visionnages SANS recommandation** (opportunités
+manquées, avec genres). Puis un **seul appel LLM sans outils**
+(`LlmRunner.RunSynthesisAsync`, repli multi-backend) produit une **directive
+concise** (≤ 1200 caractères, puces actionnables, repart de la directive
+précédente, contrainte explicite de **préserver la diversité**).
+
+**3. Réinjection** — la directive persistée (`PromptDirectives`) est injectée
+dans le prompt : **par usager** pour « À regarder ce soir », **fusionnée
+(étiquetée par usager)** pour la tâche planifiée d'enregistrement.
+
+**Garde-fous** : directives **visibles et éditables** (JSON) dans la page de
+config — les vider les retire des prompts ; fail-open total (sans directive,
+prompts inchangés ; échec d'analyse → directive précédente conservée ; usager
+sans signal sauté) ; bibliothèque `.strm` exclue de l'historique analysé.
 
 ## Auto-programmation & popup au login
 

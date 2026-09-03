@@ -236,6 +236,55 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Synthèse LLM sans outils (un seul appel, repli multi-backend).
+        //  Path générique partagé : la boucle de rétroaction hebdo
+        //  (RecoAnalysisTask) l'utilise pour produire la directive de
+        //  recommandation à partir d'un tableau de corrélations construit
+        //  en C# — même forme que la synthèse déterministe de l'audit
+        //  (rassemblement C# + un passage LLM sans outils).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Un seul appel LLM SANS outils ni boucle agent, avec repli
+        /// multi-backend (<see cref="ResolveBackends"/> dans l'ordre de
+        /// priorité). Retourne (réponse brute, ok) ; ok=false si aucun
+        /// backend configuré ou si tous échouent (erreur catchée + loguée —
+        /// l'appelant décide quoi faire ; fail-open naturel).
+        /// <see cref="OperationCanceledException"/> est propagée.
+        /// </summary>
+        public async System.Threading.Tasks.Task<(string reply, bool ok)> RunSynthesisAsync(
+            PluginConfiguration cfg, string label, string systemPrompt, string userPrompt,
+            System.Threading.CancellationToken ct)
+        {
+            try
+            {
+                var backends = ResolveBackends(cfg);
+                if (backends.Count == 0)
+                {
+                    _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — synthèse ignorée.", label);
+                    return (string.Empty, false);
+                }
+
+                string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
+                string geminiKey = ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
+
+                string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                    systemPrompt, userPrompt, label, ct).ConfigureAwait(false);
+                return (reply, true);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.Info("[LLM_AI] [{0}] Synthèse annulée.", label);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.ErrorException("[LLM_AI] [{0}] Échec de la synthèse : {1}", ex, label, ex.Message);
+                return (string.Empty, false);
+            }
+        }
+
+        // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Path séparé de la recommandation : mêmes backends LLM (ResolveBackends
         //  réutilisé), mais outils dédiés (system_audit seul), system prompt

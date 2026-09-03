@@ -163,6 +163,23 @@ namespace LLM_AI
                 return;
             }
 
+            // Directive de rétroaction (opt-in, boucle hebdo) : fusion des
+            // directives de TOUS les usagers (la reco d'enregistrement est
+            // globale au foyer, pas par usager). Vide si désactivée/jamais
+            // analysée — prompts inchangés (fail-open).
+            if (cfg.RecoFeedbackEnabled)
+            {
+                string feedback = RecoFeedback.BuildRecordBlock(cfg);
+                if (feedback.Length > 0)
+                {
+                    if (!string.IsNullOrWhiteSpace(seriesPrompt))
+                        seriesPrompt += "\n\n" + feedback;
+                    if (!string.IsNullOrWhiteSpace(filmsPrompt))
+                        filmsPrompt += "\n\n" + feedback;
+                    _logger.Info("[LLM_AI] Directive de rétroaction injectée dans le(s) prompt d'enregistrement.");
+                }
+            }
+
             try
             {
                 string p1 = "", p2 = "";
@@ -229,6 +246,37 @@ namespace LLM_AI
 
                 PersistRecommendations(cfg, merged);
                 SendRecommendationNotification(merged);
+
+                // Journalisation des recos d'enregistrement pour la boucle de
+                // rétroaction hebdo (opt-in) : entrées kind=record, sans
+                // usager (reco globale du foyer — corrélée aux visionnages
+                // de chaque usager par RecoAnalysisTask). Best-effort.
+                if (cfg.RecoFeedbackEnabled)
+                {
+                    try
+                    {
+                        var entries = new List<RecoLogEntry>();
+                        foreach (var r in AutoProgrammer.ParseRecommendations(merged))
+                        {
+                            if (string.IsNullOrWhiteSpace(r.Title)) continue;
+                            entries.Add(new RecoLogEntry
+                            {
+                                User = "",
+                                Kind = "record",
+                                Title = r.Title,
+                                Source = r.Kind ?? "",
+                                Id = r.Id ?? "",
+                                Date = DateTimeOffset.UtcNow
+                            });
+                        }
+                        if (entries.Count > 0)
+                            RecoFeedback.AppendLog(cfg, entries, _logger);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Warn("[LLM_AI] Rétroaction : journalisation du run échouée : {0}", ex.Message);
+                    }
+                }
 
                 // Badge « AI » sur les images EPG (opt-out, non destructif) :
                 // alimente le registre des programmes suggérés à enregistrer

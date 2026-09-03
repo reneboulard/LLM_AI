@@ -108,6 +108,17 @@ define([], function () {
             "cfg.tonight.recDays.desc": "Fenêtre de recherche des enregistrements récents non visionnés (candidats « à regarder ce soir »). Défaut 7.",
             "cfg.tonight.minRec": "Min recommandations",
             "cfg.tonight.minRec.desc": "Si l'EPG + les enregistrements donnent moins de recommandations, complète avec des titres non visionnés de la bibliothèque. Défaut 3.",
+            "cfg.tonight.binge.flag": "Signaler les séries « prêtes à dévorer » (stock d'épisodes enregistrés non visionnés)",
+            "cfg.tonight.binge.desc": "Option opt-in. Détecte les séries que l'usager est en train d'enregistrer et dont il accumule volontairement les épisodes non visionnés (il attend d'en avoir plusieurs avant de commencer) : quand le stock atteint le seuil, le run « ce soir » propose de commencer (« il est temps de regarder X, N épisodes en attente »). Anti-spam : chaque série n'est signalée qu'UNE seule fois ; la suggestion ne se ré-arme qu'après que le compte non visionné repasse sous le seuil (l'usager a commencé à regarder). Une série dormante (jamais commencée, conservée « pour un jour de pluie ») ne déclenche jamais la suggestion : seules les séries encore actives — au moins un épisode arrivé récemment — sont signalées.",
+            "cfg.tonight.binge.threshold": "Seuil d'épisodes en attente",
+            "cfg.tonight.binge.threshold.desc": "Nombre d'épisodes non visionnés à partir duquel une série est « prête à dévorer ». Défaut 4.",
+            "cfg.tonight.binge.days": "Fenêtre d'activité (jours)",
+            "cfg.tonight.binge.days.desc": "Au moins un épisode de la série doit avoir été ajouté à la bibliothèque dans ces N derniers jours (signal « enregistrement actif » — distingue une accumulation en cours d'une série dormante). Défaut 14.",
+            "cfg.feedback.h": "Boucle de rétroaction des recommandations",
+            "cfg.feedback.desc": "<b>Opt-in</b>. Chaque recommandation (« À regarder ce soir », tâche planifiée d'enregistrement) et chaque rejet (« Oublier ») est journalisé. Une fois par semaine (dimanche 4 h), une tâche d'analyse rapproche ce journal de ce que l'usager a <b>réellement regardé</b> et fait produire au LLM une directive concise (ce qui a plu / ignoré / manqué) réinjectée dans les prompts des runs suivants — les recommandations s'améliorent d'elles-mêmes au fil des semaines. Fail-open : sans directive, les prompts sont inchangés.",
+            "cfg.feedback.flag": "Activer la boucle de rétroaction (analyse hebdo + directives de recommandation)",
+            "cfg.feedback.directive": "Directives actives (par usager, JSON)",
+            "cfg.feedback.directive.desc": "Directives produites par la dernière analyse (une par usager). <b>Éditable</b> : l'admin peut corriger ou vider ce JSON <code>[{\"u\":\"userId\",\"n\":\"nom\",\"d\":\"date\",\"text\":\"…\"}]</code> — vider le champ (ou un « text ») retire la directive des prompts jusqu'à la prochaine analyse.",
             "cfg.autoprog.h": "Auto-programmation & popup au login",
             "cfg.autoprog.desc": "Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML : les recommandations ne sont visibles que sur la page web. L'auto-programmation crée les timers Emby des recos à enregistrer → elles ressortent dans le guide EPG natif (badge d'enregistrement) sur tous les clients. Le popup au login signale ce soir ce que l'usager peut regarder (bibliothèque / enregistrements).",
             "cfg.autoprog.flag": "Auto-programmer les recommandations (créer les timers d'enregistrement)",
@@ -243,7 +254,8 @@ define([], function () {
             "rec.type.upcoming": "À venir",
             "rec.type.recording": "Disponible · Enregistrement",
             "rec.type.library": "Disponible · Bibliothèque",
-            "rec.type.aired": "Diffusé"
+            "rec.type.aired": "Diffusé",
+            "rec.type.watched": "Déjà visionné"
         },
 
         en: {
@@ -329,6 +341,17 @@ define([], function () {
             "cfg.tonight.recDays.desc": "Lookback window for recent unwatched recordings (candidates for \"watch tonight\"). Default 7.",
             "cfg.tonight.minRec": "Min recommendations",
             "cfg.tonight.minRec.desc": "If EPG + recordings yield fewer recommendations, fill with unwatched library titles. Default 3.",
+            "cfg.tonight.binge.flag": "Surface \"binge-ready\" series (stockpile of unwatched recorded episodes)",
+            "cfg.tonight.binge.desc": "Opt-in. Detects series the user is actively recording and deliberately stockpiling unwatched (waiting for enough episodes before starting): when the stockpile reaches the threshold, the tonight run suggests starting it (\"time to start X, N episodes waiting\"). Anti-spam: each series is surfaced only ONCE; the suggestion re-arms only after the unwatched count drops back below the threshold (the user started watching). A dormant series (never started, kept \"for a rainy day\") never triggers the suggestion: only still-active series — at least one episode added recently — are surfaced.",
+            "cfg.tonight.binge.threshold": "Episode stockpile threshold",
+            "cfg.tonight.binge.threshold.desc": "Unwatched-episode count at which a series becomes \"binge-ready\". Default 4.",
+            "cfg.tonight.binge.days": "Activity window (days)",
+            "cfg.tonight.binge.days.desc": "At least one episode of the series must have been added to the library within these last N days (the \"actively recording\" signal — tells an ongoing stockpile from a dormant series). Default 14.",
+            "cfg.feedback.h": "Recommendation feedback loop",
+            "cfg.feedback.desc": "<b>Opt-in</b>. Every recommendation (\"Watch tonight\", scheduled record task) and every rejection (\"Forget\") is logged. Once a week (Sunday 4 AM), an analysis task correlates that log with what the user <b>actually watched</b> and has the LLM produce a concise directive (what worked / was ignored / was missed) that is re-injected into subsequent run prompts — recommendations improve on their own over the weeks. Fail-open: without a directive, prompts are unchanged.",
+            "cfg.feedback.flag": "Enable the feedback loop (weekly analysis + recommendation directives)",
+            "cfg.feedback.directive": "Active directives (per user, JSON)",
+            "cfg.feedback.directive.desc": "Directives produced by the latest analysis (one per user). <b>Editable</b>: the admin can fix or clear this JSON <code>[{\"u\":\"userId\",\"n\":\"name\",\"d\":\"date\",\"text\":\"…\"}]</code> — emptying the field (or a \"text\") removes the directive from prompts until the next analysis.",
             "cfg.autoprog.h": "Auto-programming & login popup",
             "cfg.autoprog.desc": "Native Android / Android TV clients don't render plugin HTML pages: recommendations are only visible on the web page. Auto-programming creates the Emby timers for recommendations to record → they stand out in the native EPG guide (record badge) on every client. The login popup surfaces what to watch tonight (library / recordings).",
             "cfg.autoprog.flag": "Auto-program recommendations (create recording timers)",
@@ -460,7 +483,8 @@ define([], function () {
             "rec.type.upcoming": "Upcoming",
             "rec.type.recording": "Available · Recording",
             "rec.type.library": "Available · Library",
-            "rec.type.aired": "Aired"
+            "rec.type.aired": "Aired",
+            "rec.type.watched": "Already watched"
         }
     };
 

@@ -476,6 +476,88 @@ namespace LLM_AI
         public int TonightMinRecommendations { get; set; } = 3;
 
         /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, le run « À
+        /// regarder ce soir » détecte les <b>séries prêtes à dévorer</b>
+        /// (<i>binge-ready</i>) : séries dont l'usager accumule des épisodes
+        /// non visionnés pendant l'enregistrement (il attend d'en avoir
+        /// plusieurs avant de commencer) et dont <b>au moins un épisode est
+        /// arrivé récemment</b> (<see cref="TonightBingeActiveDays"/>) — le
+        /// signal « toujours en cours d'enregistrement » qui distingue une
+        /// accumulation active d'une série dormante jamais commencée.
+        /// Une série qui franchit <see cref="TonightBingeThreshold"/>
+        /// épisodes non visionnés est proposée UNE SEULE fois au LLM
+        /// (« temps de commencer X, N épisodes en attente ») — la
+        /// recommandation ne se répète pas tant que le compte ne repasse
+        /// pas sous le seuil (anti-spam, voir <see cref="BingeNotified"/>).
+        /// </summary>
+        public bool TonightBingeEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Seuil d'épisodes non visionnés pour qu'une série soit « prête à
+        /// dévorer » (<see cref="TonightBingeEnabled"/>). Défaut 4.
+        /// </summary>
+        public int TonightBingeThreshold { get; set; } = 4;
+
+        /// <summary>
+        /// Fenêtre d'activité (en jours) pour la détection « prête à dévorer » :
+        /// au moins un épisode non visionné de la série doit avoir été ajouté à
+        /// la bibliothèque dans ces N derniers jours (<c>DateCreated</c>).
+        /// C'est le signal « l'enregistrement est actif » — une série dormante
+        /// (jamais commencée, conservée « pour un jour de pluie ») n'a pas de
+        /// nouvel épisode et ne déclenche donc <b>jamais</b> la suggestion.
+        /// Défaut 14 (tolère un rythme bi-mensuel).
+        /// </summary>
+        public int TonightBingeActiveDays { get; set; } = 14;
+
+        /// <summary>
+        /// État anti-spam de la détection « prête à dévorer » : tableau JSON
+        /// <c>[{"key":"userId|serie","count":N}]</c> — une entrée par série
+        /// déjà signalée à cet usager (le compte non visionné au moment du
+        /// signalement). Une série présente dans cette liste n'est
+        /// <b>plus proposée</b> ; l'entrée est retirée quand son compte non
+        /// visionné repasse sous <see cref="TonightBingeThreshold"/> (l'usager
+        /// a commencé à regarder), ce qui ré-arme la suggestion pour le cycle
+        /// d'accumulation suivant. Un seul signalement par cycle — jamais de
+        /// recommandation répétée. Maintenance interne : ne pas éditer.
+        /// </summary>
+        public string BingeNotified { get; set; } = "";
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : boucle de
+        /// rétroaction des recommandations. Si coché : (1) chaque reco
+        /// (« À regarder ce soir », tâche planifiée d'enregistrement) et
+        /// chaque rejet (bouton « Oublier ») est journalisé dans
+        /// <see cref="RecoLog"/> ; (2) la tâche planifiée hebdomadaire
+        /// <c>RecoAnalysisTask</c> rapproche ce journal des visionnages réels
+        /// de chaque usager (regardé / ignoré / rejeté / vu sans reco) et
+        /// fait produire au LLM une directive concise persistée dans
+        /// <see cref="PromptDirectives"/> ; (3) cette directive est réinjectée
+        /// dans le prompt des runs suivants. Fail-open : sans directive, les
+        /// prompts sont inchangés ; un échec d'analyse ne casse jamais un run.
+        /// </summary>
+        public bool RecoFeedbackEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Journal roulant des recommandations pour la boucle de
+        /// rétroaction : tableau JSON
+        /// <c>[{"u":"userId","k":"tonight|record|drop","d":"ISO","t":"Titre","s":"source","i":"id"}]</c>.
+        /// Prune automatique > 30 jours (plafond 500 entrées), maintenance
+        /// interne : ne pas éditer.
+        /// </summary>
+        public string RecoLog { get; set; } = "";
+
+        /// <summary>
+        /// Directives de recommandation persistées (une par usager, écrasées
+        /// à chaque analyse hebdo) : tableau JSON
+        /// <c>[{"u":"userId","n":"nom","d":"yyyy-MM-dd","text":"directive"}]</c>.
+        /// Réinjectées dans le prompt des runs « À regarder ce soir » (par
+        /// usager) et de la tâche planifiée d'enregistrement (fusionnées).
+        /// Affichées et <b>éditables/clearables</b> dans la page de config —
+        /// l'admin garde le contrôle de ce que le LLM a conclu.
+        /// </summary>
+        public string PromptDirectives { get; set; } = "";
+
+        /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
         /// run <b>frais</b> de « À regarder ce soir », le plugin ajoute le genre
         /// <c>AI Tonight</c> aux items Emby du <b>watch bucket</b> recommandés

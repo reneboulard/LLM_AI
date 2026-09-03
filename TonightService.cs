@@ -69,6 +69,15 @@ namespace LLM_AI
             "enregistrés ces derniers jours mais pas encore regardés). Ce sont des candidats de " +
             "choix immédiat : déjà enregistrés, prêts à regarder. Si l'usager suit une série et " +
             "qu'un nouvel épisode enregistré de cette série est non visionné, remonte-le en priorité.\n" +
+            " 4) Les séries « prêtes à dévorer » — SI le message contient une section « SÉRIES " +
+            "PRÊTES À DÉVORER » : ce sont des séries dont l'enregistrement est actif et dont " +
+            "l'usager accumule volontairement les épisodes non visionnés avant de commencer. " +
+            "Recommande-en AU PLUS UNE par run, comme « il est temps de commencer » : " +
+            "source=\"recording\" si la série figure aussi dans les enregistrements non visionnés " +
+            "(reprends alors l'id de cette liste), sinon source=\"library\" en reprenant l'id " +
+            "fourni tel quel (l'UI proposera « Regarder ») ; mentionne le nombre d'épisodes en " +
+            "attente dans la raison. C'est un rappel opportuniste, indépendant de la contrainte " +
+            "de minimum — pas un remplissage de sélection.\n" +
             "Pour chaque recommandation, positionne kind=\"series\" ou kind=\"movie\" (series → timer " +
             "série, movie/one-off → timer unique) et priority high/medium/low. Ajoute un champ " +
             "source : \"live\" (programme EPG du soir — à regarder en direct ou à enregistrer) ou " +
@@ -113,6 +122,14 @@ namespace LLM_AI
             public bool FromCache;
             public string Error;
         }
+
+        // Gate anti-spam « prêt à dévorer » en attente de persistance :
+        // posé par BuildBingeReadySeries, consommé par GenerateTonightAsync
+        // SEULEMENT si le run LLM réussit — le signalement a alors bien été
+        // livré au modèle. Un run raté ne consomme pas le one-shot : la série
+        // sera re-proposée au prochain run.
+        private PluginConfiguration _pendingBingeCfg;
+        private Dictionary<string, int> _pendingBingeMap;
 
         // ------------------------------------------------------------------
         //  Cache par usager (in-memory, statique, partagé ; TTL = TonightCacheHours)
@@ -227,11 +244,36 @@ namespace LLM_AI
             //    LLM uniquement si EPG + enregistrements < TonightMinRecommendations.
             string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot);
 
+            // 2c) Séries « prêtes à dévorer » (opt-in, gate anti-spam persistant) :
+            //    séries dont l'enregistrement est actif et dont le stock d'épisodes
+            //    non visionnés vient de franchir le seuil — signalées UNE fois par
+            //    cycle d'accumulation (re-armées quand l'usager commence à regarder).
+            string binge = cfg.TonightBingeEnabled
+                ? BuildBingeReadySeries(user, cfg, compact, excludedStrmRoot)
+                : string.Empty;
+
+            // 2d) Watched-guard : index per-usager du contenu DÉJÀ VISIONNÉ
+            //     (épisodes joués par série + films joués). Sert à MARQUER les
+            //     recos live « déjà visionnées » (rediffusion EPG) pendant la
+            //     validation — l'UI affiche la carte avec badge « Déjà visionné »
+            //     et masque les actions, l'auto-programmation ne crée pas de
+            //     timer, les popups la sautent. Null si indisponible (fail-open :
+            //     recos non marquées, jamais droppées pour autant).
+            WatchedIndex watchedIdx = BuildWatchedIndex(user, excludedStrmRoot);
+
+            // 2e) Directive de rétroaction (opt-in, boucle hebdo) : synthèse
+            //     LLM des recommandations passées vs les visionnages réels,
+            //     persistée par RecoAnalysisTask. Vide si désactivée/jamais
+            //     analysée — le prompt est alors inchangé (fail-open).
+            string feedback = cfg.RecoFeedbackEnabled
+                ? RecoFeedback.BuildTonightBlock(cfg, user.Id.ToString())
+                : string.Empty;
+
             // 3) Prompt personnalisé = template config + profil + enregistrements
-            //    + réserve + contrainte de minimum dynamique.
+            //    + réserve (+ binge + directive) + contrainte de minimum dynamique.
             int minRec = Math.Max(0, cfg.TonightMinRecommendations);
             string prompt = (cfg.TonightPrompt ?? string.Empty).Trim()
-                + "\n\n" + profile + recs + reserve
+                + "\n\n" + profile + recs + reserve + binge + feedback
                 + "\n\n### CONTRAINTE DE SÉLECTION\n"
                 + $"Garantis AU MOINS {minRec} recommandation(s). Si l'EPG du soir + les "
                 + "enregistrements non visionnés en produisent moins, complète avec la RÉSERVE "
@@ -246,6 +288,17 @@ namespace LLM_AI
             if (!ok || string.IsNullOrWhiteSpace(payload))
                 return new TonightResult { Error = "Le run LLM n'a pas produit de recommandation." };
 
+            // Le run a réussi : consomme le gate « prêt à dévorer » en attente
+            // (le signalement a été livré au LLM). Sur échec (return ci-dessus),
+            // le gate n'est PAS persisté — la série binge sera re-proposée au
+            // prochain run au lieu d'avoir brûlé son one-shot anti-spam.
+            if (_pendingBingeCfg != null && _pendingBingeMap != null)
+            {
+                PersistBingeNotified(_pendingBingeCfg, _pendingBingeMap);
+                _pendingBingeCfg = null;
+                _pendingBingeMap = null;
+            }
+
             // Enrichissement bibliothèque : pour les reco source="live" dont le
             // titre est déjà possédé, injecte library_id (bouton « Regarder »
             // depuis la bibliothèque + signal owned-guard pour AutoProgrammer).
@@ -255,10 +308,12 @@ namespace LLM_AI
             // Validation d'existence : on vérifie que chaque recommandation
             // pointe vers un item réel (EPG non expiré / item bibliothèque non
             // supprimé / id non halluciné). Drop les introuvables ; marque
-            // « Diffusé » (aired=true) les programmes EPG déjà terminés (gardés,
-            // mais sans actions obsolètes côté UI). Fail-open : une erreur de
-            // requête transitoire ne vide jamais les recos.
-            payload = ValidateAndFilter(payload, ct);
+            // « Diffusé » (aired=true) les programmes EPG déjà terminés et
+            // « Déjà visionné » (watched=true) les rediffusions que l'usager a
+            // déjà vues (gardées, mais sans actions obsolètes côté UI).
+            // Fail-open : une erreur de requête transitoire ne vide jamais les
+            // recos.
+            payload = ValidateAndFilter(payload, watchedIdx, ct);
             if (string.IsNullOrWhiteSpace(payload))
                 return new TonightResult { Error = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés)." };
 
@@ -326,6 +381,38 @@ namespace LLM_AI
                 }
             }
 
+            // Journalisation du run pour la boucle de rétroaction hebdo
+            // (opt-in) : chaque reco devient une entrée du journal
+            // (kind=tonight) que RecoAnalysisTask rapprochera des
+            // visionnages réels de l'usager. Best-effort : un échec de
+            // journalisation ne casse jamais le run.
+            if (cfg.RecoFeedbackEnabled)
+            {
+                try
+                {
+                    var entries = new List<RecoLogEntry>();
+                    foreach (var r in AutoProgrammer.ParseRecommendations(payload))
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Title)) continue;
+                        entries.Add(new RecoLogEntry
+                        {
+                            User = user.Id.ToString(),
+                            Kind = "tonight",
+                            Title = r.Title,
+                            Source = r.Source ?? "",
+                            Id = r.Id ?? "",
+                            Date = DateTimeOffset.UtcNow
+                        });
+                    }
+                    if (entries.Count > 0)
+                        RecoFeedback.AppendLog(cfg, entries, _logger);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] Rétroaction : journalisation du run échouée : {0}", ex.Message);
+                }
+            }
+
             return new TonightResult { Payload = payload, Date = date, FromCache = false };
         }
 
@@ -343,8 +430,11 @@ namespace LLM_AI
         ///   la fenêtre « ce soir »). Si le programme a déjà fini
         ///   (<c>EndDate &lt;= now</c>) → on garde la reco mais on pose
         ///   <c>aired=true</c> (l'UI marque « Diffusé » et masque Programmer /
-        ///   Regarder en direct). Sinon on injecte <c>end</c> (date de fin
-        ///   autoritaire). Id absent du snapshot → drop (EPG expiré ou id
+        ///   Regarder en direct). Si l'épisode/le film correspond à un contenu
+        ///   que l'usager a déjà visionné (<paramref name="watchedIdx"/>) → on
+        ///   pose aussi <c>watched=true</c> (rediffusion : badge « Déjà visionné »,
+        ///   pas de timer, exclu des popups). Sinon on injecte <c>end</c> (date
+        ///   de fin autoritaire). Id absent du snapshot → drop (EPG expiré ou id
         ///   halluciné).</item>
         /// <item><c>source="recording"/"library"</c> : l'id (InternalId Emby,
         ///   la forme DTO/REST — cf. <see cref="ItemIdResolver"/>) doit résoudre
@@ -357,10 +447,11 @@ namespace LLM_AI
         ///   soir », non concernées par la validation EPG).</item>
         /// </list>
         /// <b>Fail-open</b> : toute erreur transitoire (EPG/library indispo,
-        ///   parse JSON) renvoie le payload original inchangé — on ne vide
-        ///   jamais les recos sur un échec de requête. Ne lève pas.
+        ///   parse JSON, index watched indispo) renvoie le payload original
+        ///   inchangé — on ne vide jamais les recos sur un échec de requête.
+        ///   Ne lève pas.
         /// </summary>
-        private string ValidateAndFilter(string payload, CancellationToken ct)
+        private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(payload)) return payload;
 
@@ -491,7 +582,7 @@ namespace LLM_AI
                     }
                 }
 
-                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0;
+                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0;
                 for (int i = arr.Count - 1; i >= 0; i--)
                 {
                     if (!(arr[i] is JsonObject obj)) { kept++; continue; }
@@ -503,6 +594,17 @@ namespace LLM_AI
                         if (epg == null) { kept++; continue; } // EPG indispo → fail-open
                         if (epg.TryGetValue(id ?? "", out var p))
                         {
+                            // Watched-guard : rediffusion d'un épisode/film déjà
+                            // visionné par l'usager → MARQUÉ, pas droppé (le
+                            // marquage ne retire pas la reco de la sélection :
+                            // le minimum de recos reste garanti ; c'est l'UI, les
+                            // popups et l'auto-programmation qui la traitent
+                            // comme non actionnable).
+                            if (watchedIdx != null && IsWatchedProgram(p, watchedIdx))
+                            {
+                                obj["watched"] = true;
+                                watchedMarked++;
+                            }
                             if (p.EndDate.HasValue && p.EndDate.Value <= now)
                                 obj["aired"] = true;   // Diffusé : gardé, marqué
                             else if (p.EndDate.HasValue)
@@ -523,8 +625,8 @@ namespace LLM_AI
                     }
                 }
 
-                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}).",
-                    kept, dropped, epgExpired, libMissing);
+                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}), rediffusions déjà visionnées marquées : {4}.",
+                    kept, dropped, epgExpired, libMissing, watchedMarked);
 
                 return arr.ToJsonString();
             }
@@ -533,6 +635,142 @@ namespace LLM_AI
                 _logger?.Warn("[LLM_AI] Tonight validation : échec global ({0}) — payload conservé.", ex.Message);
                 return payload;
             }
+        }
+
+        // ------------------------------------------------------------------
+        //  Watched-guard (rediffusions déjà visionnées)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Index per-usager du contenu déjà visionné, pour marquer les recos
+        /// live « déjà visionnées » (rediffusion EPG d'un épisode/film vu).
+        /// Séries indexées par <see cref="LlmRunner.NormTitle"/> du nom de
+        /// série — clés d'épisodes « s{S}e{E} » (même convention que
+        /// <c>AiBadgeEnhancer</c>) + noms d'épisodes normalisés (repli quand
+        /// l'EPG ne numérote pas la diffusion) ; films par titre normalisé.
+        /// </summary>
+        private class WatchedIndex
+        {
+            /// <summary>Clé série → clés « s{S}e{E} » des épisodes joués.</summary>
+            public readonly Dictionary<string, HashSet<string>> SeriesEpisodes =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>Clé série → noms d'épisodes joués normalisés.</summary>
+            public readonly Dictionary<string, HashSet<string>> SeriesEpisodeTitles =
+                new(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>Titres de films joués normalisés.</summary>
+            public readonly HashSet<string> MovieTitles = new(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Construit l'index du contenu déjà visionné de l'usager (épisodes ET
+        /// films joués, bibliothèque .strm exclue — ses cartes de test sont
+        /// « jouées » à l'activation et pollueraient l'index). Fenêtre limitée
+        /// aux 300 épisodes + 200 films les plus récemment joués : le
+        /// watched-guard n'a pas besoin de l'historique complet, seulement du
+        /// passé assez frais pour qu'une rediffusion puisse y figurer.
+        /// Échec de requête → null (fail-open : recos non marquées).
+        /// </summary>
+        private WatchedIndex BuildWatchedIndex(User user, string excludedRoot)
+        {
+            if (user == null) return null;
+            var idx = new WatchedIndex();
+            try
+            {
+                var eq = new InternalItemsQuery
+                {
+                    User = user,
+                    IsPlayed = true,
+                    Recursive = true,
+                    IncludeItemTypes = new[] { "Episode" },
+                    OrderBy = new[] { ("DatePlayed", SortOrder.Descending) },
+                    Limit = 300,
+                    EnableTotalRecordCount = false
+                };
+                foreach (var it in _library.GetItemList(eq) ?? Array.Empty<BaseItem>())
+                {
+                    // SeriesName n'existe que sur Episode (pas BaseItem) — même
+                    // cast que le profil de goût / le builder binge.
+                    var episode = it as MediaBrowser.Controller.Entities.TV.Episode;
+                    if (episode == null) continue;
+                    if (IsUnderPath(it.Path, excludedRoot)) continue;
+                    string skey = LlmRunner.NormTitle(episode.SeriesName);
+                    if (string.IsNullOrEmpty(skey)) continue;
+                    if (it.ParentIndexNumber.HasValue && it.IndexNumber.HasValue)
+                    {
+                        if (!idx.SeriesEpisodes.TryGetValue(skey, out var ses))
+                            idx.SeriesEpisodes[skey] = ses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        ses.Add("s" + it.ParentIndexNumber.Value + "e" + it.IndexNumber.Value);
+                    }
+                    var et = LlmRunner.NormTitle(it.Name);
+                    if (!string.IsNullOrEmpty(et))
+                    {
+                        if (!idx.SeriesEpisodeTitles.TryGetValue(skey, out var ts))
+                            idx.SeriesEpisodeTitles[skey] = ts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        ts.Add(et);
+                    }
+                }
+
+                var mq = new InternalItemsQuery
+                {
+                    User = user,
+                    IsPlayed = true,
+                    Recursive = true,
+                    IncludeItemTypes = new[] { "Movie" },
+                    OrderBy = new[] { ("DatePlayed", SortOrder.Descending) },
+                    Limit = 200,
+                    EnableTotalRecordCount = false
+                };
+                foreach (var it in _library.GetItemList(mq) ?? Array.Empty<BaseItem>())
+                {
+                    if (it == null) continue;
+                    if (IsUnderPath(it.Path, excludedRoot)) continue;
+                    var mkey = LlmRunner.NormTitle(it.Name);
+                    if (!string.IsNullOrEmpty(mkey)) idx.MovieTitles.Add(mkey);
+                }
+
+                _logger?.Info("[LLM_AI] Watched-guard : index de « {0} » — {1} série(s) visionnée(s), {2} film(s).",
+                    user.Name, idx.SeriesEpisodes.Count, idx.MovieTitles.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Watched-guard : index indisponible ({0}) — recos live non marquées (fail-open).", ex.Message);
+                return null;
+            }
+            return idx;
+        }
+
+        /// <summary>
+        /// Vrai si le programme EPG <paramref name="p"/> correspond à un contenu
+        /// que l'usager a déjà visionné (watched-guard) : film par titre
+        /// normalisé, épisode par clé « s{S}e{E} » — repli sur le nom d'épisode
+        /// normalisé quand l'EPG ne numérote pas la diffusion. Programme sans
+        /// type connu (ni série ni film) ou sans correspondance → false
+        /// (fail-open : jamais marqué sur un doute).
+        /// </summary>
+        private static bool IsWatchedProgram(BaseItemDto p, WatchedIndex idx)
+        {
+            if (idx == null || p == null) return false;
+            if (p.IsMovie == true)
+            {
+                var mkey = LlmRunner.NormTitle(p.Name);
+                return !string.IsNullOrEmpty(mkey) && idx.MovieTitles.Contains(mkey);
+            }
+            if (p.IsSeries == true)
+            {
+                string skey = LlmRunner.NormTitle(p.SeriesName);
+                if (string.IsNullOrEmpty(skey)) return false;
+                if (p.ParentIndexNumber.HasValue && p.IndexNumber.HasValue
+                    && idx.SeriesEpisodes.TryGetValue(skey, out var ses)
+                    && ses.Contains("s" + p.ParentIndexNumber.Value + "e" + p.IndexNumber.Value))
+                    return true;
+                var et = LlmRunner.NormTitle(p.EpisodeTitle);
+                return !string.IsNullOrEmpty(et)
+                    && idx.SeriesEpisodeTitles.TryGetValue(skey, out var ts)
+                    && ts.Contains(et);
+            }
+            return false;
         }
 
         /// <summary>
@@ -875,6 +1113,251 @@ namespace LLM_AI
                 sb.AppendLine("(Réserve bibliothèque indisponible.)");
             }
             return sb.ToString();
+        }
+
+        // ------------------------------------------------------------------
+        //  Séries « prêtes à dévorer » (binge-ready) + gate anti-spam
+        // ------------------------------------------------------------------
+
+        /// <summary>Agrégat d'une série candidate au signalement « prêt à dévorer ».</summary>
+        private class BingeSeries
+        {
+            public string Key;         // clé normalisée (NormTitle du SeriesName)
+            public string Name;        // nom d'affichage (SeriesName)
+            public int Count;          // épisodes non visionnés observés
+            public DateTimeOffset Newest; // arrivée la plus récente (DateCreated)
+            public BaseItem First;     // premier épisode non visionné (ordre saison/épisode)
+            public int FirstSeason;    // saison de First (int.MaxValue si inconnue)
+            public int FirstEpisode;   // n° d'épisode de First (int.MaxValue si inconnu)
+        }
+
+        /// <summary>
+        /// Construit le bloc « SÉRIES PRÊTES À DÉVORER » injecté dans le prompt
+        /// « ce soir » (opt-in <see cref="PluginConfiguration.TonightBingeEnabled"/>) :
+        /// séries dont l'usager accumule des épisodes non visionnés pendant
+        /// l'enregistrement, dont <b>au moins un épisode est arrivé
+        /// récemment</b> (<c>DateCreated</c> dans
+        /// <see cref="PluginConfiguration.TonightBingeActiveDays"/> — le signal
+        /// « enregistrement actif » qui distingue une accumulation d'une série
+        /// dormante jamais commencée) et dont le stock vient de franchir
+        /// <see cref="PluginConfiguration.TonightBingeThreshold"/>.
+        /// <para><b>Gate anti-spam</b> (<see cref="PluginConfiguration.BingeNotified"/>) :
+        /// une série signalée n'est plus proposée tant que son compte non
+        /// visionné ne repasse pas sous le seuil — l'usager a commencé à
+        /// regarder, ce qui ré-arme la suggestion pour le cycle d'accumulation
+        /// suivant. Un seul signalement par cycle, jamais de répétition.</para>
+        /// <para>Fail-open : toute erreur renvoie une chaîne vide (le run
+        /// Tonight continue sans le bloc). Retourne aussi une chaîne vide quand
+        /// il n'y a rien à signaler (pas de section vide dans le prompt).</para>
+        /// </summary>
+        private string BuildBingeReadySeries(User user, PluginConfiguration cfg, bool compact, string excludedRoot)
+        {
+            if (cfg == null || user == null) return string.Empty;
+            int threshold = Math.Max(1, cfg.TonightBingeThreshold);
+            int activeDays = Math.Max(1, cfg.TonightBingeActiveDays);
+            var activeCutoff = DateTimeOffset.Now.AddDays(-activeDays);
+            string userPrefix = user.Id.ToString() + "|";
+
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    User = user,
+                    IsPlayed = false,
+                    Recursive = true,
+                    IncludeItemTypes = new[] { "Episode" },
+                    OrderBy = new[] { ("DateCreated", SortOrder.Descending) },
+                    // Pool large : le compte par série doit être fiable jusqu'au
+                    // seuil. Les séries dormantes « pour un jour de pluie »
+                    // gonflent le pool d'épisodes non visionnés — une fenêtre
+                    // DateCreated côté requête raterait des stockpiles dont les
+                    // épisodes anciens précèdent la coupure ; on filtre
+                    // l'activité en C# après agrégation plutôt qu'en requête.
+                    Limit = 600,
+                    EnableTotalRecordCount = false
+                };
+                var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
+
+                var series = new Dictionary<string, BingeSeries>(StringComparer.Ordinal);
+                foreach (var it in items)
+                {
+                    if (it == null) continue;
+                    // Exclut la bibliothèque .strm (recommendations à enregistrer) :
+                    // ses cartes ne sont pas du contenu en attente de visionnage
+                    // (garde anti-circulaire partagée avec les autres sondes).
+                    if (IsUnderPath(it.Path, excludedRoot)) continue;
+                    var episode = it as MediaBrowser.Controller.Entities.TV.Episode;
+                    string name = episode?.SeriesName;
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    string key = LlmRunner.NormTitle(name);
+                    if (string.IsNullOrEmpty(key)) continue;
+
+                    if (!series.TryGetValue(key, out var s))
+                    {
+                        s = new BingeSeries
+                        {
+                            Key = key,
+                            Name = name,
+                            Newest = DateTimeOffset.MinValue,
+                            First = null,
+                            FirstSeason = int.MaxValue,
+                            FirstEpisode = int.MaxValue
+                        };
+                        series[key] = s;
+                    }
+                    s.Count++;
+                    if (it.DateCreated > s.Newest) s.Newest = it.DateCreated;
+
+                    // Premier épisode à regarder : ordre saison/épisode (repli :
+                    // premier rencontré dans l'ordre DateCreated décroissant)
+                    // pour que le bouton « Regarder » démarre au début du stock.
+                    int season = it.ParentIndexNumber ?? int.MaxValue;
+                    int number = it.IndexNumber ?? int.MaxValue;
+                    if (s.First == null || season < s.FirstSeason
+                        || (season == s.FirstSeason && number < s.FirstEpisode))
+                    {
+                        s.First = it; s.FirstSeason = season; s.FirstEpisode = number;
+                    }
+                }
+
+                // Gate anti-spam : retire les entrées de CET usager dont le
+                // compte observé repasse sous le seuil (série absente du pool =
+                // tout est visionné → 0). Les autres usagers ne sont pas touchés.
+                var notified = ParseBingeNotified(cfg);
+                bool mapChanged = false;
+                foreach (var entryKey in notified.Keys
+                    .Where(k => k.StartsWith(userPrefix, StringComparison.OrdinalIgnoreCase))
+                    .ToList())
+                {
+                    int observed = series.TryGetValue(entryKey.Substring(userPrefix.Length), out var s0)
+                        ? s0.Count : 0;
+                    if (observed < threshold)
+                    {
+                        notified.Remove(entryKey); // ré-armement (l'usager regarde)
+                        mapChanged = true;
+                        _logger?.Info("[LLM_AI] Tonight binge : « {0} » ré-armée (compte {1} < seuil {2}).",
+                            entryKey.Substring(userPrefix.Length), observed, threshold);
+                    }
+                }
+
+                var candidates = series.Values
+                    .Where(s => s.Count >= threshold && s.Newest >= activeCutoff)
+                    .Where(s => !notified.ContainsKey(userPrefix + s.Key))
+                    .OrderByDescending(s => s.Count)
+                    .ThenByDescending(s => s.Newest)
+                    .ToList();
+                int cap = compact ? 1 : 2;
+                var surfaced = candidates.Take(cap).ToList();
+                if (surfaced.Count == 0)
+                {
+                    if (mapChanged) PersistBingeNotified(cfg, notified); // ré-armements à sauver
+                    return string.Empty; // rien à signaler : pas de bloc (économie de tokens)
+                }
+
+                var sb = new StringBuilder();
+                sb.AppendLine("### SÉRIES PRÊTES À DÉVORER (l'usager accumule des épisodes enregistrés non visionnés)");
+                sb.AppendLine(surfaced.Count + " série(s) dont l'enregistrement est actif (nouvel épisode arrivé " +
+                              "récemment) et dont le stock d'épisodes non visionnés a atteint le seuil — " +
+                              "l'usager attend d'en avoir assez pour commencer. C'est le moment de le lui signaler :");
+                foreach (var s in surfaced)
+                {
+                    var line = new StringBuilder("- id=" + s.First?.InternalId + " | title=" + s.Name +
+                        " | unwatched=" + s.Count +
+                        " | latest=" + s.Newest.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                    if (s.FirstSeason != int.MaxValue || s.FirstEpisode != int.MaxValue)
+                        line.Append(" | start=S" + (s.FirstSeason == int.MaxValue ? 0 : s.FirstSeason).ToString("00", CultureInfo.InvariantCulture)
+                                  + "E" + (s.FirstEpisode == int.MaxValue ? 0 : s.FirstEpisode).ToString("00", CultureInfo.InvariantCulture));
+                    if (!string.IsNullOrEmpty(s.First?.Name))
+                        line.Append(" « " + s.First.Name + " »");
+                    sb.AppendLine(line.ToString());
+                    // Marque comme signalée : gate persistant (une fois par cycle
+                    // d'accumulation, re-armée quand le compte repasse sous le seuil).
+                    notified[userPrefix + s.Key] = s.Count;
+                    mapChanged = true;
+                }
+                sb.AppendLine("Recommande AU PLUS UNE de ces séries (priorité au plus grand stock), kind=\"series\", " +
+                              "source=\"recording\" si la série figure aussi dans les ENREGISTREMENTS NON VISIONNÉS " +
+                              "ci-dessus (reprends alors l'id de cette liste), sinon source=\"library\" en reprenant " +
+                              "l'id ci-dessus tel quel (l'UI proposera « Regarder »). Mentionne le nombre " +
+                              "d'épisodes en attente dans la raison.");
+
+                _logger?.Info("[LLM_AI] Tonight binge : {0} série(s) signalée(s) ({1} candidate(s), seuil {2}, fenêtre active {3} j, pool {4} épisode(s)).",
+                    surfaced.Count, candidates.Count, threshold, activeDays, items.Length);
+
+                // Ne persiste PAS ici : le signalement n'est consommé que si le
+                // run LLM réussit (voir GenerateTonightAsync) — un run raté ne
+                // « brûle » pas le one-shot anti-spam, la série sera re-proposée
+                // au prochain run.
+                if (mapChanged)
+                {
+                    _pendingBingeCfg = cfg;
+                    _pendingBingeMap = notified;
+                }
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] BuildBingeReadySeries : {0}", ex.Message);
+                return string.Empty; // fail-open : le run Tonight continue sans le bloc
+            }
+        }
+
+        /// <summary>
+        /// Parse <see cref="PluginConfiguration.BingeNotified"/> (tableau JSON
+        /// <c>[{"key":"userId|serie","count":N}]</c>) en dictionnaire
+        /// (insensible à la casse). Tolère un JSON mal formé (renvoie un
+        /// dictionnaire vide) — même convention que
+        /// <see cref="GetEmbyInfoTool.DroppedTitlesSet"/>.
+        /// </summary>
+        private static Dictionary<string, int> ParseBingeNotified(PluginConfiguration cfg)
+        {
+            var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var raw = cfg?.BingeNotified;
+            if (string.IsNullOrWhiteSpace(raw)) return map;
+            try
+            {
+                if (JsonNode.Parse(raw) is JsonArray arr)
+                {
+                    foreach (var node in arr)
+                    {
+                        if (!(node is JsonObject obj)) continue;
+                        string key = ObjStr(obj, "key");
+                        if (string.IsNullOrEmpty(key)) continue;
+                        int count = 0;
+                        if (obj["count"] is JsonValue cv && cv.TryGetValue<int>(out var n)) count = n;
+                        map[key] = count;
+                    }
+                }
+            }
+            catch { /* JSON invalide : on ignore (map vide) */ }
+            return map;
+        }
+
+        /// <summary>
+        /// Sérialise le dictionnaire du gate anti-spam (clés triées : fichier
+        /// déterministe d'un run à l'autre) et persiste la configuration.
+        /// Best-effort : un échec de sauvegarde est logué sans casser le run
+        /// (conséquence bénigne : le gate serait ré-évalué au prochain run).
+        /// </summary>
+        private void PersistBingeNotified(PluginConfiguration cfg, Dictionary<string, int> map)
+        {
+            try
+            {
+                var arr = new JsonArray();
+                foreach (var kv in map.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    var o = new JsonObject();
+                    o["key"] = kv.Key;
+                    o["count"] = kv.Value;
+                    arr.Add(o);
+                }
+                cfg.BingeNotified = arr.ToJsonString();
+                Plugin.Instance?.SaveConfiguration();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Tonight binge : persistance du gate échouée ({0}) — ré-évalué au prochain run.", ex.Message);
+            }
         }
     }
 }

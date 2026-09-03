@@ -108,8 +108,11 @@ define([], function () {
     // à regarder en direct / à enregistrer) d'une reco déjà disponible
     // (enregistrement ou item de bibliothèque, prêts à lire maintenant). Un
     // programme EPG déjà diffusé (aired=true, injecté par la validation
-    // backend) → « Diffusé » (carte conservée, actions masquées).
+    // backend) → « Diffusé » (carte conservée, actions masquées). Une
+    // rediffusion déjà visionnée par l'usager (watched=true, watched-guard)
+    // → « Déjà visionné » (prend le pas sur « Diffusé »).
     function sourceBadge(it) {
+        if (it.watched) return { cls: "ai-type-watched", icon: "✓", text: i18n.t("rec.type.watched") };
         if (it.aired) return { cls: "ai-type-aired", icon: "✓", text: i18n.t("rec.type.aired") };
         var s = String(it.source || "").toLowerCase();
         if (s === "recording") return { cls: "ai-type-rec", icon: "📼", text: i18n.t("rec.type.recording") };
@@ -148,7 +151,12 @@ define([], function () {
         // Un programme EPG déjà diffusé (aired, injecté par la validation
         // backend) : on garde la carte mais on masque les actions obsolètes
         // (Programmer / Regarder en direct) — l'usager voit la reco passée.
+        // Une rediffusion déjà visionnée (watched, watched-guard) : même
+        // traitement — la carte reste (le LLM l'a choisie, le minimum de recos
+        // tient), seules les actions disparaissent. « Regarder (bibli.) »
+        // subsiste si l'épisode possédé permet une relecture volontaire.
         var isAired = !!it.aired;
+        var isWatched = !!it.watched;
         var badge = sourceBadge(it);
 
         // Méta-ligne : un item disponible (recording/library) n'a ni date ni
@@ -165,7 +173,7 @@ define([], function () {
         // commencé et qu'on dispose d'un channel_id, ET que la lecture client
         // est disponible (playbackManager via require).
         var watchLive = "";
-        if (it.section === "tonight" && !isWatchItem && !isAired && (it.channel_id || it.channel_id === 0)
+        if (it.section === "tonight" && !isWatchItem && !isAired && !isWatched && (it.channel_id || it.channel_id === 0)
             && canWatch() && hasAiringStarted(it)) {
             watchLive = '<button class="ai-btn-watchlive" type="button" data-channel="' +
                 esc(it.channel_id) + '" title="' + esc(i18n.t("rec.tonight.watchLive")) +
@@ -194,8 +202,9 @@ define([], function () {
 
         // « Programmer » : uniquement pour source live non encore diffusé (un
         // enregistrement / un item de bibliothèque n'a pas de timer à créer,
-        // et un programme déjà diffusé n'a plus rien à programmer).
-        var recordBtn = (isWatchItem || isAired) ? '' :
+        // et un programme déjà diffusé ou déjà visionné n'a plus rien à
+        // programmer).
+        var recordBtn = (isWatchItem || isAired || isWatched) ? '' :
             '<button class="ai-btn-record" type="button"' +
                 (hasId ? '' : ' disabled') +
                 ' data-id="' + esc(it.id || "") + '"' +
@@ -205,7 +214,8 @@ define([], function () {
                 (hasId ? '' : ' title="' + esc(i18n.t("rec.btn.noId")) + '"') +
                 '>' + i18n.t("rec.btn.program") + '</button>';
 
-        return '<div class="ai-card"' + (isAired ? ' data-aired="1"' : '') + ' data-idx="' + idx + '">' +
+        return '<div class="ai-card"' + (isAired ? ' data-aired="1"' : '')
+            + (isWatched ? ' data-watched="1"' : '') + ' data-idx="' + idx + '">' +
             '<div class="ai-card-poster">' +
                 poster +
                 '<div class="ai-type-badge ' + badge.cls + '" title="' + esc(badge.text) + '">' +

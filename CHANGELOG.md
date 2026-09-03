@@ -14,6 +14,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Ajouté / Added
 
+- **Boucle de rétroaction des recommandations** (`RecoAnalysisTask` +
+  `RecoFeedback` + `LlmRunner.RunSynthesisAsync`, opt-in `RecoFeedbackEnabled`,
+  défaut off) : le plugin apprend de ses recommandations passées. Chaque reco
+  (« À regarder ce soir », tâche planifiée d'enregistrement) et chaque rejet
+  (« Oublier ») est journalisé (`RecoLog`, fenêtre roulante 30 jours / plafond
+  500 entrées). La nouvelle tâche planifiée hebdomadaire **« Analyse des
+  recommandations »** (dimanche 4 h) rapproche en C# déterministe ce journal des
+  visionnages réels de chaque usager — via `IUserDataManager` (regardé / ignoré /
+  rejeté / vu-sans-recommandation) — puis fait produire au LLM (un seul appel
+  sans outils, repli multi-backend) une **directive concise** persistée
+  (`PromptDirectives`, une par usager, ≤ 1200 caractères) et réinjectée dans le
+  prompt des runs suivants : par usager pour « À regarder ce soir », fusionnée
+  pour la tâche d'enregistrement. **L'admin garde le contrôle** : les directives
+  sont affichées et éditables (JSON) dans la page de config ; les vider les
+  retire des prompts. **Fail-open** : sans directive ou boucle désactivée, les
+  prompts sont inchangés ; un échec d'analyse conserve la directive précédente
+  et ne casse jamais un run ; usager sans signal (aucune reco/rejet) sauté.
+  **Recommendation feedback loop** (`RecoAnalysisTask` + `RecoFeedback` +
+  `LlmRunner.RunSynthesisAsync`, opt-in `RecoFeedbackEnabled`, off by default):
+  the plugin learns from its past recommendations. Every reco ("Watch tonight",
+  scheduled record task) and every rejection ("Forget") is logged (`RecoLog`,
+  30-day rolling window / 500-entry cap). The new weekly scheduled task
+  **"Recommendation analysis"** (Sunday 4 AM) deterministically correlates that
+  log in C# against each user's actual watch history — via `IUserDataManager`
+  (watched / ignored / rejected / watched-without-reco) — then has the LLM
+  produce (single tool-less call, multi-backend fallback) a **concise
+  directive** that is persisted (`PromptDirectives`, one per user, ≤ 1200
+  chars) and re-injected into subsequent run prompts: per-user for "Watch
+  tonight", merged for the record task. **The admin stays in control**:
+  directives are displayed and editable (JSON) on the config page; clearing
+  them removes them from prompts. **Fail-open**: without a directive or with
+  the loop disabled, prompts are unchanged; an analysis failure keeps the
+  previous directive and never breaks a run; users without signal (no
+  reco/rejection) are skipped.
+
+- **Watched-guard « À regarder ce soir »** (`TonightService.BuildWatchedIndex` +
+  `ValidateAndFilter` + `GetEmbyInfoTool.EpgTonight`) : une rediffusion EPG d'un
+  épisode/ film que l'usager a **déjà visionné** n'est plus recommandée comme du
+  contenu neuf (vécu : reco d'un épisode déjà vu, la rediffusion de 19 h masquant
+  l'épisode inédit de 21 h). Deux garde-fous déterministes C# :
+  **(C) déduplication par titre « meilleure diffusion »** dans `epg_tonight` —
+  pour chaque titre, on garde la diffusion au contenu le plus récent (n°
+  saison/épisode le plus haut, repli sur la diffusion la plus tardive) au lieu de
+  la première heure : la rediffusion ne masque plus l'inédit, seul visible du LLM ;
+  **(A) marquage `watched=true`** par la validation du run — index per-usager des
+  épisodes joués (clés « s{S}e{E} » + repli nom d'épisode) et des films joués ;
+  toute reco live correspondante est **marquée, pas droppée** (le minimum de recos
+  reste garanti) : badge « Déjà visionné », actions Programmer/Regarder en direct
+  masquées, aucun timer créé (AutoProgrammer), exclue des popups et de la cloche.
+  Fail-open total (index indisponible → recos non marquées, jamais vidées) ;
+  bibliothèque `.strm` exclue de l'index (anti-circulaire).
+  **"Watch tonight" watched-guard** (`TonightService.BuildWatchedIndex` +
+  `ValidateAndFilter` + `GetEmbyInfoTool.EpgTonight`): an EPG rerun of an episode/
+  movie the user **already watched** is no longer recommended as fresh content
+  (experienced: a reco for an already-seen episode, the 7 pm rerun hiding the 9 pm
+  premiere). Two deterministic C# guards:
+  **(C) "best airing" per-title dedup** in `epg_tonight` — for each title the
+  freshest-content airing wins (highest season/episode number, fallback to latest
+  start) instead of the earliest: a rerun no longer crowds out the premiere, the
+  only one the LLM could see;
+  **(A) `watched=true` marking** at run validation — per-user index of played
+  episodes ("s{S}e{E}" keys + episode-name fallback) and played movies; any
+  matching live reco is **marked, not dropped** (the minimum reco count still
+  holds): "Already watched" badge, Schedule/Watch-live actions hidden, no timer
+  created (AutoProgrammer), excluded from popups and the bell notification.
+  Fully fail-open (index unavailable → recos unmarked, never emptied); `.strm`
+  library excluded from the index (anti-circular).
+
+- **Séries « prêtes à dévorer » (binge-ready)** (`TonightService.BuildBingeReadySeries`,
+  opt-in `TonightBingeEnabled`, défaut off) : le run « À regarder ce soir » détecte les
+  séries dont l'usager accumule les épisodes enregistrés non visionnés — il attend d'en
+  avoir plusieurs avant de commencer — et lui signale que c'est le moment (« il est temps
+  de regarder X, N épisodes en attente »). Détection déterministe C# : épisodes non
+  visionnés agrégés par série ; une série qualifie quand son stock atteint
+  `TonightBingeThreshold` (défaut 4) **et** qu'au moins un épisode est arrivé dans les
+  `TonightBingeActiveDays` derniers jours (défaut 14 — le signal « enregistrement actif »
+  qui distingue une accumulation en cours d'une série dormante jamais commencée : une
+  série conservée « pour un jour de pluie » ne déclenche **jamais** la suggestion).
+  Injectée dans le prompt « ce soir » (AU PLUS UNE série recommandée par run,
+  `source="recording"` si la série figure aussi dans les enregistrements non visionnés,
+  sinon `source="library"` ; id du premier épisode à regarder, ordre saison/épisode).
+  **Anti-spam** : le gate persistant `BingeNotified` (par usager et par série, carry-forward
+  par la page de config) ne signale chaque série qu'**une seule fois par cycle
+  d'accumulation** — la suggestion se ré-arme quand le compte non visionné repasse sous
+  le seuil, c'est-à-dire quand l'usager commence à regarder. Bibliothèque `.strm` exclue
+  (garde anti-circulaire), fail-open (aucune erreur de la détection ne casse le run).
+  **Binge-ready series ("time to start watching")** (`TonightService.BuildBingeReadySeries`,
+  opt-in `TonightBingeEnabled`, off by default): the tonight run detects series whose
+  episodes the user is stockpiling unwatched while recording — they wait for several before
+  starting — and surfaces that it's time ("time to start X, N episodes waiting").
+  Deterministic C# detection: unwatched episodes aggregated per series; a series qualifies
+  when its stockpile reaches `TonightBingeThreshold` (default 4) **and** at least one
+  episode arrived within the last `TonightBingeActiveDays` days (default 14 — the
+  "actively recording" signal that tells an ongoing stockpile from a dormant, never-started
+  series: a series kept "for a rainy day" **never** triggers the suggestion). Injected
+  into the tonight prompt (AT MOST ONE series recommended per run,
+  `source="recording"` if the series also appears in the unwatched recordings, else
+  `source="library"`; id of the first episode to watch, season/episode order).
+  **Anti-spam**: the persistent `BingeNotified` gate (per user and per series, carried
+  forward by the config page) surfaces each series **only once per accumulation cycle** —
+  the suggestion re-arms when the unwatched count drops back below the threshold, i.e.
+  when the user starts watching. `.strm` library excluded (anti-circular guard), fail-open
+  (no detection error ever breaks the run).
+
 - **Traduction IA des genres EPG — pont GenreCleaner** (`GenreApiService` +
   `GenreCleanerMap` + section « Traduction des genres (IA) » de la page de config) :
   LLM_AI devient le **curateur** du plugin GenreCleaner (catalogue officiel Emby) —

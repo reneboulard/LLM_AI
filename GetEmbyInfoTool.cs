@@ -650,6 +650,24 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Vrai si la diffusion <paramref name="a"/> porte un contenu PLUS récent
+        /// que <paramref name="b"/> — déduplication par titre d'
+        /// <see cref="EpgTonight"/> : n° de saison, puis n° d'épisode (une
+        /// rediffusion porte un numéro INFÉRIEUR à l'épisode inédit), puis heure
+        /// de début (égalité de contenu → diffusion la plus tardive ; films et
+        /// EPG non numérotés). Absent de numérotation → -1 (passe après tout
+        /// numéro réel).
+        /// </summary>
+        private static bool FresherAirContent(BaseItemDto a, BaseItemDto b)
+        {
+            int aSeason = a.ParentIndexNumber ?? -1, bSeason = b.ParentIndexNumber ?? -1;
+            if (aSeason != bSeason) return aSeason > bSeason;
+            int aEp = a.IndexNumber ?? -1, bEp = b.IndexNumber ?? -1;
+            if (aEp != bEp) return aEp > bEp;
+            return (a.StartDate ?? DateTimeOffset.MinValue) > (b.StartDate ?? DateTimeOffset.MinValue);
+        }
+
+        /// <summary>
         /// Programmes de l'EPG pour « ce soir » : fenêtre temporelle bornée par
         /// <see cref="PluginConfiguration.TonightWindowStart"/> /
         /// <see cref="PluginConfiguration.TonightWindowEnd"/> (défaut : maintenant
@@ -664,6 +682,12 @@ namespace LLM_AI
         ///   direct »).</item>
         /// <item>les flags Kids/News/Sports fusionnent séries + films (un programme
         ///   kid passe si l'un des deux flags est activé).</item>
+        /// <item>déduplication par titre : la diffusion au CONTENU le plus récent
+        ///   gagne (n° saison/épisode le plus haut — une rediffusion porte un
+        ///   numéro INFÉRIEUR à l'épisode inédit ; repli sur la diffusion la plus
+        ///   tardive pour les films/EPG non numérotés). Ne pas garder la première
+        ///   diffusion : une rediffusion de 19 h masquerait l'épisode inédit de
+        ///   21 h, seul visible du LLM.</item>
         /// </list>
         /// Même forme de retour que epg_series/epg_movies + <c>is_series</c>/
         /// <c>is_movie</c>/<c>is_scheduled</c> pour que l'LLM positionne
@@ -755,18 +779,31 @@ namespace LLM_AI
                     minStart, maxStart, wl.Channels?.Count ?? 0, wl.Genres?.Count ?? 0);
             }
 
-            var seen = new HashSet<string>();
+            // Déduplication par titre — pré-passe « meilleure diffusion » : pour
+            // chaque titre, on garde la diffusion au CONTENU le plus récent
+            // (saison, puis épisode, puis heure de début). Vécu 2026-09-03 : le
+            // premier passage gardait la diffusion la plus TÔT — une
+            // rediffusion de 19 h masquait l'épisode inédit de 21 h du même
+            // titre, seul visible du LLM (reco d'un épisode déjà visionné).
+            var best = new Dictionary<string, BaseItemDto>();
+            foreach (var p in programs)
+            {
+                var t = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                if (string.IsNullOrEmpty(t)) continue;
+                var k = Norm(t);
+                if (string.IsNullOrEmpty(k) || excluded.Contains(k)) continue;
+                if (!best.TryGetValue(k, out var cur) || FresherAirContent(p, cur))
+                    best[k] = p;
+            }
+
             var kept = new List<(BaseItemDto p, string[] genres, bool isScheduled)>();
             int wlFiltered = 0, flagRejected = 0, wlRejected = 0;
             var flagSamples = new List<string>();
             var wlSamples = new List<string>();
-            foreach (var p in programs.OrderBy(x => x.StartDate ?? DateTimeOffset.MaxValue))
+            foreach (var p in best.Values.OrderBy(x => x.StartDate ?? DateTimeOffset.MaxValue))
             {
                 var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
-                if (string.IsNullOrEmpty(title)) continue;
                 var key = Norm(title);
-                if (excluded.Contains(key)) continue;
-                if (!seen.Add(key)) continue;              // dédupliquer par titre
                 var genres = GenreFor(p, genreMap);
                 if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p))) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))

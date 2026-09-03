@@ -154,9 +154,12 @@
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-rec { background: #6a4fbf; }
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-lib { background: #2a7a7a; }
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-aired { background: #555; color: #ccc; }
+            .LLMAIRecommendationsPage .ai-type-badge.ai-type-watched { background: #8a6d1a; color: #f5eecf; }
             /* Une reco diffusée (passée, sans action) est estompée — distincte
-               des recos « À venir » encore actionnables. */
-            .LLMAIRecommendationsPage .ai-card[data-aired="1"] {
+               des recos « À venir » encore actionnables. Même estompage pour
+               une rediffusion déjà visionnée (watched-guard). */
+            .LLMAIRecommendationsPage .ai-card[data-aired="1"],
+            .LLMAIRecommendationsPage .ai-card[data-watched="1"] {
                 opacity: 0.72;
             }
             .LLMAIRecommendationsPage .ai-card-info {

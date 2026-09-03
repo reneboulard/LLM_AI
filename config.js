@@ -417,6 +417,14 @@ define(["loading"], function (loading) {
         view.querySelector("#numTonightRecDays").value = isNaN(trd) ? 7 : trd;
         var tmr = parseInt(cfg.TonightMinRecommendations, 10);
         view.querySelector("#numTonightMinRec").value = isNaN(tmr) ? 3 : tmr;
+        view.querySelector("#chkTonightBingeEnabled").checked = !!cfg.TonightBingeEnabled;
+        var tbt = parseInt(cfg.TonightBingeThreshold, 10);
+        view.querySelector("#numTonightBingeThreshold").value = isNaN(tbt) ? 4 : tbt;
+        var tbad = parseInt(cfg.TonightBingeActiveDays, 10);
+        view.querySelector("#numTonightBingeActiveDays").value = isNaN(tbad) ? 14 : tbad;
+        // Boucle de rétroaction (opt-in) — directive éditable par l'admin.
+        view.querySelector("#chkRecoFeedbackEnabled").checked = !!cfg.RecoFeedbackEnabled;
+        view.querySelector("#txtPromptDirectives").value = cfg.PromptDirectives || "";
         view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
         // Badge « AI » (opt-out, non destructif — défaut coché).
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
@@ -484,6 +492,21 @@ define(["loading"], function (loading) {
             TonightCacheHours: parseInt(view.querySelector("#numTonightCache").value, 10) || 4,
             TonightRecordingsDays: parseInt(view.querySelector("#numTonightRecDays").value, 10) || 7,
             TonightMinRecommendations: parseInt(view.querySelector("#numTonightMinRec").value, 10) || 3,
+            TonightBingeEnabled: view.querySelector("#chkTonightBingeEnabled").checked,
+            TonightBingeThreshold: parseInt(view.querySelector("#numTonightBingeThreshold").value, 10) || 4,
+            TonightBingeActiveDays: parseInt(view.querySelector("#numTonightBingeActiveDays").value, 10) || 14,
+            // Boucle de rétroaction (opt-in). PromptDirectives est éditable
+            // ici (l'admin peut corriger/vider) — pas de carry-forward, la
+            // valeur affichée fait foi. RecoLog, lui, est maintenu côté
+            // serveur (journal roulant) : carry-forward obligatoire, la config
+            // est POSTée en remplacement intégral.
+            RecoFeedbackEnabled: view.querySelector("#chkRecoFeedbackEnabled").checked,
+            PromptDirectives: view.querySelector("#txtPromptDirectives").value || "",
+            RecoLog: (loadedCfg && loadedCfg.RecoLog) || "",
+            // Carry-forward : BingeNotified est le gate anti-spam maintenu côté
+            // serveur (séries déjà signalées) — on le renvoie tel quel pour ne
+            // pas l'écraser (même contrainte que StrmSecret).
+            BingeNotified: (loadedCfg && loadedCfg.BingeNotified) || "",
             AutoProgram: view.querySelector("#chkAutoProgram").checked,
             AiBadgeEnabled: view.querySelector("#chkAiBadgeEnabled").checked,
             AiOwnedBadgeEnabled: view.querySelector("#chkAiOwnedBadgeEnabled").checked,

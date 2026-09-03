@@ -614,7 +614,9 @@ namespace LLM_AI
         /// 2026-09-02 : un run 100 % live → 0 item « watchable now » → popup
         /// unique générique « Suggestions prêtes », alors que la sélection
         /// avait 3 recos à annoncer). Le popup publie la sélection complète
-        /// « À regarder ce soir », comme la section homonyme de la page.
+        /// « À regarder ce soir », comme la section homonyme de la page —
+        /// SAUF les rediffusions marquées <c>watched=true</c> par la validation
+        /// (watched-guard) : déjà visionnées, les annoncer serait du spam.
         /// Récupère titre + chaîne + heure de début + kind pour enrichir le
         /// toast (texte seul : pas d'image, pas de HTML — le client web
         /// HTML-encode Header/Text avant rendu).
@@ -631,6 +633,15 @@ namespace LLM_AI
                     foreach (var el in doc.RootElement.EnumerateArray())
                     {
                         if (el.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+
+                        // Watched-guard : une rediffusion déjà visionnée (marqueur
+                        // injecté par la validation Tonight) n'a pas sa place dans
+                        // les popups « À regarder ce soir » — c'est exactement le
+                        // spam que l'usager refuse. La carte reste visible sur la
+                        // page, seule l'annonce active la saute.
+                        if (el.TryGetProperty("watched", out var wd)
+                            && wd.ValueKind == System.Text.Json.JsonValueKind.True)
+                            continue;
 
                         var it = new WatchItem();
                         if (el.TryGetProperty("title", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String)
