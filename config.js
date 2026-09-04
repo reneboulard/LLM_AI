@@ -303,8 +303,12 @@ define(["loading"], function (loading) {
             + '<div class="llmBackendRow" data-backend>'
             +   '<div class="backendHeader">'
             +     '<span>' + i18n.t("cfg.backend.num", (index + 1)) + '</span>'
-            +     '<button is="emby-button" type="button" class="btnRemoveBackend">' + i18n.t("cfg.backend.remove") + '</button>'
+            +     '<span class="backendActions">'
+            +       '<button is="emby-button" type="button" class="btnTestBackend" title="' + esc(i18n.t("cfg.backend.test.title")) + '">' + i18n.t("cfg.backend.test") + '</button>'
+            +       '<button is="emby-button" type="button" class="btnRemoveBackend">' + i18n.t("cfg.backend.remove") + '</button>'
+            +     '</span>'
             +   '</div>'
+            +   '<div class="backendTestResult"></div>'
             +   '<div class="backendFields">'
             +     '<div class="inputContainer providerField">'
             +       '<select is="emby-select" class="beProvider" label="' + esc(i18n.t("cfg.backend.provider.label")) + '">'
@@ -377,6 +381,213 @@ define(["loading"], function (loading) {
             var modelInput = row.querySelector(".beModel");
             if (urlInput && urlInput.value.trim() === "") urlInput.value = d.url;
             if (modelInput && modelInput.value.trim() === "") modelInput.value = d.model;
+        });
+    }
+
+    // Test d'un backend : POST /Plugins/LLMAI/TestLlm avec les valeurs
+    // ÉDITÉES de la ligne (testable avant enregistrement — les clés API ne
+    // sont pas postées, le serveur les relit depuis la config enregistrée).
+    // Résultat inline sous l'en-tête de la ligne : OK + latence ou échec.
+    function testBackend(row, btn) {
+        var provider = ((row.querySelector(".beProvider") || {}).value) || "ollama_local";
+        var url = ((row.querySelector(".beUrl") || {}).value) || "";
+        var model = ((row.querySelector(".beModel") || {}).value) || "";
+        var resultEl = row.querySelector(".backendTestResult");
+
+        btn.disabled = true;
+        var prevLabel = btn.textContent;
+        btn.textContent = i18n.t("cfg.backend.testing");
+        if (resultEl) resultEl.textContent = i18n.t("cfg.backend.testing");
+
+        ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/TestLlm"),
+            type: "POST",
+            data: JSON.stringify({ Provider: provider, Url: url, Model: model }),
+            contentType: "application/json",
+            dataType: "json"
+        }).then(function (data) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            data = data || {};
+            if (!resultEl) return;
+            resultEl.textContent = data.Ok
+                ? i18n.t("cfg.backend.test.ok", data.Ms || 0, (data.Reply || "").trim())
+                : i18n.t("cfg.backend.test.fail", data.Error || "?");
+        }, function (err) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            if (resultEl) {
+                resultEl.textContent = i18n.t("cfg.backend.test.fail",
+                    (err && err.statusText ? err.statusText : err));
+            }
+        });
+    }
+
+    // ----------------------------------------------------------------
+    //  Bouton « Réinitialiser » des prompts/directives
+    // ----------------------------------------------------------------
+
+    // Prompts par défaut (langue configurée) — GET /Plugins/LLMAI/DefaultPrompts,
+    // mis en cache après le premier fetch (les 4 boutons partagent la même
+    // réponse). En cas d'échec on invalide le cache pour permettre un retry.
+    var _defaultsPromise = null;
+    function fetchDefaultPrompts() {
+        if (_defaultsPromise) return _defaultsPromise;
+        _defaultsPromise = ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/DefaultPrompts"),
+            type: "GET",
+            dataType: "json"
+        }).then(null, function (err) {
+            _defaultsPromise = null;
+            throw err;
+        });
+        return _defaultsPromise;
+    }
+
+    function wireResetPromptButtons(view) {
+        view.querySelectorAll(".btnResetPrompt").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var targetId = btn.getAttribute("data-reset-target") || "";
+                var key = btn.getAttribute("data-default-key") || "";
+                if (!targetId || !key) return;
+                var target = view.querySelector("#" + targetId);
+                if (!target) return;
+                fetchDefaultPrompts().then(function (d) {
+                    if (!d || d.Error) {
+                        if (typeof Dashboard !== "undefined" && Dashboard.alert) {
+                            Dashboard.alert(i18n.t("cfg.reset.error", (d && d.Error) || "?"));
+                        }
+                        return;
+                    }
+                    // Remplit le textarea (non enregistré tant que l'admin
+                    // n'a pas cliqué « Enregistrer »).
+                    target.value = d[key] != null ? d[key] : "";
+                }, function (err) {
+                    if (typeof Dashboard !== "undefined" && Dashboard.alert) {
+                        Dashboard.alert(i18n.t("cfg.reset.error",
+                            (err && err.statusText ? err.statusText : err)));
+                    }
+                });
+            });
+        });
+    }
+
+    // ----------------------------------------------------------------
+    //  Sections repliables
+    // ----------------------------------------------------------------
+
+    // État par section dans localStorage (préférence du navigateur admin ;
+    // "1" = repliée). Peut jeter selon le contexte — tout accès est gardé.
+    var SECTION_KEY_PREFIX = "llmai.cfg.section.";
+    function lsGet(key) {
+        try { return window.localStorage.getItem(key); } catch (e) { return null; }
+    }
+    function lsSet(key, value) {
+        try { window.localStorage.setItem(key, value); } catch (e) { /* silencieux */ }
+    }
+
+    // Assemble les sections repliables : chaque h3.sectionTitle devient
+    // l'interrupteur d'une section dont le contenu (siblings jusqu'au
+    // prochain h3.sectionTitle) est déplacé dans un div.llmaiSectionBody.
+    // Le div du bouton « Enregistrer » (fin de la dernière section) reste
+    // hors des sections : toujours visible. Idempotent (viewshow multiple).
+    function makeSectionsCollapsible(view) {
+        var container = view.querySelector(".verticalSection");
+        if (!container) return;
+        var heads = container.querySelectorAll("h3.sectionTitle");
+        if (!heads.length) return;
+        if (heads[0].classList.contains("llmaiToggle")) return; // déjà assemblé
+
+        // Le conteneur du bouton « Enregistrer » reste toujours hors des
+        // sections repliables.
+        var saveBtn = container.querySelector("button[type=submit]");
+        var saveDiv = saveBtn ? saveBtn.parentNode : null;
+
+        var sections = [];
+        heads.forEach(function (h, idx) {
+            // Contenu = siblings éléments jusqu'au prochain h3.sectionTitle
+            // ou le div Enregistrer.
+            var nodes = [];
+            var n = h.nextSibling;
+            while (n) {
+                if (n.nodeType === 1) {
+                    if (n === saveDiv) break;
+                    if (n.tagName === "H3" && n.classList.contains("sectionTitle")) break;
+                    nodes.push(n);
+                }
+                n = n.nextSibling;
+            }
+            var body = document.createElement("div");
+            body.className = "llmaiSectionBody";
+            h.parentNode.insertBefore(body, nodes.length ? nodes[0] : h.nextSibling);
+            nodes.forEach(function (node) { body.appendChild(node); });
+
+            // Titre = interrupteur : chevron ▾ (pivote à -90° replié),
+            // focusable au clavier (rôle button + Enter/Espace).
+            h.classList.add("llmaiToggle");
+            h.setAttribute("tabindex", "0");
+            h.setAttribute("role", "button");
+            h.setAttribute("aria-expanded", "true");
+            var chev = document.createElement("span");
+            chev.className = "llmaiChevron";
+            chev.textContent = "▾";
+            h.appendChild(chev);
+
+            var section = {
+                head: h,
+                body: body,
+                key: SECTION_KEY_PREFIX + idx,
+                apply: function () {
+                    var collapsed = lsGet(this.key) === "1";
+                    this.body.classList.toggle("llmaiHidden", collapsed);
+                    this.head.classList.toggle("llmaiToggleCollapsed", collapsed);
+                    this.head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+                },
+                toggle: function () {
+                    lsSet(this.key, this.body.classList.contains("llmaiHidden") ? "0" : "1");
+                    this.apply();
+                    refreshLabel();
+                }
+            };
+            h.addEventListener("click", function () { section.toggle(); });
+            h.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    section.toggle();
+                }
+            });
+            section.apply();
+            sections.push(section);
+        });
+        view._llmaiSections = sections;
+
+        // Libellé du bouton global : « Replier tout » s'il reste une section
+        // dépliée, sinon « Déplier tout ». Conservé sur la vue pour le
+        // branchement du bouton (wireToggleAllButton) et les toggles locaux.
+        function refreshLabel() {
+            var btn = view.querySelector("#btnToggleSections");
+            if (!btn) return;
+            var anyExpanded = sections.some(function (s) {
+                return !s.body.classList.contains("llmaiHidden");
+            });
+            btn.textContent = i18n.t(anyExpanded ? "cfg.sections.collapse" : "cfg.sections.expand");
+        }
+        view._llmaiRefreshLabel = refreshLabel;
+        refreshLabel();
+    }
+
+    function wireToggleAllButton(view) {
+        var btn = view.querySelector("#btnToggleSections");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+            var sections = view._llmaiSections || [];
+            if (!sections.length) return;
+            // Action : replier s'il reste une section dépliée, sinon déplier.
+            var anyExpanded = sections.some(function (s) {
+                return !s.body.classList.contains("llmaiHidden");
+            });
+            sections.forEach(function (s) { lsSet(s.key, anyExpanded ? "1" : "0"); s.apply(); });
+            if (typeof view._llmaiRefreshLabel === "function") view._llmaiRefreshLabel();
         });
     }
 
@@ -592,18 +803,30 @@ define(["loading"], function (loading) {
                 });
             }
 
-            // Supprimer un backend (délégation sur le conteneur).
+            // Supprimer / tester un backend (délégation sur le conteneur).
             var host = view.querySelector("#llmBackends");
             if (host) {
                 host.addEventListener("click", function (e) {
-                    var btn = e.target.closest ? e.target.closest(".btnRemoveBackend") : null;
+                    var btn = e.target.closest ? e.target.closest(".btnRemoveBackend, .btnTestBackend") : null;
                     if (!btn) return;
                     var row = e.target.closest ? e.target.closest(".llmBackendRow") : null;
-                    if (row && row.parentNode) row.parentNode.removeChild(row);
+                    if (!row) return;
+                    if (btn.classList.contains("btnTestBackend")) {
+                        testBackend(row, btn);
+                        return;
+                    }
+                    if (row.parentNode) row.parentNode.removeChild(row);
                 });
                 // Pré-remplit URL/modèle par défaut quand on change de provider.
                 wireProviderChange(host);
             }
+
+            // Sections repliables + bouton global « Replier tout » + boutons
+            // « Réinitialiser » des prompts. Indépendants de la config
+            // chargée — branchés dès le viewshow (idempotents).
+            makeSectionsCollapsible(view);
+            wireToggleAllButton(view);
+            wireResetPromptButtons(view);
 
             // Filtre de recherche de la liste des chaines.
             var chFilter = view.querySelector("#wlChannelsFilter");

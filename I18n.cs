@@ -40,6 +40,9 @@ namespace LLM_AI
         /// <summary>Clé de langue par défaut / repli universel : anglais.</summary>
         public const string En = "en";
 
+        /// <summary>Clé de langue française (seule autre langue fournie).</summary>
+        public const string Fr = "fr";
+
         // ------------------------------------------------------------------
         //  Résolution de la clé de langue
         // ------------------------------------------------------------------

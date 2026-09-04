@@ -149,6 +149,52 @@
                 font-style: italic;
                 padding: 0.4em 0;
             }
+            /* Ligne de résultat du test d'un backend LLM (bouton « Tester »
+               de la ligne : OK + latence, ou message d'échec). */
+            .LLMAIConfigPage .backendTestResult {
+                margin: 0.2em 0 0.3em;
+                font-size: 0.9em;
+                color: #444;
+                min-height: 1em;
+            }
+            .LLMAIConfigPage .backendActions {
+                display: flex;
+                gap: 0.4em;
+            }
+            /* Sections repliables : le titre h3 devient l'interrupteur (un
+               chevron ▾ pivote à -90° quand replié), le contenu de la
+               section vit dans .llmaiSectionBody. Structure assemblée par
+               config.js au viewshow (makeSectionsCollapsible) — le HTML
+               reste une suite plate h3 + champs. */
+            .LLMAIConfigPage h3.sectionTitle.llmaiToggle {
+                cursor: pointer;
+                user-select: none;
+                -webkit-user-select: none;
+                padding-bottom: 0.25em;
+                border-bottom: 1px solid #e0e0e0;
+            }
+            .LLMAIConfigPage h3.sectionTitle.llmaiToggle:focus {
+                outline: 2px solid #1c5a8a;
+                outline-offset: 2px;
+            }
+            .LLMAIConfigPage .llmaiChevron {
+                display: inline-block;
+                margin-left: 0.35em;
+                transition: transform 0.15s ease;
+                font-size: 0.8em;
+                color: #888;
+            }
+            .LLMAIConfigPage h3.sectionTitle.llmaiToggle.llmaiToggleCollapsed .llmaiChevron {
+                transform: rotate(-90deg);
+            }
+            .LLMAIConfigPage .llmaiSectionBody.llmaiHidden {
+                display: none;
+            }
+            /* Bouton « Réinitialiser » sous les textareas de directives :
+               discret pour ne pas concurrencer les boutons d'action. */
+            .LLMAIConfigPage .btnResetPrompt {
+                margin-top: 0.35em;
+            }
         </style>
 
         <div data-role="content">
@@ -162,6 +208,16 @@
                              serveur 1 h). Caché par défaut ; aucune version plus
                              récente ou erreur réseau = rien affiché. -->
                         <div id="updateBanner" class="updateBanner" style="display:none;"></div>
+
+                        <!-- Replier/déplier toutes les sections (les titres h3
+                             de section sont eux-mêmes cliquables ; config.js
+                             assemble les sections repliables au viewshow). -->
+                        <div style="margin:0.6em 0 0;">
+                            <button is="emby-button" type="button" id="btnToggleSections"
+                                    class="raised" data-i18n="cfg.sections.collapse">
+                                Replier tout
+                            </button>
+                        </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.2em;" data-i18n="cfg.backends.h">Serveurs LLM (repli par priorité)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.backends.desc">
@@ -385,6 +441,11 @@
                                       label="RAG Directives (system prompt)"
                                       data-i18n-label="cfg.rag.label"
                                       rows="4"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtRagDirectives" data-default-key="RagDirectives"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
                             <div class="fieldDescription" data-i18n-html="cfg.rag.desc">Prompt système envoyé au LLM (role: system) à chaque appel.</div>
                         </div>
 
@@ -405,6 +466,11 @@
                                       rows="3"
                                       data-i18n-ph="cfg.sched.series.ph"
                                       placeholder="Daily 03:00 | Recommande des enregistrements de SÉRIES : …"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtScheduleTask" data-default-key="ScheduleTask"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
                             <div class="fieldDescription" data-i18n-html="cfg.sched.series.desc">
                                 Format : « &lt;planification&gt; | &lt;prompt de tâche SÉRIES&gt; ».
                                 Planification : Daily HH:MM, Hourly, Weekly &lt;Day&gt; HH:MM, Interval &lt;heures&gt;.
@@ -422,6 +488,11 @@
                                       rows="3"
                                       data-i18n-ph="cfg.sched.movies.ph"
                                       placeholder="Recommande des enregistrements de FILMS : …"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtScheduleTaskMovies" data-default-key="ScheduleTaskMovies"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
                             <div class="fieldDescription" data-i18n-html="cfg.sched.movies.desc">
                                 Prompt du <b>run FILMS</b> (étape 3 : films à venir absents de la biblio,
                                 via get_emby_info action=epg_movies). Pas de planification ici — elle vient
@@ -511,6 +582,11 @@
                                       label="Prompt « ce soir »"
                                       data-i18n-label="cfg.tonight.prompt"
                                       rows="4"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtTonightPrompt" data-default-key="TonightPrompt"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
                             <div class="fieldDescription" data-i18n-html="cfg.tonight.prompt.desc">
                                 Template du prompt envoyé au LLM. Le profil de goût (historique récent
                                 de l'usager) y est injecté à l'exécution.

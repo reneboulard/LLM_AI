@@ -14,6 +14,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Ajouté / Added
 
+- **Test d'un backend LLM depuis la page de config** (bouton « Tester » sur
+  chaque ligne de serveur LLM, endpoint admin-only
+  `POST /Plugins/LLMAI/TestLlm`) : appel rapide (une question-sonde, timeout
+  30 s, prompt dans la langue configurée) au backend **tel qu'édité** —
+  testable avant enregistrement. Les clés API ne sont pas postées par la
+  page : le serveur les relit depuis la config enregistrée (repli variable
+  d'environnement). Résultat inline sous l'en-tête de la ligne : OK + latence
+  ou message d'échec. / **LLM backend test from the config page** ("Test"
+  button on each LLM server row, admin-only endpoint
+  `POST /Plugins/LLMAI/TestLlm`): quick call (one probe question, 30 s
+  timeout, prompt in the configured language) to the backend **as edited** —
+  testable before saving. API keys are not posted by the page: the server
+  re-reads them from the saved configuration (environment-variable
+  fallback). Inline result under the row header: OK + latency or failure
+  message.
+
+- **Bouton « Réinitialiser » pour les directives/prompts de la config**
+  (endpoint admin-only `GET /Plugins/LLMAI/DefaultPrompts` +
+  `DefaultPrompts.cs`) : restaure la version propre des quatre prompts
+  éditables (Directives RAG, tâche Séries, tâche Films, prompt « ce soir »)
+  dans la **langue de l'interface** (`?Lang=` forcé, sinon `ResponseLanguage`
+  si renseignée, sinon langue d'affichage Emby — volontairement PAS la
+  cascade métadonnées qui retomberait sur le legacy `TmdbLanguage`) — une
+  installation neuve installe le français, un usager anglophone clique
+  Réinitialiser et obtient la directive en anglais. Le « propre » des
+  Directives RAG est une **directive de base réelle** (vérifier via les
+  outils avant d'affirmer, ne jamais recommander un titre possédé/programmé,
+  guidage année de production, explications concrètes) — désormais aussi
+  la valeur installée sur les NOUVELLES installations (les installs
+  existantes ne changent pas tant que l'admin n'a pas cliqué
+  Réinitialiser). Valeur par défaut unique : les initializers de
+  `PluginConfiguration` pointent sur `DefaultPrompts.Fr` (plus de texte
+  dupliqué). Le bouton remplit le textarea sans enregistrer — l'admin
+  clique « Enregistrer » pour appliquer. / **"Reset" button for the config
+  directives/prompts** (admin-only endpoint `GET /Plugins/LLMAI/DefaultPrompts`
+  + `DefaultPrompts.cs`): restores the clean version of the four editable
+  prompts (RAG directives, Series task, Movies task, "tonight" prompt) in
+  the **interface language** (forced `?Lang=`, else `ResponseLanguage` if
+  set, else Emby display language — deliberately NOT the metadata cascade,
+  which would fall back to legacy `TmdbLanguage`) — a fresh install ships
+  French, an English user clicks Reset and gets the English directive. The
+  clean RAG directives are a **real baseline directive** (verify with the
+  tools before asserting, never recommend an owned/scheduled title,
+  production-year guidance, concrete explanations) — now also the value
+  shipped to NEW installations (existing installs are unchanged until the
+  admin clicks Reset). Single source of defaults: the `PluginConfiguration`
+  initializers now point at `DefaultPrompts.Fr` (no more duplicated text).
+  The button fills the textarea without saving — the admin clicks "Save"
+  to apply.
+
+- **Sections repliables de la page de config** : les ~11 titres de section
+  deviennent des interrupteurs (chevron, clavier Enter/Espace, aria-expanded)
+  qui replient leur contenu ; bouton global « Replier tout / Déplier tout »
+  en haut de page ; l'état de chaque section est mémorisé par navigateur
+  (localStorage, accès gardé). Le bouton « Enregistrer » reste toujours
+  visible (hors sections). / **Collapsible config page sections**: the ~11
+  section titles become toggles (chevron, Enter/Space keyboard support,
+  aria-expanded) that fold their content; global "Collapse all / Expand all"
+  button at the top; each section's state is remembered per browser
+  (localStorage, guarded access). The "Save" button stays always visible
+  (outside the sections).
+
 - **Boucle de rétroaction des recommandations** (`RecoAnalysisTask` +
   `RecoFeedback` + `LlmRunner.RunSynthesisAsync`, opt-in `RecoFeedbackEnabled`,
   défaut off) : le plugin apprend de ses recommandations passées. Chaque reco

@@ -247,9 +247,11 @@ namespace LLM_AI
 
         /// <summary>
         /// Directives RAG : prompt système envoyé au LLM (role: system)
-        /// à chaque appel de la tâche planifiée.
+        /// à chaque appel de la tâche planifiée. Réinitialisable en page de
+        /// config vers la version « propre » localisée
+        /// (<see cref="DefaultPrompts"/>).
         /// </summary>
-        public string RagDirectives { get; set; } = "";
+        public string RagDirectives { get; set; } = DefaultPrompts.Fr.RagDirectives;
 
         /// <summary>
         /// Langue de sortie du LLM pour le texte en langage naturel (raisons des
@@ -269,7 +271,7 @@ namespace LLM_AI
         /// La planification (gauche du '|') fixe les triggers par défaut ;
         /// le prompt (droite du '|') est envoyé au LLM comme message utilisateur.
         /// </summary>
-        public string ScheduleTask { get; set; } = "Daily 03:00 | Recommande des enregistrements de SÉRIES : 1) les nouvelles séries (S01E01) à venir dans l'EPG mais absentes de ma bibliothèque (get_emby_info action=epg_series premieres_only=true), enrichis-les via tmdb_lookup/tvdb_search quand le synopsis EPG est vide, et croise avec new_releases ; 2) les nouvelles saisons à venir des séries que je possède déjà mais qui ne sont pas dans mes enregistrements planifiés (get_emby_info action=epg_series new_seasons=true). Les filtres chaines/genres et les flags Kids/News/Sports s'appliquent. Recommande les drames, thrillers, comédies de fiction et scifi dignes d'être enregistrés. Retourne un tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] où kind vaut \"series\".";
+        public string ScheduleTask { get; set; } = DefaultPrompts.Fr.ScheduleTask;
 
         /// <summary>
         /// Prompt de la tâche FILMS (sans partie planification — la
@@ -277,7 +279,7 @@ namespace LLM_AI
         /// second run agent indépendant (contexte séparé du run séries) puis
         /// fusionné avec celui-ci. Vide = pas de run films (séries seulement).
         /// </summary>
-        public string ScheduleTaskMovies { get; set; } = "Recommande des enregistrements de FILMS : les films à venir dans l'EPG mais absents de la bibliothèque (get_emby_info action=epg_movies), enrichis via tmdb_lookup quand le synopsis EPG est vide. Les filtres chaines/genres et les flags Kids/News/Sports s'appliquent. Recommande les drames, thrillers, comédies de fiction et scifi dignes d'être enregistrés. Retourne un tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] où kind vaut \"movie\".";
+        public string ScheduleTaskMovies { get; set; } = DefaultPrompts.Fr.ScheduleTaskMovies;
 
         /// <summary>
         /// Nombre max de séries soumises au LLM par appel epg_series (plafond
@@ -420,22 +422,7 @@ namespace LLM_AI
         /// l'orientation éditoriale (ex. « privilégie la fiction, croise avec
         /// mes goûts, recommande à regarder en direct ou à enregistrer »).
         /// </summary>
-        public string TonightPrompt { get; set; } =
-            "À partir de l'historique de visionnage de l'usager (profil de goût fourni), des " +
-            "programmes de l'EPG pour ce soir (appelle get_emby_info avec action=\"epg_tonight\") " +
-            "ET des enregistrements récents non visionnés listés dans le message (films/épisodes " +
-            "enregistrés ces derniers jours mais pas encore regardés), recommande ce qui pourrait " +
-            "lui plaire À REGARDER CE SOIR. Croise les genres/titres de l'historique avec l'EPG du " +
-            "soir ET avec les enregistrements disponibles : si l'usager suit une série et qu'un " +
-            "nouvel épisode enregistré de cette série est non visionné, c'est un candidat de choix. " +
-            "Pour chaque recommandation, précise kind=\"series\" ou kind=\"movie\" et " +
-            "priority high/medium/low, et source=\"live\" (programme EPG du soir : à regarder en " +
-            "direct ou à enregistrer) ou source=\"recording\" (enregistrement disponible : à " +
-            "regarder maintenant). Reprends title/channel/start tels quels depuis epg_tonight pour " +
-            "le source=\"live\" ; pour source=\"recording\", reprends id tel quel depuis la liste " +
-            "des enregistrements. Tu peux enrichir via tmdb_lookup/web_search si utile, mais reste " +
-            "pratique et rapide : l'objectif est une courte sélection personnalisée pour ce soir, " +
-            "pas un audit exhaustif.";
+        public string TonightPrompt { get; set; } = DefaultPrompts.Fr.TonightPrompt;
 
         /// <summary>
         /// Nombre max de programmes soumis au LLM par appel <c>epg_tonight</c>

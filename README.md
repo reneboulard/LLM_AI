@@ -133,6 +133,24 @@ activé de plus haute priorité est le backend **primaire**. Chaque backend :
 Champs hérités `LlmUrl` / `ModelName` restent supportés (repli legacy : un `LlmUrl` non
 vide est traité comme un backend local).
 
+### Aides de la page de configuration
+
+- **Bouton « Tester » par backend** (`POST /Plugins/LLMAI/TestLlm`, admin-only) : appel
+  rapide au backend **tel qu'édité** (une question-sonde dans la langue configurée,
+  timeout 30 s) — testable avant enregistrement. Les clés API ne sont pas postées par
+  la page : le serveur les relit depuis la config enregistrée. Résultat inline sous
+  l'en-tête de la ligne : OK + latence ou message d'échec.
+- **Bouton « Réinitialiser » sur les quatre prompts éditables** (Directives RAG, tâche
+  Séries, tâche Films, prompt « ce soir ») : restaure la version propre dans la langue
+  de l'interface (`?Lang=` forcé, sinon `ResponseLanguage` si renseignée, sinon langue
+  d'affichage Emby). Une installation neuve installe le français ; un usager anglophone
+  clique Réinitialiser et obtient la directive en anglais. Le bouton remplit le textarea
+  sans enregistrer. Source unique : `DefaultPrompts.cs` (FR + EN), aussi utilisée par
+  les valeurs par défaut des champs pour une nouvelle installation.
+- **Sections repliables** : chaque titre de section replie son contenu (chevron,
+  clavier Enter/Espace) ; bouton global « Replier tout / Déplier tout » ; l'état par
+  section est mémorisé par navigateur. Le bouton « Enregistrer » reste toujours visible.
+
 ### Clés API
 
 Les clés API sont stockées dans la config **OU** lues dans des variables d'environnement
@@ -246,7 +264,9 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 `TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée — [SearXNG](https://docs.searxng.org/)), `WebFetchDirect`,
 `NewReleaseSources` (sources de l'outil `new_releases`, une par ligne — migré depuis
 l'ancienne paire `ShowbizzUrl` / `ShowbizzPattern`), `RagDirectives` (directives additionnelles injectées
-dans le prompt), `ResponseLanguage` (langue de sortie du LLM — voir ci-dessous),
+dans le prompt — installée par défaut avec la directive de base localisée, réinitialisable
+en un clic, voir [Aides de la page de configuration](#aides-de-la-page-de-configuration)),
+`ResponseLanguage` (langue de sortie du LLM — voir ci-dessous),
 `ScheduleTask` / `ScheduleTaskMovies` (cron de la tâche planifiée),
 `DebugVerbose`.
 
@@ -355,6 +375,8 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}]}` (serveur stateless — la page garde l'historique), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. |
+| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s) et `GET /Plugins/LLMAI/DefaultPrompts` (les quatre prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
+| `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des quatre prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | Endpoints **traduction IA des genres** (admin) : `GET /Plugins/LLMAI/GenreProposals` (collecte les genres EPG des programmes **à venir** non couverts par GenreCleaner, par section films/séries, plafonnés à 60/section, puis un appel LLM one-shot via `ChatWithFallbackAsync` propose pour chacun une cible du vocabulaire curaté, un nouveau genre, ou rien) et `POST /Plugins/LLMAI/GenreApply` (re-valide puis écrit dans `GenreCleaner.xml` via `GenreCleanerMap`, enregistre dans `GenreAliasApplied`, déclenche `NotifyPendingRestart`). Langue des suggestions = cascade `ResolveMetaLangKey` (`ResponseLanguage`). Voir [Traduction IA des genres](#traduction-ia-des-genres-epg-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (statique interne) | **Pont GenreCleaner.xml** : lecture (`Allowed`/`IsMapped`/`IsCovered` — un genre est couvert s'il est mappé OU présent tel quel dans AllowedGenres), écriture idempotente (`AddMappings` — dedup par clé normalisée, ajout AllowedGenres pour les entrées `new`, rejet des mappages identité `Action→Action` sauf nouveaux genres) et **auto-guérison** (`HealApplied` : ré-écrit dans le XML les mappages enregistrés dans `GenreAliasApplied` qui manqueraient — `new:true` restaure aussi l'entrée AllowedGenres). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | Endpoints **usager** de la page Recommandations : `GET /Plugins/LLMAI/Recos` (dernières recommandations de la tâche planifiée + date, tout usager authentifié — la page ne lit plus la config plugin via l'endpoint hôte admin `/Configuration`, qui renvoyait 403 aux non-admin) et `POST /Plugins/LLMAI/Forget {Title}` (bouton **Oublier** : ajoute à `DroppedTitles` serveur-side via `SaveConfiguration`). Ne sert **que** ces deux champs — jamais la config complète (clés API, prompts). |
