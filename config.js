@@ -473,6 +473,76 @@ define(["loading"], function (loading) {
     }
 
     // ----------------------------------------------------------------
+    //  Fiche mémoire réflexive — consultation + édition admin
+    // ----------------------------------------------------------------
+
+    // GET /Plugins/LLMAI/MemoryCard : version, date, texte de la fiche
+    // courante (version 0 = pas encore rédigée). Best-effort : échec →
+    // message discret, jamais bloquant pour le reste de la page.
+    function loadMemoryCardCard(view) {
+        var txt = view.querySelector("#txtMemoryCard");
+        var meta = view.querySelector("#lblMemoryCardMeta");
+        if (!txt) return;
+        ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/MemoryCard"),
+            type: "GET",
+            dataType: "json"
+        }).then(function (data) {
+            data = data || {};
+            if (data.Error) return; // non-admin (ne devrait pas arriver ici)
+            txt.value = data.Text || "";
+            txt.disabled = false;
+            if (meta) {
+                meta.textContent = data.Version > 0
+                    ? i18n.t("cfg.memory.cardview.meta", data.Version, data.Updated || "?", data.HistoryCount || 0)
+                    : i18n.t("cfg.memory.cardview.empty");
+            }
+        }, function (err) {
+            txt.disabled = true;
+            if (meta) {
+                meta.textContent = i18n.t("cfg.memory.cardview.error",
+                    (err && err.statusText ? err.statusText : "?"));
+            }
+        });
+    }
+
+    // POST /Plugins/LLMAI/MemoryCard : enregistre le texte édité par
+    // l'admin (version et historique inchangés côté serveur).
+    function wireSaveMemoryCardButton(view) {
+        var btn = view.querySelector("#btnSaveMemoryCard");
+        if (!btn) return;
+        btn.addEventListener("click", function () {
+            var txt = view.querySelector("#txtMemoryCard");
+            var saved = view.querySelector("#lblMemoryCardSaved");
+            if (!txt) return;
+            btn.disabled = true;
+            var prevLabel = btn.textContent;
+            btn.textContent = i18n.t("cfg.memory.cardview.saving");
+            ApiClient.ajax({
+                url: ApiClient.getUrl("Plugins/LLMAI/MemoryCard"),
+                type: "POST",
+                data: JSON.stringify({ Text: txt.value || "" }),
+                contentType: "application/json",
+                dataType: "json"
+            }).then(function (data) {
+                btn.disabled = false;
+                btn.textContent = prevLabel;
+                data = data || {};
+                if (saved) saved.textContent = data.Error
+                    ? i18n.t("cfg.memory.cardview.savefail", data.Error)
+                    : i18n.t("cfg.memory.cardview.saved");
+            }, function (err) {
+                btn.disabled = false;
+                btn.textContent = prevLabel;
+                if (saved) {
+                    saved.textContent = i18n.t("cfg.memory.cardview.savefail",
+                        (err && err.statusText ? err.statusText : "?"));
+                }
+            });
+        });
+    }
+
+    // ----------------------------------------------------------------
     //  Sections repliables
     // ----------------------------------------------------------------
 
@@ -642,6 +712,8 @@ define(["loading"], function (loading) {
         // Mémoire réflexive (Phase A, opt-in) : décisions + télémétrie.
         view.querySelector("#chkDecisionLogEnabled").checked = !!cfg.DecisionLogEnabled;
         view.querySelector("#chkPlaybackTelemetryEnabled").checked = !!cfg.PlaybackTelemetryEnabled;
+        view.querySelector("#chkMemoryCardEnabled").checked = !!cfg.MemoryCardEnabled;
+        loadMemoryCardCard(view);
         view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
         // Badge « AI » (opt-out, non destructif — défaut coché).
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
@@ -730,6 +802,7 @@ define(["loading"], function (loading) {
             // clés XML, pas à ces fichiers).
             DecisionLogEnabled: view.querySelector("#chkDecisionLogEnabled").checked,
             PlaybackTelemetryEnabled: view.querySelector("#chkPlaybackTelemetryEnabled").checked,
+            MemoryCardEnabled: view.querySelector("#chkMemoryCardEnabled").checked,
             // Carry-forward : BingeNotified est le gate anti-spam maintenu côté
             // serveur (séries déjà signalées) — on le renvoie tel quel pour ne
             // pas l'écraser (même contrainte que StrmSecret).
@@ -843,6 +916,7 @@ define(["loading"], function (loading) {
             makeSectionsCollapsible(view);
             wireToggleAllButton(view);
             wireResetPromptButtons(view);
+            wireSaveMemoryCardButton(view);
 
             // Filtre de recherche de la liste des chaines.
             var chFilter = view.querySelector("#wlChannelsFilter");

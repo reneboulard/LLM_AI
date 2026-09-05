@@ -664,6 +664,21 @@ namespace LLM_AI
         /// </summary>
         public bool PlaybackTelemetryEnabled { get; set; } = false;
 
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, la tâche
+        /// hebdomadaire « Mémoire réflexive » (dimanche 4 h 30) fait réécrire
+        /// par le LLM sa <b>fiche mémoire</b> (~250 mots, Markdown) à partir
+        /// des événements bruts de la semaine (décisions × télémétrie ×
+        /// candidats écartés × snapshot EPG) — <c>memory_card.json</c>,
+        /// versionnée, 4 versions précédentes conservées, échec LLM = fiche
+        /// précédente conservée. La fiche est ensuite réinjectée dans les
+        /// prompts (recommandations, enregistrement, chat), où elle REMPLACE
+        /// les directives de la boucle de rétroaction classique. Requiert
+        /// <see cref="DecisionLogEnabled"/> et <see cref="PlaybackTelemetryEnabled"/>
+        /// (sans données, pas de révision).
+        /// </summary>
+        public bool MemoryCardEnabled { get; set; } = false;
+
         // ------------------------------------------------------------------
         //  Auto-programmation + popup au login (visibilité native TV).
         //  Les recommandations LLM_AI ne s'affichent que sur la page web ; les

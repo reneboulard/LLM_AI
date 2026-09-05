@@ -526,6 +526,31 @@ namespace LLM_AI
         }
 
         // -----------------------------------------------------------------
+        //  Lectures (tâche Mémoire, Phase C)
+        // -----------------------------------------------------------------
+
+        /// <summary>Lecture complète du journal de décisions (30 jours).</summary>
+        internal static List<DecisionEntry> ParseAllDecisions()
+        {
+            try { lock (_lock) return ParseDecisions(); }
+            catch { return new List<DecisionEntry>(); }
+        }
+
+        /// <summary>Lecture complète des pools de candidats (30 jours).</summary>
+        internal static List<RunPool> ParseAllPools()
+        {
+            try { lock (_lock) return ParsePools(); }
+            catch { return new List<RunPool>(); }
+        }
+
+        /// <summary>Lecture complète du journal de télémétrie (30 jours).</summary>
+        internal static List<PlaybackEntry> ParseAllPlayback()
+        {
+            try { lock (_lock) return ParsePlayback(); }
+            catch { return new List<PlaybackEntry>(); }
+        }
+
+        // -----------------------------------------------------------------
         //  IO communs
         // -----------------------------------------------------------------
 

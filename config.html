@@ -762,6 +762,36 @@
                             lecture elle-même.
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkMemoryCardEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.memory.card.flag">Activer la fiche mémoire du LLM (révision hebdomadaire + injection)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.card.desc">
+                            Opt-in. Tâche hebdomadaire (dimanche 4 h 30) : le LLM réécrit lui-même sa
+                            <b>fiche mémoire</b> (~250 mots) à partir des événements bruts de la semaine
+                            (décisions × télémétrie × candidats écartés × snapshot EPG). La fiche est
+                            versionnée (4 versions conservées), réinjectée dans les prompts (recommandations,
+                            enregistrement, chat) où elle <b>remplace</b> la directive de la boucle de
+                            rétroaction classique. Un échec LLM conserve la fiche précédente.
+                        </div>
+
+                        <div style="margin:0.8em 0 1.2em;">
+                            <h3 class="sectionTitle" style="margin-top:0.4em;margin-bottom:0.5em;" data-i18n="cfg.memory.cardview.h">Fiche mémoire actuelle</h3>
+                            <div class="fieldDescription" style="margin-bottom:0.6em;" data-i18n-html="cfg.memory.cardview.desc">
+                                Lecture/édition admin — correctif manuel possible (le LLM la réécrira
+                                la semaine suivante à partir de votre version). Version 0 = pas encore
+                                rédigée (la première révision a besoin d'une semaine de données).
+                            </div>
+                            <div id="lblMemoryCardMeta" class="fieldDescription" style="margin-bottom:0.4em;"></div>
+                            <textarea id="txtMemoryCard" is="emby-textarea" class="txtMemoryCard" rows="10"
+                                      style="width:100%;font-family:monospace;font-size:0.85em;" spellcheck="false"></textarea>
+                            <button is="emby-button" type="button" id="btnSaveMemoryCard" class="raised button-submit"
+                                    style="margin-top:0.6em;">
+                                <span data-i18n="cfg.memory.cardview.save">Enregistrer la fiche</span>
+                            </button>
+                            <span id="lblMemoryCardSaved" style="margin-left:0.8em;"></span>
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.autoprog.h">Auto-programmation &amp; popup au login</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.desc">
                             Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML :

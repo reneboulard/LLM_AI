@@ -267,13 +267,13 @@ namespace LLM_AI
             //     recos non marquées, jamais droppées pour autant).
             WatchedIndex watchedIdx = BuildWatchedIndex(user, excludedStrmRoot);
 
-            // 2e) Directive de rétroaction (opt-in, boucle hebdo) : synthèse
-            //     LLM des recommandations passées vs les visionnages réels,
-            //     persistée par RecoAnalysisTask. Vide si désactivée/jamais
-            //     analysée — le prompt est alors inchangé (fail-open).
-            string feedback = cfg.RecoFeedbackEnabled
-                ? RecoFeedback.BuildTonightBlock(cfg, user.Id.ToString())
-                : string.Empty;
+            // 2e) Injection mémoire : la fiche mémoire réflexive (opt-in,
+            //     Phase C) a priorité — quand elle existe, elle REMPLACE la
+            //     directive de la boucle de rétroaction classique (repli
+            //     fail-open sur cette dernière si la fiche est vide/absente).
+            string feedback = MemoryCard.BuildInjectionBlock(cfg);
+            if (string.IsNullOrEmpty(feedback) && cfg.RecoFeedbackEnabled)
+                feedback = RecoFeedback.BuildTonightBlock(cfg, user.Id.ToString());
 
             // 3) Prompt personnalisé = template config + profil + enregistrements
             //    + réserve (+ binge + directive) + contrainte de minimum dynamique.

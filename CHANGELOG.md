@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.9.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Mémoire réflexive — Phase 3 : la fiche mémoire du LLM** (le concept est
+  désormais complet : données → réflexion → réinjection) :
+  - `MemoryCard.cs` (nouveau) — store `memory_card.json` (répertoire de
+    config du plugin) : fiche courante (version, date, texte Markdown
+    plafonné ≈ 250 mots) + **historique immuable des 4 versions
+    précédentes** (le contrepoids anti-dérive : un LLM qui réécrit sa
+    mémoire chaque semaine peut s'auto-convaincre en boucle) ;
+  - `MemoryTask.cs` (nouvelle tâche planifiée, dimanche 4 h 30 — après
+    l'analyse hebdo classique) : joint en C# (zéro LLM pour la jointure) les
+    événements bruts de la semaine — décisions × télémétrie de lecture
+    (rejet immédiat / abandon / partiel / validé, % du direct via la durée
+    de diffusion du snapshot EPG) × **calibration des versions de fiche**
+    (les recos émises sous v3 ont-elles mieux marché que celles sous v4 ?) ×
+    candidats écartés des pools (mauvaise reco vs erreur de classement) ×
+    vu-sans-recommandation (titres résolus côté C#) × créneaux de lecture —
+    puis **un seul appel LLM sans outils** réécrit la fiche (reprise de
+    l'actuelle obligatoire, sections imposées, auto-évaluation des croyances
+    ratées, nuance signal faible/fort, ≤ 250 mots) ; version++ à la
+    sauvegarde, fail-open (échec LLM → fiche précédente conservée) ;
+  - **Injection** (3 sites) : quand la fiche est active et renseignée, elle
+    **remplace** la directive de la boucle de rétroaction classique —
+    prompts Tonight (`TonightService`), prompts d'enregistrement
+    (`LlmScheduledTask`), workflow de chat (`LlmRunner.RunChatAsync`) ;
+    fiche vide/absente → repli transparent sur la directive classique ;
+  - **Opt-in** `MemoryCardEnabled` (défaut off ; requiert les stores
+    décision/télémétrie — sans données, pas de révision) ;
+  - **Consultation / édition admin** : `GET`/`POST
+    /Plugins/LLMAI/MemoryCard` (réservés admin) + zone sur la page de
+    configuration (version/date/nb de versions conservées, texte éditable
+    pour un correctif manuel, bouton « Enregistrer la fiche » — version et
+    historique inchangés côté serveur) ;
+  - lectures des stores exposées (`DecisionStore.ParseAllDecisions /
+    ParseAllPools / ParseAllPlayback`) pour la jointure de la tâche.
+
 ## [1.8.0.0] — 2026-09-05
 
 ### Ajouté / Added

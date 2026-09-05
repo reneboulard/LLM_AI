@@ -564,7 +564,11 @@ namespace LLM_AI
                 // Agent chat : intro + workflow dédiés ; formatSection=""
                 // supprime le bloc « FORMAT DES RECOMMANDATIONS » (le chat
                 // produit du Markdown libre, pas un tableau JSON de recos).
-                var agent = new LlmAgentService(backends, cfg.RagDirectives, CHAT_WORKFLOW,
+                // Mémoire réflexive (Phase C) : la fiche mémoire (si active)
+                // est accolée au workflow — tendance générale de fond, sans
+                // exclure la diversité ; vide = inchangé (fail-open).
+                string workflow = CHAT_WORKFLOW + MemoryCard.BuildInjectionBlock(cfg);
+                var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
                     CHAT_ROLE_INTRO, "", cfg.ResponseLanguage);
 

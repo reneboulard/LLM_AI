@@ -229,6 +229,85 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Fiche mémoire réflexive (Phase C) : consultation + édition admin
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <c>GET /Plugins/LLMAI/MemoryCard</c> — la fiche mémoire réflexive
+        /// courante (version, date, texte) pour la zone d'administration de
+        /// la page de configuration. Réservé aux administrateurs.
+        /// </summary>
+        [Route("/Plugins/LLMAI/MemoryCard", "GET")]
+        public class MemoryCardRequest : IReturn<object>
+        {
+        }
+
+        /// <summary>Réponse : fiche courante (version 0 = pas encore rédigée).</summary>
+        public class MemoryCardResponse
+        {
+            public int Version { get; set; }
+            public string Updated { get; set; }
+            public string Text { get; set; }
+            public int HistoryCount { get; set; }
+            public string Error { get; set; }
+        }
+
+        public object Get(MemoryCardRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new MemoryCardResponse { Error = "Réservé aux administrateurs." };
+
+            var (current, history) = MemoryCard.Load();
+            return new MemoryCardResponse
+            {
+                Version = current.Version,
+                Updated = current.Updated == default
+                    ? ""
+                    : current.Updated.ToLocalTime().ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+                Text = current.Text ?? "",
+                HistoryCount = history.Count
+            };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/MemoryCard</c> — écriture de la fiche par
+        /// l'administrateur (correctif manuel, garde-fou face au LLM). Le
+        /// texte est plafonné comme une fiche LLM ; version et historique
+        /// inchangés. Réservé aux administrateurs.
+        /// </summary>
+        [Route("/Plugins/LLMAI/MemoryCard", "POST")]
+        public class MemoryCardPostRequest : IReturn<object>
+        {
+            public string Text { get; set; }
+        }
+
+        public object Post(MemoryCardPostRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new MemoryCardResponse { Error = "Réservé aux administrateurs." };
+
+            var (current, history) = MemoryCard.Load();
+            var updated = new MemoryCardData
+            {
+                Version = current.Version,
+                Updated = current.Updated == default ? DateTimeOffset.Now : current.Updated,
+                Text = req?.Text ?? ""
+            };
+            MemoryCard.Save(updated, history, Logger);
+            Logger.Info("[LLM_AI] Fiche mémoire éditée manuellement par l'administrateur (v{0}).", updated.Version);
+            return new MemoryCardResponse
+            {
+                Version = updated.Version,
+                Text = updated.Text,
+                HistoryCount = history.Count
+            };
+        }
+
+        // ------------------------------------------------------------------
         //  Auth : résolution de l'administrateur appelant
         // ------------------------------------------------------------------
 

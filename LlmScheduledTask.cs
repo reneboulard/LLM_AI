@@ -167,7 +167,18 @@ namespace LLM_AI
             // directives de TOUS les usagers (la reco d'enregistrement est
             // globale au foyer, pas par usager). Vide si désactivée/jamais
             // analysée — prompts inchangés (fail-open).
-            if (cfg.RecoFeedbackEnabled)
+            // Mémoire réflexive (Phase C) : la fiche mémoire a priorité sur
+            // la directive de la boucle classique (repli fail-open sur celle-ci).
+            string memory = MemoryCard.BuildInjectionBlock(cfg);
+            if (memory.Length > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(seriesPrompt))
+                    seriesPrompt += "\n\n" + memory;
+                if (!string.IsNullOrWhiteSpace(filmsPrompt))
+                    filmsPrompt += "\n\n" + memory;
+                _logger.Info("[LLM_AI] Fiche mémoire injectée dans le(s) prompt d'enregistrement.");
+            }
+            else if (cfg.RecoFeedbackEnabled)
             {
                 string feedback = RecoFeedback.BuildRecordBlock(cfg);
                 if (feedback.Length > 0)
