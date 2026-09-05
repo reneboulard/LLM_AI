@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.8.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Mémoire réflexive — Phase 2 : snapshot EPG** — `EpgSnapshotStore.cs`
+  (nouveau, fichier `epg_snapshot.json` dans le répertoire de config du
+  plugin) : les métadonnées EPG éphémères sont **figées** dès l'émission au
+  LLM ou la programmation d'un timer — un programme diffusé disparaît de la
+  base Emby, sans snapshot tout ce qu'on en savait est perdu :
+  - écrit aux sites de capture existants (`epg_tonight` / `epg_series` /
+    `epg_movies`) : titre, titre d'épisode, synopsis (≤ 300), chaîne, début de
+    diffusion, **durée de diffusion** (minutes — c'est le dénominateur du % du
+    direct), genres **normalisés** (GenreCleanerMap — nomenclature commune
+    bibliothèque), année, flags série/film ;
+  - `AutoProgrammer` marque les programmes programmés (`timer=true`, entrée
+    minimale créée si le programme n'a jamais passé un outil EPG) ;
+  - le croisement avec la bibliothèque (providerIds, item enregistré) est
+    résolu de façon **déterministe à l'analyse** (Phase 3) plutôt qu'en
+    temps réel — aucun hook runtime, aucun coût caché ;
+  - opt-in `DecisionLogEnabled` (même store opt-in que les décisions) ;
+    rétention 90 jours (une saison reste joignable), plafond 3000, fail-open.
+
+### Corrigé / Fixed
+
+- `PlaybackWatcher` (v1.7.0.0) : using manquant
+  (`MediaBrowser.Controller.Session`) — la DLL v1.7.0.0 ne compilait pas
+  réellement (le build incrémental l'avait masqué) ; rebuild propre vérifié.
+
+---
+
 ## [1.7.0.0] — 2026-09-05
 
 ### Ajouté / Added

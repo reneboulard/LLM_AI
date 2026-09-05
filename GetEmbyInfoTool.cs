@@ -1032,8 +1032,10 @@ namespace LLM_AI
                 foreach (var t in picked)
                 {
                     var capTitle = !string.IsNullOrEmpty(t.p.SeriesName) ? t.p.SeriesName : t.p.Name;
+                    var mapped = GenreCleanerMap.MapGenres(t.genres, true);
                     DecisionStore.CaptureCandidate("epg_series", t.p.Id.ToString(), capTitle,
-                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, true));
+                        t.p.ChannelName, t.p.StartDate, mapped);
+                    EpgSnapshotStore.Upsert(t.p, mapped, _logger);
                 }
 
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
@@ -1159,8 +1161,12 @@ namespace LLM_AI
             // pour le run films (runId posé par LlmScheduledTask).
             if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
                 foreach (var t in picked)
+                {
+                    var mapped = GenreCleanerMap.MapGenres(t.genres, false);
                     DecisionStore.CaptureCandidate("epg_movies", t.p.Id.ToString(), t.p.Name,
-                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, false));
+                        t.p.ChannelName, t.p.StartDate, mapped);
+                    EpgSnapshotStore.Upsert(t.p, mapped, _logger);
+                }
 
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
@@ -1408,8 +1414,12 @@ namespace LLM_AI
                 foreach (var t in picked)
                 {
                     var capTitle = !string.IsNullOrEmpty(t.p.SeriesName) ? t.p.SeriesName : t.p.Name;
+                    var mapped = GenreCleanerMap.MapGenres(t.genres, SeriesCtx(t.p));
                     DecisionStore.CaptureCandidate("epg", t.p.Id.ToString(), capTitle,
-                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, SeriesCtx(t.p)));
+                        t.p.ChannelName, t.p.StartDate, mapped);
+                    // Snapshot EPG (Phase B) : fige le programme (durée de
+                    // diffusion → % du direct, description, genres).
+                    EpgSnapshotStore.Upsert(t.p, mapped, _logger);
                 }
 
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);

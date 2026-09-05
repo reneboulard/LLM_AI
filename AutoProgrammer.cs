@@ -217,6 +217,9 @@ namespace LLM_AI
                 }
                 _logger?.Info("[LLM_AI] Auto-program : « {0} » → {1} timer créé (programId={2}).",
                     r.Title, IsSeries(r.Kind) ? "series" : "movie", r.Id);
+                // Snapshot EPG (Phase B) : le programme programmé est figé
+                // (même s'il n'a jamais passé un outil EPG). Best-effort.
+                EpgSnapshotStore.MarkTimer(r.Id, r.Title, r.Channel, null, _logger);
                 // Mémorise pour le dedup intra-passe (deux recos du même titre).
                 programIds.Add(r.Id);
                 if (!string.IsNullOrEmpty(norm)) names.Add(norm);
