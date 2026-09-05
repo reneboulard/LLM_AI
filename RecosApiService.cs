@@ -231,6 +231,36 @@ namespace LLM_AI
             // (opt-in) : un « Oublier » est le signal négatif le plus fort
             // dont dispose l'analyse (RecoAnalysisTask). Best-effort — n'affecte
             // jamais le résultat du drop lui-même.
+            //
+            // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) : le rejet
+            // est aussi journalisé comme décision kind=drop (sans runId — le
+            // run d'origine n'est pas résolu à ce stade ; la Phase C pourra le
+            // rapprocher par titre).
+            if (cfg.DecisionLogEnabled)
+            {
+                try
+                {
+                    DecisionStore.AppendDecisions(cfg, new[]
+                    {
+                        new DecisionEntry
+                        {
+                            RunId = "",
+                            Kind = "drop",
+                            User = user.Id.ToString(),
+                            Date = DateTimeOffset.UtcNow,
+                            Title = title,
+                            ItemId = "",
+                            ProgramId = "",
+                            Source = "",
+                            Reason = "rejet explicite de l'usager",
+                            Priority = "",
+                            Mv = 0
+                        }
+                    }, Logger);
+                }
+                catch { /* best-effort */ }
+            }
+
             if (cfg.RecoFeedbackEnabled)
             {
                 try

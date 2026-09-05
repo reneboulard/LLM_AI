@@ -10,6 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.7.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Mémoire réflexive — Phase 1 : les données de la réflexion** — deux options
+  opt-in dans une nouvelle section de config « Mémoire réflexive
+  (expérimental) ». Ce sont les stores qui alimenteront l'auto-évaluation du
+  LLM (la fiche mémoire rédigée par le LLM arrive en Phase 3) :
+  - **Journal de décisions** (`DecisionLogEnabled`) — `DecisionStore.cs` :
+    - `decisions.json` : chaque reco émise (kind `tonight` / `record` / `drop`)
+      avec la **raison** du LLM (champ `reason` de son tableau JSON — produit
+      depuis toujours, jusqu'ici perdu), la priorité, l'itemId Emby ou le
+      programId EPG, l'usager, et la **version de la fiche mémoire** en
+      vigueur au moment de la décision (`mv`, 0 tant que la fiche n'existe
+      pas) — la clé de la calibration (réviser une croyance, pas un titre) ;
+    - `run_pool.json` : le **menu de candidats** soumis au LLM à chaque run
+      (EPG émis par `get_emby_info` — capture dans les actions `epg_tonight` /
+      `epg_series` / `epg_movies` —, réserve bibliothèque, enregistrements non
+      visionnés) — permet à l'analyse de distinguer une mauvaise reco d'une
+      **erreur de classement** (le gagnant ignoré, un écarté regardé) ;
+    - carry-forward : au premier usage, les entrées du journal `RecoLog`
+      (config XML) sont migrées dans `decisions.json` ; `RecoLog` reste en
+      **double écriture** (l'analyse hebdo `RecoAnalysisTask` le lit encore —
+      la Phase 3 le retirera).
+  - **Télémétrie de lecture** (`PlaybackTelemetryEnabled`) —
+    `PlaybackWatcher.cs` (nouveau, pattern `IServerEntryPoint`) branché sur
+    `ISessionManager.PlaybackStopped` : `playback.json` — item, usager,
+    durée réelle, **fraction lue** (signal comportemental : rejet immédiat
+    &lt; 5 %, abandon 5–50 %, validé &gt; 80 %), source
+    bibliothèque/.strm/direct, chaîne, client, appareil. Le % du direct
+    (pas de durée d'œuvre naturelle) reste à dériver via le snapshot EPG
+    (Phase 2). % calculé depuis `BaseItem.RunTimeTicks` /
+    `MediaSourceInfo` — vérifié par réflexion : `UserItemData` n'expose
+    **pas** `PlayedPercentage` sur cette build.
+  - Points d'ancrage : `TonightService` (runId + pool + décisions tonight),
+    `LlmScheduledTask` (décisions record), `RecosApiService` (drop),
+    `GetEmbyInfoTool` (captures EPG via `DecisionStore.ActiveRunId` — le
+    tool, global et sans usager, est relié au run par un contexte statique).
+  - Rétention 30 jours, plafonds (1000 décisions / 200 pools / 2000 lectures /
+    60 candidats par run) ; fail-open de bout en bout.
+
+### Technique / Technical
+
+- `TonightService.IsUnderPath` passe en `internal` (partagé avec
+  `PlaybackWatcher` pour l'étiquetage .strm).
+
+---
+
 ## [1.6.0.0] — 2026-09-05
 
 ### Ajouté / Added

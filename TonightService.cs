@@ -289,10 +289,21 @@ namespace LLM_AI
             // 4) Run agent (boucle de tool-calling) — même logique que la tâche
             //    planifiée : backends, outils, enrichissement (match titres →
             //    id/channel_id/rating/image_url) gérés par LlmRunner.
+            // Mémoire réflexive (Phase A) : le runId relie les décisions
+            // journalisées au pool de candidats capturé pendant le run
+            // (epg_tonight par le tool get_emby_info, réserve + enregistrements
+            // par les builders ci-dessus). Best-effort, opt-in.
+            string runId = "t" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
+                + "-" + (user.Id.ToString("N").Length >= 6 ? user.Id.ToString("N").Substring(0, 6) : user.Id.ToString("N"));
+            if (cfg.DecisionLogEnabled)
+                DecisionStore.BeginRun(runId);
             var (payload, ok) = await runner.RunAsync(cfg, "TONIGHT", prompt, TONIGHT_WORKFLOW, ct).ConfigureAwait(false);
 
             if (!ok || string.IsNullOrWhiteSpace(payload))
+            {
+                if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
                 return new TonightResult { Error = "Le run LLM n'a pas produit de recommandation." };
+            }
 
             // Le run a réussi : consomme le gate « prêt à dévorer » en attente
             // (le signalement a été livré au LLM). Sur échec (return ci-dessus),
@@ -321,7 +332,10 @@ namespace LLM_AI
             // recos.
             payload = ValidateAndFilter(payload, watchedIdx, ct);
             if (string.IsNullOrWhiteSpace(payload))
+            {
+                if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
                 return new TonightResult { Error = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés)." };
+            }
 
             // Surface native des recos du watch bucket sur un run FRAIS (pas sur
             // cache) : deux mécanismes indépendants et opt-in, réutilisant les
@@ -423,6 +437,71 @@ namespace LLM_AI
             // (kind=tonight) que RecoAnalysisTask rapprochera des
             // visionnages réels de l'usager. Best-effort : un échec de
             // journalisation ne casse jamais le run.
+            //
+            // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) : en
+            // PLUS du journal RecoLog (conservé pour l'analyse hebdo
+            // actuelle), chaque reco est journalisée avec sa raison et sa
+            // priorité (DecisionEntry), et le pool de candidats du run est
+            // persisté (RunPool) — la matière première de la calibration
+            // (reviser une croyance, pas un titre) et du diagnostic de
+            // classement (écarté vs choisi). Double écriture transitoire :
+            // la Phase C retire RecoLog.
+            if (cfg.DecisionLogEnabled)
+            {
+                try
+                {
+                    // Ferme le run : drain des candidats capturés pendant le
+                    // run (epg_tonight + réserve + enregistrements).
+                    var poolCands = DecisionStore.EndRun(runId);
+
+                    var decisions = new List<DecisionEntry>();
+                    var recos = AutoProgrammer.ParseRecommendations(payload);
+                    foreach (var r in recos)
+                    {
+                        if (string.IsNullOrWhiteSpace(r.Title)) continue;
+                        var isLive = string.Equals(r.Source, "live", StringComparison.OrdinalIgnoreCase);
+                        decisions.Add(new DecisionEntry
+                        {
+                            RunId = runId,
+                            Kind = "tonight",
+                            User = user.Id.ToString(),
+                            Date = DateTimeOffset.UtcNow,
+                            Title = r.Title,
+                            // item : InternalId bibliothèque/enregistrement ;
+                            // programme EPG pour un reco live (Guid, OK dans
+                            // nos propres fichiers JSON — jamais en REST).
+                            ItemId = isLive ? (r.LibraryId ?? "") : (r.LibraryId ?? r.Id ?? ""),
+                            ProgramId = isLive ? (r.Id ?? "") : "",
+                            Source = r.Source ?? "",
+                            Reason = r.Reason ?? "",
+                            Priority = r.Priority ?? "",
+                            Mv = 0 // fiche mémoire : Phase C
+                        });
+                    }
+                    if (decisions.Count > 0)
+                        DecisionStore.AppendDecisions(cfg, decisions, _logger);
+                    DecisionStore.SavePool(cfg, new RunPool
+                    {
+                        RunId = runId,
+                        User = user.Id.ToString(),
+                        Date = DateTimeOffset.UtcNow,
+                        Mv = 0,
+                        Candidates = poolCands
+                    }, _logger);
+                    _logger?.Info("[LLM_AI] Décisions : run {0} — {1} reco(s) journalisée(s), pool {2} candidat(s).",
+                        runId, decisions.Count, poolCands.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] Décisions : journalisation du run échouée : {0}", ex.Message);
+                    DecisionStore.EndRun(runId); // purge du contexte statique
+                }
+            }
+            else if (DecisionStore.ActiveRunId != null)
+            {
+                DecisionStore.EndRun(runId); // run démarré avant un toggle off
+            }
+
             if (cfg.RecoFeedbackEnabled)
             {
                 try
@@ -891,8 +970,9 @@ namespace LLM_AI
         /// <paramref name="root"/> (comparaison insensible à la casse — Windows).
         /// Sert à exclure la bibliothèque .strm des sondes bibliothèque.
         /// Null/vide sur l'un ou l'autre → false (rien à exclure).
+        /// Internal : partagé avec PlaybackWatcher (télémétrie).
         /// </summary>
-        private static bool IsUnderPath(string itemPath, string root)
+        internal static bool IsUnderPath(string itemPath, string root)
         {
             if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(itemPath)) return false;
             string r = root.TrimEnd('/', '\\', System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar);
@@ -1073,6 +1153,12 @@ namespace LLM_AI
                         line.Append($" | episode={r.EpisodeTitle}");
                     lines.Add(line.ToString());
 
+                    // Mémoire réflexive : les enregistrements listés font
+                    // partie du menu soumis au LLM — capturés. No-op hors run.
+                    if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                        DecisionStore.CaptureCandidate("recording", r.Id?.ToString(), title,
+                            r.ChannelName, null, genres);
+
                     if (lines.Count >= (compact ? 12 : 40)) break;
                 }
 
@@ -1159,6 +1245,12 @@ namespace LLM_AI
                     if (isEpisode && !string.IsNullOrEmpty(it.Name) && it.Name != title)
                         line.Append($" | episode={it.Name}");
                     lines.Add(line.ToString());
+
+                    // Mémoire réflexive : la réserve fait partie du menu soumis
+                    // au LLM — capturée comme le reste du pool. No-op hors run.
+                    if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                        DecisionStore.CaptureCandidate("library", it.InternalId.ToString(), title,
+                            null, null, genres);
 
                     if (lines.Count >= (compact ? 8 : 20)) break;
                 }

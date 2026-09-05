@@ -639,6 +639,9 @@ define(["loading"], function (loading) {
         // Boucle de rétroaction (opt-in) — directive éditable par l'admin.
         view.querySelector("#chkRecoFeedbackEnabled").checked = !!cfg.RecoFeedbackEnabled;
         view.querySelector("#txtPromptDirectives").value = cfg.PromptDirectives || "";
+        // Mémoire réflexive (Phase A, opt-in) : décisions + télémétrie.
+        view.querySelector("#chkDecisionLogEnabled").checked = !!cfg.DecisionLogEnabled;
+        view.querySelector("#chkPlaybackTelemetryEnabled").checked = !!cfg.PlaybackTelemetryEnabled;
         view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
         // Badge « AI » (opt-out, non destructif — défaut coché).
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
@@ -720,6 +723,13 @@ define(["loading"], function (loading) {
             RecoFeedbackEnabled: view.querySelector("#chkRecoFeedbackEnabled").checked,
             PromptDirectives: view.querySelector("#txtPromptDirectives").value || "",
             RecoLog: (loadedCfg && loadedCfg.RecoLog) || "",
+            // Mémoire réflexive (Phase A, opt-in) : les stores vivent dans des
+            // fichiers JSON du répertoire de config du plugin (decisions.json,
+            // run_pool.json, playback.json) maintenus côté serveur — aucun
+            // champ de config à porter ici (le carry-forward s'applique aux
+            // clés XML, pas à ces fichiers).
+            DecisionLogEnabled: view.querySelector("#chkDecisionLogEnabled").checked,
+            PlaybackTelemetryEnabled: view.querySelector("#chkPlaybackTelemetryEnabled").checked,
             // Carry-forward : BingeNotified est le gate anti-spam maintenu côté
             // serveur (séries déjà signalées) — on le renvoie tel quel pour ne
             // pas l'écraser (même contrainte que StrmSecret).

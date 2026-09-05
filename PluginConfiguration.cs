@@ -629,6 +629,42 @@ namespace LLM_AI
         public string TonightUserName { get; set; } = string.Empty;
 
         // ------------------------------------------------------------------
+        //  Mémoire réflexive (Phase A) : les données qui alimenteront la
+        //  réflexion du LLM. Trois stores fichiers dans le répertoire de
+        //  configuration du plugin (rétention 30 jours, plafonnés) :
+        //  decisions.json (chaque reco émise avec sa raison + version de la
+        //  fiche), run_pool.json (le « menu » soumis au LLM à chaque run),
+        //  playback.json (chaque lecture terminée, avec % lu). La fiche
+        //  mémoire elle-même (rédigée par le LLM, injectée dans les prompts)
+        //  arrive en Phase C.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, chaque reco
+        /// émise (« À regarder ce soir », enregistrements, rejet « Oublier »)
+        /// est journalisée dans <c>decisions.json</c> avec la <b>raison</b> du
+        /// LLM (l'argument de la reco) et le <b>menu de candidats</b> soumis au
+        /// run (<c>run_pool.json</c>) — la matière première de l'auto-évaluation
+        /// (réviser une croyance, pas un titre ; distinguer une mauvaise reco
+        /// d'une erreur de classement). Écritures locales, aucune donnée
+        /// envoyée à l'extérieur ; en double écriture du journal RecoLog
+        /// existant (que l'analyse hebdo lit encore).
+        /// </summary>
+        public bool DecisionLogEnabled { get; set; } = false;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, chaque
+        /// lecture terminée est journalisée dans <c>playback.json</c> (item,
+        /// usager, durée réelle, fraction lue, source bibliothèque/.strm/
+        /// direct, chaîne, client, appareil). C'est le signal comportemental
+        /// central de la réflexion : rejet immédiat (&lt; 5 %), abandon en
+        /// cours (5–50 %), contenu validé (&gt; 80 %). Aucun effet sur la
+        /// lecture elle-même (best-effort) ; le pourcentage du direct reste
+        /// à dériver via le snapshot EPG (Phase B).
+        /// </summary>
+        public bool PlaybackTelemetryEnabled { get; set; } = false;
+
+        // ------------------------------------------------------------------
         //  Auto-programmation + popup au login (visibilité native TV).
         //  Les recommandations LLM_AI ne s'affichent que sur la page web ; les
         //  clients natifs (Android / Android TV) ne rendent pas les pages

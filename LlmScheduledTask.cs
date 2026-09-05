@@ -185,6 +185,14 @@ namespace LLM_AI
                 string p1 = "", p2 = "";
                 bool ok1 = false, ok2 = false;
 
+                // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) :
+                // runId des runs d'enregistrement — relie les décisions
+                // journalisées aux candidats EPG capturés (epg_series /
+                // epg_movies par le tool get_emby_info).
+                string runId = "r" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+                if (cfg.DecisionLogEnabled)
+                    DecisionStore.BeginRun(runId);
+
                 // Run 1 : SÉRIES (étapes 1 + 2).
                 if (!string.IsNullOrWhiteSpace(seriesPrompt))
                 {
@@ -204,6 +212,7 @@ namespace LLM_AI
 
                 if (!ok1 && !ok2)
                 {
+                    if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
                     throw new Exception("Les deux runs agent (séries et films) ont échoué.");
                 }
 
@@ -276,6 +285,59 @@ namespace LLM_AI
                     {
                         _logger?.Warn("[LLM_AI] Rétroaction : journalisation du run échouée : {0}", ex.Message);
                     }
+                }
+
+                // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) :
+                // décisions kind=record avec raison + priorité, et pool des
+                // candidats EPG capturés pendant les deux runs. En PLUS du
+                // journal RecoLog (double écriture transitoire ; la Phase C
+                // retire RecoLog). Best-effort.
+                if (cfg.DecisionLogEnabled)
+                {
+                    try
+                    {
+                        var poolCands = DecisionStore.EndRun(runId);
+                        var decisions = new List<DecisionEntry>();
+                        foreach (var r in AutoProgrammer.ParseRecommendations(merged))
+                        {
+                            if (string.IsNullOrWhiteSpace(r.Title)) continue;
+                            decisions.Add(new DecisionEntry
+                            {
+                                RunId = runId,
+                                Kind = "record",
+                                User = "",               // reco globale du foyer
+                                Date = DateTimeOffset.UtcNow,
+                                Title = r.Title,
+                                ItemId = r.LibraryId ?? "", // possédé → bibliothèque
+                                ProgramId = r.Id ?? "",     // programme EPG à programmer
+                                Source = r.Kind ?? "",
+                                Reason = r.Reason ?? "",
+                                Priority = r.Priority ?? "",
+                                Mv = 0 // fiche mémoire : Phase C
+                            });
+                        }
+                        if (decisions.Count > 0)
+                            DecisionStore.AppendDecisions(cfg, decisions, _logger);
+                        DecisionStore.SavePool(cfg, new RunPool
+                        {
+                            RunId = runId,
+                            User = "",
+                            Date = DateTimeOffset.UtcNow,
+                            Mv = 0,
+                            Candidates = poolCands
+                        }, _logger);
+                        _logger.Info("[LLM_AI] Décisions : run {0} — {1} reco(s) d'enregistrement journalisée(s), pool {2} candidat(s).",
+                            runId, decisions.Count, poolCands.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Warn("[LLM_AI] Décisions : journalisation du run échouée : {0}", ex.Message);
+                        DecisionStore.EndRun(runId); // purge du contexte statique
+                    }
+                }
+                else if (DecisionStore.ActiveRunId != null)
+                {
+                    DecisionStore.EndRun(runId); // run démarré avant un toggle off
                 }
 
                 // Badge « AI » sur les images EPG (opt-out, non destructif) :

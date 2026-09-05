@@ -1025,6 +1025,17 @@ namespace LLM_AI
             if ((cfg?.DebugVerbose ?? false) && flagRejected > 0)
                 _logger?.Info("[LLM_AI] epg_series flags rejetés={0}, échantillons : {1}",
                     flagRejected, string.Join(" | ", flagSamples));
+
+            // Capture mémoire réflexive (Phase A) — même rôle qu'epg_tonight
+            // pour les runs d'enregistrement (runId posé par LlmScheduledTask).
+            if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                foreach (var t in picked)
+                {
+                    var capTitle = !string.IsNullOrEmpty(t.p.SeriesName) ? t.p.SeriesName : t.p.Name;
+                    DecisionStore.CaptureCandidate("epg_series", t.p.Id.ToString(), capTitle,
+                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, true));
+                }
+
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
 
@@ -1143,6 +1154,14 @@ namespace LLM_AI
             }
             _logger?.Info("[LLM_AI] epg_movies : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
                 kept.Count, results.Count, wlFiltered, limit);
+
+            // Capture mémoire réflexive (Phase A) — même rôle qu'epg_tonight
+            // pour le run films (runId posé par LlmScheduledTask).
+            if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                foreach (var t in picked)
+                    DecisionStore.CaptureCandidate("epg_movies", t.p.Id.ToString(), t.p.Name,
+                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, false));
+
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
 
@@ -1379,6 +1398,20 @@ namespace LLM_AI
                 string.Join(", ", emittedGenres.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
             _logger?.Info("[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
                 kept.Count, results.Count, wlFiltered, limit);
+
+            // Capture mémoire réflexive (Phase A) : le menu émis au LLM est
+            // joint au run courant (runId posé par TonightService) — permet
+            // à l'analyse hebdo de distinguer une mauvaise reco d'une erreur
+            // de classement (le gagnant ignoré, un écarté regardé). No-op
+            // hors run ou flag off. Best-effort.
+            if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                foreach (var t in picked)
+                {
+                    var capTitle = !string.IsNullOrEmpty(t.p.SeriesName) ? t.p.SeriesName : t.p.Name;
+                    DecisionStore.CaptureCandidate("epg", t.p.Id.ToString(), capTitle,
+                        t.p.ChannelName, t.p.StartDate, GenreCleanerMap.MapGenres(t.genres, SeriesCtx(t.p)));
+                }
+
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
 

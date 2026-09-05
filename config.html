@@ -727,6 +727,41 @@
                             </div>
                         </div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.memory.h">Mémoire réflexive (expérimental)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.desc">
+                            Les <b>données</b> qui alimenteront la réflexion du LLM sur lui-même
+                            (Phase 1 — la fiche mémoire rédigée par le LLM arrive dans une version
+                            ultérieure) : chaque reco émise avec sa <b>raison</b>, le <b>menu</b> de
+                            candidats soumis à chaque run, et chaque <b>lecture</b> terminée avec le
+                            pourcentage visionné. Trois fichiers JSON locaux (rétention 30 jours,
+                            plafonnés), aucune donnée sortante.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkDecisionLogEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.memory.decisions.flag">Journaliser les décisions du LLM (reco + raison + menu de candidats)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.decisions.desc">
+                            Opt-in. À chaque reco (« À regarder ce soir », enregistrements) et chaque
+                            rejet « Oublier », écrit <code>decisions.json</code> (raison + priorité +
+                            version de fiche) et <code>run_pool.json</code> (les candidats écartés aussi)
+                            — permet de réviser une croyance, pas un titre, et de distinguer une mauvaise
+                            reco d'une erreur de classement. Double écriture du journal RecoLog (requis
+                            par l'analyse hebdo actuelle).
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkPlaybackTelemetryEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.memory.playback.flag">Télémétrie de lecture (% visionné de chaque lecture)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.playback.desc">
+                            Opt-in. À chaque fin de lecture, écrit <code>playback.json</code> (item,
+                            usager, durée réelle, fraction lue, source bibliothèque/.strm/direct,
+                            chaîne, client, appareil). Signal central de la réflexion : rejet immédiat
+                            (&lt; 5 %), abandon (5–50 %), contenu validé (&gt; 80 %). Aucun effet sur la
+                            lecture elle-même.
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.autoprog.h">Auto-programmation &amp; popup au login</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.desc">
                             Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML :
