@@ -736,6 +736,7 @@ define(["loading"], function (loading) {
         view.querySelector("#txtAuditFocus").value = "";
         // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
         view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
+        view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -838,7 +839,10 @@ define(["loading"], function (loading) {
             AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
             AuditPrompt: (loadedCfg && loadedCfg.AuditPrompt) || "",
             // Chat interactif — simple booléen, pas de carry-forward spécial.
-            ChatEnabled: view.querySelector("#chkChatEnabled").checked
+            ChatEnabled: view.querySelector("#chkChatEnabled").checked,
+            // Mémoire de conversation (opt-in) — les sessions vivent dans
+            // chat_memory.json côté serveur, comme les autres stores JSON.
+            ChatMemoryEnabled: view.querySelector("#chkChatMemoryEnabled").checked
         };
     }
 

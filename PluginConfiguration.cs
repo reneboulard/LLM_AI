@@ -963,5 +963,19 @@ namespace LLM_AI
         /// gated par <see cref="AuditRemediationEnabled"/>.
         /// </summary>
         public bool ChatEnabled { get; set; } = true;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : mémoire de
+        /// conversation du chat. Chaque session est persistée par usager
+        /// (<c>chat_memory.json</c>) ; au retour de l'usager, un appel LLM
+        /// sans outils condense la session précédente en note de continuité
+        /// (goûts exprimés, faits, fil ouvert) et les signaux de goût partent
+        /// dans <c>decisions.json</c> (kind="chat") — la révision hebdo de la
+        /// fiche mémoire les intègre. L'injection (résumé + derniers échanges)
+        /// se fait dans le prompt de chat ; le bouton « Reprendre » de la page
+        /// chat restaure la conversation. Échec LLM = pas de résumé, la
+        /// conversation suivante continue sans (fail-open).
+        /// </summary>
+        public bool ChatMemoryEnabled { get; set; } = false;
     }
 }

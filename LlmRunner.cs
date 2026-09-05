@@ -547,7 +547,8 @@ namespace LLM_AI
             PluginConfiguration cfg, string label,
             IReadOnlyList<LlmClient.ChatMessage> history, string userMessage,
             ISessionManager sessions, ITaskManager tasks, INotificationManager notifications,
-            System.Threading.CancellationToken ct)
+            System.Threading.CancellationToken ct,
+            string conversationMemory = null)
         {
             try
             {
@@ -567,7 +568,10 @@ namespace LLM_AI
                 // Mémoire réflexive (Phase C) : la fiche mémoire (si active)
                 // est accolée au workflow — tendance générale de fond, sans
                 // exclure la diversité ; vide = inchangé (fail-open).
-                string workflow = CHAT_WORKFLOW + MemoryCard.BuildInjectionBlock(cfg);
+                // Mémoire de conversation (chat_memory) : résumé de la
+                // session précédente + derniers échanges (ChatApiService).
+                string workflow = CHAT_WORKFLOW + MemoryCard.BuildInjectionBlock(cfg)
+                    + (conversationMemory ?? "");
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
                     CHAT_ROLE_INTRO, "", cfg.ResponseLanguage);

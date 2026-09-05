@@ -1034,6 +1034,20 @@
                             <span class="checkboxLabel" data-i18n="cfg.chat.enabled">Activer le chat interactif (/Plugins/LLMAI/Chat)</span>
                         </label>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkChatMemoryEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.chat.memory.flag">Mémoire de conversation (reprendre le dernier chat)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.memory.desc">
+                            Opt-in. Chaque conversation est persistée (<code>chat_memory.json</code>) ;
+                            au retour de l'usager, un appel LLM condense la session précédente en
+                            <b>note de continuité</b> (goûts exprimés, faits, fil ouvert) et les
+                            <b>signaux de goût</b> partent dans <code>decisions.json</code> (kind="chat")
+                            — la fiche mémoire hebdo les intègre. La page chat affiche un bouton
+                            « Reprendre » ; le résumé + les derniers échanges sont injectés dans le
+                            prompt. Un échec LLM = conversation suivante sans mémoire (fail-open).
+                        </div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

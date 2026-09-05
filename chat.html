@@ -61,6 +61,22 @@
                 line-height: 1.55;
                 white-space: normal;
             }
+            .LLMAIChatPage .chatResume {
+                display: flex;
+                align-items: center;
+                gap: 0.8em;
+                margin: 0 0 0.8em 0;
+                padding: 0.6em 0.8em;
+                background: rgba(138,180,248,0.08);
+                border: 1px solid rgba(138,180,248,0.25);
+                border-radius: 6px;
+            }
+            .LLMAIChatPage .chatResume[hidden] { display: none; }
+            .LLMAIChatPage .chatResumeText {
+                color: #b8c9e8;
+                font-size: 0.88em;
+                flex: 1 1 auto;
+            }
             .LLMAIChatPage .chatTurn {
                 margin: 0.8em 0;
             }
@@ -118,6 +134,11 @@
                     LLM configurées</b>. L'historique est maintenu par la page ; la directive et la
                     documentation des outils sont envoyées au LLM une seule fois, au début de la
                     conversation. Réservé aux administrateurs.
+                </div>
+                <div id="chatResume" class="chatResume" hidden>
+                    <span id="chatResumeText" class="chatResumeText"></span>
+                    <button is="emby-button" type="button" class="raised" id="btnResumeChat"
+                            data-i18n="chat.resume.button">Reprendre</button>
                 </div>
                 <div id="chatLog" class="chatLog">
                     <div class="chatHint" data-i18n="cfg.chat.hint">

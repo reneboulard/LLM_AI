@@ -102,6 +102,10 @@ define([], function () {
                 // user/assistant uniquement, bornés côté page ET côté serveur.
                 var chatHistory = [];
                 var chatBusy = false;
+                // Mémoire de conversation : identifiant de session retourné
+                // par la première réponse du serveur puis rejoué à chaque
+                // tour (chaîne vide = nouvelle conversation).
+                var chatSessionId = "";
 
                 var chatLog = view.querySelector("#chatLog");
                 var chatInput = view.querySelector("#txtChatInput");
@@ -185,7 +189,8 @@ define([], function () {
                     // courant (porté par Message).
                     var payload = {
                         Message: msg,
-                        History: chatHistory.slice(0, -1).slice(-40)
+                        History: chatHistory.slice(0, -1).slice(-40),
+                        Session: chatSessionId
                     };
 
                     ApiClient.ajax({
@@ -227,6 +232,9 @@ define([], function () {
                         var reply = (data.Reply || "").trim();
                         appendChatTurn("assistant", renderMarkdown(reply));
                         chatHistory.push({ role: "assistant", content: reply });
+                        // Identifiant de session (mémoire de conversation) :
+                        // retourné à chaque tour, rejoué au suivant.
+                        if (data.Session) chatSessionId = data.Session;
                     }, function (err) {
                         return describeError(err).then(function (errText) {
                             chatBusy = false;
@@ -252,12 +260,79 @@ define([], function () {
                     chatClearBtn.addEventListener("click", function () {
                         if (chatBusy) return;
                         chatHistory = [];
+                        // Oubli côté serveur de la session en cours (mémoire
+                        // de conversation) — best-effort, le chat continue
+                        // sans même si l'appel échoue.
+                        if (chatSessionId) {
+                            var forgotten = chatSessionId;
+                            chatSessionId = "";
+                            ApiClient.ajax({
+                                url: ApiClient.getUrl("Plugins/LLMAI/ChatMemory/Forget"),
+                                type: "POST",
+                                data: JSON.stringify({ Session: forgotten }),
+                                contentType: "application/json",
+                                dataType: "json"
+                            }).then(null, function () { /* silencieux */ });
+                        }
                         if (chatLog) {
                             chatLog.innerHTML = '<div class="chatHint">' +
                                 esc(i18n.t("cfg.chat.hint")) + '</div>';
                         }
                     });
                 }
+
+                // ----------------------------------------------------------------
+                //  Mémoire de conversation : bannière « Reprendre »
+                // ----------------------------------------------------------------
+
+                // GET /Plugins/LLMAI/ChatMemory : la session la plus récente
+                // (id, date, résumé, derniers tours). Une bannière propose de
+                // la reprendre ; les derniers échanges verbatim sont rejoués
+                // dans le log, le résumé (si prêt) est injecté serveur-side.
+                function loadChatMemory() {
+                    var banner = view.querySelector("#chatResume");
+                    if (!banner) return;
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/ChatMemory"),
+                        type: "GET",
+                        dataType: "json"
+                    }).then(function (data) {
+                        data = data || {};
+                        if (data.Error || data.Enabled === false || !data.Current) return;
+                        var info = data.Current;
+                        if (!info.Id || !(info.Turns > 0)) return;
+
+                        var textEl = view.querySelector("#chatResumeText");
+                        if (textEl) {
+                            textEl.textContent = i18n.t("chat.resume.banner",
+                                info.Date || "?", info.Turns || 0);
+                        }
+                        banner.hidden = false;
+
+                        var resumeBtn = view.querySelector("#btnResumeChat");
+                        if (resumeBtn && !resumeBtn._llmaiWired) {
+                            resumeBtn._llmaiWired = true;
+                            resumeBtn.addEventListener("click", function () {
+                                if (chatBusy) return;
+                                chatSessionId = info.Id;
+                                chatHistory = [];
+                                if (chatLog) chatLog.innerHTML = "";
+                                var turns = info.Last || [];
+                                for (var i = 0; i < turns.length; i++) {
+                                    var t = turns[i];
+                                    if (!t || !t.content) continue;
+                                    var role = t.role === "user" ? "user" : "assistant";
+                                    chatHistory.push({ role: role, content: t.content });
+                                    appendChatTurn(role, role === "user"
+                                        ? "<p>" + esc(t.content) + "</p>"
+                                        : renderMarkdown(t.content));
+                                }
+                                banner.hidden = true;
+                            });
+                        }
+                    }, function () { /* indisponible : chat sans mémoire (fail-open) */ });
+                }
+                loadChatMemory();
             }); // fin i18nReady().then(...).then(...)
         });
     };

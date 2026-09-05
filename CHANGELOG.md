@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.10.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Mémoire de conversation du chat** (opt-in `ChatMemoryEnabled`, défaut
+  off) — reprendre le dernier chat, et raffiner les goûts de l'usager :
+  - `ChatMemoryStore.cs` (nouveau) — store `chat_memory.json` : par usager,
+    les 5 dernières sessions (rétention 30 jours), chacune avec ses tours
+    verbatim (plafonnés), un total, et le **résumé de session** (≤ 1500
+    caractères) ;
+  - **Condensation paresseuse** — la session précédente est résumée
+    (UN appel LLM sans outils) en tâche de fond au retour de l'usager
+    (ouverture de la page chat ou première conversation), jamais pendant la
+    conversation (zéro coût par tour) : note de continuité « Goûts exprimés
+    / Faits utiles / Fil ouvert » + une ligne `SIGNALS:` (tableau JSON des
+    signaux de goût, parsing tolérant — absent = ignoré, fail-open) ;
+  - **Signaux de goût → boucle réflexive** : chaque signal (titre, raison,
+    +/−) est journalisé comme décision `kind="chat"` dans `decisions.json`
+    (dédoublonné 7 jours, gated `DecisionLogEnabled`) — la révision hebdo
+    de la fiche mémoire (`MemoryTask`) les voit déjà ; plus grand trou de
+    traçabilité de la v1.9 comblé ;
+  - **Injection** : résumé de la session précédente + derniers échanges
+    verbatim accolés au workflow de chat (après la fiche mémoire ; la
+    session courante est exclue — son contenu arrive via l'historique
+    rejoué par la page) ; jetable (le résumé suivant le remplace) ;
+  - **Page chat** : bannière « Conversation du {date} — {n} échanges » +
+    bouton **« Reprendre »** (restaure les derniers échanges et la session) ;
+    le bouton « Effacer la conversation » oublie aussi la session
+    (`POST /Plugins/LLMAI/ChatMemory/Forget`, best-effort) ;
+  - **Endpoints admin** : `GET /Plugins/LLMAI/ChatMemory` (session la plus
+    récente) et `POST /Plugins/LLMAI/ChatMemory/Forget` ; le `SessionId`
+    voyage dans `ChatRequest`/`ChatResponse` ;
+  - opt-in, fail-open partout : store absent → chat sans mémoire, inchangé.
+
 ## [1.9.0.0] — 2026-09-05
 
 ### Ajouté / Added
