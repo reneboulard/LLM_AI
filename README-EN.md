@@ -1,6 +1,6 @@
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.1.0.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.10.0.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -27,6 +27,14 @@ straight into `GenreCleaner.xml` (see
 ("LLM_AI Chat" page, the agent's full toolset in a conversation, see
 [LLM chat](#llm-chat-admin)).
 
+It also implements an **opt-in reflective memory** (experimental): the LLM journals its
+own recommendations (with reasons), watch telemetry and an EPG snapshot, then a weekly
+task rewrites a **versioned memory card** — its own strategy, ≤ 250 words — which is
+re-injected into its prompts (see [Reflective memory](#reflective-memory)). The chat
+adds a **conversation memory** (persisted sessions, lazy summarization, "Resume"
+button, taste signals feeding the same journal, see
+[Conversation memory](#conversation-memory)).
+
 ---
 
 ## Table of contents
@@ -44,10 +52,11 @@ straight into `GenreCleaner.xml` (see
 11. [Orphan recording identification](#orphan-recording-identification)
 12. [AI genre translation (GenreCleaner)](#ai-genre-translation-genrecleaner)
 13. [LLM chat (admin)](#llm-chat-admin)
-14. [HTTP API](#http-api)
-15. [i18n (FR / EN)](#i18n-fr--en)
-16. [Troubleshooting](#troubleshooting)
-17. [Changelog](#changelog)
+14. [Reflective memory](#reflective-memory)
+15. [HTTP API](#http-api)
+16. [i18n (FR / EN)](#i18n-fr--en)
+17. [Troubleshooting](#troubleshooting)
+18. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -339,6 +348,25 @@ modify another plugin's config). Full details:
 - `ChatEnabled` (bool, default `true` — opt-out) — enables the **LLM_AI Chat** page
   (admin menu, "Server" section) and the `POST /Plugins/LLMAI/Chat` endpoint.
   See [LLM chat (admin)](#llm-chat-admin).
+- `ChatMemoryEnabled` (bool, default `false` — opt-in) — chat conversation memory:
+  persisted sessions, lazy summarization, "Resume" button. See
+  [Conversation memory](#conversation-memory).
+
+### Reflective memory (experimental)
+
+Three opt-in flags (see [Reflective memory](#reflective-memory)):
+
+- `DecisionLogEnabled` (bool, default `false`) — journals every emitted reco with its
+  LLM **reason** and the run's **candidate menu** (`decisions.json` + `run_pool.json`),
+  and freezes ephemeral EPG metadata (`epg_snapshot.json`). Double-writes the classic
+  feedback-loop RecoLog journal (which still reads it).
+- `PlaybackTelemetryEnabled` (bool, default `false`) — journals every finished
+  playback with the watched percentage (`playback.json`): instant rejection (< 5 %),
+  abandon (5–50 %), validated content (> 80 %).
+- `MemoryCardEnabled` (bool, default `false`) — weekly task (Sunday 4:30): the LLM
+  rewrites its **memory card** (~250 words, `memory_card.json`, versioned, 4 previous
+  versions kept); when active, the card REPLACES the classic feedback-loop directive
+  in the prompts. Admin-editable on the configuration page.
 
 ---
 
@@ -359,6 +387,12 @@ modify another plugin's config). Full details:
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` genre + empties the collection (always active). |
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Weekly analysis (Sunday 04:00, opt-in `RecoFeedbackEnabled`) of the feedback loop: correlates the reco/rejection log with actual watch history (C# + `IUserDataManager`), has the LLM (`RunSynthesisAsync`, tool-less) produce a per-user directive persisted in `PromptDirectives`. See [Feedback loop](#recommendation-feedback-loop). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internal) | Feedback-loop helpers: rolling `RecoLog` journal (parse/persist/prune), `PromptDirectives` (parse/persist/truncation), re-injected prompt blocks (per-user for Tonight, merged for the record task). |
+| `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (internal static) | Reflective-memory stores: `decisions.json` (one entry per emitted reco, with its LLM reason and the card version in effect `mv`), `run_pool.json` (the candidate "menu" submitted to each run — tells a bad reco from a ranking error), `playback.json` (`PlaybackWatcher` telemetry). Static run context (`BeginRun`/`EndRun`/`ActiveRunId`) linking the global `get_emby_info` tool to the current run; readers `ParseAllDecisions/Pools/Playback`. 30-day retention, capped, fail-open. |
+| `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Telemetry observer: hooks `ISessionManager.PlaybackStopped`, writes one `playback.json` entry per finished session (item, user, actual duration, watched fraction, source library/.strm/direct, channel, client, device). Opt-in `PlaybackTelemetryEnabled` checked on every event; the live percentage is derived at analysis time via `EpgSnapshotStore`. Best-effort, never affects playback. |
+| `EpgSnapshotStore.cs` | `EpgSnapshotStore` / `EpgSnapshotEntry` (internal static) | EPG snapshot (`epg_snapshot.json`, 90-day retention): freezes ephemeral metadata as soon as the program is submitted to the LLM (title, synopsis ≤ 300, channel, **air duration** = live-percentage denominator, GenreCleanerMap-normalized genres, year, series/movie flags) and at timer creation (`AutoProgrammer` → `MarkTimer`). An aired program vanishes from Emby: without the snapshot, everything we knew is lost. |
+| `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (internal static) | Reflective memory card (`memory_card.json`): current version + **immutable history of the 4 previous versions** (anti-drift counterweight), ~250-word cap, fail-open (LLM failure → previous card kept). `BuildInjectionBlock`: the "ASSISTANT MEMORY" block re-injected into prompts when `MemoryCardEnabled` — **replaces** the classic feedback-loop directive (transparent fallback otherwise). |
+| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Weekly revision (Sunday 4:30, opt-in `MemoryCardEnabled`): **100% C# join** of the week's events (decisions × telemetry with live percentage via snapshot × **card-version calibration** `mv` × pool-discarded candidates × watched-without-reco × playback slots), then **one tool-less LLM call** rewrites the card (must carry the current one forward, imposed sections, weak/strong signal nuance, ≤ 250 words). See [Reflective memory](#reflective-memory). |
+| `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (internal static) | Chat conversation memory (`chat_memory.json`, per user, 5 sessions / 30 days): verbatim turns (compacted to the last 6 after summarization), session summary (≤ 1500 chars). `BuildInjectionBlock`: previous session summary + last exchanges, appended to the chat workflow (throwaway — the next summary replaces it). Opt-in `ChatMemoryEnabled`. See [Conversation memory](#conversation-memory). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series) → S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`) → S3 (SearXNG web search → IMDb id, same acceptance gate), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. See [Orphan identification](#orphan-recording-identification). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default poster (`default_poster.jpg`, embedded resource) on the `AI Tonight` collection (BoxSet) and the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same Gracenote artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
@@ -366,8 +400,8 @@ modify another plugin's config). Full details:
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report. |
-| `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}]}` (stateless server — the page keeps the history), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities). The system prompt (tool docs + directives) is built server-side, once per conversation. |
-| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | **Admin** utility endpoints for the config page: `POST /Plugins/LLMAI/TestLlm` (test a backend **as edited** — provider/url/model posted, API keys re-read server-side from saved config, reply carries OK/failure + latency + excerpt, 30 s timeout) and `GET /Plugins/LLMAI/DefaultPrompts` (the four default prompts in the resolved language: `?Lang=` → `ResponseLanguage` → Emby display language — deliberately NOT the metadata/TmdbLanguage cascade). See [Config page helpers](#config-page-helpers). |
+| `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}], Session}` (the page keeps the history; `Session` = conversation-memory id), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities, memory block appended). The system prompt (tool docs + directives) is built server-side, once per conversation. Also carries the **conversation memory**: session resolution, turn journaling (`ChatMemoryStore`), lazy condensation of past sessions (one LLM call as a background task, continuity note + `SIGNALS:` line → decisions `kind="chat"`), and the `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget` endpoints. |
+| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | **Admin** utility endpoints for the config page: `POST /Plugins/LLMAI/TestLlm` (test a backend **as edited** — provider/url/model posted, API keys re-read server-side from saved config, reply carries OK/failure + latency + excerpt, 30 s timeout) and `GET /Plugins/LLMAI/DefaultPrompts` (the four default prompts in the resolved language: `?Lang=` → `ResponseLanguage` → Emby display language — deliberately NOT the metadata/TmdbLanguage cascade) and `GET`/`POST /Plugins/LLMAI/MemoryCard` (admin view/edit of the memory card — version and history unchanged). See [Config page helpers](#config-page-helpers). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (internal static) | **Single source** of the four default prompts/directives (FR + EN): the `RagDirectives` baseline (verify via tools before asserting, never recommend an owned/scheduled title, slight preference for recent productions without penalizing a missing year), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`. Feeds both the `PluginConfiguration` initializers (fresh installs) and the **Reset** button content. |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | **AI genre translation** endpoints (admin): `GET /Plugins/LLMAI/GenreProposals` (collects EPG genres of **upcoming** programs not covered by GenreCleaner, per movie/series section, capped at 60/section, then a one-shot LLM call via `ChatWithFallbackAsync` proposes for each a curated-vocabulary target, a new genre, or nothing) and `POST /Plugins/LLMAI/GenreApply` (re-validates then writes into `GenreCleaner.xml` via `GenreCleanerMap`, records into `GenreAliasApplied`, triggers `NotifyPendingRestart`). Suggestion language = `ResolveMetaLangKey` cascade (`ResponseLanguage`). See [AI genre translation](#ai-genre-translation-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (internal static) | **GenreCleaner.xml bridge**: reading (`Allowed`/`IsMapped`/`IsCovered` — a genre is covered when mapped OR present as-is in AllowedGenres), idempotent writing (`AddMappings` — dedup by normalized key, AllowedGenres add for `new` entries, identity mappings like `Action→Action` rejected except new genres) and **self-healing** (`HealApplied`: re-writes into the XML the mappings recorded in `GenreAliasApplied` that went missing — `new:true` also restores the AllowedGenres entry). |
@@ -382,7 +416,7 @@ modify another plugin's config). Full details:
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Specialized LLM tools (see [LLM tools](#llm-tools)). `TmdbLookupTool` additionally exposes `LookupMetaAsync`/`LookupMetaMultiLangAsync` (search, S1), `FindByExternalIdAsync` (`/find`, validates a proposed id), `LookupMetaByIdAsync` (detail by id), `CleanEpgTitle` — reused by `StrmLibraryGenerator` and `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Configuration page (entry of the fields above). |
 | `recommendations.html` / `recommendations.js` | — | Recommendations page (renders the 3 sections, cards, buttons). |
-| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history (stateless server), shared Markdown rendering. |
+| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history, shared Markdown rendering, "Resume" banner (conversation memory, opt-in `ChatMemoryEnabled`). |
 | `i18n.js` | — | Localized FR/EN strings + `web/ConfigurationPage?name=LLMAII18n` endpoint. |
 | `deploy.sh` | — | Build + deploy + restart (see [Installation](#installation)). |
 
@@ -967,14 +1001,96 @@ scheduled task (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
 **not** the audit remediation actions), the plugin's backends/priorities.
 
 - **Endpoint:** `POST /Plugins/LLMAI/Chat`, body
-  `{Message, History:[{role,content}]}` — the server is **stateless** (the page keeps
-  the history, scoped to each page visit), roles other than user/assistant are
-  filtered, and the system prompt (tool docs + directives) is built server-side.
+  `{Message, History:[{role,content}], Session}` — the page keeps the history (scoped
+  to each page visit), roles other than user/assistant are filtered, and the system
+  prompt (tool docs + directives) is built server-side. `Session`: the
+  conversation-memory id (returned by the first response then replayed; empty = new
+  conversation).
 - **Gating:** `ChatEnabled` (default `true`, opt-out). **Admin only** — the page is
   not published in the user menu (no `EnableInUserMenu`): it exposes library and EPG
   introspection.
 - Usage: explore the library in natural language, prepare/evaluate an evening, ask
   the agent what it could recommend — without spending a full run.
+
+### Conversation memory
+
+Opt-in `ChatMemoryEnabled` (default off) — resume the last chat and refine the
+user's tastes:
+
+- **Persistence**: each session is journaled per user in `chat_memory.json`
+  (5 sessions, 30 days) — verbatim turns, total, summary.
+- **Lazy condensation**: the previous session is summarized (ONE tool-less LLM
+  call) as a **background task** when the user comes back (page load, new
+  conversation) — never during the conversation (zero per-turn cost). Continuity
+  note "Tastes expressed / Useful facts / Open thread", ending with a `SIGNALS:`
+  line (JSON array of taste signals, tolerant parsing: missing = ignored,
+  fail-open).
+- **Reflective bridge**: every taste signal (title, reason, +/−) becomes a
+  `kind="chat"` decision in `decisions.json` (7-day dedup) — the weekly card
+  revision picks them up.
+- **Injection**: previous session summary + its last 6 verbatim exchanges,
+  appended to the chat workflow (after the memory card); throwaway (the next
+  summary replaces it).
+- **UI**: "Conversation from {date} — {n} exchange(s)" banner + a **"Resume"**
+  button (restores the last exchanges and the session); "Clear conversation" also
+  forgets the server-side session.
+- **Admin endpoints**: `GET /Plugins/LLMAI/ChatMemory` (most recent session),
+  `POST /Plugins/LLMAI/ChatMemory/Forget` (forget session(s)).
+
+---
+
+## Reflective memory
+
+**Opt-in, experimental** — the LLM observes its own results and maintains its own
+strategy. Full cycle: **data → reflection → re-injection**.
+
+### The stores (Phase A/B, `DecisionStore` / `PlaybackWatcher` / `EpgSnapshotStore`)
+
+All JSON files in the plugin configuration directory, opt-in, capped, bounded
+retention, fail-open (missing/corrupt file → empty, never an exception):
+
+| File | Content | Retention |
+|---|---|---|
+| `decisions.json` | Every emitted reco (Tonight / recording / "Forget" rejection / **chat taste signal**) with its **LLM reason**, its priority, and the **card version in effect** (`mv` — the calibration key) | 30 days |
+| `run_pool.json` | The candidate "menu" submitted to each run (EPG captured by `get_emby_info`, library reserve, unwatched recordings) — tells a **bad reco** from a **ranking error** | 30 days |
+| `playback.json` | Every finished playback: item, user, actual duration, **watched fraction**, source (library/.strm/direct), channel, client, device | 30 days |
+| `epg_snapshot.json` | EPG metadata **frozen** at LLM submission / timer creation (title, synopsis, channel, **air duration** — live-percentage denominator, normalized genres) | 90 days |
+
+Derived behavioral categories: **instant rejection** < 5 %, **abandon** 5–50 %,
+**partial** 50–80 %, **validated** > 80 % (live % = watched duration ÷ snapshot air
+duration, joined by channel + air window).
+
+### The memory card (Phase C, `MemoryTask` / `MemoryCard`)
+
+Weekly task (Sunday 4:30 — after the classic 4:00 analysis, opt-in
+`MemoryCardEnabled`):
+
+1. **100% C# join** (zero LLM for the data): decisions × telemetry × **card-version
+   calibration** (did recos issued under v3 perform better than under v4?) ×
+   pool-discarded candidates × watched-without-reco (titles resolved C#-side) ×
+   playback slots.
+2. **One tool-less LLM call** rewrites the card: carrying the current one forward is
+   mandatory, imposed sections ("What I know about the user / What worked / What
+   failed and why / Strategies for future recommendations / Uncertainty zones"),
+   self-assessment of the failed *belief* (not just the title), weak-signal nuance
+   (1-2 cases) vs strong (3+), ≤ 250 words.
+3. **Immutable history**: version++, 4 previous versions kept — the anti-drift
+   counterweight. LLM failure → previous card kept (fail-open).
+
+**Injection (3 sites)**: when the card is active and non-empty, it **replaces** the
+classic feedback-loop directive — Tonight prompts, recording prompts, chat workflow.
+Empty/missing card → transparent fallback to the classic directive.
+
+**Admin view/edit**: the "Current memory card" section of the configuration page
+(version/date/kept-versions count, editable text for a manual correction the LLM will
+carry forward next week) — `GET`/`POST /Plugins/LLMAI/MemoryCard` (admin) endpoints.
+
+### Reset
+
+No button: renaming/deleting the JSON files above is enough (the stores recreate
+them on first write, no restart needed). Pitfall: deleting `decisions.json` alone
+triggers a re-migration of the old RecoLog journal — also clear the RecoLog field of
+the config for a true zero. Rename (backup) beats delete (reversible).
 
 ---
 
@@ -1072,14 +1188,59 @@ round-trip, hence 403 for a non-admin.
 **Authentication:** any authenticated user.
 
 ```
-POST /Plugins/LLMAI/Chat          body: {Message, History:[{role,content}]}
+POST /Plugins/LLMAI/Chat          body: {Message, History:[{role,content}], Session}
 ```
 
 **Admin LLM chat**: one conversation turn with the agent (all tools, plugin
-backends/priorities). Stateless server — `History` is sent back by the page, filtered
-to user/assistant roles. See [LLM chat (admin)](#llm-chat-admin).
+backends/priorities). `History` is sent back by the page, filtered to user/assistant
+roles; `Session` (optional) enables the conversation memory — the id is returned in
+every response and replayed by the page. See
+[LLM chat (admin)](#llm-chat-admin) and [Conversation memory](#conversation-memory).
+
+**Response:** `{ Reply, Enabled, Error, Session }`.
 
 **Authentication:** admin only.
+
+```
+GET  /Plugins/LLMAI/MemoryCard
+POST /Plugins/LLMAI/MemoryCard    body: {"Text":"..."}
+```
+
+**Reflective memory card** (admin): `GET` returns `{Version, Updated, Text,
+HistoryCount, Error}` (current card + number of kept versions); `POST` saves a manual
+text correction (version and history unchanged — the LLM will carry this text forward
+at the next weekly revision). See [Reflective memory](#reflective-memory).
+
+**Response:** `{Version, Updated, Text, HistoryCount, Error}`.
+
+**Authentication:** admin only.
+
+**Test:**
+```bash
+curl -H "X-Emby-Token: VOTRE_CLE_API" \
+  "http://localhost:8096/emby/Plugins/LLMAI/MemoryCard"
+```
+
+```
+GET  /Plugins/LLMAI/ChatMemory
+POST /Plugins/LLMAI/ChatMemory/Forget    body: {"Session":"c..."} (optional)
+```
+
+**Conversation memory** (admin): `GET` kicks the lazy condensation of past sessions
+(background task) and returns `{Current:{Id, Date, Turns, HasSummary, Summary,
+Last:[{role,content}]}, Enabled, Error}` — the most recent session with turns (used
+by the chat page "Resume" banner). `POST …/Forget` deletes the given session (without
+`Session`: all of the calling admin's sessions).
+
+**Response Forget:** `{Forgotten, Error}`.
+
+**Authentication:** admin only.
+
+**Test:**
+```bash
+curl -H "X-Emby-Token: VOTRE_CLE_API" \
+  "http://localhost:8096/emby/Plugins/LLMAI/ChatMemory"
+```
 
 ```
 GET /Plugins/LLMAI/GenreProposals
