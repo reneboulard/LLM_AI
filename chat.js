@@ -136,6 +136,37 @@ define([], function () {
                     if (pending) pending.parentNode.removeChild(pending);
                 }
 
+                // Message d'erreur lisible depuis une promesse ajax rejetée.
+                // L'ajax d'Emby (ApiClient.fetch, requête non-GET) rejette la
+                // Response BRUTE pour tout statut ≥ 400 : String(err) rendait
+                // « [object Response] » (vécu 2026-09-05). On lit le statut et,
+                // si possible, le corps (JSON d'erreur ServiceStack ou texte)
+                // pour afficher « HTTP 500 — message ». Repli : AbortError
+                // (timeout page), TypeError (connexion coupée), sinon String().
+                function describeError(err) {
+                    if (err && typeof err.status === "number" && err.status >= 400) {
+                        var base = "HTTP " + err.status;
+                        if (typeof err.text !== "function") return Promise.resolve(base);
+                        return err.text().then(function (body) {
+                            var m = "";
+                            try {
+                                var j = JSON.parse(body);
+                                m = (j && (j.Message || j.message)) ||
+                                    (j && j.ResponseStatus &&
+                                        (j.ResponseStatus.Message || j.ResponseStatus.ErrorCode)) || "";
+                            } catch (e) {
+                                if (body) m = String(body).slice(0, 200);
+                            }
+                            return m ? base + " — " + m : base;
+                        }, function () { return base; });
+                    }
+                    if (err && err.name === "AbortError")
+                        return Promise.resolve("Requête trop longue — le LLM n'a pas répondu dans le délai imparti. Réessayez.");
+                    if (err instanceof TypeError)
+                        return Promise.resolve("Serveur injoignable (connexion interrompue).");
+                    return Promise.resolve(String(err == null ? "" : err));
+                }
+
                 function sendChat() {
                     if (chatBusy || !chatInput || !chatSendBtn) return;
                     var msg = (chatInput.value || "").trim();
@@ -161,7 +192,12 @@ define([], function () {
                         url: ApiClient.getUrl("Plugins/LLMAI/Chat"),
                         type: "POST",
                         data: JSON.stringify(payload),
-                        contentType: "application/json"
+                        contentType: "application/json",
+                        // Borne client : un LLM local lent ne doit pas laisser
+                        // la bulle « réfléchit… » indéfiniment (le serveur
+                        // voit l'annulation et arrête son agent). AbortError
+                        // → message dédié dans describeError().
+                        timeout: 240000
                     }).then(function (resp) {
                         return resp.json();
                     }).then(function (data) {
@@ -192,13 +228,15 @@ define([], function () {
                         appendChatTurn("assistant", renderMarkdown(reply));
                         chatHistory.push({ role: "assistant", content: reply });
                     }, function (err) {
-                        chatBusy = false;
-                        chatSendBtn.disabled = false;
-                        chatHistory.pop();
-                        removePendingTurn();
-                        appendChatTurn("assistant",
-                            '<p class="chatHint">' + esc(String(err)) + '</p>');
-                        if (chatInput) chatInput.value = msg;
+                        return describeError(err).then(function (errText) {
+                            chatBusy = false;
+                            chatSendBtn.disabled = false;
+                            chatHistory.pop();
+                            removePendingTurn();
+                            appendChatTurn("assistant",
+                                '<p class="chatHint">' + esc(errText) + '</p>');
+                            if (chatInput) chatInput.value = msg;
+                        });
                     });
                 }
 

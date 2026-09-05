@@ -39,24 +39,32 @@ namespace LLM_AI
         public string Description =>
             "Interroge la bibliothèque Emby et l'EPG (lecture seule). Retourne du JSON minimal. " +
             "Actions : summary, library, global_search, item_details, item_persons, person, " +
-            "epg_series, epg_movies, epg_tonight, scheduled, planning.";
+            "find, genre_stats, epg_series, epg_movies, epg_tonight, scheduled, planning. " +
+            "find = recherche unifiée bibliothèque+EPG (voie recommandée pour les questions génériques).";
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
-  ""action"": ""summary | library | global_search | item_details | item_persons | person | epg_series | epg_movies | epg_tonight | scheduled"",
+  ""action"": ""summary | library | global_search | item_details | item_persons | person | find | genre_stats | epg_series | epg_movies | epg_tonight | scheduled"",
   ""type"": ""(library) movie | series | episode | audio | album | book — filtre IncludeItemTypes"",
-  ""query"": ""(global_search) terme de recherche"",
+  ""query"": ""(global_search/find) terme de recherche"",
   ""name"": ""(person) nom de personne à chercher"",
   ""id"": ""(item_details / item_persons) identifiant de l'item (id renvoyé par library/global_search)"",
   ""genre"": ""(library) filtre par genre"",
-  ""sort_by"": ""(library) recent | year | rating | name (défaut: recent)"",
-  ""min_rating"": ""(library) note communautaire minimale"",
-  ""types"": ""(global_search) tableau de types à restreindre"",
+  ""person"": ""(find) nom d'acteur/réalisateur — items où il apparaît"",
+  ""genres"": ""(find) tableau de genres (FR ou EN brut accepté, vocabulaire normalisé)"",
+  ""classification"": ""(find) classification officielle demandée (ex. 13+, PG-13, CA-14A — normalisée)"",
+  ""source"": ""(find) library | epg | both (défaut both; récent/date_played: défaut library)"",
+  ""user"": ""(find/genre_stats) usager pour watched/favorites/date_played (défaut: premier usager; genre_stats: tous)"",
+  ""watched"": ""(find) true=uniquement vus, false=uniquement non vus (besoin user)"",
+  ""favorites"": ""(find) true=uniquement favoris, false=uniquement non-favoris (besoin user)"",
+  ""sort_by"": ""(library/find) recent | year | rating | name | date_played (défaut recent; date_played: nécessite user)"",
+  ""min_rating"": ""(library/find) note communautaire minimale"",
+  ""types"": ""(find/global_search) tableau de types à restreindre"",
   ""premieres_only"": ""(epg_series) true pour ne garder que les S01E01 (nouvelles séries). Exclut kids/news sauf si les flags correspondants sont activés en config ; exclut documentary (sauf exclude_genres) et les séries de la biblio"",
   ""new_seasons"": ""(epg_series) true pour le mode « séries absentes » d'emby-absent-series.sh : garde les nouvelles saisons de séries déjà possédées (is_new_season=true), n'exclut que les timers, conserve les kids"",
   ""exclude_genres"": ""(epg_series / epg_movies / epg_tonight) genres à exclure. Défaut epg_series premieres_only: [""documentary"", ""news""] ; sinon []"",
   ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence) ; tu peux demander moins"",
-  ""offset"": ""(library) indice de pagination (défaut 0)""
+  ""offset"": ""(library/find) indice de pagination (défaut 0)""
 }";
 
         private static readonly JsonSerializerOptions s_json = new JsonSerializerOptions
@@ -100,6 +108,8 @@ namespace LLM_AI
                     case "item_details":  result = ItemDetails(args); break;
                     case "item_persons":   result = ItemPersons(args); break;
                     case "person":         result = Person(args); break;
+                    case "find":          result = Find(args); break;
+                    case "genre_stats":   result = GenreStats(args); break;
                     case "epg_series":    result = EpgSeries(args); break;
                     case "epg_movies":    result = EpgMovies(args); break;
                     case "epg_tonight":   result = EpgTonight(args); break;
@@ -331,6 +341,493 @@ namespace LLM_AI
                 single_timers = singleProj
             }, s_json);
         }
+
+        // ------------------------------------------------------------------
+        //  find : façade bibliothèque + EPG (une seule requête LLM)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Résultat intermédiaire d'une jambe <see cref="Find"/> : un item de
+        /// la bibliothèque (<see cref="Lib"/>) OU un programme EPG
+        /// (<see cref="Epg"/>) — jamais les deux. La projection JSON unifiée
+        /// est faite en aval.
+        /// </summary>
+        private sealed class FindResult
+        {
+            public BaseItem Lib;           // null côté EPG
+            public BaseItemDto Epg;        // null côté biblio
+            public string[] Genres;        // genres enrichis (EPG : BuildGenreMap)
+            public bool Owned;             // côté EPG : titre présent en biblio
+        }
+
+        /// <summary>
+        /// Recherche unifiée : le LLM décrit ce qu'il cherche UNE seule fois
+        /// (terme, types, personne, genres, classification, vus/favoris…) et
+        /// l'outil fait les appels Emby appropriés. Les vocabulaires qui
+        /// diffèrent entre les deux sources sont harmonisés ici :
+        /// <list type="bullet">
+        /// <item>genres — l'EPG émet l'anglais brut (« Kids »), la biblio le
+        ///   français curaté (« Enfant ») : matching par
+        ///   <see cref="GenreCleanerMap.GenreKeys"/> (clés brute + mappée) et
+        ///   sortie toujours curatisée par <see cref="GenreCleanerMap.MapGenres"/>.</item>
+        /// <item>classification — « PG-13 » (EPG) / « CA-14A » (biblio réécrite
+        ///   par Classification Mapper) : normalisation via
+        ///   <see cref="ClassificationMap.Normalize"/> des deux côtés.</item>
+        /// </list>
+        /// <c>source</c> : library | epg | both (défaut both). En « both »,
+        /// dédup par titre normalisé — l'item bibliothèque gagne ; en « epg »
+        /// seul, les programmes dont le titre est possédé restent avec
+        /// <c>owned=true</c> (informatif, non exclusif : on cherche, on ne
+        /// recommande pas une liste d'enregistrement ici).
+        /// </summary>
+        private string Find(JsonElement args)
+        {
+            int limit = Math.Max(1, OptInt(args, "limit", 20));
+            int offset = OptInt(args, "offset", 0);
+            string sortBy = (OptString(args, "sort_by") ?? "recent").ToLowerInvariant();
+
+            // Défaut de source dépendant du tri : « recent » (DateCreated) et
+            // « date_played » sont des concepts BIBLIOTHÈQUE — un défaut
+            // « both » y mélange les programmes EPG (vécu 2026-09-05 : une
+            // question « derniers ajouts » renvoyait 196 programmes TV avec
+            // les 10 films récents, et le LLM devait se corriger en rappelant
+            // find avec source=library). Seulement quand le LLM ne précise
+            // PAS source : une demande explicite source=both est honorée.
+            string source = OptString(args, "source")?.ToLowerInvariant();
+            if (source == null && (sortBy == "recent" || sortBy == "date_played"))
+                source = "library";
+            source ??= "both";
+            if (source != "library" && source != "epg" && source != "both")
+                return Err($"source inconnue : {source} (library | epg | both)");
+            var genreSet = NormGenreSet(OptStringArray(args, "genres") ?? Array.Empty<string>());
+            string classification = OptString(args, "classification");
+            string searchTerm = OptString(args, "query");
+            string personName = OptString(args, "person");
+            double? minRating = OptDouble(args, "min_rating");
+            bool? watched = OptBoolTri(args, "watched");
+            bool? favs = OptBoolTri(args, "favorites");
+            bool byDatePlayed = sortBy == "date_played";
+            bool userDependent = watched.HasValue || favs.HasValue || byDatePlayed;
+
+            if (byDatePlayed && source == "epg")
+                return Err("sort_by=date_played ne s'applique qu'à la bibliothèque (source=library|both)");
+
+            User user = null;
+            if (userDependent)
+            {
+                user = ResolveUser(OptString(args, "user"));
+                if (user == null) return Err("usager introuvable (paramètre 'user' invalide)");
+                _logger?.Info("[LLM_AI] find : contexte usager={0} (watched={1} favorites={2} date_played={3})",
+                    user.Name, watched, favs, byDatePlayed);
+            }
+
+            var types = OptStringArray(args, "types");
+
+            // --- Jambe bibliothèque ------------------------------------------
+            var libMatches = new List<FindResult>();
+            if (source != "epg")
+            {
+                var q = new InternalItemsQuery
+                {
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    User = user
+                };
+                if (types != null && types.Length > 0)
+                    q.IncludeItemTypes = types.Select(MapType).Distinct().ToArray();
+                else
+                    q.IncludeItemTypes = new[] { "Movie", "Series" };
+                if (!string.IsNullOrEmpty(searchTerm)) q.SearchTerm = searchTerm;
+                if (minRating.HasValue) q.MinCommunityRating = minRating.Value;
+                if (watched.HasValue) q.IsPlayed = watched.Value;
+                if (favs.HasValue) q.IsFavorite = favs.Value;
+
+                if (!string.IsNullOrWhiteSpace(personName))
+                {
+                    // PersonIds attend des InternalId (long) — émis à toutes
+                    // les frontières LLM/UI (cf. ItemIdResolver), même forme
+                    // que l'API REST (vérifié live : PersonIds=3787 → 39 films).
+                    var personIds = ResolvePersonIds(personName);
+                    if (personIds == null)
+                        return Err($"personne introuvable : {personName}");
+                    q.PersonIds = personIds;
+                }
+
+                if (byDatePlayed)
+                {
+                    // DatePlayed n'existe que côté SQL (UserData) : le tri passe
+                    // par la query (précédent RecoAnalysisTask), la pagination
+                    // en amont (Limit = offset + limit), pas de tri C# possible.
+                    q.OrderBy = new[] { ("DatePlayed", SortOrder.Descending) };
+                    q.Limit = offset + limit;
+                    foreach (var it in _library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                    {
+                        if (!MatchesGenres(it.Genres, genreSet, LibSeriesCtx(it))) continue;
+                        if (!MatchesClassification(it.OfficialRating, classification)) continue;
+                        libMatches.Add(ToFindResult(it, user));
+                    }
+                }
+                else
+                {
+                    q.Limit = null;   // pool complet, tri C#, pagination ensuite
+                    foreach (var it in _library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                    {
+                        if (!MatchesGenres(it.Genres, genreSet, LibSeriesCtx(it))) continue;
+                        if (!MatchesClassification(it.OfficialRating, classification)) continue;
+                        libMatches.Add(ToFindResult(it, user));
+                    }
+                }
+            }
+
+            // --- Jambe EPG ----------------------------------------------------
+            var epgMatches = new List<FindResult>();
+            if (source != "library")
+            {
+                const int POOL = 300;
+                var q = new InternalItemsQuery { HasAired = false, Limit = POOL };
+                var epTypes = (types != null && types.Length > 0)
+                    ? new HashSet<string>(types.Select(MapType).Distinct())
+                    : new HashSet<string>();
+                if (epTypes.Count > 0 && epTypes.All(t => t == "Movie"))
+                    q.IsMovie = true;
+                else if (epTypes.Count > 0 && epTypes.All(t => t == "Series" || t == "Episode"))
+                    q.IsSeries = true;
+
+                var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
+                // GetPrograms renvoie des DTO sans Genres peuplé : enrichissement
+                // par BuildGenreMap (BaseItem), comme les actions epg_*.
+                var genreMap = BuildGenreMap(q);
+
+                // owned : titres normés des matches biblio (post-filtre) —
+                // informatif en source=epg, dédup en source=both.
+                var ownedSet = new HashSet<string>(
+                    libMatches.Select(r => Norm(r.Lib.Name ?? ""))
+                              .Where(n => n.Length > 0));
+
+                var st = string.IsNullOrWhiteSpace(searchTerm)
+                    ? null : searchTerm.Trim().ToLowerInvariant();
+
+                // Dédup par titre : la diffusion au contenu le plus récent
+                // gagne (même sémantique que epg_tonight, FresherAirContent).
+                var best = new Dictionary<string, BaseItemDto>();
+                foreach (var p in programs)
+                {
+                    var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                    if (string.IsNullOrEmpty(title)) continue;
+                    var k = Norm(title);
+                    if (string.IsNullOrEmpty(k)) continue;
+                    if (!best.TryGetValue(k, out var cur) || FresherAirContent(p, cur))
+                        best[k] = p;
+                }
+
+                foreach (var kv in best)
+                {
+                    var p = kv.Value;
+                    var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                    var genres = GenreFor(p, genreMap);
+                    if (!MatchesGenres(genres, genreSet, SeriesCtx(p))) continue;
+                    if (!MatchesClassification(p.OfficialRating, classification)) continue;
+                    if (st != null
+                        && !((title ?? "").ToLowerInvariant().Contains(st))
+                        && !((p.Overview ?? "").ToLowerInvariant().Contains(st))) continue;
+                    var owned = ownedSet.Contains(kv.Key);
+                    // both : l'item bibliothèque gagne (dédup par titre).
+                    if (source == "both" && owned) continue;
+                    epgMatches.Add(new FindResult { Epg = p, Genres = genres, Owned = owned });
+                }
+            }
+
+            // --- Fusion, tri, pagination --------------------------------------
+            List<FindResult> merged;
+            if (source == "epg")
+                merged = epgMatches.OrderBy(x => x.Epg.StartDate ?? DateTimeOffset.MaxValue).ToList();
+            else if (byDatePlayed)
+                merged = libMatches;   // déjà trié côté SQL (DatePlayed desc)
+            else
+                merged = SortFind(libMatches.Concat(epgMatches).ToList(), sortBy);
+
+            var page = merged.Skip(offset).Take(limit).ToList();
+
+            var results = new List<object>();
+            foreach (var r in page)
+            {
+                if (r.Lib != null)
+                {
+                    var i = r.Lib;
+                    results.Add(new
+                    {
+                        id = i.InternalId.ToString(),
+                        name = i.Name,
+                        sources = new[] { "library" },
+                        type = TypeLabel(i),
+                        year = i.ProductionYear,
+                        rating = i.CommunityRating,
+                        // Vocabulaire curaté unique (biblio déjà curatisée :
+                        // MapGenres est une identité dessus).
+                        genres = GenreCleanerMap.MapGenres(i.Genres, LibSeriesCtx(i)),
+                        // Classification canonique Classification Mapper.
+                        classification = ClassificationMap.Normalize(i.OfficialRating),
+                        overview = Truncate(i.Overview, 150),
+                        image_url = ImageUrl(i.InternalId),
+                        date_created = i.DateCreated
+                    });
+                }
+                else
+                {
+                    var p = r.Epg;
+                    var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                    results.Add(new
+                    {
+                        id = p.Id,
+                        name = title,
+                        sources = new[] { "epg" },
+                        type = "program",
+                        year = p.ProductionYear,
+                        rating = p.CommunityRating,
+                        genres = GenreCleanerMap.MapGenres(r.Genres, SeriesCtx(p)),
+                        classification = ClassificationMap.Normalize(p.OfficialRating),
+                        overview = Truncate(p.Overview, 200),
+                        channel = p.ChannelName,
+                        channel_number = p.ChannelNumber,
+                        start = p.StartDate,
+                        end = p.EndDate,
+                        season = p.ParentIndexNumber,
+                        episode = p.IndexNumber,
+                        owned = r.Owned
+                    });
+                }
+            }
+
+            _logger?.Info("[LLM_AI] find : source={0} lib={1} epg={2} → {3} résultat(s) (tri={4}, offset={5}).",
+                source, libMatches.Count, epgMatches.Count, page.Count, sortBy, offset);
+            return JsonSerializer.Serialize(new { total = merged.Count, results }, s_json);
+        }
+
+        /// <summary>Tri C# des résultats find (hors date_played, trié côté SQL).</summary>
+        private static List<FindResult> SortFind(List<FindResult> list, string sortBy)
+        {
+            switch (sortBy)
+            {
+                case "year":
+                    return list.OrderByDescending(x => KeyInt(x, it => it.ProductionYear)).ToList();
+                case "rating":
+                    return list.OrderByDescending(x => KeyDouble(x, it => it.CommunityRating)).ToList();
+                case "name":
+                    return list.OrderBy(x => x.Lib != null ? x.Lib.Name : (x.Epg != null ? x.Epg.Name : ""),
+                                       StringComparer.OrdinalIgnoreCase).ToList();
+                default:   // recent : DateCreated biblio, repli StartDate EPG
+                    return list.OrderByDescending(x => KeyDate(x)).ToList();
+            }
+        }
+
+        private static int? KeyInt(FindResult x, Func<BaseItem, int?> f)
+            => x.Lib != null ? f(x.Lib) : x.Epg?.ProductionYear;
+
+        private static double? KeyDouble(FindResult x, Func<BaseItem, double?> f)
+            => x.Lib != null ? f(x.Lib) : x.Epg?.CommunityRating;
+
+        private static DateTime KeyDate(FindResult x)
+        {
+            // BaseItem.DateCreated est un DateTimeOffset sur cette build.
+            if (x.Lib != null) return x.Lib.DateCreated.UtcDateTime;
+            var sd = x.Epg?.StartDate;
+            return sd.HasValue ? sd.Value.UtcDateTime : DateTime.MinValue;
+        }
+
+        private FindResult ToFindResult(BaseItem item, User user)
+        {
+            // LastPlayedDate n'est pas lisible sans IUserDataManager (non
+            // injecté, pour éviter le ripple des 7 constructeurs de
+            // LlmRunner) : le tri date_played passe côté SQL (OrderBy sur la
+            // query) et la date elle-même n'est pas émise.
+            return new FindResult { Lib = item };
+        }
+
+        /// <summary>
+        /// Résout un nom de personne (acteur/réalisateur…) vers l'InternalId
+        /// (long) de l'item Person correspondant — <c>InternalItemsQuery.PersonIds</c>
+        /// est un <c>long[]</c> sur cette build (vérifié par compilation).
+        /// Match par titre normalisé (<see cref="Norm"/>, accents pliés) en
+        /// priorité, sinon premier résultat SearchTerm. Retourne null si
+        /// aucune personne trouvée.
+        /// </summary>
+        private long[] ResolvePersonIds(string name)
+        {
+            var q = new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { "Person" },
+                SearchTerm = name,
+                Limit = 10,
+                EnableTotalRecordCount = false
+            };
+            var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
+            if (items.Length == 0) return null;
+            var norm = Norm(name);
+            var best = items.FirstOrDefault(p => string.Equals(Norm(p.Name ?? ""), norm, StringComparison.Ordinal))
+                       ?? items[0];
+            return new[] { best.InternalId };
+        }
+
+        /// <summary>
+        /// Résout un nom d'usager (paramètre) vers un <see cref="User"/> ;
+        /// absent → premier usager de la liste. Retourne null si introuvable.
+        /// </summary>
+        private User ResolveUser(string name)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    var byName = _users.GetUserByName(name);
+                    if (byName != null) return byName;
+                    // Repli insensible à la casse (GetUserByName peut être strict).
+                    return (_users.GetUserList(new UserQuery()) ?? new User[0])
+                        .FirstOrDefault(u => string.Equals(u.Name, name, StringComparison.OrdinalIgnoreCase));
+                }
+                return (_users.GetUserList(new UserQuery()) ?? new User[0]).FirstOrDefault();
+            }
+            catch { return null; }
+        }
+
+        // ------------------------------------------------------------------
+        //  genre_stats : censuses de genres du vu / favoris (profil de goûts)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Profil de goûts d'un usager : occurrences de genres (vocabulaire
+        /// curaté) dans ce qui a été VU, dans les FAVORIS vus et les FAVORIS
+        /// non vus. Les flags vus/favoris sont per-user et se requêtent
+        /// directement (<c>InternalItemsQuery.User</c> + <c>IsPlayed</c>/
+        /// <c>IsFavorite</c>) — pas besoin de <c>IUserDataManager</c>.
+        /// <paramref name="user"/> absent → tous les usagers agrégés
+        /// (dédup par item : un même item vu par deux usagers compte une fois).
+        /// Sortie : top 15 de genres par bucket + totaux d'items.
+        /// </summary>
+        private string GenreStats(JsonElement args)
+        {
+            string userName = OptString(args, "user");
+            List<User> users;
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                users = (_users.GetUserList(new UserQuery()) ?? new User[0])
+                    .Where(u => u != null).ToList();
+                if (users.Count == 0) return Err("aucun usager sur ce serveur");
+            }
+            else
+            {
+                var u = ResolveUser(userName);
+                if (u == null) return Err($"usager introuvable : {userName}");
+                users = new List<User> { u };
+            }
+
+            var seenWatched = new HashSet<string>();
+            var seenFavW = new HashSet<string>();
+            var seenFavU = new HashSet<string>();
+            var watchedItems = new List<BaseItem>();
+            var favWatchedItems = new List<BaseItem>();
+            var favUnwatchedItems = new List<BaseItem>();
+
+            foreach (var u in users)
+            {
+                CollectIds(new InternalItemsQuery
+                {
+                    User = u,
+                    IsPlayed = true,
+                    IncludeItemTypes = new[] { "Movie", "Episode" },
+                    Recursive = true,
+                    Limit = null,
+                    EnableTotalRecordCount = false
+                }, seenWatched, watchedItems);
+                CollectIds(new InternalItemsQuery
+                {
+                    User = u,
+                    IsPlayed = true,
+                    IsFavorite = true,
+                    IncludeItemTypes = new[] { "Movie", "Episode" },
+                    Recursive = true,
+                    Limit = null,
+                    EnableTotalRecordCount = false
+                }, seenFavW, favWatchedItems);
+                CollectIds(new InternalItemsQuery
+                {
+                    User = u,
+                    IsPlayed = false,
+                    IsFavorite = true,
+                    IncludeItemTypes = new[] { "Movie", "Episode" },
+                    Recursive = true,
+                    Limit = null,
+                    EnableTotalRecordCount = false
+                }, seenFavU, favUnwatchedItems);
+            }
+
+            var watchedCounts = CensusGenres(watchedItems);
+            var favWatchedCounts = CensusGenres(favWatchedItems);
+            var favUnwatchedCounts = CensusGenres(favUnwatchedItems);
+            var favAll = favWatchedCounts.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in favUnwatchedCounts)
+                favAll[kv.Key] = favAll.TryGetValue(kv.Key, out var n) ? n + kv.Value : kv.Value;
+
+            _logger?.Info("[LLM_AI] genre_stats usagers={0} vus={1} fav={2} (fav vus={3} fav non vus={4}).",
+                string.Join(",", users.Select(u => u.Name)),
+                watchedItems.Count, favWatchedItems.Count + favUnwatchedItems.Count,
+                favWatchedItems.Count, favUnwatchedItems.Count);
+
+            var result = new
+            {
+                users = users.Select(u => u.Name),
+                totals = new
+                {
+                    watched = watchedItems.Count,
+                    favorites = favWatchedItems.Count + favUnwatchedItems.Count,
+                    favorites_watched = favWatchedItems.Count,
+                    favorites_unwatched = favUnwatchedItems.Count
+                },
+                watched = Top(watchedCounts),
+                favorites = new
+                {
+                    all = Top(favAll),
+                    watched = Top(favWatchedCounts),
+                    unwatched = Top(favUnwatchedCounts)
+                }
+            };
+            return JsonSerializer.Serialize(result, s_json);
+        }
+
+        /// <summary>
+        /// Ajoute les items d'une requête à une liste en dédupliquant par
+        /// InternalId (agrégation multi-usagers : un item vu par deux usagers
+        /// ne compte qu'une fois).
+        /// </summary>
+        private void CollectIds(InternalItemsQuery q, HashSet<string> seen, List<BaseItem> into)
+        {
+            foreach (var it in _library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                if (seen.Add(it.InternalId.ToString()))
+                    into.Add(it);
+        }
+
+        /// <summary>
+        /// Compte les occurrences de genres (vocabulaire curaté
+        /// <see cref="GenreCleanerMap.MapGenres"/>) d'une liste d'items.
+        /// </summary>
+        private static Dictionary<string, int> CensusGenres(List<BaseItem> items)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var it in items)
+            {
+                var ctx = LibSeriesCtx(it);
+                foreach (var g in GenreCleanerMap.MapGenres(it.Genres, ctx))
+                    counts[g] = counts.TryGetValue(g, out var n) ? n + 1 : 1;
+            }
+            return counts;
+        }
+
+        /// <summary>Top <paramref name="n"/> de genres triés par occurrences décroissantes.</summary>
+        private static object[] Top(Dictionary<string, int> counts, int n = 15)
+            => counts.OrderByDescending(kv => kv.Value)
+                     .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                     .Take(n)
+                     .Select(kv => (object)new { genre = kv.Key, count = kv.Value })
+                     .ToArray();
 
         // ------------------------------------------------------------------
         //  EPG : programmes à venir absents de la bibliothèque (diff fait ici)
@@ -1336,6 +1833,49 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Vrai si les genres d'un item (biblio OU EPG) recoupent les genres
+        /// demandés : matching par <see cref="GenreCleanerMap.GenreKeys"/>
+        /// (clés brute + mappée) — un genre demandé « comédie » matche l'EPG
+        /// « Comedy » ET la biblio « Comédie », dans les deux sens. Set vide =
+        /// pas de filtre.
+        /// </summary>
+        private static bool MatchesGenres(string[] itemGenres, HashSet<string> wanted, bool? seriesCtx)
+        {
+            if (wanted == null || wanted.Count == 0) return true;
+            if (itemGenres == null || itemGenres.Length == 0) return false;
+            return GenreCleanerMap.GenreKeys(itemGenres, seriesCtx).Overlaps(wanted);
+        }
+
+        /// <summary>
+        /// Vrai si la classification d'un item (biblio OU EPG) normalisée
+        /// (<see cref="ClassificationMap.Normalize"/>) égale la classification
+        /// demandée — « 13+ » (demandé) matche « PG-13 »/« TV-14 » (EPG) et
+        /// « CA-14A » (biblio réécrite). Vide = pas de filtre.
+        /// </summary>
+        private static bool MatchesClassification(string officialRating, string wanted)
+        {
+            if (string.IsNullOrWhiteSpace(wanted)) return true;
+            var a = ClassificationMap.Normalize(officialRating);
+            var b = ClassificationMap.Normalize(wanted);
+            return !string.IsNullOrEmpty(a)
+                && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Contexte de type d'un item biblio pour les tables de mapping
+        /// GenreCleaner (série/épisode = table séries, film = table films).
+        /// NB : Movie est dans le namespace <c>Entities.Movies</c> (pas
+        /// <c>Entities</c>), comme Series/Episode dans <c>Entities.TV</c>.
+        /// </summary>
+        private static bool? LibSeriesCtx(BaseItem i)
+        {
+            if (i is MediaBrowser.Controller.Entities.TV.Episode
+                || i is MediaBrowser.Controller.Entities.TV.Series) return true;
+            if (i is MediaBrowser.Controller.Entities.Movies.Movie) return false;
+            return null;
+        }
+
+        /// <summary>
         /// Contexte de type d'un programme EPG pour les tables de mapping
         /// GenreCleaner (les mappings diffèrent entre films et séries : « Kids »
         /// → « Enfant » côté séries, « Children » → « Familial » côté films).
@@ -1438,6 +1978,20 @@ namespace LLM_AI
             if (p.ValueKind == JsonValueKind.True) return true;
             if (p.ValueKind == JsonValueKind.False) return false;
             return dflt;
+        }
+
+        /// <summary>
+        /// Tri-état : absent/mal formé → null (pas de filtre), true/false →
+        /// filtre explicite (contrairement à <see cref="OptBool"/>, qui ne
+        /// distingue pas absent de false).
+        /// </summary>
+        private static bool? OptBoolTri(JsonElement e, string name)
+        {
+            if (e.ValueKind != JsonValueKind.Object) return null;
+            if (!e.TryGetProperty(name, out var p)) return null;
+            if (p.ValueKind == JsonValueKind.True) return true;
+            if (p.ValueKind == JsonValueKind.False) return false;
+            return null;
         }
 
         private static double? OptDouble(JsonElement e, string name)

@@ -148,8 +148,31 @@ namespace LLM_AI
             // LlmRunner construit avec les services de la base + liveTv,
             // exactement comme sur le path d'audit.
             var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager, _liveTv, ApplicationHost);
-            string reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
-                _sessions, _tasks, _notifications, ct).ConfigureAwait(false);
+            string reply;
+            try
+            {
+                reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
+                    _sessions, _tasks, _notifications, ct).ConfigureAwait(false);
+            }
+            // Requête avortée (déconnexion client, timeout page) : répondre un
+            // JSON propre au lieu de laisser l'OperationCanceledException
+            // remonter en 500 ServiceStack — vécu 2026-09-05 : l'ajax d'Emby
+            // rejette alors la Response brute et la page affichait
+            // « [object Response] ». (Si le client a vraiment fermé la
+            // connexion, la réponse est perdue — sans conséquence.)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Annulation DÉPASSANT la requête HTTP (timeout HttpClient LLM) :
+                // le client est encore là → on lui répond.
+                Logger.Info("[LLM_AI] [CHAT] Requête annulée (délai backend LLM) — réponse d'erreur envoyée.");
+                return new ChatResponse { Enabled = true, Error = "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez." };
+            }
+            catch (OperationCanceledException)
+            {
+                // Déconnexion client : ni réponse ni 500 — juste le log.
+                Logger.Info("[LLM_AI] [CHAT] Requête annulée (client déconnecté).");
+                throw;
+            }
 
             return new ChatResponse
             {

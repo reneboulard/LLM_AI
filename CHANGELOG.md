@@ -10,6 +10,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.5.1.0] — 2026-09-05
+
+### Corrigé / Fixed
+
+- **Chat : « [object Response] » sur échec de requête** — l'ajax d'Emby
+  (`ApiClient.fetch`, non-GET) rejette la **Response brute** pour tout statut
+  ≥ 400, et la page chat la stringifyait telle quelle. Vécu : une question
+  « Bruce Willis » avortée à 124 s (LLM local lent) → réponse d'erreur
+  ServiceStack → « [object Response ] ». La page lit maintenant le statut
+  HTTP et le corps d'erreur (JSON ServiceStack ou texte) et affiche
+  « HTTP 500 — message » ; `AbortError` (timeout client, borné à 4 min) et
+  `TypeError` (connexion coupée) ont des messages dédiés.
+- **Chat : requête avortée → 500 ServiceStack** — `ChatApiService.Post`
+  attrape désormais l'`OperationCanceledException` : réponse JSON propre
+  (« Le LLM n'a pas répondu à temps… ») si le client est encore connecté
+  (timeout backend LLM), log simple en cas de déconnexion client.
+- **`find` : le tri `recent`/`date_played` (défaut du paramètre `source`) est
+  maintenant `library`** — ces tris sont des concepts bibliothèque
+  (DateCreated/DatePlayed) ; l'ancien défaut `both` mélangeait les programmes
+  EPG dans « vos derniers ajouts » (196 programmes TV aux côtés des 10 films
+  récents, le LLM devant se corriger en rappelant `find` avec
+  `source=library`). Une demande explicite `source=both` reste honorée.
+- **Classifications émises en casse canonique** — le pont Classification
+  Mapper renvoyait la clé pliée minuscule (« ca-g ») au lieu du libellé
+  canonique du JSON (« CA-G ») ; la valeur d'affichage conserve désormais la
+  casse du fichier de configuration.
+
+---
+
+## [1.5.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Action `find` de `get_emby_info` : recherche unifiée bibliothèque + EPG**
+  (le LLM fait UNE requête, l'outil fait les appels Emby appropriés) : terme
+  libre, types, personne (acteur/réalisateur, résolue via
+  `InternalItemsQuery.PersonIds`), genres (vocabulaire harmonisé par le pont
+  GenreCleaner — FR curaté et EN brut matchent dans les deux sens),
+  classification (normalisée via Classification Mapper), `source`
+  `library|epg|both` avec dédup par titre (l'item bibliothèque gagne ;
+  en source=epg seul, `owned=true` informatif), filtres `watched`/`favorites`
+  per-user (`IsPlayed`/`IsFavorite` sur la query — sans
+  `IUserDataManager`, aucun ripple de constructeur), tris récents/année/
+  note/nom côté C# et `date_played` côté SQL (`OrderBy` sur la query,
+  précédent RecoAnalysisTask). / **`get_emby_info` `find` action: unified
+  library + EPG search** (the LLM asks once, the tool makes the right Emby
+  calls): free-text term, types, person (resolved via
+  `InternalItemsQuery.PersonIds`), genres (harmonized through the
+  GenreCleaner bridge — curated French and raw English match both ways),
+  classification (normalized via Classification Mapper), `source`
+  `library|epg|both` with title dedup (library wins; in epg-only mode
+  `owned=true` is informational), per-user `watched`/`favorites` filters
+  (`IsPlayed`/`IsFavorite` on the query — no `IUserDataManager`, no
+  constructor ripple), recent/year/rating/name C# sorts and `date_played`
+  SQL-side (`OrderBy` on the query, following RecoAnalysisTask).
+
+- **Pont `ClassificationMap.cs` (Classification Mapper)** : lecteur paresseux
+  de `classification_mapper_config.json` (dossier config du serveur,
+  `ConfigurationDirectoryPath`, re-stat mtime 30 s, neutre si le plugin est
+  absent) — normalise les classifications officielles hétérogènes
+  (« PG-13 », « TV-14 », « 13+ »…) vers les valeurs canoniques maintenues
+  dans l'UI Classification Mapper (« CA-14A »…), en miroir du pont
+  GenreCleaner pour les genres. / **`ClassificationMap.cs` bridge
+  (Classification Mapper)**: lazy reader of
+  `classification_mapper_config.json` (server config directory,
+  `ConfigurationDirectoryPath`, 30 s mtime re-stat, neutral when the plugin
+  is absent) — normalizes heterogeneous official ratings ("PG-13", "TV-14",
+  "13+"…) to the canonical values maintained in the Classification Mapper UI
+  ("CA-14A"…), mirroring the GenreCleaner bridge for genres.
+
+- **Action `genre_stats` de `get_emby_info`** : profil de goûts —
+  occurrences de genres (vocabulaire curaté) dans le vu, les favoris vus et
+  les favoris non vus (top 15 par bucket, totaux ; tous les usagers agrégés
+  avec dédup par item si `user` absent). / **`get_emby_info` `genre_stats`
+  action**: taste profile — genre occurrences (curated vocabulary) among
+  watched, favorites watched and favorites unwatched (top 15 per bucket,
+  item totals; all users aggregated with per-item dedup when `user` is
+  absent).
+
 ## [Non publié / Unreleased]
 
 ### Ajouté / Added
