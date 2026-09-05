@@ -10,6 +10,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.0.0] — 2026-09-05
+
+### Ajouté / Added
+
+- **Surfaces « personnelles » du watch bucket « À regarder ce soir »** — deux
+  nouvelles options opt-in dans la section Tonight, parallèles au genre et à la
+  collection existants (les quatre coexistent, chacune indépendante) :
+  - **Playlist « AI Tonight »** (`TonightPlaylistEnabled`) — maintenue via
+    `IPlaylistManager` : créée avec les recos du watch bucket au premier run,
+    puis **reset à chaque run frais** (toutes les entrées retirées, recos du
+    jour ajoutées — la playlist reflète exactement les recommandations du
+    jour). Publique (visible par le foyer), liée à l'usager configuré. Signatures
+    `IPlaylistManager` vérifiées par réflexion sur `MediaBrowser.Controller.dll`
+    de cet hôte : `CreatePlaylist(PlaylistCreationRequest)`,
+    `AddToPlaylist(Playlist, long[], skipDuplicates, User, ct)`,
+    `RemoveFromPlaylist(playlist, entryIds long[])` — les **entryIds** sont les
+    enfants de la playlist, listés via `playlist.GetItemList(...)` (l'override
+    `GetItemsInternal` lit le fichier playlist).
+  - **Favoris éphémères** (`TonightFavoritesEnabled`) — les recos du watch
+    bucket mises en favori (`IUserDataManager.SaveUserData`, raison
+    `UpdateUserRating`) pour l'usager configuré : « Ma liste » les montre au
+    cours de la soirée. Le set exact posé par le plugin est tracé dans
+    `tonight_favorites_state.json` (dossier de configuration du plugin) ; le
+    nettoyage nocturne ne revert **que ce set** — un item déjà favori avant le
+    run est ignoré (jamais modifié, jamais suivi). Limite documentée : un
+    item re-favorisé manuellement par l'usager après notre pose est retourné
+    au nettoyage (indistinguable d'un nôtre).
+- **Option « usager des surfaces Tonight »** (`TonightUserName`) — usager
+  propriétaire des favoris éphémères et de la playlist ; vide = premier usager
+  admin (sinon premier usager).
+- **Nettoyage nocturne 3 h étendu** (`AiTonightCleanupTask`, toujours exécuté
+  même si les flags sont désactivés) : (1) revert des favoris posés par le
+  plugin (set du fichier d'état), (2) retrait du genre « AI Tonight »,
+  (3) vidage de la collection (coquille conservée), (4) vidage de la playlist
+  (entrées retirées, coquille conservée).
+- Page de configuration : deux nouvelles cases à cocher + champ usager dans la
+  section « À regarder ce soir » (i18n FR/EN).
+
+### Changé / Changed
+
+- `TonightService` reçoit `IPlaylistManager` + `IUserDataManager` (ripple sur
+  `TonightApiService` et `TonightLoginService`, seuls sites de construction).
+
+---
+
 ## [1.5.1.0] — 2026-09-05
 
 ### Corrigé / Fixed

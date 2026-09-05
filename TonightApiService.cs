@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Net;
+using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
@@ -43,13 +44,18 @@ namespace LLM_AI
         private readonly ILiveTvManager _liveTv;
         private readonly IJsonSerializer _json;
         private readonly ICollectionManager _collections;
+        private readonly IPlaylistManager _playlists;
+        private readonly IUserDataManager _userData;
 
         public TonightApiService(ILiveTvManager liveTv, IJsonSerializer json,
-            ICollectionManager collections)
+            ICollectionManager collections, IPlaylistManager playlists,
+            IUserDataManager userData)
         {
             _liveTv = liveTv;
             _json = json;
             _collections = collections;
+            _playlists = playlists;
+            _userData = userData;
         }
 
         // ------------------------------------------------------------------
@@ -114,7 +120,7 @@ namespace LLM_AI
             // Génération partagée (cache par usager, builders, run LLM, enrich).
             // Le CancellationToken vient de la requête HTTP.
             var ct = Request?.CancellationToken ?? CancellationToken.None;
-            var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger, _collections);
+            var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger, _collections, _playlists, _userData);
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(res.Error))

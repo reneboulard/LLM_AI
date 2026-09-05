@@ -590,6 +590,44 @@ namespace LLM_AI
         /// </summary>
         public bool TonightCollectionEnabled { get; set; } = false;
 
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
+        /// run <b>frais</b> de « À regarder ce soir », le plugin maintient une
+        /// <b>playlist Emby</b> nommée <c>AI Tonight</c> remplie avec les recos du
+        /// <b>watch bucket</b> (enregistrements non visionnés + items possédés) —
+        /// lecture enchaînée directement depuis n'importe quel client Emby.
+        /// <para><b>Reset à chaque run</b> : la playlist est vidée puis remplie
+        /// avec les recos courantes (elle reflète exactement les recommandations
+        /// du jour, pas un historique). Publique (visible par le foyer), liée à
+        /// l'usager <see cref="TonightUserName"/>. Indépendante du genre
+        /// (<see cref="TonightGenreTagEnabled"/>) et de la collection
+        /// (<see cref="TonightCollectionEnabled"/>).</para>
+        /// <para>La tâche planifiée 3 h du matin <b>vide</b> aussi la playlist
+        /// (les entrées sont retirées, la coquille reste) — elle tourne
+        /// <b>même si ce flag est décoché</b>.</para>
+        /// </summary>
+        public bool TonightPlaylistEnabled { get; set; } = false;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
+        /// run <b>frais</b> de « À regarder ce soir », les recos du
+        /// <b>watch bucket</b> sont mises en <b>favori</b> (dans « Ma liste »)
+        /// pour l'usager <see cref="TonightUserName"/> — favoris ÉPHÉMÈRES : la
+        /// tâche planifiée 3 h du matin les retire, <b>en ne touchant que ceux
+        /// posés par le plugin</b> (traçés dans un fichier d'état) — jamais les
+        /// favoris préexistants de l'usager (un item déjà favori avant le run
+        /// n'est pas modifié, ni suivi par le nettoyage).
+        /// </summary>
+        public bool TonightFavoritesEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Usager propriétaire des surfaces Tonight « personnelles » (favoris ;
+        /// usager de la playlist). Vide (défaut) : le premier usager admin est
+        /// utilisé, sinon le premier usager du serveur. Doit correspondre au nom
+        /// exact d'un usager Emby existant.
+        /// </summary>
+        public string TonightUserName { get; set; } = string.Empty;
+
         // ------------------------------------------------------------------
         //  Auto-programmation + popup au login (visibilité native TV).
         //  Les recommandations LLM_AI ne s'affichent que sur la page web ; les

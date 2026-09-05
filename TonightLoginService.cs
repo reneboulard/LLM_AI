@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Collections;
+using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
@@ -59,6 +60,8 @@ namespace LLM_AI
         private readonly INotificationManager _notifications;
         private readonly ILogger _logger;
         private readonly ICollectionManager _collections;
+        private readonly IPlaylistManager _playlists;
+        private readonly IUserDataManager _userData;
 
         public TonightLoginService(
             ISessionManager sessionManager,
@@ -69,7 +72,9 @@ namespace LLM_AI
             IServerApplicationHost host,
             INotificationManager notifications,
             ILogger logger,
-            ICollectionManager collections)
+            ICollectionManager collections,
+            IPlaylistManager playlists,
+            IUserDataManager userData)
         {
             _sessions = sessionManager;
             _users = userManager;
@@ -80,6 +85,8 @@ namespace LLM_AI
             _notifications = notifications;
             _logger = logger;
             _collections = collections;
+            _playlists = playlists;
+            _userData = userData;
         }
 
         // Garde-fou anti-run-parallèle pour un même usager : si deux appareils
@@ -154,7 +161,7 @@ namespace LLM_AI
                 {
                     _logger?.Info("[LLM_AI] Login « {0} » : cache Tonight froid → run LLM puis toast.", user.Name);
                     var ct = CancellationToken.None; // le run survit à la requête login
-                    var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger, _collections);
+                    var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger, _collections, _playlists, _userData);
                     var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, ct).ConfigureAwait(false);
                     if (res.Error != null || string.IsNullOrEmpty(res.Payload))
                     {

@@ -11,6 +11,7 @@ using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
@@ -42,10 +43,13 @@ namespace LLM_AI
         private readonly IServerApplicationHost _host;
         private readonly ILogger _logger;
         private readonly ICollectionManager _collections;
+        private readonly IPlaylistManager _playlists;
+        private readonly IUserDataManager _userData;
 
         public TonightService(IUserManager users, ILibraryManager library,
             ILiveTvManager liveTv, IJsonSerializer json, IServerApplicationHost host,
-            ILogger logger, ICollectionManager collections)
+            ILogger logger, ICollectionManager collections,
+            IPlaylistManager playlists, IUserDataManager userData)
         {
             _users = users;
             _library = library;
@@ -54,6 +58,8 @@ namespace LLM_AI
             _host = host;
             _logger = logger;
             _collections = collections;
+            _playlists = playlists;
+            _userData = userData;
         }
 
         // Workflow injecté dans le system prompt de l'agent (bloc
@@ -328,7 +334,8 @@ namespace LLM_AI
             // ET vide la collection ; les runs suivants reconstruisent l'un et/ou
             // l'autre selon les flags.
             HashSet<string> watchBucketIds = null;
-            if (cfg.TonightGenreTagEnabled || cfg.TonightCollectionEnabled)
+            if (cfg.TonightGenreTagEnabled || cfg.TonightCollectionEnabled ||
+                cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
             {
                 try
                 {
@@ -363,6 +370,36 @@ namespace LLM_AI
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight collection : {0}", ex.Message); }
+            }
+
+            // Surfaces « personnelles » (playlist + favoris éphémères) : opt-in,
+            // mêmes ids du watch bucket, pour l'usager « Tonight » de la config.
+            User tonightUser = null;
+            if (cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
+            {
+                tonightUser = ResolveTonightUser(cfg);
+                if (tonightUser == null)
+                    _logger?.Warn("[LLM_AI] Tonight surfaces personnelles : aucun usager résolu (TonightUserName={0}) — ignorées.",
+                        cfg.TonightUserName);
+            }
+
+            if (cfg.TonightPlaylistEnabled && watchBucketIds != null && tonightUser != null)
+            {
+                try
+                {
+                    await AiTonightPlaylistManager.EnsureAsync(_playlists, _library, _logger, watchBucketIds, tonightUser, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist : {0}", ex.Message); }
+            }
+
+            if (cfg.TonightFavoritesEnabled && watchBucketIds != null && tonightUser != null)
+            {
+                try
+                {
+                    AiTonightFavoritesManager.Apply(_userData, _library, _logger, watchBucketIds, tonightUser, ct);
+                }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight favoris : {0}", ex.Message); }
             }
 
             string date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
@@ -661,6 +698,39 @@ namespace LLM_AI
 
             /// <summary>Titres de films joués normalisés.</summary>
             public readonly HashSet<string> MovieTitles = new(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Résout l'usager des surfaces Tonight « personnelles » (playlist +
+        /// favoris) : nom de la config
+        /// (<see cref="PluginConfiguration.TonightUserName"/>) via
+        /// <see cref="IUserManager.GetUserByName"/> + repli insensible à la
+        /// casse (pattern <c>GetEmbyInfoTool.ResolveUser</c>) ; nom vide →
+        /// premier usager admin, sinon premier usager. Best-effort : null si
+        /// aucun usager résoluble.
+        /// </summary>
+        private User ResolveTonightUser(PluginConfiguration cfg)
+        {
+            try
+            {
+                var all = (_users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                    .Where(u => u != null).ToArray();
+                if (all.Length == 0) return null;
+
+                var name = cfg?.TonightUserName;
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    var byName = _users.GetUserByName(name);
+                    if (byName != null) return byName;
+                    var ci = all.FirstOrDefault(u =>
+                        string.Equals(u.Name, name, StringComparison.OrdinalIgnoreCase));
+                    if (ci != null) return ci;
+                }
+
+                return all.FirstOrDefault(u => u.Policy?.IsAdministrator ?? false)
+                    ?? all.FirstOrDefault();
+            }
+            catch { return null; }
         }
 
         /// <summary>

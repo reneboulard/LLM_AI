@@ -617,6 +617,9 @@ define(["loading"], function (loading) {
         view.querySelector("#chkTonightEnabled").checked = cfg.TonightEnabled !== false;
         view.querySelector("#chkTonightGenreTagEnabled").checked = !!cfg.TonightGenreTagEnabled;
         view.querySelector("#chkTonightCollectionEnabled").checked = !!cfg.TonightCollectionEnabled;
+        view.querySelector("#chkTonightPlaylistEnabled").checked = !!cfg.TonightPlaylistEnabled;
+        view.querySelector("#chkTonightFavoritesEnabled").checked = !!cfg.TonightFavoritesEnabled;
+        view.querySelector("#txtTonightUserName").value = cfg.TonightUserName || "";
         view.querySelector("#txtTonightWindowStart").value = cfg.TonightWindowStart || "";
         view.querySelector("#txtTonightWindowEnd").value = cfg.TonightWindowEnd || "23:59";
         view.querySelector("#txtTonightPrompt").value = cfg.TonightPrompt || "";
@@ -696,6 +699,9 @@ define(["loading"], function (loading) {
             TonightEnabled: view.querySelector("#chkTonightEnabled").checked,
             TonightGenreTagEnabled: view.querySelector("#chkTonightGenreTagEnabled").checked,
             TonightCollectionEnabled: view.querySelector("#chkTonightCollectionEnabled").checked,
+            TonightPlaylistEnabled: view.querySelector("#chkTonightPlaylistEnabled").checked,
+            TonightFavoritesEnabled: view.querySelector("#chkTonightFavoritesEnabled").checked,
+            TonightUserName: view.querySelector("#txtTonightUserName").value.trim(),
             TonightWindowStart: view.querySelector("#txtTonightWindowStart").value.trim(),
             TonightWindowEnd: view.querySelector("#txtTonightWindowEnd").value.trim(),
             TonightPrompt: view.querySelector("#txtTonightPrompt").value,

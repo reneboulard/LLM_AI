@@ -558,6 +558,46 @@
                             (coquille conservée, re-remplie au prochain run).
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightPlaylistEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.playlist.flag">Remplir une playlist « AI Tonight » avec les recos « à regarder ce soir »</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.playlist.desc">
+                            Option <b>opt-in</b>, indépendante du genre et de la collection ci-dessus (les trois peuvent
+                            cohabiter). Maintient une <b>playlist Emby</b> <b>AI Tonight</b> remplie avec les items
+                            recommandés (enregistrements non visionnés + bibliothèque) — lecture enchaînée directement
+                            depuis n'importe quel client Emby. <b>Reset à chaque run</b> : la playlist est vidée puis
+                            remplie avec les recos courantes (elle reflète exactement les recommandations du jour).
+                            Publique (visible par le foyer), liée à l'usager ci-dessous. La tâche planifiée (3 h du
+                            matin) <b>vide</b> aussi la playlist (entrées retirées, coquille conservée).
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightFavoritesEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.favorites.flag">Mettre les recos « à regarder ce soir » en favori (favoris éphémères)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.favorites.desc">
+                            Option <b>opt-in</b>. À chaque run frais, les recos (enregistrements non visionnés +
+                            bibliothèque) sont mises en <b>favori</b> (dans « Ma liste ») pour l'usager ci-dessous —
+                            favoris <b>éphémères</b> : la tâche planifiée (3 h du matin) les retire, en ne touchant
+                            <b>que ceux posés par le plugin</b> (traçés dans un fichier d'état) — jamais les favoris
+                            préexistants de l'usager (un item déjà favori avant le run n'est pas modifié ni suivi).
+                            Limite : si l'usager re-favorise manuellement un item que le plugin avait mis en favori,
+                            le nettoyage le retire quand même (indistinguable d'un nôtre).
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtTonightUserName"
+                                   label="Usager des favoris et de la playlist « AI Tonight »"
+                                   data-i18n-label="cfg.tonight.user"
+                                   placeholder="René" />
+                            <div class="fieldDescription" data-i18n-html="cfg.tonight.user.desc">
+                                Usager propriétaire des favoris éphémères et de la playlist. Vide = premier
+                                usager admin (sinon premier usager). Doit correspondre au nom exact d'un usager
+                                Emby existant.
+                            </div>
+                        </div>
+
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="text" id="txtTonightWindowStart"
