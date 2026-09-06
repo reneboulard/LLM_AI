@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.4.4] — 2026-09-06
+
+### Changed — Lien documentation avec ancre GitHub
+
+- Le lien de la page de config ouvre maintenant
+  `https://github.com/reneboulard/LLM_AI#llm_ai--plugin-emby-de-recommandations-par-llm`
+  — la page GitHub s'affiche avec le bloc « Une recommandation, plusieurs
+  sorties » (les 7 sorties natives) visible d'emblée.
+- Diagnostic confirmé (Firefox vs Chrome) : le serveur sert le bon contenu ;
+  le symptôme « clé brute » venait du cache HTTP de Chrome. À débloquer une
+  seule fois : DevTools (F12) → clic droit sur le bouton recharger →
+  « Vider le cache et effectuer un rechargement physique ». Ensuite le bust
+  par session (v1.13.4.3) évite toute récurrence.
+
 ## [1.13.4.3] — 2026-09-06
 
 ### Fixed — Cache navigateur : bust par session des ressources plugin
