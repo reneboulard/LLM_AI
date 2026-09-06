@@ -1,6 +1,10 @@
+<!-- ⚠️ Do NOT rename the H1 title below without updating the dependent anchor:
+     the French README.md title generates the GitHub anchor
+     #llm_ai--plugin-emby-de-recommandations-par-llm referenced by the
+     "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.4.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.4.4 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 

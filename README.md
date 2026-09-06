@@ -1,6 +1,11 @@
+<!-- ⚠️ NE PAS RENOMMER le titre H1 ci-dessous sans répercuter le changement :
+     l'ancre GitHub #llm_ai--plugin-emby-de-recommandations-par-llm est générée
+     à partir de ce titre et est référencée par le lien « Documentation
+     complète » de la page de config du plugin (config.html, href à mettre à
+     jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.4.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.4.4 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
