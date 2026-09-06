@@ -708,6 +708,38 @@ namespace LLM_AI
         public bool AutoProgram { get; set; } = false;
 
         // ------------------------------------------------------------------
+        //  Seuil disque du dossier d'enregistrements (RecordingDiskManager) :
+        //  gate de la création de timers + passe d'étiquetage « suggestion de
+        //  suppression » (le plugin ne supprime jamais de fichier lui-même).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Seuil d'espace libre (Go) sur le volume hébergeant le dossier
+        /// d'enregistrements Live TV : quand l'espace libre passe sous ce
+        /// seuil, la création de <b>nouveaux</b> timers est suspendue
+        /// (<c>AutoProgrammer.Program</c> et l'endpoint Activate) — les timers
+        /// déjà créés continuent d'enregistrer (Emby les possède).
+        /// <c>0</c> = gate désactivée (défaut 25). Le gate échoue OUVERT :
+        /// chemin d'enregistrements inconnu ou volume illisible ne bloque
+        /// jamais l'enregistrement.
+        /// </summary>
+        public int RecordingDiskThresholdGb { get; set; } = 25;
+
+        /// <summary>
+        /// Opt-in (défaut <c>false</c>) : quand le seuil
+        /// <see cref="RecordingDiskThresholdGb"/> est franchi, tag les
+        /// enregistrements <b>visionnés</b> (par n'importe quel usager), du
+        /// plus ancien au plus récent, avec le genre « AI Delete » — jusqu'à
+        /// ce que la suppression de tout ce qui est tagué ramène l'espace
+        /// libre au-dessus du seuil avec marge (×1.2). Chaque passe retire
+        /// D'ABORD les tags précédents (reset). <b>Pure suggestion</b> : le
+        /// plugin ne supprime jamais de fichier — l'usager filtre sa
+        /// bibliothèque par ce genre et supprime lui-même. Les enregistrements
+        /// non visionnés ne sont jamais tagués.
+        /// </summary>
+        public bool RecordingTaggingEnabled { get; set; } = false;
+
+        // ------------------------------------------------------------------
         //  Badge « AI » sur les images EPG (AiBadgeEnhancer : overlay au moment
         //  du service, jamais de mutation de l'artwork stocké). Les suggestions
         //  d'enregistrement de la tâche planifiée (record bucket) ressortent

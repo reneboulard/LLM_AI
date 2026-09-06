@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Api;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
@@ -14,14 +15,16 @@ namespace LLM_AI
     /// <summary>
     /// Endpoint HTTP plugin activant un enregistrement depuis une carte
     /// <c>.strm</c> de la bibliothèque dédiée « AI Suggestions ». Expose
-    /// <c>GET /Plugins/LLMAI/Activate?programId=…&amp;kind=…&amp;t=…</c>.
+    /// <c>GET /Plugins/LLMAI/Activate?programId=…&amp;kind=…&amp;card=…&amp;t=…</c>.
     /// </summary>
     /// <remarks>
     /// <para>Mécanisme : la tâche planifiée (<c>StrmLibraryGenerator</c>) écrit
     /// une carte <c>.strm</c> par reco du record bucket dont l'URL pointe ici.
     /// Quand l'usager lit la carte, le lecteur média demande cette URL ; le
     /// plugin crée alors le timer Emby (série → SeriesTimer, film → Timer via
-    /// <see cref="AutoProgrammer.ProgramOneAsync"/>) puis renvoie un court clip
+    /// <see cref="AutoProgrammer.ProgramOneAsync"/>), notifie le client par toast
+    /// (<see cref="ActivateFeedback"/>, v1.12 — succès/échec/disque plein), fait
+    /// supprimer la carte par Emby en cas de succès, puis renvoie un court clip
     /// de confirmation <c>recording_activated.mp4</c> (8 s, sans texte ni audio — universel).</para>
     /// <para><b>Auth</b> : l'URL <c>.strm</c> est demandée par le lecteur média
     /// (et par <c>ffprobe</c>/le transcodeur côté serveur) lors de la lecture,
@@ -52,16 +55,19 @@ namespace LLM_AI
     {
         private readonly ILiveTvManager _liveTv;
         private readonly ILibraryManager _library;
+        private readonly IServerApplicationHost _host;
 
         // Clip de confirmation embarqué (LLM_AI.recording_activated.mp4),
         // chargé une fois en mémoire statique.
         private static readonly byte[] s_clip = LoadClip();
         private const string ClipResource = "LLM_AI.recording_activated.mp4";
 
-        public ActivateApiService(ILiveTvManager liveTv, ILibraryManager library)
+        public ActivateApiService(ILiveTvManager liveTv, ILibraryManager library,
+            IServerApplicationHost host = null)
         {
             _liveTv = liveTv;
             _library = library;
+            _host = host;
         }
 
         // ------------------------------------------------------------------
@@ -72,9 +78,13 @@ namespace LLM_AI
         /// Requête GET <c>/Plugins/LLMAI/Activate</c>.
         /// <c>ProgramId</c> : id de programme EPG (tel que repris depuis l'EPG
         /// par la reco). <c>Kind</c> : « series » ou « movie » (détermine
-        /// SeriesTimer vs Timer). <c>T</c> : jeton de capacité
-        /// (<see cref="PluginConfiguration.StrmSecret"/>) — la seule gate
-        /// d'accès, le lecteur média ne transmettant pas l'auth Emby.
+        /// SeriesTimer vs Timer). <c>Card</c> : nom du dossier de la carte
+        /// (identité de la carte, écrit par <c>StrmLibraryGenerator</c> — permet
+        /// le toast de confirmation et la suppression de la carte par Emby en
+        /// cas de succès, voir <see cref="ActivateFeedback"/> ; absent sur les
+        /// cartes d'avant v1.12 → feedback simplement ignoré). <c>T</c> : jeton
+        /// de capacité (<see cref="PluginConfiguration.StrmSecret"/>) — la seule
+        /// gate d'accès, le lecteur média ne transmettant pas l'auth Emby.
         /// </summary>
         [Route("/Plugins/LLMAI/Activate", "GET")]
         [Unauthenticated]
@@ -82,6 +92,7 @@ namespace LLM_AI
         {
             public string ProgramId { get; set; }
             public string Kind { get; set; }
+            public string Card { get; set; }
             public string T { get; set; }
         }
 
@@ -109,10 +120,40 @@ namespace LLM_AI
             // les timers existants, puis SeriesTimer (série) / Timer (film).
             // Idempotent : re-lire la carte renvoie le clip sans créer de
             // doublon (le dedup neutralise un second timer).
+            AutoProgrammer.OneOutcome? outcome = null;
             try
             {
                 var ct = Request?.CancellationToken ?? CancellationToken.None;
-                var ap = new AutoProgrammer(_liveTv, _library, Logger);
+
+                // Gate disque (même règle que AutoProgrammer.Program) : disque
+                // d'enregistrements sous le seuil → aucun nouveau timer ; la
+                // passe de tag « AI Delete » (opt-in) est déclenchée si activée.
+                if (cfg?.RecordingDiskThresholdGb > 0
+                    && RecordingDiskManager.TryResolveRecordingPath(_host, Logger, out string recPath)
+                    && RecordingDiskManager.IsBelowThreshold(cfg, recPath, Logger, out long freeBytes, out long thresholdBytes))
+                {
+                    Logger?.Warn("[LLM_AI] Activate suspendu : {0} Go libre sur le volume d'enregistrements, sous le seuil ({1} Go) — aucun nouveau timer.",
+                        (freeBytes / 1073741824.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
+                        (thresholdBytes / 1073741824.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+                    if (cfg.RecordingTaggingEnabled)
+                    {
+                        // Fire-and-forget : le passage de la carte ne doit pas
+                        // attendre la passe de tag (best-effort, la passe ne
+                        // lève jamais) — CancellationToken.None, la passe
+                        // survit à la requête.
+                        var host = _host;
+                        var lib = _library;
+                        _ = System.Threading.Tasks.Task.Run(() => RecordingDiskManager.RunTagPassAsync(
+                            lib, recPath,
+                            host?.TryResolve<MediaBrowser.Controller.Library.IUserManager>(),
+                            host?.TryResolve<MediaBrowser.Controller.Notifications.INotificationManager>(),
+                            host, Logger, cfg, CancellationToken.None));
+                    }
+                    DispatchFeedback(AutoProgrammer.OneOutcome.Failed, req, gateDisk: true);
+                    return ClipResponse();
+                }
+
+                var ap = new AutoProgrammer(_liveTv, _library, Logger, _host);
                 var programIds = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var names = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
                 ap.BuildExistingTimerSets(programIds, names);
@@ -123,7 +164,7 @@ namespace LLM_AI
                     Kind = req.Kind,
                     Title = req.ProgramId
                 };
-                var outcome = await ap.ProgramOneAsync(reco, programIds, names, ct).ConfigureAwait(false);
+                outcome = await ap.ProgramOneAsync(reco, programIds, names, ct).ConfigureAwait(false);
                 Logger?.Info("[LLM_AI] Activate programId={0} kind={1} → {2}.", req.ProgramId, req.Kind, outcome);
             }
             catch (Exception ex)
@@ -134,8 +175,117 @@ namespace LLM_AI
                 Logger?.Warn("[LLM_AI] Activate : échec création timer (programId={0}) : {1}", req.ProgramId, ex.Message);
             }
 
+            // ---- Retour visuel (toast + suppression carte en cas de succès) ----
+            DispatchFeedback(outcome ?? AutoProgrammer.OneOutcome.Failed, req);
+
             // ---- Clip de confirmation (Range-aware) ----
             return ClipResponse();
+        }
+
+        // ------------------------------------------------------------------
+        //  Retour visuel : toast + suppression carte (v1.12)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Déclenche le feedback d'une activation (<see cref="ActivateFeedback"/>,
+        /// fire-and-forget) : toast Emby à la session qui lit la carte, et —
+        /// en cas de succès (<see cref="AutoProgrammer.OneOutcome.Created"/> ou
+        /// <see cref="AutoProgrammer.OneOutcome.Dedup"/>) — suppression de la
+        /// carte PAR EMBY (item + fichier .strm, différée ~60 s). Anti-doublon :
+        /// une même lecture génère plusieurs GET (sonde ffmpeg, Range…) — seul
+        /// le premier déclenche le feedback. Sans carte identifiable (cartes
+        /// d'avant v1.12, bibliothèque introuvable) → feedback ignoré, logué.
+        /// Ne lève jamais vers le handler.
+        /// </summary>
+        private void DispatchFeedback(AutoProgrammer.OneOutcome outcome, ActivateRequest req, bool gateDisk = false)
+        {
+            try
+            {
+                // Clé d'anti-doublon : le chemin .strm de la carte si connu,
+                // sinon programId|kind.
+                string strmPath = TryResolveCardPath(req?.Card);
+                string key = strmPath ?? string.Join("|", req?.ProgramId ?? "?", req?.Kind ?? "?");
+                if (!ActivateFeedback.TryMarkFresh(key))
+                {
+                    Logger?.Info("[LLM_AI] Activate : feedback déjà envoyé pour cette carte récemment — ignoré (key={0}).", key);
+                    return;
+                }
+
+                // Texte i18n selon l'issue. Succès = Created (timer créé) ou
+                // Dedup (déjà couvert par un timer existant). Tout le reste
+                // (Failed, owned/drop, NoId, gate disque…) = pas d'enregistrement.
+                string textKey;
+                bool success = false;
+                if (gateDisk)
+                {
+                    textKey = "activate.toast.diskgate";
+                }
+                else
+                {
+                    switch (outcome)
+                    {
+                        case AutoProgrammer.OneOutcome.Created:
+                            textKey = "activate.toast.programmed"; success = true; break;
+                        case AutoProgrammer.OneOutcome.Dedup:
+                            textKey = "activate.toast.duplicate"; success = true; break;
+                        default:
+                            textKey = "activate.toast.failed"; break;
+                    }
+                }
+
+                var host = _host;
+                var sessions = host?.TryResolve<MediaBrowser.Controller.Session.ISessionManager>();
+                var lib = _library;
+                string title = ActivateFeedback.ResolveProgramTitle(lib, req?.ProgramId);
+                string toastText = string.Format(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    I18n.S(textKey, I18n.ResolveDisplayLangKey(host)), title);
+
+                _ = System.Threading.Tasks.Task.Run(() =>
+                    ActivateFeedback.SendToastAsync(sessions, strmPath, toastText, Logger));
+
+                if (success && strmPath != null)
+                    _ = System.Threading.Tasks.Task.Run(() =>
+                        ActivateFeedback.DeleteCardItemLaterAsync(lib, strmPath, Logger));
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] Activate : dispatch feedback échoué (ignoré) : {0}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Reconstruit et valide le chemin du <c>.strm</c> de la carte depuis le
+        /// param <c>card</c> (nom de dossier écrit par
+        /// <see cref="StrmLibraryGenerator.WriteCard"/> — dossier ET fichier
+        /// portent le même nom sane). Validation stricte : un seul segment
+        /// (pas de séparateur ni <c>..</c>) et le chemin résolu doit rester sous
+        /// la racine de la bibliothèque .strm configurée. Renvoie null si le
+        /// param est absent (cartes d'avant v1.12) ou invalide.
+        /// </summary>
+        private string TryResolveCardPath(string card)
+        {
+            if (string.IsNullOrWhiteSpace(card)) return null;
+            card = card.Trim();
+            if (card.Contains("/") || card.Contains("\\") ||
+                card == "." || card == "..") return null;
+
+            var cfg = Plugin.Instance?.Configuration;
+            string root = StrmLibraryGenerator.ResolveLibraryRoot(_library, cfg?.StrmLibraryName, Logger);
+            if (string.IsNullOrWhiteSpace(root)) return null;
+
+            try
+            {
+                string fullRoot = Path.GetFullPath(root);
+                string full = Path.GetFullPath(Path.Combine(root, card, card + ".strm"));
+                if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) return null;
+                return full;
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] Activate : résolution du chemin de carte « {0} » échouée : {1}", card, ex.Message);
+                return null;
+            }
         }
 
         // ------------------------------------------------------------------

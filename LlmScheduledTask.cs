@@ -397,7 +397,7 @@ namespace LLM_AI
                 {
                     try
                     {
-                        var ap = new AutoProgrammer(_liveTv, _library, _logger);
+                        var ap = new AutoProgrammer(_liveTv, _library, _logger, _host);
                         await ap.Program(merged, null, cfg, cancellationToken).ConfigureAwait(false);
                     }
                     catch (Exception ex)

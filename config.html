@@ -813,6 +813,31 @@
                             que décochée. L'utilisateur peut annuler un timer indésirable dans Emby.
                         </div>
 
+                        <div style="display:flex;gap:1.2em;flex-wrap:wrap;align-items:flex-start;margin:0.6em 0;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numRecordingDiskThresholdGb"
+                                       label="Seuil disque enregistrements (Go)"
+                                       data-i18n-label="cfg.diskgate.threshold"
+                                       min="0" max="2000" />
+                                <div class="fieldDescription" data-i18n-html="cfg.diskgate.threshold.desc">Espace libre minimum sur le disque des enregistrements. En dessous, aucun NOUVEAU timer n'est créé (les timers existants continuent). 0 = désactivé. Défaut 25.</div>
+                            </div>
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkRecordingTaggingEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.diskgate.tag.flag">Suggérer à supprimer les enregistrements visionnés quand le seuil disque est franchi (genre « AI Delete »)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.diskgate.tag.desc">
+                            Option <b>opt-in</b> (décochée par défaut). Quand l'espace libre passe sous le seuil,
+                            les enregistrements <b>déjà visionnés</b> sont tagués du genre « AI Delete », du plus
+                            ancien au plus récent, jusqu'à ce que leur suppression ramène le disque au-dessus du
+                            seuil (avec marge). <b>Pure suggestion — le plugin ne supprime jamais rien</b> :
+                            filtrez la bibliothèque des enregistrements par le genre « AI Delete », multi-sélectionnez
+                            puis supprimez. Chaque passe retire d'abord les tags précédents (les tags reflètent
+                            toujours la dernière évaluation ; si vous avez libéré de l'espace, tout disparaît).
+                            Les enregistrements non visionnés ne sont jamais tagués.
+                        </div>
+
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkAiBadgeEnabled" />
                             <span class="checkboxLabel" data-i18n="cfg.aibadge.flag">Badge « AI » sur les images EPG des suggestions à enregistrer</span>

@@ -176,7 +176,7 @@ namespace LLM_AI
                     {
                         try
                         {
-                            var ap = new AutoProgrammer(_liveTv, _library, _logger);
+                            var ap = new AutoProgrammer(_liveTv, _library, _logger, _host);
                             var stats = await ap.Program(res.Payload, user, cfg, ct).ConfigureAwait(false);
                             programmed = stats.Programmed;
                         }

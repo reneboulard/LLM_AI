@@ -30,8 +30,10 @@ namespace LLM_AI
     /// <c>&lt;root&gt;/&lt;Title&gt;/</c> contenant :</para>
     /// <list type="bullet">
     /// <item><c>&lt;Title&gt;.strm</c> : URL vers l'endpoint
-    /// <c>/Plugins/LLMAI/Activate</c> — lire la carte crée le timer puis renvoie
-    /// un clip de confirmation.</item>
+    /// <c>/Plugins/LLMAI/Activate</c> (param <c>card</c> = identité de la carte)
+    /// — lire la carte crée le timer, renvoie un clip de confirmation, notifie
+    /// par toast puis fait supprimer la carte par Emby en cas de succès
+    /// (voir <see cref="ActivateFeedback"/>).</item>
     /// <item><c>&lt;Title&gt;.nfo</c> : métadonnées <c>&lt;movie&gt;</c>
     /// (titre, plot = raison LLM, studio = chaine, genre « AI Suggestion »,
     /// priority, date) — fonctionne dans une bibliothèque de type « Films » ou
@@ -448,12 +450,16 @@ namespace LLM_AI
             string folder = Path.Combine(root, safe);
             Directory.CreateDirectory(folder);
 
-            // .strm : URL vers l'endpoint Activate.
+            // .strm : URL vers l'endpoint Activate. `card` = nom du dossier de la
+            // carte (même valeur que le nom de fichier .strm, déjà SanitizeName'd)
+            // — permet à Activate de retrouver l'item de bibliothèque pour le
+            // toast de confirmation et la suppression de la carte en cas de succès.
             string url = string.Format(CultureInfo.InvariantCulture,
-                "{0}/Plugins/LLMAI/Activate?programId={1}&kind={2}&t={3}",
+                "{0}/Plugins/LLMAI/Activate?programId={1}&kind={2}&card={3}&t={4}",
                 baseApi,
                 Uri.EscapeDataString(r.Id ?? string.Empty),
                 Uri.EscapeDataString(string.IsNullOrEmpty(r.Kind) ? "movie" : r.Kind),
+                Uri.EscapeDataString(safe),
                 Uri.EscapeDataString(cfg.StrmSecret ?? string.Empty));
             File.WriteAllText(Path.Combine(folder, safe + ".strm"), url + Environment.NewLine, new UTF8Encoding(false));
 

@@ -21,7 +21,11 @@ namespace LLM_AI
     /// <see cref="AiTonightCollectionManager.CollectionName"/> (« AI Tonight ») de
     /// tous ses membres (la coquille BoxSet reste) et (4) <b>vide</b> la playlist
     /// <see cref="AiTonightPlaylistManager.PlaylistName"/> (entrées retirées, la
-    /// coquille reste). Complète les surfaces posées par
+    /// coquille reste), et (5) <b>sonde disque</b> : exécute la passe
+    /// d'étiquetage « AI Delete » de <see cref="RecordingDiskManager"/>
+    /// (opt-in) — reset quotidien des tags de suggestion de suppression,
+    /// re-tag si le seuil disque d'enregistrements est franchi. Complète les
+    /// surfaces posées par
     /// <see cref="TonightService"/> sur les recos du watch bucket — workflow :
     /// surface durant la journée (run Tonight), nettoyage à 3 h du matin.
     /// </summary>
@@ -132,6 +136,33 @@ namespace LLM_AI
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Tâche nettoyage playlist AI Tonight : {0}", ex.Message);
+                }
+
+                progress?.Report(90);
+
+                // 5) Sondage disque quotidien (opt-in) : la passe de tag
+                //    « AI Delete » (RecordingDiskManager) est exception-driven,
+                //    mais un reset quotidien garantit que les tags reflètent
+                //    toujours l'état courant — si l'espace s'est libéré sans
+                //    événement auto-program, les tags obsolètes sont retirés
+                //    ici ; si le seuil est franchi (enregistrements faits HORS
+                //    du plugin), la suggestion est (re)posée. Best-effort.
+                try
+                {
+                    var cfg = Plugin.Instance?.Configuration;
+                    if (cfg?.RecordingDiskThresholdGb > 0 && cfg.RecordingTaggingEnabled
+                        && RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out string recPath))
+                    {
+                        await RecordingDiskManager.RunTagPassAsync(_library, recPath,
+                            _host.TryResolve<MediaBrowser.Controller.Library.IUserManager>(),
+                            _host.TryResolve<MediaBrowser.Controller.Notifications.INotificationManager>(),
+                            _host, _logger, cfg, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] Sondage disque (passe tag AI Delete) : {0}", ex.Message);
                 }
             }
             catch (OperationCanceledException) { throw; }

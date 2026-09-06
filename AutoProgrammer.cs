@@ -5,9 +5,11 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Model.LiveTv;
 using MediaBrowser.Model.Logging;
 
@@ -45,12 +47,15 @@ namespace LLM_AI
         private readonly ILiveTvManager _liveTv;
         private readonly ILibraryManager _library;
         private readonly ILogger _logger;
+        private readonly IServerApplicationHost _host;
 
-        public AutoProgrammer(ILiveTvManager liveTv, ILibraryManager library, ILogger logger)
+        public AutoProgrammer(ILiveTvManager liveTv, ILibraryManager library, ILogger logger,
+            IServerApplicationHost host = null)
         {
             _liveTv = liveTv;
             _library = library;
             _logger = logger;
+            _host = host;
         }
 
         /// <summary>
@@ -95,6 +100,40 @@ namespace LLM_AI
             {
                 _logger?.Info("[LLM_AI] Auto-program : payload vide (rien à programmer).");
                 return stats;
+            }
+
+            // Gate disque (opt-in) : espace libre du volume d'enregistrements
+            // sous cfg.RecordingDiskThresholdGb → AUCUN nouveau timer (les
+            // timers déjà créés continuent — Emby les possède). Échoue OUVERT :
+            // chemin/volume indéterminable ne bloque jamais. Sous le seuil, la
+            // passe de tag « AI Delete » (suggestion, opt-in) est déclenchée
+            // immédiatement — c'est l'événement attendu, pas la routine.
+            if (cfg?.RecordingDiskThresholdGb > 0)
+            {
+                string recPath;
+                if (RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out recPath)
+                    && RecordingDiskManager.IsBelowThreshold(cfg, recPath, _logger, out long freeBytes, out long thresholdBytes))
+                {
+                    _logger?.Warn("[LLM_AI] Auto-program suspendu : {0} Go libre sur le volume d'enregistrements, sous le seuil ({1} Go) — aucun nouveau timer.",
+                        (freeBytes / 1073741824.0).ToString("0.#", CultureInfo.InvariantCulture),
+                        (thresholdBytes / 1073741824.0).ToString("0.#", CultureInfo.InvariantCulture));
+                    if (cfg.RecordingTaggingEnabled)
+                    {
+                        try
+                        {
+                            var users = _host?.TryResolve<IUserManager>();
+                            var notif = _host?.TryResolve<INotificationManager>();
+                            await RecordingDiskManager.RunTagPassAsync(_library, recPath, users, notif, _host, _logger, cfg, ct)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _logger?.Warn("[LLM_AI] Auto-program : passe tag disque échouée (ignorée) : {0}", ex.Message);
+                        }
+                    }
+                    return stats; // rien à programmer tant que le disque est plein
+                }
             }
             recos = recos
                 .OrderBy(r => PriorityRank(r.Priority))

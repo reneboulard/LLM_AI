@@ -10,6 +10,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.12.0.0] — 2026-09-06
+
+### Ajouté / Added
+
+- **Retour visuel des cartes .strm** (`ActivateFeedback.cs`, nouveau) — lire
+  une carte de la bibliothèque « AI Suggestions » ne se termine plus en
+  silence :
+  - **Toast Emby** au client qui lit la carte (mécanique
+    `DisplayMessage`/`SendMessageCommand` éprouvée de TonightLoginService ;
+    session retrouvée par le chemin du `.strm` en cours de lecture ;
+    **aucune notification cloche**) — succès (« Enregistrement programmé »),
+    déjà programmé, échec, ou disque d'enregistrements plein (gate v1.11),
+    textes FR/EN via I18n ;
+  - **Suppression de la carte en cas de succès** : après ~60 s (fin de la
+    lecture du clip), le plugin demande à **Emby** de supprimer l'item carte
+    par son chemin (`FindByPath` → `DeleteItem` avec `DeleteFileLocation`) —
+    l'item ET le fichier `.strm` disparaissent de la bibliothèque ; le plugin
+    ne supprime JAMAIS de fichier lui-même. Échec ou disque plein → carte
+    conservée (réessayable). Constaté sur ce serveur : Emby retire le **dossier
+    de carte entier** (`.strm` + `.nfo` + marker + poster) — rien à nettoyer.
+- L'URL `.strm` embarque désormais l'identité de la carte (`card=<dossier>`)
+  — les cartes générées avant v1.12 (sans `card`) fonctionnent toujours,
+  sans toast ni suppression. Anti-doublon : une même lecture génère plusieurs
+  GET à Activate (sonde ffmpeg, requêtes Range) — seul le premier déclenche
+  le feedback (cache TTL 5 min).
+
+## [1.11.0.1] — 2026-09-06
+
+### Corrigé / Fixed
+
+- **Chemin d'enregistrements par défaut** : quand aucun chemin n'est configuré
+  dans Emby (`RecordingPath`/`MovieRecordingPath`/`SeriesRecordingPath` vides),
+  le gate disque et la passe de tag replient sur le défaut Emby constaté
+  `<ProgramData>/data/livetv/recordings` (ex. `/var/lib/emby/data/livetv/recordings`)
+  au lieu d'être inertes. (Les options LiveTV restent lues via la configuration
+  nommée `livetv` — pas sur `ServerConfiguration`.)
+
+## [1.11.0.0] — 2026-09-06
+
+### Ajouté / Added
+
+- **Seuil disque du dossier d'enregistrements** (`RecordingDiskManager.cs`,
+  nouveau) — deux garde-fous non destructifs :
+  - `RecordingDiskThresholdGb` (int, défaut 25, `0` = off) : sous le seuil
+    d'espace libre du volume d'enregistrements, la création de **nouveaux**
+    timers est suspendue (`AutoProgrammer.Program` + endpoint Activate) —
+    timers existants inchangés, notification Emby, gate **fail-open** ;
+  - `RecordingTaggingEnabled` (opt-in) : au franchissement du seuil, les
+    enregistrements **visionnés** sont tagués « AI Delete », du plus ancien au
+    plus récent (tailles réelles), jusqu'à couvrir le déficit (×1.2 de marge).
+    **Le plugin ne supprime jamais de fichier** — suggestion que l'usager
+    concrétise (filtre genre + multi-sélection + suppression). Clear-first :
+    chaque passe retire les tags précédents ; sonde quotidienne à 3 h (tâche
+    de nettoyage nocturne) pour le reset sans événement auto-program.
+- Page config : champ « Seuil disque enregistrements (Go) » + case
+  « Suggérer à supprimer… » (FR/EN) dans la section auto-programmation.
+
 ## [1.10.0.0] — 2026-09-05
 
 ### Ajouté / Added

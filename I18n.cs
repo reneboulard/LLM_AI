@@ -240,6 +240,14 @@ namespace LLM_AI
                     ["task.analysis.desc"] = "Passe hebdomadaire (dimanche 4 h, opt-in RecoFeedbackEnabled) de la boucle de rétroaction : rapproche en C# le journal des recommandations de la semaine (recos « À regarder ce soir », recos d'enregistrement, rejets « Oublier ») des visionnages réels de chaque usager (regardé / ignoré / rejeté / vu sans recommandation), puis fait produire au LLM une directive concise persistée (PromptDirectives) et réinjectée dans les prompts des runs suivants. Fail-open : sans directive, les prompts sont inchangés ; un échec d'analyse ne casse jamais un run.",
                     ["task.memory.name"] = "LLM AI — Mémoire réflexive (fiche du LLM)",
                     ["task.memory.desc"] = "Passe hebdomadaire (dimanche 4 h 30, opt-in MemoryCardEnabled) de la mémoire réflexive : joint en C# les événements bruts de la semaine (décisions journalisées avec leur raison × télémétrie de lecture avec % visionné × candidats écartés du menu × snapshot EPG pour le % du direct), puis fait RÉÉCRIRE par le LLM sa fiche mémoire (~250 mots) — ce qu'il sait de l'usager, ses réussites, ses échecs et ses stratégies. Versionnée (4 versions conservées) ; un échec LLM conserve la fiche précédente ; sans signal, rien ne tourne.",
+                    ["disktag.notif.title"] = "LLM AI — Disque des enregistrements presque plein",
+                    ["disktag.notif.desc"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables). Le seuil disque est franchi. Pour libérer de l'espace : filtrez la bibliothèque des enregistrements par le genre « {1} », multi-sélectionnez puis supprimez (le plugin ne supprime jamais rien lui-même).",
+                    ["disktag.notif.desc.uncovered"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables) — insuffisant pour ramener le disque au-dessus du seuil. Supprimez-les, puis d'autres enregistrements (ou réduisez les timers) manuellement. Le plugin ne supprime jamais rien lui-même.",
+                    // Toasts d'activation d'une carte .strm (v1.12) — {0} = titre du programme.
+                    ["activate.toast.programmed"] = "Enregistrement programmé : {0}",
+                    ["activate.toast.duplicate"] = "Déjà programmé : {0}",
+                    ["activate.toast.failed"] = "Échec de l'enregistrement : {0}",
+                    ["activate.toast.diskgate"] = "Disque d'enregistrements plein — programmation suspendue : {0}",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -267,6 +275,14 @@ namespace LLM_AI
                     ["task.analysis.desc"] = "Weekly pass (Sunday 4 AM, opt-in RecoFeedbackEnabled) of the feedback loop: correlates in C# the week's recommendation log (\"Watch tonight\" recos, record recos, \"Forget\" rejections) against each user's actual watch history (watched / ignored / rejected / watched-without-reco), then has the LLM produce a concise directive that is persisted (PromptDirectives) and re-injected into subsequent run prompts. Fail-open: without a directive, prompts are unchanged; an analysis failure never breaks a run.",
                     ["task.memory.name"] = "LLM AI — Reflective memory (LLM card)",
                     ["task.memory.desc"] = "Weekly pass (Sunday 4:30 AM, opt-in MemoryCardEnabled) of the reflective memory: joins in C# the week's raw events (logged decisions with reasoning × playback telemetry with % watched × discarded menu candidates × EPG snapshot for live percentages), then has the LLM REWRITE its own memory card (~250 words) — what it knows about the user, its wins, its failures and its strategies. Versioned (4 versions kept); a failed LLM run keeps the previous card; with no signal, nothing runs.",
+                    ["disktag.notif.title"] = "LLM AI — Recording disk almost full",
+                    ["disktag.notif.desc"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable). The disk threshold is crossed. To free space: filter the recordings library by the genre \"{1}\", multi-select and delete (the plugin never deletes anything itself).",
+                    ["disktag.notif.desc.uncovered"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable) — not enough to bring the disk back above the threshold. Delete them, then other recordings (or reduce timers) manually. The plugin never deletes anything itself.",
+                    // .strm card activation toasts (v1.12) — {0} = program title.
+                    ["activate.toast.programmed"] = "Recording scheduled: {0}",
+                    ["activate.toast.duplicate"] = "Already scheduled: {0}",
+                    ["activate.toast.failed"] = "Recording failed: {0}",
+                    ["activate.toast.diskgate"] = "Recordings disk full — scheduling suspended: {0}",
                     ["task.category"] = "LLM AI",
                 },
             };

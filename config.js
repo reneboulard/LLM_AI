@@ -715,6 +715,9 @@ define(["loading"], function (loading) {
         view.querySelector("#chkMemoryCardEnabled").checked = !!cfg.MemoryCardEnabled;
         loadMemoryCardCard(view);
         view.querySelector("#chkAutoProgram").checked = !!cfg.AutoProgram;
+        var rdg = parseInt(cfg.RecordingDiskThresholdGb, 10);
+        view.querySelector("#numRecordingDiskThresholdGb").value = isNaN(rdg) ? 25 : rdg;
+        view.querySelector("#chkRecordingTaggingEnabled").checked = !!cfg.RecordingTaggingEnabled;
         // Badge « AI » (opt-out, non destructif — défaut coché).
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
         view.querySelector("#chkAiOwnedBadgeEnabled").checked = cfg.AiOwnedBadgeEnabled !== false;
@@ -809,6 +812,9 @@ define(["loading"], function (loading) {
             // pas l'écraser (même contrainte que StrmSecret).
             BingeNotified: (loadedCfg && loadedCfg.BingeNotified) || "",
             AutoProgram: view.querySelector("#chkAutoProgram").checked,
+            // 0 = gate désactivée (champ vidé = désactivé, définitif).
+            RecordingDiskThresholdGb: parseInt(view.querySelector("#numRecordingDiskThresholdGb").value, 10) || 0,
+            RecordingTaggingEnabled: view.querySelector("#chkRecordingTaggingEnabled").checked,
             AiBadgeEnabled: view.querySelector("#chkAiBadgeEnabled").checked,
             AiOwnedBadgeEnabled: view.querySelector("#chkAiOwnedBadgeEnabled").checked,
             // Carry-forward : AiBadgeProgramIds est réécrit côté serveur par la

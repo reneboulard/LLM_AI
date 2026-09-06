@@ -238,6 +238,50 @@ recommendations are only visible on the web page. Two levers make recos
 > cancel an unwanted timer in Emby. The login popup shows even without
 > auto-programming (watch suggestions only).
 
+#### Recordings-disk threshold (v1.11)
+
+Two **non-destructive** guards around the disk that receives Live TV recordings
+(`RecordingDiskManager.cs`):
+
+- `RecordingDiskThresholdGb` (int, default 25, `0` = disabled): when free space
+  on the recordings volume drops below this threshold, **no new timer** is
+  created (scheduled task, login popup and the Activate endpoint) — timers
+  already created keep recording (Emby owns them). An Emby notification reports
+  the block. The gate **fails open**: an unknown recordings path or unreadable
+  volume never blocks recording.
+- `RecordingTaggingEnabled` (bool, **opt-in**, default `false`): when the
+  threshold is crossed, **watched** recordings (by any user) are tagged with the
+  **"AI Delete"** genre, oldest first (with their real file sizes), until
+  deleting them brings free space back above the threshold (×1.2 margin).
+  **Pure suggestion — the plugin never deletes any file**: the user filters their
+  recordings library by this genre and deletes manually. Each pass first removes
+  previous tags (reset): tags always mirror the latest evaluation, and if space
+  was freed everything clears. A daily probe (3 AM, via the nightly cleanup task)
+  performs the reset even without an auto-program event. Unwatched recordings
+  are never tagged.
+
+#### .strm card feedback (v1.12)
+
+Playing an "AI Suggestions" card is no longer a silent gesture
+(`ActivateFeedback.cs`):
+
+- **Emby toast** on the client playing the card — "🤖 Recording scheduled:
+  Title" (success), "Already scheduled" (an existing timer already covers the
+  program), "Recording failed" or "Recordings disk full — scheduling suspended"
+  (v1.11 gate). The session is found by the `.strm` path being played; **no bell
+  notification** — the user clicked the card, the toast is enough.
+- **Card deletion on success**: ~60 s after activation (end of the clip
+  playback), the plugin asks **Emby** to delete the card item (`FindByPath` →
+  `DeleteItem`, `DeleteFileLocation`) — the item AND the `.strm` file leave the
+  library, and the plugin itself never deletes **any file** (same philosophy as
+  the disk threshold). Failure or full disk → the card stays, retryable.
+  Verified on this server: Emby removes the **entire card folder** (`.strm` +
+  `.nfo` + marker + poster), leaving nothing to clean up.
+- A single playback triggers several Activate calls (ffmpeg probe, Range
+  requests): a 5-min TTL cache ensures only the first one triggers feedback.
+  Pre-v1.12 cards (without the `card` param) still play, without toast or
+  deletion.
+
 ### Native surfaces (.strm library, genre, collection)
 
 Three **opt-in** levers (default `false`) that expose recos directly in Emby
@@ -381,10 +425,12 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `TonightService.cs` | `TonightService` (internal) | **Shared generation** for "Watch tonight": taste profile, unwatched recordings, library reserve, binge-ready series (opt-in, `BingeNotified` anti-spam gate), LLM run, enrichment, watched-guard (marks already-watched reruns `watched=true` — per-user `BuildWatchedIndex`), **per-user cache** (static, shared by endpoint + login). Used by `TonightApiService` and `TonightLoginService`. |
 | `AutoProgrammer.cs` | `AutoProgrammer` (internal) | Auto-programming: creates the Emby timers (SeriesTimer / single Timer) for the **record bucket** — recos to record not owned / not already scheduled / outside drop list. Server-side port of the "Schedule" logic from `recommendations.js`. `ProgramOneAsync(Reco, …)` (returns `OneOutcome`) shared with the Activate endpoint. |
 | `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (internal) | `.strm` library: writes a `.strm`+`.nfo`+poster card per record-bucket reco, `.llmai_reco` cleanup, TMDB poster download (retries with the "on <channel>" suffix stripped when the full title has no match). Poster fallback: **fetches the EPG program's Primary image** — local file OR remote Gracenote/TMS URL (`[domaine-retire]`) — with each guard's reason logged. The `.nfo` `<plot>` starts with the **native EPG overview** (original language) then the enrichment in the user's language; adds **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` when available (TMDB/IMDb/TVDB deep links). |
-| `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | `GET /Plugins/LLMAI/Activate` endpoint (`[Unauthenticated]` DTO): programs a single reco then streams `recording_activated.mp4`. Gated by `StrmSecret`. |
+| `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | `GET /Plugins/LLMAI/Activate` endpoint (`[Unauthenticated]` DTO): programs a single reco, notifies by toast + has Emby delete the card on success (v1.12), then streams `recording_activated.mp4`. Gated by `StrmSecret`. |
+| `ActivateFeedback.cs` | `ActivateFeedback` (static) | .strm card feedback (v1.12): Emby toast to the session playing the card (session found by .strm path, `DisplayMessage`), card deletion THROUGH EMBY (`FindByPath` → `DeleteItem`, delayed ~60 s, success only), duplicate-suppression cache (5-min TTL) for the multiple GETs of a single playback. |
 | `AiGenreTagger.cs` | `AiGenreTagger` (static) | `AI Tonight` genre tagging: `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
-| `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` genre + empties the collection (always active). |
+| `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` genre + empties the collection (always active). Also hosts the daily disk probe ("AI Delete" tag pass, opt-in). |
+| `RecordingDiskManager.cs` | `RecordingDiskManager` (static) | Recordings-disk threshold: path/volume resolution, "below threshold" gate (fail-open), "AI Delete" tagging pass (clear-first, watched only, oldest first, ×1.2 target) + notification. |
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Weekly analysis (Sunday 04:00, opt-in `RecoFeedbackEnabled`) of the feedback loop: correlates the reco/rejection log with actual watch history (C# + `IUserDataManager`), has the LLM (`RunSynthesisAsync`, tool-less) produce a per-user directive persisted in `PromptDirectives`. See [Feedback loop](#recommendation-feedback-loop). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internal) | Feedback-loop helpers: rolling `RecoLog` journal (parse/persist/prune), `PromptDirectives` (parse/persist/truncation), re-injected prompt blocks (per-user for Tonight, merged for the record task). |
 | `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (internal static) | Reflective-memory stores: `decisions.json` (one entry per emitted reco, with its LLM reason and the card version in effect `mv`), `run_pool.json` (the candidate "menu" submitted to each run — tells a bad reco from a ranking error), `playback.json` (`PlaybackWatcher` telemetry). Static run context (`BeginRun`/`EndRun`/`ActiveRunId`) linking the global `get_emby_info` tool to the current run; readers `ParseAllDecisions/Pools/Playback`. 30-day retention, capped, fail-open. |
@@ -665,10 +711,13 @@ Each card's `.nfo` contains:
   TMDB's `append_to_response=external_ids`) → Emby generates the TMDB / IMDb / TVDB
   **deep links** on the card's detail page.
 
-Playing a card triggers **`GET /Plugins/LLMAI/Activate?programId=&kind=&t=`**:
+Playing a card triggers **`GET /Plugins/LLMAI/Activate?programId=&kind=&card=&t=`**:
 1. `AutoProgrammer.ProgramOneAsync` creates the recording timer (a single reco),
    with dedup by ProgramId;
-2. the endpoint streams the embedded `recording_activated.mp4` clip (8 s, 1280×720, no text or audio — universal).
+2. the endpoint notifies the user with an **Emby toast** (success / already
+   scheduled / failure / disk full) and, on success, has Emby delete the card
+   after ~60 s (see [.strm card feedback (v1.12)](#strm-card-feedback-v112));
+3. the endpoint streams the embedded `recording_activated.mp4` clip (8 s, 1280×720, no text or audio — universal).
 
 The endpoint is **`[Unauthenticated]`** (media players / `ffprobe` carry no Emby
 token); the **`StrmSecret` token** (`t=`) is the sole gate. Emby only probes the
