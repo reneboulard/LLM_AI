@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.4.2] — 2026-09-06
+
+### Fixed — Libellé du lien documentation FR/EN inversé
+
+- Les valeurs FR/EN de `cfg.docs.link` étaient échangées entre les deux blocs de
+  langue (libellé anglais affiché en français et réciproquement).
+- Rappel diagnostic : si la page affiche la clé brute « cfg.docs.link », c'est un
+  `i18n.js` en cache (précédente version) — hard-reset de la page après déploiement.
+
 ## [1.13.4.1] — 2026-09-06
 
 ### Added — Lien documentation + intro « une recommandation, plusieurs sorties »
