@@ -125,11 +125,13 @@ et d'**Oublier** (ajoute le titre à la liste de rejet `DroppedTitles`).
    et le service (`emby-server`), supprime l'ancien `mon-plugin.dll`, copie la DLL et
    redémarre Emby. Variables d'env optionnelles : `EMBY_PLUGINS_DIR`, `EMBY_SERVICE`.
 4. Dans Emby : **Plugins** → **LLM_AI** → configurer (voir [Configuration](#configuration)).
-5. Recharger simplement la page (**F5**) après le redémarrage d'Emby. L'ETag servi
-   par Emby pour les pages d'un plugin dérive de son **id + version** : dès que la
-   version change, la revalidation conditionnelle du navigateur reçoit le nouveau
-   HTML/JS. Le hard-reload (Ctrl+Shift+R) ne reste nécessaire que pour un
-   redéploiement **à version constante** (itérations de développement).
+5. Recharger simplement la page (**F5**) après le redémarrage d'Emby — **une
+   nouvelle session navigateur suffit**. Le buste de cache intégré (v1.13.4.3)
+   garantit la lecture réseau des ressources plugin à chaque session (paramètre
+   `?v=` par session), et le module de version réécrit les caches puis recharge
+   la page quand il détecte un changement de version serveur. Un hard-reload
+   (Ctrl+Shift+R) ne reste utile qu'en cas de cache intermédiaire (proxy) hors
+   de portée du navigateur.
 
 ### Depuis les sources (développeur)
 

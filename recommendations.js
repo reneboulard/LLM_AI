@@ -26,9 +26,31 @@ define([], function () {
     // (cache disque), les entrées de cache HTTP sont réécrites puis la page
     // rechargée — une seule fois par session (voir asset_version_template.js).
     // Toute erreur est silencieuse : la page reste pleinement fonctionnelle.
+
+    // Jeton de bust de cache PAR SESSION navigateur. Emby sert
+    // web/ConfigurationPage avec Cache-Control: public, sans max-age ni
+    // Last-Modified, et un ETag NON dérivé du contenu (même ETag pour des
+    // ressources de contenus différents) : la revalidation peut répondre
+    // 304 sur un contenu périmé. Le jeton rend l'URL distincte à chaque
+    // session → lecture réseau garantie au moins une fois par session,
+    // sans dépendre de l'ETag (v1.13.4.3).
+    function bustToken() {
+        try {
+            var k = sessionStorage.getItem("LLMAI.bust");
+            if (!k) {
+                k = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+                sessionStorage.setItem("LLMAI.bust", k);
+            }
+            return k;
+        } catch (e) { return String(Date.now()); }
+    }
+    function resourceUrl(name) {
+        return ApiClient.getUrl("web/ConfigurationPage", { name: name, v: bustToken() });
+    }
+
     (function checkAssetVersion() {
         try {
-            var url = ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAIAssetVersion" });
+            var url = resourceUrl("LLMAIAssetVersion");
             require([url], function (av) {
                 if (av && typeof av.checkForUpdate === "function") av.checkForUpdate(ApiClient);
             }, function () { /* module absent : silencieux */ });
@@ -46,7 +68,7 @@ define([], function () {
     function i18nReady() {
         if (i18n) return Promise.resolve(i18n);
         if (_i18nPromise) return _i18nPromise;
-        var url = ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAII18n" });
+        var url = resourceUrl("LLMAII18n");
         _i18nPromise = new Promise(function (resolve, reject) {
             require([url], function (mod) { i18n = mod; resolve(mod); }, reject);
         });
@@ -668,7 +690,7 @@ define([], function () {
                 // module n'est pas chargé, le fallback background-color #101010
                 // (posé en CSS) reste visible ; en cas d'échec on garde ce fallback.
                 require([
-                    ApiClient.getUrl("web/ConfigurationPage", { name: "LLMAIBg" })
+                    resourceUrl("LLMAIBg")
                 ], function (dataUri) {
                     if (!dataUri) return;
                     view.style.backgroundImage =

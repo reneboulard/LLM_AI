@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.4.3] — 2026-09-06
+
+### Fixed — Cache navigateur : bust par session des ressources plugin
+
+- Constat : les ressources `web/ConfigurationPage` sont servies avec
+  `Cache-Control: public`, sans `max-age` ni `Last-Modified`, et un ETag **non
+  dérivé du contenu** (même ETag pour deux ressources de contenus différents —
+  vérifié par md5). La revalidation peut donc répondre `304 Not Modified` sur un
+  contenu périmé : le navigateur peut garder un `i18n.js` d'avant-déploiement
+  indéfiniment (symptôme : clé brute « cfg.docs.link » affichée sur la page de
+  config), et même survivre à un hard-reset selon le contexte.
+- **1re couche** : `config.js` / `chat.js` / `recommendations.js` chargent les
+  ressources dont ils ont le contrôle (`LLMAII18n`, `LLMAIAssetVersion`,
+  `LLMAIBg`) avec un paramètre `?v=` de bust **par session navigateur** (jeton
+  `sessionStorage`) → lecture réseau garantie à chaque nouvelle session, sans
+  dépendre de l'ETag.
+- **Couche de recours** : le self-heal de `asset_version.js` détecte désormais
+  un déploiement par **version serveur mémorisée en sessionStorage** (l'ancien
+  critère « VERSION gravée ≠ serveur » ne fonctionnait plus une fois le module
+  lui-même busté) ; bandeau « reload dur » retiré (mort avec le bust).
+- Conséquence pratique : après chaque déploiement, **une nouvelle session
+  navigateur suffit** (rechargement de l'onglet ou fermeture/ouverture) — le
+  Ctrl+Shift+R n'est plus nécessaire.
+
 ## [1.13.4.2] — 2026-09-06
 
 ### Fixed — Libellé du lien documentation FR/EN inversé

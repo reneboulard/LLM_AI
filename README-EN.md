@@ -124,11 +124,13 @@ Card buttons let you **Schedule** (SeriesTimer for a series, single Timer for a 
    service (`emby-server`), removes the old `mon-plugin.dll`, copies the DLL, and
    restarts Emby. Optional env vars: `EMBY_PLUGINS_DIR`, `EMBY_SERVICE`.
 4. In Emby: **Plugins** → **LLM_AI** → configure (see [Configuration](#configuration)).
-5. Simply reload the page (**F5**) once Emby has restarted. The ETag Emby serves for a
-   plugin's pages derives from its **id + version**: as soon as the version changes, the
-   browser's conditional revalidation receives the new HTML/JS. A hard reload
-   (Ctrl+Shift+R) remains necessary only when redeploying **at a constant version**
-   (development iterations).
+5. Simply reload the page (**F5**) once Emby has restarted — **a fresh browser
+   session is enough**. The built-in cache busting (v1.13.4.3) guarantees a
+   network read of the plugin assets on every session (`?v=` parameter per
+   session), and the version module rewrites the HTTP caches then reloads the
+   page whenever it detects a server version change. A hard reload
+   (Ctrl+Shift+R) is only useful when an intermediate cache (proxy) sits
+   beyond the browser's reach.
 
 ### From source (developer)
 

@@ -10,16 +10,23 @@
 // resservir un JS périmé depuis son cache disque sans jamais revalider
 // (d'où le « hard reset » (Ctrl+Shift+R) nécessaire après chaque déploiement
 // de DLL). L'ETag présent est correct (il suit l'assembly) mais rien ne
-// force le navigateur à l'envoyer.
+// force le navigateur à l'envoyer ; il n'est en outre PAS dérivé du contenu
+// (même ETag pour des ressources de contenus différents, v1.13.4.3).
 //
-// SOLUTION : ce module porte la version du build QUI L'A GÉNÉRÉ + la logique
-// de vérification. La page le charge puis interroge GET /Plugins/LLMAI/Version
-// (route plugin authentifiée standard). En cas d'écart, le JS servi est
-// périmé → on réécrit les entrées de cache HTTP de TOUTES nos pages
+// SOLUTION (1re couche, v1.13.4.3) : config.js / chat.js /
+// recommendations.js chargent les ressources dont ILS ont le contrôle
+// (LLMAII18n, LLMAIAssetVersion, LLMAIBg) avec un paramètre ?v= de bust PAR
+// SESSION navigateur (jeton sessionStorage) → lecture réseau garantie à
+// chaque nouvelle session, sans dépendre de l'ETag.
+// SOLUTION (couche de recours, ce module) : version du build QUI L'A GÉNÉRÉ
+// + logique de vérification pour les ressources chargées PAR LE DASHBOARD
+// (config.html, config.js — URLs getConfigurationResourceUrl, hors de notre
+// contrôle). La page interroge GET /Plugins/LLMAI/Version (route plugin
+// authentifiée standard) : si la version serveur CHANGE au cours d'une
+// session, on réécrit les entrées de cache HTTP de TOUTES nos pages
 // (fetch cache:'reload' = requête réseau inconditionnelle qui REMPLACE
 // l'entrée en cache), puis on recharge le dashboard : la passe suivante
-// charge la version fraîche. Une copie PÉRIMÉE de ce module s'auto-détecte
-// (sa version gravée est l'ancienne) — c'est le point clé du mécanisme.
+// charge la version fraîche.
 define([], function () {
     "use strict";
 
@@ -36,32 +43,15 @@ define([], function () {
         "LLMAIChatPage", "LLMAIChatPageJS", "LLMAIBg", "LLMAIAssetVersion"
     ];
 
-    // Garde anti-boucle : une seule auto-correction par version serveur et
-    // par session. Si le navigateur ignore cache:'reload' (cas rare), le
-    // second check voit encore un écart → bandeau « rechargement dur » au
-    // lieu d'un reload infini. La valeur (version serveur) fait expirer le
+    // Garde anti-boucle : une seule passe d'auto-correction par version
+    // serveur et par session. La valeur (version serveur) fait expirer le
     // drapeau dès qu'une NOUVELLE version est déployée.
     var RELOADED_FLAG = "LLMAI.versionReloaded";
 
-    // Bandeau quand l'auto-correction a échoué (cache:'reload' ignoré) :
-    // seul un rechargement dur (Ctrl+Shift+R) rafraîchira les ressources.
-    function showStaleBanner() {
-        if (document.getElementById("LLMAI-stale-banner")) return;
-        var d = document.createElement("div");
-        d.id = "LLMAI-stale-banner";
-        d.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;" +
-            "background:#b35900;color:#fff;padding:8px 12px;font-size:13px;" +
-            "text-align:center;box-shadow:0 2px 6px rgba(0,0,0,.4)";
-        d.textContent = "LLM AI : nouvelle version détectée — rechargez la page " +
-            "en dur (Ctrl+Shift+R) pour l'appliquer.";
-        document.body.appendChild(d);
-    }
-
-    // Compare la version de ce build à celle du serveur. Retourne une
-    // promesse : false = à jour (ou vérification impossible — silencieux),
-    // "reloading" = page sur le point d'être rechargée, "stale" = écart
-    // persistant après une tentative → bandeau. Best-effort : AUCUNE erreur
-    // ne doit perturber le rendu de la page hôte.
+    // Compare la version serveur mémorisée à celle du serveur. Retourne une
+    // promesse : false = rien à faire (ou vérification impossible —
+    // silencieux), "reloading" = page sur le point d'être rechargée.
+    // Best-effort : AUCUNE erreur ne doit perturber le rendu de la page hôte.
     function checkForUpdate(apiClient, opts) {
         opts = opts || {};
         var req;
@@ -76,14 +66,30 @@ define([], function () {
             var serverVersion = srv && srv.Version ? String(srv.Version) : "";
             // Pas de version côté serveur (endpoint absent/ancien, erreur) :
             // on ne fait rien — la page reste pleinement fonctionnelle.
-            if (!serverVersion || serverVersion === VERSION) return false;
+            if (!serverVersion) return false;
 
-            var alreadyTried = false;
+            // Détection par version serveur mémorisée (v1.13.4.3) : depuis le
+            // bust ?v= par session, ce module est lui-même toujours frais —
+            // comparer VERSION (gravée) au serveur ne détecterait plus rien.
+            // On mémorise la version serveur vue : un déploiement pendant la
+            // session (ou entre deux sessions) fait changer serverVersion →
+            // une passe de réécriture des caches + reload.
+            var seen;
             try {
-                alreadyTried = sessionStorage.getItem(RELOADED_FLAG) === serverVersion;
-            } catch (e) { /* sessionStorage indisponible : on tente le reload */ }
+                seen = sessionStorage.getItem(RELOADED_FLAG); // null à la 1re visite
+                if (seen == null) {
+                    // Première mémorisation : on enregistre sans recharger —
+                    // évite un reload inutile à l'ouverture d'une session.
+                    sessionStorage.setItem(RELOADED_FLAG, serverVersion);
+                    return false;
+                }
+            } catch (e) {
+                // sessionStorage indisponible : impossible de mémoriser → on
+                // renonce au heal, sinon window.location.reload() bouclerait.
+                return false;
+            }
 
-            if (alreadyTried) { showStaleBanner(); return "stale"; }
+            if (seen === serverVersion) return false;
 
             // Réécriture des entrées de cache HTTP de toutes nos pages.
             // web/ConfigurationPage répond à un GET simple, sans auth (le
