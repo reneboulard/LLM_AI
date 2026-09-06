@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.4.1] — 2026-09-06
+
+### Added — Lien documentation + intro « une recommandation, plusieurs sorties »
+
+- La page de configuration affiche un lien **« 📖 Documentation complète »** vers
+  `https://github.com/reneboulard/LLM_AI` (nouvel onglet) sous le titre — la doc
+  détaillée vit dans le repo GitHub (README FR/EN, CHANGELOG), la page n'embarque
+  qu'un lien (une ligne, pas de logique).
+- Le README (FR/EN) s'ouvre désormais sur le bloc **« Une recommandation, plusieurs
+  sorties »** : tableau des 7 sorties opt-in par intention (regarder / regrouper /
+  filtrer / marquer / enregistrer / supprimer), pour choisir en config.
+- README : version d'en-tête rafraîchie (1.13.4.1).
+
 ## [1.13.4.0] — 2026-09-06
 
 ### Added — Libellés d'actions dans la page de chat

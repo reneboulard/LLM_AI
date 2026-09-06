@@ -1,8 +1,31 @@
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.10.0.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.4.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
+
+## 📡 One recommendation, several outputs
+
+The plugin shows its recommendations on a **web page** (Recommendations,
+after login) and notifies on login — that page changes nothing in Emby. As an
+option, the same recommendations can be delivered **inside Emby itself**,
+where you watch: each output is **independent** (check only what you need) and
+**reversible** (cleaned every night at 3 AM, or rebuilt on the next run) —
+everything cleans up on its own, and the plugin never deletes anything
+itself.
+
+| I want to… | Check (config) | What it creates in Emby |
+|---|---|---|
+| **Chain tonight's watch session** | "AI Tonight" playlist | Playable playlist, rebuilt on each run |
+| **Group / browse freely** | "AI Tonight" collection | Navigable BoxSet |
+| **Find recos by a filter** | "AI Tonight" tag | Emby tag (the "Tags" filter) |
+| **Heart-mark the recos** | "AI Tonight" favorites | Favorites of the chosen user |
+| **Record automatically** what isn't owned | Auto timers (DVR) | Emby recording timers |
+| **Record with one click, on demand** | .strm library "AI Suggestions" | Playable .strm cards |
+| **Be told what to delete** when the disk is full | "AI Delete" tag | Emby tag (no auto deletion) |
+
+Per-option details in the
+[Native recommendation surfaces](#native-recommendation-surfaces) section.
 
 An Emby plugin that uses a large language model (LLM — local [Ollama](https://ollama.com), Ollama Cloud, or
 Google Gemini) to produce **series and movie recording recommendations** (scheduled at the

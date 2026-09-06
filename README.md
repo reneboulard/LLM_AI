@@ -1,8 +1,31 @@
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.10.0.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.4.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
+
+## 📡 Une recommandation, plusieurs sorties
+
+Le plugin affiche ses recommandations dans une **page web** (Recommandations,
+après login) et notifie à l'ouverture — cette page ne modifie rien dans Emby.
+En option, les mêmes recommandations peuvent être livrées **à l'intérieur
+d'Emby**, là où vous les regardez : chaque sortie est **indépendante**
+(cochez ce qui vous sert, seule) et **réversible** (nettoyée chaque nuit à
+3 h, ou recréée au run suivant) — tout se nettoie tout seul, le plugin ne
+supprime jamais rien lui-même.
+
+| Je veux… | Cochez (config) | Ce que ça crée dans Emby |
+|---|---|---|
+| **Enchaîner ma soirée ce soir** | Playlist « AI Tonight » | Playlist jouable, refaite à chaque run |
+| **Regrouper / parcourir librement** | Collection « AI Tonight » | BoxSet navigable |
+| **Retrouver les recos par un filtre** | Tag « AI Tonight » | Tag Emby (filtre « Tags ») |
+| **Marquer les recos ❤️** | Favoris « AI Tonight » | Favoris de l'usager choisi |
+| **Enregistrer automatiquement** ce qui n'est pas possédé | Timers auto (DVR) | Timers d'enregistrement Emby |
+| **Enregistrer en un clic, à la demande** | Bibliothèque .strm « AI Suggestions » | Cartes .strm jouables |
+| **Être suggéré quoi supprimer** quand le disque est plein | Tag « AI Delete » | Tag Emby (aucune suppression auto) |
+
+Détail de chaque option dans la section
+[Surfaces natives des recommandations](#surfaces-natives-des-recommandations).
 
 Plugin Emby qui utilise un grand modèle de langage (LLM — [Ollama](https://ollama.com) local, Ollama Cloud ou
 Google Gemini) pour produire des **recommandations de séries et de films à enregistrer**

@@ -26,6 +26,8 @@ define([], function () {
         fr: {
             // -- Page de configuration : titres / descriptions / labels ----
             "cfg.title": "LLM AI — Configuration",
+            "cfg.docs.link": "📖 Full documentation (GitHub — opens in a new tab)",
+            "cfg.docs.link": "📖 Documentation complète (GitHub — nouvel onglet)",
             "cfg.backends.h": "Serveurs LLM (repli par priorité)",
             "cfg.backends.desc": "Ajoutez un ou plusieurs serveurs Ollama. Chaque LLM a une <b>priorité</b> (1 = la plus haute, essayée en premier) et un drapeau <b>activé</b>. Si un serveur est indisponible, la tâche bascule automatiquement sur le prochain LLM activé selon la priorité.",
             "cfg.backends.add": "+ Ajouter un LLM",
