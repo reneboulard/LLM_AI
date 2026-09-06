@@ -21,3 +21,8 @@ CLAUDE.md
 
 ## Generated at build (LLM_AI.csproj target GenerateAssetVersionJs)
 asset_version.js
+
+# Vim swap/undo files
+*.swp
+*.swo
+*~
