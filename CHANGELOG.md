@@ -10,6 +10,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.4.0] — 2026-09-06
+
+### Added — Libellés d'actions dans la page de chat
+
+- Les toasts Emby (`DisplayMessage`) **ne sont pas rendus par le client web** sur
+  la page de configuration (constat 2026-09-06 : livraison OK, affichage
+  seulement après avoir quitté la page). L'admin n'avait donc pas de retour
+  visuel immédiat quand une action de chat réussissait.
+- Correction : le serveur retourne désormais dans la réponse HTTP un champ
+  `actions` (libellés des actions **réussies** du tour, mêmes textes que les
+  toasts), et la page de chat affiche sous la réponse une ligne discrète par
+  action — ex. « 🤖 1 item(s) tagué(s) « AI Tonight » ».
+- Success-only (identique au toast) ; pas rejoué par l'historique (l'info reste
+  dans le texte du LLM). Indépendant du client Emby → visible instantanément.
+- Le toast serveur reste actif (utile hors chat : autre onglet, autre appareil).
+- Implémentation : `ChatActions.TurnActions` (collecteur par tour, vidé à
+  `BeginTurn`, thread-safe) rempli par `ToastActionAsync` ; `ChatResponse.Actions` ;
+  rendu `chat.js` + style `chat.html`.
+
+## [1.13.3.0] — 2026-09-06
+
+### Changed — Marqueurs « AI Tonight » / « AI Delete » : genres → tags
+
+- Les deux marqueurs d'admin du plugin sont désormais des **tags** Emby et non plus des
+  genres : « AI Tonight » (recos watch bucket) et « AI Delete » (suggestions de suppression
+  disque). Un tag est plus adapté à un marqueur : il n'encombre ni la navigation par genres,
+  ni les filtres de genre des clients, ni le vocabulaire du genre cleaner — et il reste
+  filtrable dans tous les clients (filtre « Tags »).
+- Nouveau `AiTagger` (remplace `AiGenreTagger`) : ajout/retrait via `item.Tags`
+  (`InternalItemsQuery.Tags` pour les requêtes). Le tool chat `tag_ai_tonight` pose le tag
+  (texte inchangé : « tagué »).
+- **Migration automatique** : `AiTagger.RemoveAllAsync` interroge le filtre `Tags` ET le
+  filtre `Genres` du même nom, et retire les deux en une persistance — le nettoyage de 3 h
+  (`AiTonightCleanupTask`) et le clear-first de chaque passe disque migrent les items encore
+  étiquetés par l'ancien genre au fil de leurs passages, sans action manuelle.
+- Libellés mis à jour (config page FR/EN, descriptions de tâche planifiée, notification
+  disque, tool chat) : « genre » → « tag ». Les noms de propriétés de configuration sont
+  inchangés (`TonightGenreTagEnabled`, `RecordingTaggingEnabled`) — aucune perte de valeur
+  sauvegardée.
+- Correctif de câblage v1.13.2 : `PlaylistAddTool` reçoit bien `IServerApplicationHost`
+  (nécessaire à la normalisation next-up de `AiTonightPlaylistManager.AddItemsAsync`).
+
+## [1.13.2.0] — 2026-09-06
+
+### Corrigé / Fixed
+
+- **Playlist « AI Tonight » : accumulation de doublons (403 entrées, 73
+  titres ×6) éliminée**. Deux quirks de l'API playlist Emby 4.9.5.0
+  rendaient le « reset » de `EnsureAsync` inopérant (vérifiés
+  empiriquement 2026-09-06) : `RemoveFromPlaylist` ne retire **rien** (no-op
+  interne, HTTP 500 SQLiteException via REST `Ids=…`, 204 sans effet via
+  `EntryIds=…`) ; une série/saison ajoutée à une playlist est **développée
+  en tous ses épisodes** (un id série → 52 entrées). Chaque run ajoutait
+  donc ~50 entrées et n'en retirait jamais.
+  - `EnsureAsync` → **déstruction + recréation** de la playlist
+    (`ILibraryManager.DeleteItem` + `DeleteFileLocation` — le .m3u aussi)
+    + `CreatePlaylist` avec les recos fraîches : contenu exact garanti,
+    id de coquille changé à chaque run (sans importance, retrouvée par
+    nom). `ClearAsync` (cleanup 3 h) → suppression de la coquille.
+  - Recos normalisées en **feuilles** : une reco série/saison devient son
+    **épisode « next up » non vu** (usager Tonight) via
+    `ITVSeriesManager.GetNextUp` — cohérent avec Emby qui propose le
+    prochain épisode en fin de lecture ; aucun next up (tout vu) → série
+    sautée.
+- **Tools chat `playlist_add`/`playlist_remove`** — même hygiène :
+  déduplication contre les entrées courantes (un item déjà présent ne
+  consomme pas le budget), comptage **honnête** par re-listing après
+  l'appel (un id non appliqué par Emby n'est ni compté ni retracé),
+  `playlist_remove` rapporte l'échec du retrait sur ce build et ne
+  réessaye pas.
+
+---
+
+## [1.13.1.0] — 2026-09-06
+
+### Ajouté / Added
+
+- **Toast de traçabilité des actions du chat** (`ChatActions.ToastActionAsync`)
+  — chaque action de chat réussie (timer, carte .strm, tag, collection,
+  playlist, run Tonight) émet un toast Emby discret (préfixe 🤖, timeout
+  8 s) vers **toutes les sessions admin** (`SendMessageToAdminSessions` /
+  DisplayMessage). Succès seulement : pas de toast pour les refus de
+  garde-fous (le texte du chat les explique) — le nombre de toasts reflète
+  donc le budget consommé. Best-effort, jamais bloquant.
+- Test v1.13 en conditions réelles (chat admin navigateur) : propose →
+  confirmer → exécuter vérifié de bout en bout sur `record_program` (timer
+  série créé puis nettoyé) et `create_card` (.strm + .nfo + poster + marker
+  `.llmai_reco` vérifiés sur disque), `collection_add`/`collection_remove`
+  (10 ajoutés, 10 retirés ; garde de retrait : ids non ajoutés par le chat
+  exclus silencieusement, auto-refus du modèle pour un item jamais ajouté).
+
+---
+
+## [1.13.0.0] — 2026-09-06
+
+### Ajouté / Added
+
+- **Couche d'action du chat** (`ChatActions.cs`, nouveau) — le chat admin
+  obtient des outils d'action qui réutilisent les **mêmes primitives que le
+  plugin** (aucune nouvelle logique métier) : `record_program` (timer via
+  `AutoProgrammer.ProgramOneAsync` — garde-fous owned/watched/drop list/dedup
+  inclus), `create_card` (carte .strm unique via le chemin commun
+  `WriteCardWithMetaAsync` de `StrmLibraryGenerator` — éphémère par
+  construction : le marker `.llmai_reco` la fait nettoyer par Emby à la
+  prochaine génération planifiée), `tag_ai_tonight` (genre via
+  `AiGenreTagger`), `collection_add`/`collection_remove` et
+  `playlist_add`/`playlist_remove` (primitives **additives** nouvelles dans
+  les managers — contrairement à `EnsureAsync` qui rapproche tout le
+  contenu ; le retrait n'accepte que les items que le chat a ajoutés
+  lui-même dans la conversation).
+- **Budget d'actions** : config `ChatActionBudget` (défaut 10, par tour,
+  toutes surfaces confondues) + `ChatActionConversationCap` (défaut 30, par
+  conversation, compteur en mémoire serveur). `0` = chat en lecture seule
+  (comportement pré-v1.13). Consommation **au succès** : une action refusée
+  par un garde-fou ne consomme rien ; un lot refusé en bloc ne s'exécute pas
+  partiellement. Refus typé renvoyé au modèle.
+- **Étiquette de confirmation** (niveau prompt, bloc « ACTIONS EMBY
+  DISPONIBLES » du system prompt) : l'agent propose dans son texte et
+  attend une confirmation explicite de l'admin avant d'exécuter — l'admin
+  reste le maillon humain ; le budget + le gating admin sont les garde-fous
+  durs.
+- **`run_tonight_run(directives?)`** (opt-in `ChatTonightRunEnabled`, défaut
+  false) : le chat déclenche le run « À regarder ce soir » sur le chemin
+  exact de la tâche planifiée et du login
+  (`TonightService.GenerateTonightAsync`) — cache, profil, EPG, surfaces
+  configurées (genre/collection/playlist/favoris), décisions. Directives de
+  session **éphémères** (≤ 500 caractères, injectées dans le prompt de ce
+  run uniquement, jamais persistées). Limites : un seul run chat à la fois,
+  2 par conversation.
+- **Origin « chat »** : runId préfixé `c` (decisions.json diagnosable) et
+  badge discret « générée via chat — directives : … » sur la page
+  Recommandations (la métadonnée survit au cache par usager).
+
+### Modifié / Changed
+
+- `TonightService.GenerateTonightAsync` : paramètres optionnels
+  `sessionDirectives`/`fromChat` (injection one-shot dans le prompt, runId
+  `c…`, `TonightResult.ViaChat`/`ChatDirectives` portés par le cache) ;
+  `ResolveTonightUser` devient `internal static`.
+- `TonightApiService` : cache consulté via `TryGetCachedResult` (badge
+  via_chat servi aussi depuis le cache).
+- `LlmRunner.RunChatAsync` : paramètres optionnels `extraTools`/`extraWorkflow`
+  (aucun autre chemin affecté).
+- `ChatApiService` : DI `ICollectionManager`/`IPlaylistManager`, ouverture du
+  tour (`ChatActions.BeginTurn`), construction des outils d'action si budget
+  &gt; 0.
+- Page config (section Chat) : budget par tour, plafond par conversation,
+  opt-in run Tonight ; i18n FR/EN ; badge Recommandations.
+
+---
+
 ## [1.12.0.0] — 2026-09-06
 
 ### Ajouté / Added

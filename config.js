@@ -740,6 +740,13 @@ define(["loading"], function (loading) {
         // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
         view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
+        // Couche d'action du chat (v1.13) : budget par tour (0 = lecture
+        // seule), plafond par conversation, run Tonight opt-in.
+        var cab = parseInt(cfg.ChatActionBudget, 10);
+        view.querySelector("#numChatActionBudget").value = isNaN(cab) ? 10 : cab;
+        var cac = parseInt(cfg.ChatActionConversationCap, 10);
+        view.querySelector("#numChatActionCap").value = isNaN(cac) ? 30 : cac;
+        view.querySelector("#chkChatTonightRun").checked = !!cfg.ChatTonightRunEnabled;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -848,7 +855,11 @@ define(["loading"], function (loading) {
             ChatEnabled: view.querySelector("#chkChatEnabled").checked,
             // Mémoire de conversation (opt-in) — les sessions vivent dans
             // chat_memory.json côté serveur, comme les autres stores JSON.
-            ChatMemoryEnabled: view.querySelector("#chkChatMemoryEnabled").checked
+            ChatMemoryEnabled: view.querySelector("#chkChatMemoryEnabled").checked,
+            // Couche d'action du chat (v1.13).
+            ChatActionBudget: parseInt(view.querySelector("#numChatActionBudget").value, 10) || 0,
+            ChatActionConversationCap: parseInt(view.querySelector("#numChatActionCap").value, 10) || 30,
+            ChatTonightRunEnabled: view.querySelector("#chkChatTonightRun").checked
         };
     }
 

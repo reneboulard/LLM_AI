@@ -7,11 +7,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Api;
+using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
@@ -49,16 +51,21 @@ namespace LLM_AI
         private readonly INotificationManager _notifications;
         private readonly IJsonSerializer _json;
         private readonly ILiveTvManager _liveTv;
+        private readonly ICollectionManager _collections;
+        private readonly IPlaylistManager _playlists;
 
         public ChatApiService(ISessionManager sessions, ITaskManager tasks,
             INotificationManager notifications, IJsonSerializer json,
-            ILiveTvManager liveTv)
+            ILiveTvManager liveTv, ICollectionManager collections,
+            IPlaylistManager playlists)
         {
             _sessions = sessions;
             _tasks = tasks;
             _notifications = notifications;
             _json = json;
             _liveTv = liveTv;
+            _collections = collections;
+            _playlists = playlists;
         }
 
         // ------------------------------------------------------------------
@@ -108,6 +115,10 @@ namespace LLM_AI
             public string Date { get; set; }
             public string Session { get; set; }
             public string Error { get; set; }
+            /// <summary>Libellés des actions réussies du tour (v1.13.4) —
+            /// affichés par la page de chat sous la réponse (le toast Emby
+            /// n'est pas rendu sur la page de config). Null si aucune.</summary>
+            public List<string> Actions { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -177,11 +188,31 @@ namespace LLM_AI
             // LlmRunner construit avec les services de la base + liveTv,
             // exactement comme sur le path d'audit.
             var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager, _liveTv, ApplicationHost);
+
+            // Couche d'action du chat (v1.13) : budget > 0 → outils d'action
+            // (mêmes primitives que le plugin) + bloc de workflow annonçant
+            // budget et étiquette de confirmation. 0 = lecture seule
+            // (strictement le comportement pré-v1.13).
+            // Le tour (un message = un tour) ouvre le compteur de budget.
+            ChatActions.BeginTurn(sessionId, Logger);
+            List<ILlmTool> actionTools = null;
+            string actionsWorkflow = null;
+            if (cfg.ChatActionBudget > 0)
+            {
+                actionTools = ChatActions.BuildTools(cfg, sessionId, admin,
+                    LibraryManager, _liveTv, _collections, _playlists,
+                    UserManager, ApplicationHost, Logger, _json, _sessions);
+                actionsWorkflow = ChatActions.BuildWorkflowBlock(cfg);
+                Logger.Info("[LLM_AI] [CHAT] Couche d'action active : {0} outil(s), budget {1}/tour.",
+                    actionTools.Count, cfg.ChatActionBudget);
+            }
+
             string reply;
             try
             {
                 reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
-                    _sessions, _tasks, _notifications, ct, memoryBlock).ConfigureAwait(false);
+                    _sessions, _tasks, _notifications, ct, memoryBlock,
+                    actionTools, actionsWorkflow).ConfigureAwait(false);
             }
             // Requête avortée (déconnexion client, timeout page) : répondre un
             // JSON propre au lieu de laisser l'OperationCanceledException
@@ -216,12 +247,19 @@ namespace LLM_AI
                     fromUser: false, text: reply, logger: Logger);
             }
 
+            // Libellés des actions réussies du tour (succès seulement) :
+            // affichés sous la réponse par la page de chat — le toast Emby
+            // DisplayMessage n'est pas rendu par le client web sur cette
+            // page de configuration (constat 2026-09-06).
+            var turnActions = ChatActions.TakeActions(sessionId);
+
             return new ChatResponse
             {
                 Enabled = true,
                 Reply = reply,
                 Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-                Session = savedSession
+                Session = savedSession,
+                Actions = turnActions.Count > 0 ? turnActions : null
             };
         }
 

@@ -175,147 +175,236 @@ namespace LLM_AI
             foreach (var r in bucket)
             {
                 ct.ThrowIfCancellationRequested();
-
-                // Lookup TMDB : synopsis/note/genres/année pour le .nfo + URL poster.
-                string kind = AutoProgrammer.IsSeries(r.Kind) ? "series" : "movie";
-
-                // Programme EPG (une seule requête in-process par reco, via r.Id =
-                // programId) : fournit l'overview natif du diffuseur — dans la
-                // langue de la chaîne, indépendante de ResponseLanguage — que l'on
-                // place en tête du <plot>. Sert aussi de source au poster de repli.
-                BaseItem epgProgram = TryGetEpgProgram(r);
-                string epgOverview = (epgProgram?.Overview ?? string.Empty).Trim();
-
-                TmdbMeta meta = null;
-                string queryTitle = r.Title;
-                try { meta = await tmdb.LookupMetaAsync(queryTitle, kind, null, userTmdb, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB échoué pour « {0} » ({1}).", r.Title, ex.Message); }
-
-                // Suffixe « on <chaîne> » : les titres Gracenote du type
-                // « Moonflower Murders on Masterpiece » n'ont PAS de match TMDB
-                // sous leur forme complète (l'entrée TMDB s'appelle « Moonflower
-                // Murders »). Si le lookup complet échoue, on retente UNE fois
-                // sans le suffixe — inoffensif : la forme complète est toujours
-                // essayée d'abord, donc un titre légitime contenant « on »
-                // (p.ex. « Attack on Titan ») n'est tronqué que si son lookup
-                // complet a déjà raté. Le repli poster EPG couvre le reste.
-                if (meta == null)
-                {
-                    string stripped = StripChannelSuffix(queryTitle);
-                    if (!string.IsNullOrEmpty(stripped))
-                    {
-                        try { meta = await tmdb.LookupMetaAsync(stripped, kind, null, userTmdb, ct).ConfigureAwait(false); }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB (titre sans suffixe) échoué pour « {0} » ({1}).", stripped, ex.Message); }
-
-                        if (meta != null)
-                        {
-                            _logger?.Info("[LLM_AI] Strm library : match TMDB pour « {0} » trouvé via « {1} » (suffixe « on … » retiré).", r.Title, stripped);
-                            queryTitle = stripped;   // le tier 2 (en-US) re-cherche sur ce titre.
-                        }
-                    }
-                }
-
-                // Cascade TMDB (tiers 2 + 3) :
-                //  Tier 1 : langue de l'usager (userTmdb) — déjà fait ci-dessus.
-                //  Tier 2 : si pas de synopsis (ou pas de match) et userTmdb != en-US,
-                //           repli en-US et on fusionne poster/genres/année.
-                //  Tier 3 : dernier recours, on traduit le synopsis en-US vers la
-                //           langue de l'usager via le LLM. Sauté si userTmdb == en-US
-                //           (le tier 1 est déjà en anglais -> zéro appel LLM).
-                if (!string.Equals(userTmdb, "en-US", StringComparison.OrdinalIgnoreCase)
-                    && (meta == null || string.IsNullOrWhiteSpace(meta.Overview)))
-                {
-                    TmdbMeta metaEn = null;
-                    try { metaEn = await tmdb.LookupMetaAsync(queryTitle, kind, null, "en-US", ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB en-US échoué pour « {0} » ({1}).", r.Title, ex.Message); }
-
-                    if (metaEn != null)
-                    {
-                        if (meta == null)
-                        {
-                            // Aucun match dans la langue usager : on part du match en-US.
-                            meta = metaEn;
-                        }
-                        else
-                        {
-                            // Match partiel en langue usager (souvent sans synopsis) :
-                            // on comble poster/genres/année depuis le match en-US.
-                            if (string.IsNullOrWhiteSpace(meta.PosterUrl)) meta.PosterUrl = metaEn.PosterUrl;
-                            if (meta.Genres == null || meta.Genres.Length == 0) meta.Genres = metaEn.Genres;
-                            if (!meta.Year.HasValue) meta.Year = metaEn.Year;
-                            if (!meta.Rating.HasValue) meta.Rating = metaEn.Rating;
-                        }
-
-                        // Tier 3 : traduction LLM du synopsis en-US -> langue usager.
-                        if (!string.IsNullOrWhiteSpace(metaEn.Overview))
-                        {
-                            if (_runner != null)
-                            {
-                                try
-                                {
-                                    string translated = await _runner.TranslateTextAsync(
-                                        cfg, metaEn.Overview, I18n.ToLangName(langKey), ct).ConfigureAwait(false);
-                                    if (!string.IsNullOrWhiteSpace(translated))
-                                        meta.Overview = translated;
-                                }
-                                catch (OperationCanceledException) { throw; }
-                                catch (Exception ex)
-                                {
-                                    _logger?.Warn("[LLM_AI] Strm library : traduction synopsis « {0} » échouée ({1}) — synopsis en-US conservé.",
-                                        r.Title, ex.Message);
-                                    meta.Overview = metaEn.Overview;
-                                }
-                            }
-                            else
-                            {
-                                // Pas de runner (LLM indispo) : on garde le synopsis en-US.
-                                meta.Overview = metaEn.Overview;
-                            }
-                        }
-                    }
-                }
-
-                // 5) Écriture de la carte (.strm + .nfo enrichi + marker).
-                try
-                {
-                    WriteCard(root, r, cfg, baseApi, serverId, langKey, meta, epgOverview);
+                if (await WriteCardWithMetaAsync(root, r, cfg, baseApi, serverId, langKey, userTmdb, tmdb, ct)
+                        .ConfigureAwait(false))
                     written++;
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    _logger?.Warn("[LLM_AI] Strm library : échec écriture carte « {0} » : {1}", r.Title, ex.Message);
-                }
-
-                // 6) Poster : URL TMDB (depuis le lookup) sinon poster EPG en repli.
-                bool posterWritten = false;
-                if (!string.IsNullOrWhiteSpace(meta?.PosterUrl))
-                {
-                    try { posterWritten = await DownloadPosterAsync(root, r, meta.PosterUrl, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster TMDB pour « {0} » ({1}).", r.Title, ex.Message); }
-                }
-
-                // Repli : récupère l'affiche Primary du programme EPG pointé par
-                // r.Id (téléfilm/titre régional absent de TMDB mais dont la
-                // chaîne fournit déjà un poster, souvent un vrai portrait 2:3).
-                // L'affiche peut être un fichier local OU une URL distante
-                // (Gracenote/TMS référence presque toujours une URL http).
-                if (!posterWritten)
-                {
-                    try { posterWritten = await TryCopyProgramPosterAsync(root, r, epgProgram, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
-                }
             }
 
             // 7) Déclencher un scan pour faire apparaître les nouvelles cartes.
             TriggerScan(ct);
 
             _logger?.Info("[LLM_AI] Strm library : {0} carte(s) écrites, scan déclenché.", written);
+        }
+
+        /// <summary>
+        /// Écrit UNE carte pour une reco (chemin commun à la génération
+        /// planifiée et au chat) : overview EPG natif, cascade méta TMDB
+        /// (tier 1 langue usager, tier 2 repli en-US + fusion, tier 3
+        /// traduction LLM), écriture (.strm + .nfo enrichi + marker) puis
+        /// poster (URL TMDB sinon affiche EPG en repli). Retourne true si la
+        /// carte a été écrite.
+        /// </summary>
+        private async Task<bool> WriteCardWithMetaAsync(string root, AutoProgrammer.Reco r,
+            PluginConfiguration cfg, string baseApi, string serverId, string langKey,
+            string userTmdb, TmdbLookupTool tmdb, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // Lookup TMDB : synopsis/note/genres/année pour le .nfo + URL poster.
+            string kind = AutoProgrammer.IsSeries(r.Kind) ? "series" : "movie";
+
+            // Programme EPG (une seule requête in-process par reco, via r.Id =
+            // programId) : fournit l'overview natif du diffuseur — dans la
+            // langue de la chaîne, indépendante de ResponseLanguage — que l'on
+            // place en tête du <plot>. Sert aussi de source au poster de repli.
+            BaseItem epgProgram = TryGetEpgProgram(r);
+            string epgOverview = (epgProgram?.Overview ?? string.Empty).Trim();
+
+            TmdbMeta meta = null;
+            string queryTitle = r.Title;
+            try { meta = await tmdb.LookupMetaAsync(queryTitle, kind, null, userTmdb, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB échoué pour « {0} » ({1}).", r.Title, ex.Message); }
+
+            // Suffixe « on <chaîne> » : les titres Gracenote du type
+            // « Moonflower Murders on Masterpiece » n'ont PAS de match TMDB
+            // sous leur forme complète (l'entrée TMDB s'appelle « Moonflower
+            // Murders »). Si le lookup complet échoue, on retente UNE fois
+            // sans le suffixe — inoffensif : la forme complète est toujours
+            // essayée d'abord, donc un titre légitime contenant « on »
+            // (p.ex. « Attack on Titan ») n'est tronqué que si son lookup
+            // complet a déjà raté. Le repli poster EPG couvre le reste.
+            if (meta == null)
+            {
+                string stripped = StripChannelSuffix(queryTitle);
+                if (!string.IsNullOrEmpty(stripped))
+                {
+                    try { meta = await tmdb.LookupMetaAsync(stripped, kind, null, userTmdb, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB (titre sans suffixe) échoué pour « {0} » ({1}).", stripped, ex.Message); }
+
+                    if (meta != null)
+                    {
+                        _logger?.Info("[LLM_AI] Strm library : match TMDB pour « {0} » trouvé via « {1} » (suffixe « on … » retiré).", r.Title, stripped);
+                        queryTitle = stripped;   // le tier 2 (en-US) re-cherche sur ce titre.
+                    }
+                }
+            }
+
+            // Cascade TMDB (tiers 2 + 3) :
+            //  Tier 1 : langue de l'usager (userTmdb) — déjà fait ci-dessus.
+            //  Tier 2 : si pas de synopsis (ou pas de match) et userTmdb != en-US,
+            //           repli en-US et on fusionne poster/genres/année.
+            //  Tier 3 : dernier recours, on traduit le synopsis en-US vers la
+            //           langue de l'usager via le LLM. Sauté si userTmdb == en-US
+            //           (le tier 1 est déjà en anglais -> zéro appel LLM).
+            if (!string.Equals(userTmdb, "en-US", StringComparison.OrdinalIgnoreCase)
+                && (meta == null || string.IsNullOrWhiteSpace(meta.Overview)))
+            {
+                TmdbMeta metaEn = null;
+                try { metaEn = await tmdb.LookupMetaAsync(queryTitle, kind, null, "en-US", ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB en-US échoué pour « {0} » ({1}).", r.Title, ex.Message); }
+
+                if (metaEn != null)
+                {
+                    if (meta == null)
+                    {
+                        // Aucun match dans la langue usager : on part du match en-US.
+                        meta = metaEn;
+                    }
+                    else
+                    {
+                        // Match partiel en langue usager (souvent sans synopsis) :
+                        // on comble poster/genres/année depuis le match en-US.
+                        if (string.IsNullOrWhiteSpace(meta.PosterUrl)) meta.PosterUrl = metaEn.PosterUrl;
+                        if (meta.Genres == null || meta.Genres.Length == 0) meta.Genres = metaEn.Genres;
+                        if (!meta.Year.HasValue) meta.Year = metaEn.Year;
+                        if (!meta.Rating.HasValue) meta.Rating = metaEn.Rating;
+                    }
+
+                    // Tier 3 : traduction LLM du synopsis en-US -> langue usager.
+                    if (!string.IsNullOrWhiteSpace(metaEn.Overview))
+                    {
+                        if (_runner != null)
+                        {
+                            try
+                            {
+                                string translated = await _runner.TranslateTextAsync(
+                                    cfg, metaEn.Overview, I18n.ToLangName(langKey), ct).ConfigureAwait(false);
+                                if (!string.IsNullOrWhiteSpace(translated))
+                                    meta.Overview = translated;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                _logger?.Warn("[LLM_AI] Strm library : traduction synopsis « {0} » échouée ({1}) — synopsis en-US conservé.",
+                                    r.Title, ex.Message);
+                                meta.Overview = metaEn.Overview;
+                            }
+                        }
+                        else
+                        {
+                            // Pas de runner (LLM indispo) : on garde le synopsis en-US.
+                            meta.Overview = metaEn.Overview;
+                        }
+                    }
+                }
+            }
+
+            // 5) Écriture de la carte (.strm + .nfo enrichi + marker).
+            bool written = false;
+            try
+            {
+                WriteCard(root, r, cfg, baseApi, serverId, langKey, meta, epgOverview);
+                written = true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Strm library : échec écriture carte « {0} » : {1}", r.Title, ex.Message);
+                return false;
+            }
+
+            // 6) Poster : URL TMDB (depuis le lookup) sinon poster EPG en repli.
+            bool posterWritten = false;
+            if (!string.IsNullOrWhiteSpace(meta?.PosterUrl))
+            {
+                try { posterWritten = await DownloadPosterAsync(root, r, meta.PosterUrl, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster TMDB pour « {0} » ({1}).", r.Title, ex.Message); }
+            }
+
+            // Repli : récupère l'affiche Primary du programme EPG pointé par
+            // r.Id (téléfilm/titre régional absent de TMDB mais dont la
+            // chaîne fournit déjà un poster, souvent un vrai portrait 2:3).
+            // L'affiche peut être un fichier local OU une URL distante
+            // (Gracenote/TMS référence presque toujours une URL http).
+            if (!posterWritten)
+            {
+                try { posterWritten = await TryCopyProgramPosterAsync(root, r, epgProgram, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
+            }
+
+            return written;
+        }
+
+        /// <summary>
+        /// Écrit UNE carte .strm à la demande — couche d'action du chat
+        /// (v1.13, tool <c>create_card</c>). Résout root / URL de base /
+        /// serverId / langue, puis réutilise le chemin commun
+        /// <see cref="WriteCardWithMetaAsync"/> (méta TMDB + carte + poster).
+        /// À la différence de la génération planifiée : PAS de
+        /// <c>CleanPrevious</c> (on ne toucherait pas aux cartes existantes)
+        /// et PAS de filtre record bucket (le chat décide ; les garde-fous
+        /// « possédé / déjà dispo » relèvent du tool, qui refuse avant).
+        /// La carte porte le marker <c>.llmai_reco</c> → éphémère : Emby la
+        /// nettoie à la prochaine génération planifiée. Retourne true si la
+        /// carte a été écrite.
+        /// </summary>
+        internal async Task<bool> WriteSingleCardAsync(AutoProgrammer.Reco r,
+            PluginConfiguration cfg, CancellationToken ct)
+        {
+            if (cfg == null || string.IsNullOrWhiteSpace(cfg.StrmLibraryName))
+            {
+                _logger?.Info("[LLM_AI] Strm library : carte unique (chat) — config absente → ignorée.");
+                return false;
+            }
+
+            string root = ResolveLibraryRoot(cfg.StrmLibraryName);
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                _logger?.Warn("[LLM_AI] Strm library : carte unique (chat) — bibliothèque « {0} » introuvable.", cfg.StrmLibraryName);
+                return false;
+            }
+            Directory.CreateDirectory(root);
+            EnsureSecret(cfg);
+
+            // URL de base : même priorité que la génération planifiée
+            // (EmbyPublicUrl explicite, sinon détection locale).
+            string baseApi = (Plugin.Instance?.Configuration?.EmbyPublicUrl ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(baseApi))
+            {
+                try { baseApi = _host?.GetLocalHostApiUrl() ?? string.Empty; }
+                catch { baseApi = string.Empty; }
+            }
+            baseApi = (baseApi ?? string.Empty).TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(baseApi))
+            {
+                _logger?.Warn("[LLM_AI] Strm library : carte unique (chat) — URL de base Emby indéfinie → carte ignorée.");
+                return false;
+            }
+
+            string serverId = null;
+            try
+            {
+                if (_host != null)
+                {
+                    var pub = await _host.GetPublicSystemInfo(ct).ConfigureAwait(false);
+                    serverId = pub?.Id;
+                }
+            }
+            catch (Exception ex) { _logger?.Warn("[LLM_AI] Strm library : serverId indispo ({0}) — lien EPG omis sur la carte.", ex.Message); }
+
+            string langKey = I18n.ResolveMetaLangKey(cfg, _host);
+            string userTmdb = I18n.ToTmdbLang(langKey);
+            var tmdb = new TmdbLookupTool(_logger);
+
+            bool ok = await WriteCardWithMetaAsync(root, r, cfg, baseApi, serverId, langKey, userTmdb, tmdb, ct)
+                .ConfigureAwait(false);
+            if (ok) TriggerScan(ct);
+            return ok;
         }
 
         // ------------------------------------------------------------------

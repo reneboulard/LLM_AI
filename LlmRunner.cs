@@ -548,7 +548,9 @@ namespace LLM_AI
             IReadOnlyList<LlmClient.ChatMessage> history, string userMessage,
             ISessionManager sessions, ITaskManager tasks, INotificationManager notifications,
             System.Threading.CancellationToken ct,
-            string conversationMemory = null)
+            string conversationMemory = null,
+            List<ILlmTool> extraTools = null,
+            string extraWorkflow = null)
         {
             try
             {
@@ -571,14 +573,19 @@ namespace LLM_AI
                 // Mémoire de conversation (chat_memory) : résumé de la
                 // session précédente + derniers échanges (ChatApiService).
                 string workflow = CHAT_WORKFLOW + MemoryCard.BuildInjectionBlock(cfg)
-                    + (conversationMemory ?? "");
+                    + (conversationMemory ?? "")
+                    + (extraWorkflow ?? "");
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
                     CHAT_ROLE_INTRO, "", cfg.ResponseLanguage);
 
-                // Tous les outils existants : recommandation + audit santé.
+                // Tous les outils existants : recommandation + audit santé +
+                // (couche d'action du chat, v1.13 : tools construits par
+                // ChatActions et injectés par l'endpoint — budget géré là-bas).
                 var tools = BuildTools(cfg);
                 tools.AddRange(BuildAuditTools(cfg, sessions, tasks, notifications));
+                if (extraTools != null && extraTools.Count > 0)
+                    tools.AddRange(extraTools);
 
                 string reply = await agent.RunChatAsync(history, userMessage, tools, ct)
                     .ConfigureAwait(false);

@@ -93,6 +93,13 @@ namespace LLM_AI
             public string Date { get; set; }
             public bool FromCache { get; set; }
             public string Error { get; set; }
+            /// <summary>Origin « chat » : ce payload a été produit par un run
+            /// déclenché depuis le chat (tool run_tonight_run) — la page
+            /// affiche un badge discret « générée via chat ».</summary>
+            public bool ViaChat { get; set; }
+            /// <summary>Directives de session du run chat (informatif, badge).
+            /// Vide pour un run normal.</summary>
+            public string ChatDirectives { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -121,12 +128,36 @@ namespace LLM_AI
             // Le CancellationToken vient de la requête HTTP.
             var ct = Request?.CancellationToken ?? CancellationToken.None;
             var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger, _collections, _playlists, _userData);
+
+            // Cache complet (méta origin chat) sauf Refresh : TryGetCachedResult
+            // renvoie le TonightResult caché (payload + badge via_chat) ; sinon
+            // on relance le pipeline comme avant.
+            var cached = refresh ? null : TonightService.TryGetCachedResult(user.Id.ToString());
+            if (cached.HasValue)
+                return new TonightResponse
+                {
+                    Enabled = true,
+                    Items = cached.Value.Payload,
+                    Date = cached.Value.Date,
+                    FromCache = true,
+                    ViaChat = cached.Value.ViaChat,
+                    ChatDirectives = cached.Value.ChatDirectives
+                };
+
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(res.Error))
                 return new TonightResponse { Enabled = true, Error = res.Error, Date = res.Date, FromCache = res.FromCache };
 
-            return new TonightResponse { Enabled = true, Items = res.Payload, Date = res.Date, FromCache = res.FromCache };
+            return new TonightResponse
+            {
+                Enabled = true,
+                Items = res.Payload,
+                Date = res.Date,
+                FromCache = res.FromCache,
+                ViaChat = res.ViaChat,
+                ChatDirectives = res.ChatDirectives
+            };
         }
 
         /// <summary>

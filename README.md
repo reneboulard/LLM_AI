@@ -255,11 +255,11 @@ enregistrements Live TV (`RecordingDiskManager.cs`) :
   volume illisible ne bloque jamais.
 - `RecordingTaggingEnabled` (bool, **opt-in**, défaut `false`) : quand le seuil
   est franchi, les enregistrements **visionnés** (par n’importe quel usager) sont
-  tagués du genre **« AI Delete »**, du plus ancien au plus récent (avec leur
+  tagués **« AI Delete »** (tag), du plus ancien au plus récent (avec leur
   taille réelle), jusqu’à ce que leur suppression ramène l’espace libre au-dessus
   du seuil (×1.2 de marge). **Pure suggestion — le plugin ne supprime jamais de
-  fichier** : l’usager filtre sa bibliothèque d’enregistrements par ce genre et
-  supprime lui-même. Chaque passe retire **d’abord** les tags précédents (reset) :
+  fichier** : l’usager filtre sa bibliothèque d’enregistrements par ce tag
+  (filtre « Tags ») et supprime lui-même. Chaque passe retire **d’abord** les tags précédents (reset) :
   les tags reflètent toujours la dernière évaluation, et si l’espace s’est
   libéré, tout disparaît. Une sonde quotidienne (3 h, via la tâche de nettoyage
   nocturne) fait le reset même sans événement auto-program. Les enregistrements
@@ -304,9 +304,10 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
   bibliothèque de type **Films** (ou Contenu mixte) pointant vers un dossier vide.
 - `StrmSecret` (chaîne, auto-générée) — jeton de capacité vérifié par l'endpoint
   `/Plugins/LLMAI/Activate`. Auto-généré au premier run, jamais à saisir.
-- `TonightGenreTagEnabled` (bool, défaut `false`) — ajoute le genre `AI Tonight`
-  aux items Emby du **watch bucket** (modifie les métadonnées réelles). Scope
-  isolé du genre `AI Suggestion` de la bibliothèque `.strm`.
+- `TonightGenreTagEnabled` (bool, défaut `false`) — ajoute le **tag** `AI Tonight`
+  aux items Emby du **watch bucket** (modifie les métadonnées réelles ; ex-genre,
+  migré en v1.13.3). Scope isolé du genre `AI Suggestion` de la bibliothèque
+  `.strm`.
 - `TonightCollectionEnabled` (bool, défaut `false`) — maintient une collection
   (BoxSet) `AI Tonight` des items du watch bucket. **Non destructive** (items
   référencés, jamais copiés). Indépendante du genre (les deux cohabitent).
@@ -406,6 +407,12 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
 - `ChatMemoryEnabled` (bool, défaut `false` — opt-in) — mémoire de conversation du
   chat : sessions persistées, résumé paresseux, bouton « Reprendre ». Voir
   [Mémoire de conversation](#mémoire-de-conversation).
+- `ChatActionBudget` (int, défaut `10`) — budget d'actions du chat **par tour**
+  (toutes surfaces confondues : cartes, timers, tags, collection, playlist, run).
+  `0` = chat en lecture seule. `ChatActionConversationCap` (int, défaut `30`) —
+  borne cumulative par conversation. `ChatTonightRunEnabled` (bool, défaut
+  `false` — opt-in) — autorise le tool `run_tonight_run`. Voir
+  [Couche d'action du chat](#couche-daction-du-chat).
 
 ### Mémoire réflexive (expérimental)
 
@@ -434,14 +441,14 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + backends multi-source. |
 | `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie les notifications. Délègue l'orchestration à `LlmRunner`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
-| `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService` et `TonightLoginService`. |
+| `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService`, `TonightLoginService` et le tool chat `run_tonight_run` (directives de session éphémères + origin chat, v1.13). |
 | `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
 | `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB (retry sans suffixe « on <chaîne> » si le titre complet n'a pas de match). Repli poster : **télécharge l'affiche Primary du programme EPG** — fichier local OU URL distante Gracenote/TMS (`[domaine-retire]`) — avec raison loguée à chaque garde. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique, notifie par toast + fait supprimer la carte par Emby en cas de succès (v1.12), puis stream `recording_activated.mp4`. Gated par `StrmSecret`. |
 | `ActivateFeedback.cs` | `ActivateFeedback` (statique) | Retour visuel des cartes .strm (v1.12) : toast Emby à la session qui lit la carte (session retrouvée par chemin .strm, `DisplayMessage`), suppression de la carte PAR EMBY (`FindByPath` → `DeleteItem`, différée ~60 s, succès seulement), cache anti-doublon (TTL 5 min) pour les GET multiples d'une même lecture. |
-| `AiGenreTagger.cs` | `AiGenreTagger` (statique) | Étiquetage genre `AI Tonight` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository`. |
+| `AiTagger.cs` | `AiTagger` (statique) | Étiquetage **tags** `AI Tonight` / `AI Delete` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository` (retire aussi le genre hérité du même nom — migration v1.13.3). |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
-| `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le genre `AI Tonight` + vide la collection (toujours actif). Porte aussi la sonde disque quotidienne (passe tag « AI Delete », opt-in). |
+| `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le tag `AI Tonight` (+ genre hérité, migration) + vide la collection (toujours actif). Porte aussi la sonde disque quotidienne (passe tag « AI Delete », opt-in). |
 | `RecordingDiskManager.cs` | `RecordingDiskManager` (statique) | Seuil disque du dossier d'enregistrements : résolution chemin/volume, gate « sous le seuil » (fail-open), passe d'étiquetage « AI Delete » (clear-first, visionnés uniquement, plus ancien d'abord, objectif ×1.2) + notification. |
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:00, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internes) | Helpers de la boucle de rétroaction : journal roulant `RecoLog` (parse/persist/prune), directives `PromptDirectives` (parse/persist/troncature), blocs de prompt réinjectés (par usager pour Tonight, fusionnés pour la tâche d'enregistrement). |
@@ -451,6 +458,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (statique interne) | Fiche mémoire réflexive (`memory_card.json`) : version courante + **historique immuable des 4 versions précédentes** (contrepoids anti-dérive), plafond ~250 mots, fail-open (échec LLM → fiche précédente). `BuildInjectionBlock` : le bloc « MÉMOIRE DE L'ASSISTANT » réinjecté dans les prompts quand `MemoryCardEnabled` — **remplace** la directive de la boucle classique (repli transparent sinon). |
 | `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 30, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Voir [Mémoire réflexive](#mémoire-réflexive). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (statique interne) | Mémoire de conversation du chat (`chat_memory.json`, par usager, 5 sessions / 30 j) : tours verbatim (compressés aux 6 derniers après résumé), résumé de session (≤ 1500 car.). `BuildInjectionBlock` : résumé de la session précédente + derniers échanges, accolé au workflow de chat (jetable — le résumé suivant le remplace). Opt-in `ChatMemoryEnabled`. Voir [Mémoire de conversation](#mémoire-de-conversation). |
+| `ChatActions.cs` | `ChatActions` (statique interne) | **Couche d'action du chat** (v1.13) : 8 tools (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `run_tonight_run` opt-in) réutilisant les primitives du plugin ; budget par tour + par conversation (consommation au succès, lots all-or-nothing), gate « un run chat à la fois », trace des items ajoutés (seuls retirables), bloc de workflow (budget + étiquette de confirmation), trace visuelle des actions réussies (toast Emby + libellé `TurnActions` renvoyé à la page — v1.13.1/v1.13.4). Voir [Couche d'action du chat](#couche-daction-du-chat). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`) → S3 (recherche web SearXNG → id IMDb, même porte d'acceptation), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette Gracenote de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
@@ -741,17 +749,21 @@ les cartes activées.
 > clients en direct-play (TV, téléphones). L'authentification Emby 401 les
 > requêtes sans token — d'où le `[Unauthenticated]` + `StrmSecret`.
 
-### Genre `AI Tonight` (watch bucket)
+### Tag `AI Tonight` (watch bucket)
 
-`AiGenreTagger` étiquette, sur les **runs frais** de Tonight (pas le cache), les
+`AiTagger` étiquette, sur les **runs frais** de Tonight (pas le cache), les
 items Emby réels du **watch bucket** (enregistrements non visionnés + items
-possédés) avec le genre **`AI Tonight`** (option `TonightGenreTagEnabled`).
-L'usager retrouve les recos en **filtrant sur ce genre** dans n'importe quel
-client Emby.
+possédés) avec le **tag** `AI Tonight` (option `TonightGenreTagEnabled`).
+L'usager retrouve les recos en **filtrant sur ce tag** dans n'importe quel
+client Emby. Un tag est préféré au genre (v1.13.3) : « AI Tonight » est un
+marqueur d'admin, pas un genre de contenu — il n'encombre ni la navigation par
+genres ni le vocabulaire du genre cleaner.
 
-- Mutate : `item.Genres = …; item.UpdateToRepository(ItemUpdateType.MetadataEdit)`.
-- **Modifie les métadonnées réelles** (tableau `Genres`) — un refresh peut
+- Mutate : `item.Tags = …; item.UpdateToRepository(ItemUpdateType.MetadataEdit)`.
+- **Modifie les métadonnées réelles** (tableau `Tags`) — un refresh peut
   l'effacer, réajouté au prochain run frais.
+- **Migration v1.13.3** : le nettoyage de 3 h retire aussi l'ancien *genre* du
+  même nom des items qui le portent encore.
 - Scope **isolé** du genre `AI Suggestion` utilisé par la bibliothèque `.strm`
   (nettoyage séparé).
 
@@ -773,11 +785,12 @@ la parcourt comme n'importe quelle collection dans n'importe quel client.
 
 Tâche planifiée **quotidienne 03:00**, **toujours active** (non gatingée) :
 
-1. retire le genre `AI Tonight` de tous les items (`AiGenreTagger.RemoveAllAsync`) ;
+1. retire le tag `AI Tonight` de tous les items (+ l'ancien genre hérité du même
+   nom, migration v1.13.3) via `AiTagger.RemoveAllAsync` ;
 2. **vide** la collection `AI Tonight` (coquille conservée, re-remplie au prochain
    run frais) — best-effort.
 
-Les runs « ce soir » suivants réajoutent le genre / re-remplissent la collection sur
+Les runs « ce soir » suivants réajoutent le tag / re-remplissent la collection sur
 les recos toujours pertinentes.
 
 ---
@@ -1110,6 +1123,56 @@ goûts de l'usager :
   « Effacer la conversation » oublie aussi la session serveur.
 - **Endpoints admin** : `GET /Plugins/LLMAI/ChatMemory` (session la plus
   récente), `POST /Plugins/LLMAI/ChatMemory/Forget` (oubli de session(s)).
+
+### Couche d'action du chat
+
+Le chat agit sur les **mêmes surfaces que le plugin** — cartes .strm « AI
+Suggestions », timers d'enregistrement, tag « AI Tonight », collection,
+playlist, run Tonight — en réutilisant les primitives existantes, sous limites
+strictes (`ChatActions.cs`) :
+
+- **Admin-only + human in the middle** : pas d'autorisation supplémentaire ;
+  l'étiquette (annoncée dans le system prompt) est « proposer dans le texte,
+  exécuter après confirmation explicite de l'admin ». Les garde-fous DURS sont
+  le budget et le gating admin.
+- **Budget d'actions** : `ChatActionBudget` par tour (défaut 10, toutes
+  surfaces confondues) + `ChatActionConversationCap` par conversation (défaut
+  30, compteur en mémoire serveur — remis au redémarrage). `0` = lecture seule.
+  Consommation **au succès** : une action refusée par un garde-fou (déjà
+  possédé, déjà visionné, drop list, doublon) ne consomme rien ; un lot ne
+  couvrant pas le budget restant est refusé en bloc (all-or-nothing).
+- **8 tools** : `record_program` (timer via `AutoProgrammer.ProgramOneAsync`),
+  `create_card` (carte .strm unique, éphémère par construction — le marker
+  `.llmai_reco` la fait nettoyer par Emby à la prochaine génération
+  planifiée), `tag_ai_tonight` (tag, v1.13.3), `collection_add`/`collection_remove`,
+  `playlist_add`/`playlist_remove` (primitives **additives** — contrairement à
+  `EnsureAsync` qui rapproche tout le contenu ; le retrait n'accepte que les
+  items que le chat a ajoutés lui-même dans la conversation) et
+  `run_tonight_run` (opt-in).
+- **`run_tonight_run(directives?)`** (`ChatTonightRunEnabled`, défaut false) :
+  déclenche le run Tonight sur le chemin exact de la tâche planifiée et du
+  login. Directives de session **éphémères** (≤ 500 caractères, valables pour
+  ce run uniquement, jamais persistées) ; un seul run chat à la fois, 2 par
+  conversation ; runId préfixé `c` (diagnostic) ; badge discret « générée via
+  chat — directives : … » sur la page Recommandations (la métadonnée survit
+  au cache par usager). Les résultats sont livrés par les surfaces habituelles
+  (page, tag, collection, playlist selon la config).
+- **Trace visuelle des actions** : chaque action réussie émet un libellé vers
+  deux sorties (v1.13.1/v1.13.4) — (1) un **toast Emby** 🤖 vers toutes les
+  sessions admin (visible sur les pages normales d'Emby, autre appareil… ; le
+  client web ne le rend PAS sur la page de configuration, constat 2026-09-06),
+  et (2) une **ligne discrète dans la page de chat** sous la réponse du LLM
+  (« 🤖 1 item(s) tagué(s) « AI Tonight » » — champ `actions` de la réponse
+  HTTP, non rejoué par l'historique). Succès seulement : rien pour les refus
+  de garde-fous.
+- **Hygiène playlist (v1.13.2)** : sur ce build Emby, `RemoveFromPlaylist`
+  est inopérant (no-op interne / HTTP 500) et une série ajoutée est
+  développée en TOUS ses épisodes. Les ajouts (tools chat compris) passent
+  donc par une **normalisation en feuilles** (série/season → épisode *next
+  up*, skip si tout vu) et le comptage honnête par re-listing (les items
+  déjà présents ne consomment pas de budget). Le reset complet reste le
+  destroy+recréate du run Tonight ; `playlist_remove` signale l'inopérance
+  du retrait à l'usager.
 
 ---
 

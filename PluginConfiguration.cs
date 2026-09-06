@@ -549,16 +549,19 @@ namespace LLM_AI
         /// run <b>frais</b> de « À regarder ce soir », le plugin ajoute le genre
         /// <c>AI Tonight</c> aux items Emby du <b>watch bucket</b> recommandés
         /// (enregistrements non visionnés + items possédés) — l'usager les
-        /// retrouve en filtrant sur ce genre dans n'importe quel client Emby.
-        /// <para>Une tâche planifiée (« Nettoyage genre AI Tonight », 3 h du
-        /// matin) retire le genre de tous les items chaque jour ; les runs
-        /// Tonight suivants le réajoutent sur les recos toujours pertinentes.
+        /// retrouve en filtrant sur ce <b>tag</b> dans n'importe quel client
+        /// Emby (ex-genre, migré en tag en v1.13.3 : c'est un marqueur d'admin,
+        /// pas un genre de contenu).
+        /// <para>Une tâche planifiée (« Nettoyage tag AI Tonight », 3 h du
+        /// matin) retire le tag de tous les items chaque jour (et migre
+        /// l'éventuel genre hérité) ; les runs Tonight suivants le réajoutent
+        /// sur les recos toujours pertinentes.
         /// Cette tâche de nettoyage tourne <b>même si ce flag est décoché</b>
         /// (pour nettoyer les tags restants après désactivation).</para>
         /// <para><b>Scope isolé</b> du genre <c>AI Suggestion</c> utilisé par la
         /// bibliothèque <c>.strm</c> (<see cref="StrmLibraryEnabled"/>) — les
         /// deux nettoyages sont indépendants. <b>Attention</b> : modifie les
-        /// métadonnées réelles des items (tableau <c>Genres</c>) ; un refresh
+        /// métadonnées réelles des items (tableau <c>Tags</c>) ; un refresh
         /// métadonnées peut annuler le tag (réajouté au prochain run).</para>
         /// </summary>
         public bool TonightGenreTagEnabled { get; set; } = false;
@@ -569,18 +572,18 @@ namespace LLM_AI
         /// <b>collection Emby</b> nommée <c>AI Tonight</c> regroupant les items du
         /// <b>watch bucket</b> recommandés (enregistrements non visionnés + items
         /// possédés) — l'usager la parcourt comme n'importe quelle collection dans
-        /// n'importe quel client Emby. Même principe que l'étiquetage par genre
+        /// n'importe quel client Emby. Même principe que l'étiquetage par tag
         /// (<see cref="TonightGenreTagEnabled"/>) mais présenté comme une
-        /// collection navigable plutôt qu'un filtre par genre ; les deux flags sont
+        /// collection navigable plutôt qu'un filtre ; les deux flags sont
         /// indépendants (peuvent cohabiter).
-        /// <para>Contrairement au genre (qui <b>modifie</b> les métadonnées des
+        /// <para>Contrairement au tag (qui <b>modifie</b> les métadonnées des
         /// items), la collection est <b>non destructive</b> : les items sont
         /// référencés (regroupés), jamais copiés ni déplacés — lire un membre
         /// joue le vrai item (enregistrement ou fichier possédé). La collection
         /// agrège des items <i>inter-bibliothèques</i> (enregistrements + films/
-        /// séries possédés), ce qu'un filtre par genre ne permet pas aussi
+        /// séries possédés), ce qu'un filtre de tags ne permet pas aussi
         /// directement.</para>
-        /// <para>Une tâche planifiée (« Nettoyage genre AI Tonight », 3 h du
+        /// <para>Une tâche planifiée (« Nettoyage tag AI Tonight », 3 h du
         /// matin) <b>vide</b> aussi la collection chaque jour (retire tous les
         /// membres, la coquille BoxSet reste pour être re-remplie au prochain
         /// run) ; cette tâche tourne <b>même si ce flag est décoché</b> (nettoie
@@ -599,7 +602,7 @@ namespace LLM_AI
         /// <para><b>Reset à chaque run</b> : la playlist est vidée puis remplie
         /// avec les recos courantes (elle reflète exactement les recommandations
         /// du jour, pas un historique). Publique (visible par le foyer), liée à
-        /// l'usager <see cref="TonightUserName"/>. Indépendante du genre
+        /// l'usager <see cref="TonightUserName"/>. Indépendante du tag
         /// (<see cref="TonightGenreTagEnabled"/>) et de la collection
         /// (<see cref="TonightCollectionEnabled"/>).</para>
         /// <para>La tâche planifiée 3 h du matin <b>vide</b> aussi la playlist
@@ -729,12 +732,12 @@ namespace LLM_AI
         /// Opt-in (défaut <c>false</c>) : quand le seuil
         /// <see cref="RecordingDiskThresholdGb"/> est franchi, tag les
         /// enregistrements <b>visionnés</b> (par n'importe quel usager), du
-        /// plus ancien au plus récent, avec le genre « AI Delete » — jusqu'à
+        /// plus ancien au plus récent, avec le tag « AI Delete » — jusqu'à
         /// ce que la suppression de tout ce qui est tagué ramène l'espace
         /// libre au-dessus du seuil avec marge (×1.2). Chaque passe retire
         /// D'ABORD les tags précédents (reset). <b>Pure suggestion</b> : le
         /// plugin ne supprime jamais de fichier — l'usager filtre sa
-        /// bibliothèque par ce genre et supprime lui-même. Les enregistrements
+        /// bibliothèque par ce tag et supprime lui-même. Les enregistrements
         /// non visionnés ne sont jamais tagués.
         /// </summary>
         public bool RecordingTaggingEnabled { get; set; } = false;
@@ -1009,5 +1012,35 @@ namespace LLM_AI
         /// conversation suivante continue sans (fail-open).
         /// </summary>
         public bool ChatMemoryEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Budget d'actions du chat <b>par tour</b> (une question = un tour) :
+        /// nombre maximal d'actions réussies toutes surfaces confondues —
+        /// cartes .strm, timers d'enregistrement, tags « AI Tonight », entrées
+        /// de collection, entrées de playlist, déclenchement de run. Les
+        /// actions refusées par les garde-fous existants (owned-guard, drop
+        /// list, dedup…) ne consomment PAS le budget. <c>0</c> = chat en
+        /// <b>lecture seule</b> (aucun outil d'action construit).
+        /// </summary>
+        public int ChatActionBudget { get; set; } = 10;
+
+        /// <summary>
+        /// Plafond d'actions du chat <b>par conversation</b> (session de chat,
+        /// compteur en mémoire serveur — remis à zéro au redémarrage). Borne
+        /// cumulative au-delà du budget par tour, pour borner la dérive d'une
+        /// session qui réformerait sa proposition indéfiniment.
+        /// </summary>
+        public int ChatActionConversationCap { get; set; } = 30;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : autorise le tool de
+        /// chat <c>run_tonight_run(directives?)</c> — déclenche le run « À
+        /// regarder ce soir » (même code path que la tâche planifiée et le
+        /// login) avec des directives de session ÉPHÉMÈRES injectées dans le
+        /// prompt de ce run uniquement (jamais persistées dans la config).
+        /// Limites propres : un seul run chat à la fois, 2 par conversation
+        /// au maximum, directives plafonnées à 500 caractères.
+        /// </summary>
+        public bool ChatTonightRunEnabled { get; set; } = false;
     }
 }

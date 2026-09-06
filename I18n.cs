@@ -232,8 +232,8 @@ namespace LLM_AI
                     // --- Tâches planifiées ---
                     ["task.llm.name"] = "LLM AI Task",
                     ["task.llm.desc"] = "Agent LLM autonome (Ollama) qui interroge la bibliothèque Emby via des outils natifs read-only pour accomplir la tâche configurée.",
-                    ["task.cleanup.name"] = "LLM AI — Nettoyage genre « AI Tonight »",
-                    ["task.cleanup.desc"] = "Nettoyage nocturne des surfaces natives « À regarder ce soir » : retire le genre « AI Tonight » de tous les items Emby ET vide la collection « AI Tonight » de ses membres (la coquille reste, re-remplie au prochain run). Tourne quotidiennement à 3 h ; les runs Tonight suivants reconstruisent les surfaces sur les recos toujours pertinentes. Ne touche pas au genre « AI Suggestion » de la bibliothèque .strm.",
+                    ["task.cleanup.name"] = "LLM AI — Nettoyage tag « AI Tonight »",
+                    ["task.cleanup.desc"] = "Nettoyage nocturne des surfaces natives « À regarder ce soir » : retire le tag « AI Tonight » de tous les items Emby (et, migration v1.13.3, le genre hérité du même nom) ET vide la collection « AI Tonight » de ses membres (la coquille reste, re-remplie au prochain run). Tourne quotidiennement à 3 h ; les runs Tonight suivants reconstruisent les surfaces sur les recos toujours pertinentes. Ne touche pas au genre « AI Suggestion » de la bibliothèque .strm.",
                     ["task.orphan.name"] = "LLM AI — Identification des enregistrements orphelins",
                     ["task.orphan.desc"] = "Passe quotidienne (4 h) qui repère les enregistrements DVR non identifiés (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB), tente de les résoudre par nettoyage du titre + recherche multilingue (S1), puis par proposition LLM d'un id IMDb validé via TMDB /find (S2), et écrit l'id + métadonnées + affiche en verrouillant le titre EPG. Les irrésolus sont marqués pour revue. Le titre original EPG est toujours préservé (verrouillé).",
                     ["task.analysis.name"] = "LLM AI — Analyse des recommandations (rétroaction)",
@@ -241,7 +241,7 @@ namespace LLM_AI
                     ["task.memory.name"] = "LLM AI — Mémoire réflexive (fiche du LLM)",
                     ["task.memory.desc"] = "Passe hebdomadaire (dimanche 4 h 30, opt-in MemoryCardEnabled) de la mémoire réflexive : joint en C# les événements bruts de la semaine (décisions journalisées avec leur raison × télémétrie de lecture avec % visionné × candidats écartés du menu × snapshot EPG pour le % du direct), puis fait RÉÉCRIRE par le LLM sa fiche mémoire (~250 mots) — ce qu'il sait de l'usager, ses réussites, ses échecs et ses stratégies. Versionnée (4 versions conservées) ; un échec LLM conserve la fiche précédente ; sans signal, rien ne tourne.",
                     ["disktag.notif.title"] = "LLM AI — Disque des enregistrements presque plein",
-                    ["disktag.notif.desc"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables). Le seuil disque est franchi. Pour libérer de l'espace : filtrez la bibliothèque des enregistrements par le genre « {1} », multi-sélectionnez puis supprimez (le plugin ne supprime jamais rien lui-même).",
+                    ["disktag.notif.desc"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables). Le seuil disque est franchi. Pour libérer de l'espace : filtrez la bibliothèque des enregistrements par le tag « {1} », multi-sélectionnez puis supprimez (le plugin ne supprime jamais rien lui-même).",
                     ["disktag.notif.desc.uncovered"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables) — insuffisant pour ramener le disque au-dessus du seuil. Supprimez-les, puis d'autres enregistrements (ou réduisez les timers) manuellement. Le plugin ne supprime jamais rien lui-même.",
                     // Toasts d'activation d'une carte .strm (v1.12) — {0} = titre du programme.
                     ["activate.toast.programmed"] = "Enregistrement programmé : {0}",
@@ -267,8 +267,8 @@ namespace LLM_AI
                     // --- Scheduled tasks ---
                     ["task.llm.name"] = "LLM AI Task",
                     ["task.llm.desc"] = "Autonomous LLM agent (Ollama) that queries the Emby library via read-only native tools to accomplish the configured task.",
-                    ["task.cleanup.name"] = "LLM AI — AI Tonight genre cleanup",
-                    ["task.cleanup.desc"] = "Nightly cleanup of the native \"Watch tonight\" surfaces: removes the \"AI Tonight\" genre from all Emby items AND empties the \"AI Tonight\" collection of its members (the shell remains, refilled on the next run). Runs daily at 3 AM; subsequent Tonight runs rebuild the surfaces on still-relevant recos. Does not touch the \"AI Suggestion\" genre of the .strm library.",
+                    ["task.cleanup.name"] = "LLM AI — AI Tonight tag cleanup",
+                    ["task.cleanup.desc"] = "Nightly cleanup of the native \"Watch tonight\" surfaces: removes the \"AI Tonight\" tag from all Emby items (and, v1.13.3 migration, the legacy genre of the same name) AND empties the \"AI Tonight\" collection of its members (the shell remains, refilled on the next run). Runs daily at 3 AM; subsequent Tonight runs rebuild the surfaces on still-relevant recos. Does not touch the \"AI Suggestion\" genre of the .strm library.",
                     ["task.orphan.name"] = "LLM AI — Orphan recording identification",
                     ["task.orphan.desc"] = "Daily pass (4 AM) that finds unidentified DVR recordings (no IMDb/TMDB id — often Quebec titles missing from TMDB/TVDB), resolves them via title cleanup + multi-language search (S1), then an LLM-proposed IMDb id validated through TMDB /find (S2), and writes the id + metadata + poster while locking the EPG title. Unresolved ones are tagged for review. The original EPG title is always preserved (locked).",
                     ["task.analysis.name"] = "LLM AI — Recommendation analysis (feedback loop)",
@@ -276,7 +276,7 @@ namespace LLM_AI
                     ["task.memory.name"] = "LLM AI — Reflective memory (LLM card)",
                     ["task.memory.desc"] = "Weekly pass (Sunday 4:30 AM, opt-in MemoryCardEnabled) of the reflective memory: joins in C# the week's raw events (logged decisions with reasoning × playback telemetry with % watched × discarded menu candidates × EPG snapshot for live percentages), then has the LLM REWRITE its own memory card (~250 words) — what it knows about the user, its wins, its failures and its strategies. Versioned (4 versions kept); a failed LLM run keeps the previous card; with no signal, nothing runs.",
                     ["disktag.notif.title"] = "LLM AI — Recording disk almost full",
-                    ["disktag.notif.desc"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable). The disk threshold is crossed. To free space: filter the recordings library by the genre \"{1}\", multi-select and delete (the plugin never deletes anything itself).",
+                    ["disktag.notif.desc"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable). The disk threshold is crossed. To free space: filter the recordings library by the tag \"{1}\", multi-select and delete (the plugin never deletes anything itself).",
                     ["disktag.notif.desc.uncovered"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable) — not enough to bring the disk back above the threshold. Delete them, then other recordings (or reduce timers) manually. The plugin never deletes anything itself.",
                     // .strm card activation toasts (v1.12) — {0} = program title.
                     ["activate.toast.programmed"] = "Recording scheduled: {0}",

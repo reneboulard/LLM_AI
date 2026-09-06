@@ -324,15 +324,29 @@ define([], function () {
     // ---- Section « À regarder ce soir » (endpoint plugin personnalisé) ----
 
     // Section tonight rendue après réception de l'endpoint : en-tête (titre +
-    // compteur + badge « depuis cache » + bouton Rafraîchir) + grille de cartes.
-    function tonightSectionHtml(items, fromCache) {
+    // compteur + badge « depuis cache » + badge « générée via chat » + bouton
+    // Rafraîchir) + grille de cartes.
+    function tonightSectionHtml(items, fromCache, data) {
         var count = items.length;
         var badge = fromCache
             ? ' <span class="tonight-cache">' + esc(i18n.t("rec.tonight.fromCache")) + '</span>'
             : '';
+        // Origin « chat » (run_tonight_run) : badge discret avec les directives
+        // de session du run (informatif, tronqué à l'affichage).
+        var viaChat = '';
+        if (data && data.ViaChat) {
+            var dir = String(data.ChatDirectives || "");
+            if (dir.length > 0) {
+                if (dir.length > 120) dir = dir.slice(0, 120) + "…";
+                viaChat = ' <span class="tonight-cache" title="' + esc(dir) + '">' +
+                    esc(i18n.t("reco.viaChat", dir)) + '</span>';
+            } else {
+                viaChat = ' <span class="tonight-cache">' + esc(i18n.t("reco.viaChat.short")) + '</span>';
+            }
+        }
         var head = '<h3 class="recSectionTitle">🌙 ' + esc(i18n.t("rec.section.tonight")) +
             ' <span class="section-counter">' + (count ? i18n.t("rec.count", count) : '') + '</span>' +
-            badge + '</h3>' +
+            badge + viaChat + '</h3>' +
             '<div class="tonight-actions"><button is="emby-button" type="button" class="raised ai-btn-tonight-refresh">' +
             esc(i18n.t("rec.tonight.refresh")) + '</button></div>';
         var body = count ? renderCards(items)
@@ -386,7 +400,7 @@ define([], function () {
             // bouton « Regarder en direct » dans cardHtml).
             items.forEach(function (it) { it.section = "tonight"; });
 
-            host.innerHTML = tonightSectionHtml(items, !!data.FromCache);
+            host.innerHTML = tonightSectionHtml(items, !!data.FromCache, data);
             updateCount();
             markScheduledCards(view);
         }, function (err) {

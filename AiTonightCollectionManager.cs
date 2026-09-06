@@ -17,7 +17,7 @@ namespace LLM_AI
     /// (« AI Tonight ») regroupant les items du <b>watch bucket</b> recommandés
     /// par « À regarder ce soir » (enregistrements non visionnés + items
     /// possédés). Même principe que l'étiquetage par genre
-    /// (<see cref="AiGenreTagger"/>) mais présenté comme une collection navigable
+    /// (<see cref="AiTagger"/>) mais présenté comme une collection navigable
     /// plutôt qu'un filtre par genre — et surtout <b>non destructif</b> : les
     /// items sont référencés (regroupés), jamais copiés ni déplacés, et ils
     /// proviennent de bibliothèques potentiellement distinctes (enregistrements
@@ -63,7 +63,7 @@ namespace LLM_AI
     {
         /// <summary>
         /// Nom de la collection Emby maintenue pour « À regarder ce soir ».
-        /// Volontairement identique au genre <see cref="AiGenreTagger.TonightGenre"/>
+        /// Volontairement identique au tag <see cref="AiTagger.TonightTag"/>
         /// (« AI Tonight ») pour une cohérence d'interface, mais c'est un artefact
         /// distinct (une collection, pas un genre) — les deux mécanismes sont
         /// indépendants.
@@ -93,7 +93,7 @@ namespace LLM_AI
 
             // 1) Résoudre les ids du watch bucket (InternalId, ou Guid hérité —
             //    cf. ItemIdResolver) -> InternalId (long) du gestionnaire de
-            //    collections. Best-effort par id (déjà étiqueté par AiGenreTagger
+            //    collections. Best-effort par id (déjà étiqueté par AiTagger
             //    avec la même logique de résolution).
             var freshLongIds = new List<long>();
             int skipped = 0;
@@ -204,6 +204,130 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Ajout additif (chat, v1.13) — SANS rapprochement
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Ajoute des items à la collection <see cref="CollectionName"/>
+        /// SANS rapprochement (additif pur) — contrairement à
+        /// <see cref="EnsureAsync"/> qui remplace tout le contenu. Crée la
+        /// collection (membres initiaux, <c>IsLocked=true</c>, image par
+        /// défaut) si absente ; sinon <c>AddToCollection</c> sur la coquille
+        /// existante. Retourne le nombre d'items réellement ajoutés.
+        /// Best-effort : un échec d'API est logué sans lever.
+        /// Utilisé par la couche d'action du chat (<c>ChatActions</c>).
+        /// </summary>
+        internal static async Task<int> AddItemsAsync(
+            ICollectionManager collections, ILibraryManager library, ILogger logger,
+            IServerApplicationHost host, IEnumerable<string> itemIds, CancellationToken ct)
+        {
+            if (collections == null || library == null || itemIds == null)
+                return 0;
+
+            var longIds = new List<long>();
+            foreach (var raw in itemIds)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                BaseItem item;
+                try { item = ItemIdResolver.Resolve(library, raw); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Collection : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
+                if (item == null) continue;
+                if (!longIds.Contains(item.InternalId)) longIds.Add(item.InternalId);
+            }
+            if (longIds.Count == 0) return 0;
+
+            var arr = longIds.ToArray();
+            BoxSet boxSet = FindCollection(library);
+            if (boxSet == null)
+            {
+                // Création avec membres initiaux — même options que
+                // EnsureAsync (IsLocked=true : Emby n'attache pas de provider
+                // id TMDB au nom « AI Tonight » et garde notre pochette).
+                try
+                {
+                    var opts = new CollectionCreationOptions
+                    {
+                        Name = CollectionName,
+                        ItemIdList = arr,
+                        IsLocked = true
+                    };
+                    await collections.CreateCollection(opts).ConfigureAwait(false);
+                    logger?.Info("[LLM_AI] Collection « {0} » : créée (chat) avec {1} membre(s).", CollectionName, arr.Length);
+                }
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] Collection « {0} » : échec CreateCollection (chat) : {1}", CollectionName, ex.Message);
+                    return 0;
+                }
+                try
+                {
+                    var fresh = FindCollection(library);
+                    if (fresh != null)
+                        await DefaultImageApplier.ApplyPrimaryIfMissingAsync(fresh, host, library, logger, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Collection « {0} » : image par défaut échouée : {1}", CollectionName, ex.Message); }
+                return arr.Length;
+            }
+
+            EnsureLocked(boxSet, logger);
+            try
+            {
+                await collections.AddToCollection(boxSet.InternalId, arr).ConfigureAwait(false);
+                logger?.Info("[LLM_AI] Collection « {0} » : {1} item(s) ajouté(s) (chat).", CollectionName, arr.Length);
+                return arr.Length;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Collection « {0} » : échec AddToCollection (chat) : {1}", CollectionName, ex.Message);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Retire des items de la collection <see cref="CollectionName"/>
+        /// (<c>RemoveFromCollection</c> ne retire QUE le lien, jamais l'item).
+        /// Retourne le nombre d'ids réellement retirés. Best-effort, ne lève
+        /// jamais. Utilisé par la couche d'action du chat — l'appelant
+        /// (ChatActions) filtre en amont pour n'autoriser que les items que
+        /// le chat a lui-même ajoutés dans la conversation.
+        /// </summary>
+        internal static Task<int> RemoveItemsAsync(
+            ICollectionManager collections, ILibraryManager library, ILogger logger,
+            IEnumerable<string> itemIds, CancellationToken ct)
+        {
+            if (collections == null || library == null || itemIds == null)
+                return Task.FromResult(0);
+
+            var longIds = new List<long>();
+            foreach (var raw in itemIds)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                BaseItem item;
+                try { item = ItemIdResolver.Resolve(library, raw); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Collection : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
+                if (item == null) continue;
+                if (!longIds.Contains(item.InternalId)) longIds.Add(item.InternalId);
+            }
+            if (longIds.Count == 0) return Task.FromResult(0);
+
+            try
+            {
+                BoxSet boxSet = FindCollection(library);
+                if (boxSet == null) return Task.FromResult(0);
+                collections.RemoveFromCollection(boxSet, longIds.ToArray());
+                logger?.Info("[LLM_AI] Collection « {0} » : {1} item(s) retiré(s) (chat).", CollectionName, longIds.Count);
+                return Task.FromResult(longIds.Count);
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Collection « {0} » : échec RemoveFromCollection (chat) : {1}", CollectionName, ex.Message);
+                return Task.FromResult(0);
+            }
+        }
+
+        // ------------------------------------------------------------------
         //  Nettoyage (vidage de la collection)
         // ------------------------------------------------------------------
 
@@ -251,7 +375,7 @@ namespace LLM_AI
         /// <see cref="BoxSet"/> de la bibliothèque (filtre par type + nom exact).
         /// Retourne null si introuvable.
         /// </summary>
-        private static BoxSet FindCollection(ILibraryManager library)
+        internal static BoxSet FindCollection(ILibraryManager library)
         {
             try
             {

@@ -16,7 +16,7 @@ namespace LLM_AI
     /// « À regarder ce soir » : (1) revert des favoris <b>posés par le plugin</b>
     /// (<see cref="AiTonightFavoritesManager.Revert"/> — set tracé dans le fichier
     /// d'état), (2) retire le genre
-    /// <see cref="AiGenreTagger.TonightGenre"/> (« AI Tonight ») de tous les items
+    /// <see cref="AiTagger.TonightTag"/> (« AI Tonight ») de tous les items
     /// Emby qui le portent, (3) <b>vide</b> la collection
     /// <see cref="AiTonightCollectionManager.CollectionName"/> (« AI Tonight ») de
     /// tous ses membres (la coquille BoxSet reste) et (4) <b>vide</b> la playlist
@@ -102,8 +102,8 @@ namespace LLM_AI
 
                 progress?.Report(30);
 
-                // 2) Retrait du genre « AI Tonight » de tous les items.
-                await AiGenreTagger.RemoveAllAsync(_library, _logger, AiGenreTagger.TonightGenre, cancellationToken)
+                // 2) Retrait du tag « AI Tonight » de tous les items.
+                await AiTagger.RemoveAllAsync(_library, _logger, AiTagger.TonightTag, cancellationToken)
                     .ConfigureAwait(false);
 
                 progress?.Report(50);

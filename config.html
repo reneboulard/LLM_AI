@@ -532,14 +532,14 @@
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightGenreTagEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.tonight.genretag.flag">Étiqueter les recos « à regarder ce soir » avec le genre « AI Tonight »</span>
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.genretag.flag">Étiqueter les recos « à regarder ce soir » avec le tag « AI Tonight »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.genretag.desc">
-                            Option <b>opt-in</b>. Ajoute le genre <b>AI Tonight</b> aux items Emby recommandés (enregistrements
-                            non visionnés + bibliothèque) pour les retrouver en filtrant sur ce genre dans n'importe quel
-                            client Emby. Une tâche planifiée (<b>Nettoyage genre AI Tonight</b>, 3 h du matin) retire le genre
+                            Option <b>opt-in</b>. Ajoute le tag <b>AI Tonight</b> aux items Emby recommandés (enregistrements
+                            non visionnés + bibliothèque) pour les retrouver en filtrant sur ce <b>tag</b> (filtre « Tags ») dans n'importe quel
+                            client Emby. Une tâche planifiée (<b>Nettoyage tag AI Tonight</b>, 3 h du matin) retire le tag (et migre l'éventuel genre hérité)
                             chaque jour ; les runs « ce soir » suivants le réajoutent sur les recos pertinentes. <b>Modifie les
-                            métadonnées réelles</b> des items (tableau Genres) — un refresh peut l'effacer (réajouté au prochain
+                            métadonnées réelles</b> des items (tableau Tags) — un refresh peut l'effacer (réajouté au prochain
                             run). Indépendant de la bibliothèque <c>.strm</c> (genre <c>AI Suggestion</c>, nettoyage séparé).
                         </div>
 
@@ -548,13 +548,13 @@
                             <span class="checkboxLabel" data-i18n="cfg.tonight.collection.flag">Regrouper les recos « à regarder ce soir » dans une collection « AI Tonight »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.collection.desc">
-                            Option <b>opt-in</b>, indépendante du genre ci-dessus (les deux peuvent cohabiter). Maintient une
+                            Option <b>opt-in</b>, indépendante du tag ci-dessus (les deux peuvent cohabiter). Maintient une
                             <b>collection Emby</b> <b>AI Tonight</b> regroupant les items recommandés (enregistrements non
                             visionnés + bibliothèque) — l'usager la parcourt comme n'importe quelle collection dans n'importe
                             quel client Emby. <b>Non destructive</b> : les items sont référencés (regroupés), jamais copiés ni
                             déplacés ; lire un membre joue le vrai item. La collection agrège des items
                             <i>inter-bibliothèques</i> (enregistrements + films/séries possédés). La tâche planifiée
-                            (<b>Nettoyage genre AI Tonight</b>, 3 h du matin) <b>vide</b> aussi la collection chaque jour
+                            (<b>Nettoyage tag AI Tonight</b>, 3 h du matin) <b>vide</b> aussi la collection chaque jour
                             (coquille conservée, re-remplie au prochain run).
                         </div>
 
@@ -563,7 +563,7 @@
                             <span class="checkboxLabel" data-i18n="cfg.tonight.playlist.flag">Remplir une playlist « AI Tonight » avec les recos « à regarder ce soir »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.playlist.desc">
-                            Option <b>opt-in</b>, indépendante du genre et de la collection ci-dessus (les trois peuvent
+                            Option <b>opt-in</b>, indépendante du tag et de la collection ci-dessus (les trois peuvent
                             cohabiter). Maintient une <b>playlist Emby</b> <b>AI Tonight</b> remplie avec les items
                             recommandés (enregistrements non visionnés + bibliothèque) — lecture enchaînée directement
                             depuis n'importe quel client Emby. <b>Reset à chaque run</b> : la playlist est vidée puis
@@ -825,14 +825,14 @@
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkRecordingTaggingEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.diskgate.tag.flag">Suggérer à supprimer les enregistrements visionnés quand le seuil disque est franchi (genre « AI Delete »)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.diskgate.tag.flag">Suggérer à supprimer les enregistrements visionnés quand le seuil disque est franchi (tag « AI Delete »)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.diskgate.tag.desc">
                             Option <b>opt-in</b> (décochée par défaut). Quand l'espace libre passe sous le seuil,
-                            les enregistrements <b>déjà visionnés</b> sont tagués du genre « AI Delete », du plus
+                            les enregistrements <b>déjà visionnés</b> sont tagués « AI Delete », du plus
                             ancien au plus récent, jusqu'à ce que leur suppression ramène le disque au-dessus du
                             seuil (avec marge). <b>Pure suggestion — le plugin ne supprime jamais rien</b> :
-                            filtrez la bibliothèque des enregistrements par le genre « AI Delete », multi-sélectionnez
+                            filtrez la bibliothèque des enregistrements par le tag « AI Delete » (filtre « Tags »), multi-sélectionnez
                             puis supprimez. Chaque passe retire d'abord les tags précédents (les tags reflètent
                             toujours la dernière évaluation ; si vous avez libéré de l'espace, tout disparaît).
                             Les enregistrements non visionnés ne sont jamais tagués.
@@ -1071,6 +1071,44 @@
                             — la fiche mémoire hebdo les intègre. La page chat affiche un bouton
                             « Reprendre » ; le résumé + les derniers échanges sont injectés dans le
                             prompt. Un échec LLM = conversation suivante sans mémoire (fail-open).
+                        </div>
+
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.actions.desc">
+                            Couche d'action (v1.13) : le chat peut agir sur les <b>mêmes surfaces que le
+                            plugin</b> — cartes .strm « AI Suggestions », timers d'enregistrement, tag
+                            « AI Tonight », collection, playlist — en réutilisant les primitives existantes
+                            (garde-fous owned/watched/drop list/dedup inclus). Le budget plafonne les
+                            actions réussies : <b>par tour</b> (toutes surfaces confondues) et
+                            <b>par conversation</b> ; <code>0</code> = chat en lecture seule. L'agent doit
+                            <b>proposer puis attendre votre confirmation</b> avant d'exécuter ; une action
+                            refusée par un garde-fou ne consomme pas le budget.
+                        </div>
+                        <div style="display:flex;gap:1em;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numChatActionBudget"
+                                       label="Budget actions / tour"
+                                       data-i18n-label="cfg.chat.actions.budget"
+                                       min="0" max="100" />
+                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.budget.desc">Actions réussies max par question (toutes surfaces confondues). 0 = lecture seule. Défaut 10.</div>
+                            </div>
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numChatActionCap"
+                                       label="Plafond actions / conversation"
+                                       data-i18n-label="cfg.chat.actions.cap"
+                                       min="0" max="1000" />
+                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.cap.desc">Borne cumulative par conversation (compteur en mémoire serveur, remis au redémarrage). Défaut 30.</div>
+                            </div>
+                        </div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkChatTonightRun" />
+                            <span class="checkboxLabel" data-i18n="cfg.chat.actions.tonightrun">Autoriser le chat à déclencher le run « À regarder ce soir » (run_tonight_run)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.actions.tonightrun.desc">
+                            Opt-in. Le chat peut relancer le run Tonight (même code path que la tâche
+                            planifiée et le login) avec des <b>directives de session éphémères</b> (500
+                            caractères max, valables pour ce run uniquement, jamais persistées).
+                            Limites : un seul run chat à la fois, 2 par conversation. La page
+                            Recommandations affiche un badge « générée via chat ».
                         </div>
 
                         <div>

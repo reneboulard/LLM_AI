@@ -127,6 +127,13 @@ namespace LLM_AI
             public string Date;
             public bool FromCache;
             public string Error;
+            /// <summary>Origin « chat » : run déclenché par le tool
+            /// <c>run_tonight_run</c> du chat (badge sur la page
+            /// Recommandations).</summary>
+            public bool ViaChat;
+            /// <summary>Directives de session du run chat (éphémères —
+            /// badge informatif). Vide pour un run normal.</summary>
+            public string ChatDirectives;
         }
 
         // Gate anti-spam « prêt à dévorer » en attente de persistance :
@@ -146,6 +153,9 @@ namespace LLM_AI
             public string Items;
             public string Date;
             public DateTimeOffset ExpiresAt;
+            /// <summary>Origin « chat » (badge) — cf. TonightResult.ViaChat.</summary>
+            public bool ViaChat;
+            public string ChatDirectives;
         }
 
         private static readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
@@ -165,6 +175,30 @@ namespace LLM_AI
             {
                 if (_cache.TryGetValue(userId, out var e) && e.ExpiresAt > DateTimeOffset.UtcNow)
                     return e.Items;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Variante complète de <see cref="TryGetCached"/> pour l'endpoint
+        /// HTTP : renvoie le résultat caché avec ses métadonnées (date,
+        /// origin chat — badge de la page Recommandations). Retourne null si
+        /// pas de cache ou cache expiré.
+        /// </summary>
+        internal static TonightResult? TryGetCachedResult(string userId)
+        {
+            if (string.IsNullOrEmpty(userId)) return null;
+            lock (_cacheLock)
+            {
+                if (_cache.TryGetValue(userId, out var e) && e.ExpiresAt > DateTimeOffset.UtcNow)
+                    return new TonightResult
+                    {
+                        Payload = e.Items,
+                        Date = e.Date,
+                        FromCache = true,
+                        ViaChat = e.ViaChat,
+                        ChatDirectives = e.ChatDirectives
+                    };
             }
             return null;
         }
@@ -195,7 +229,8 @@ namespace LLM_AI
         /// c'est à l'appelant (endpoint / login) de le faire selon son contexte.
         /// </summary>
         public async Task<TonightResult> GenerateTonightAsync(User user, PluginConfiguration cfg,
-            bool refresh, CancellationToken ct)
+            bool refresh, CancellationToken ct,
+            string sessionDirectives = null, bool fromChat = false)
         {
             if (cfg == null)
                 return new TonightResult { Error = "Configuration du plugin indisponible." };
@@ -279,8 +314,20 @@ namespace LLM_AI
             //    + réserve (+ binge + directive) + contrainte de minimum dynamique.
             int minRec = Math.Max(0, cfg.TonightMinRecommendations);
             string prompt = (cfg.TonightPrompt ?? string.Empty).Trim()
-                + "\n\n" + profile + recs + reserve + binge + feedback
-                + "\n\n### CONTRAINTE DE SÉLECTION\n"
+                + "\n\n" + profile + recs + reserve + binge + feedback;
+
+            // Directives de session (chat, tool run_tonight_run) : one-shot,
+            // injectées dans LE prompt de ce run uniquement — jamais
+            // persistées dans la config. Plafonnées à 500 caractères par le
+            // tool (ChatActions) ; garde-fou ici aussi (fail-safe).
+            if (!string.IsNullOrWhiteSpace(sessionDirectives))
+            {
+                var sd = sessionDirectives.Trim();
+                if (sd.Length > 500) sd = sd.Substring(0, 500);
+                prompt += "\n\n### DIRECTIVES DE SESSION (chat — valables pour ce run uniquement)\n" + sd;
+            }
+
+            prompt += "\n\n### CONTRAINTE DE SÉLECTION\n"
                 + $"Garantis AU MOINS {minRec} recommandation(s). Si l'EPG du soir + les "
                 + "enregistrements non visionnés en produisent moins, complète avec la RÉSERVE "
                 + "BIBLIOTHÈQUE ci-dessus (source=\"library\", reprends id). Ne dépasse pas le "
@@ -293,7 +340,7 @@ namespace LLM_AI
             // journalisées au pool de candidats capturé pendant le run
             // (epg_tonight par le tool get_emby_info, réserve + enregistrements
             // par les builders ci-dessus). Best-effort, opt-in.
-            string runId = "t" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
+            string runId = (fromChat ? "c" : "t") + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
                 + "-" + (user.Id.ToString("N").Length >= 6 ? user.Id.ToString("N").Substring(0, 6) : user.Id.ToString("N"));
             if (cfg.DecisionLogEnabled)
                 DecisionStore.BeginRun(runId);
@@ -341,7 +388,7 @@ namespace LLM_AI
             // cache) : deux mécanismes indépendants et opt-in, réutilisant les
             // mêmes ids collectés une fois ci-dessous (parseur/dedup
             // d'AutoProgrammer) :
-            //  - étiquetage par genre « AI Tonight » (filtre par genre dans Emby) ;
+            //  - étiquetage par tag « AI Tonight » (filtre par tag dans Emby) ;
             //  - collection Emby « AI Tonight » (collection navigable, non
             //    destructive — regroupe les items par référence).
             // Le nettoyage quotidien (AiTonightCleanupTask, 3 h) retire le genre
@@ -370,7 +417,7 @@ namespace LLM_AI
             {
                 try
                 {
-                    await AiGenreTagger.AddAsync(_library, _logger, watchBucketIds, AiGenreTagger.TonightGenre, ct)
+                    await AiTagger.AddAsync(_library, _logger, watchBucketIds, AiTagger.TonightTag, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight genre tag : {0}", ex.Message); }
@@ -391,7 +438,7 @@ namespace LLM_AI
             User tonightUser = null;
             if (cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
             {
-                tonightUser = ResolveTonightUser(cfg);
+                tonightUser = ResolveTonightUser(_users, cfg);
                 if (tonightUser == null)
                     _logger?.Warn("[LLM_AI] Tonight surfaces personnelles : aucun usager résolu (TonightUserName={0}) — ignorées.",
                         cfg.TonightUserName);
@@ -401,7 +448,7 @@ namespace LLM_AI
             {
                 try
                 {
-                    await AiTonightPlaylistManager.EnsureAsync(_playlists, _library, _logger, watchBucketIds, tonightUser, ct)
+                    await AiTonightPlaylistManager.EnsureAsync(_playlists, _library, _logger, watchBucketIds, tonightUser, _host, ct)
                         .ConfigureAwait(false);
                 }
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist : {0}", ex.Message); }
@@ -427,7 +474,9 @@ namespace LLM_AI
                     {
                         Items = payload,
                         Date = date,
-                        ExpiresAt = DateTimeOffset.UtcNow.AddHours(cacheHours)
+                        ExpiresAt = DateTimeOffset.UtcNow.AddHours(cacheHours),
+                        ViaChat = fromChat,
+                        ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null
                     };
                 }
             }
@@ -529,7 +578,14 @@ namespace LLM_AI
                 }
             }
 
-            return new TonightResult { Payload = payload, Date = date, FromCache = false };
+            return new TonightResult
+            {
+                Payload = payload,
+                Date = date,
+                FromCache = false,
+                ViaChat = fromChat,
+                ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null
+            };
         }
 
         // ------------------------------------------------------------------
@@ -788,18 +844,18 @@ namespace LLM_AI
         /// premier usager admin, sinon premier usager. Best-effort : null si
         /// aucun usager résoluble.
         /// </summary>
-        private User ResolveTonightUser(PluginConfiguration cfg)
+        internal static User ResolveTonightUser(IUserManager users, PluginConfiguration cfg)
         {
             try
             {
-                var all = (_users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                var all = (users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
                     .Where(u => u != null).ToArray();
                 if (all.Length == 0) return null;
 
                 var name = cfg?.TonightUserName;
                 if (!string.IsNullOrWhiteSpace(name))
                 {
-                    var byName = _users.GetUserByName(name);
+                    var byName = users.GetUserByName(name);
                     if (byName != null) return byName;
                     var ci = all.FirstOrDefault(u =>
                         string.Equals(u.Name, name, StringComparison.OrdinalIgnoreCase));

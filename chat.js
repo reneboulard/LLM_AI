@@ -230,7 +230,20 @@ define([], function () {
                         // Remplace le « réfléchit… » par la réponse réelle.
                         removePendingTurn();
                         var reply = (data.Reply || "").trim();
-                        appendChatTurn("assistant", renderMarkdown(reply));
+                        var actionsHtml = "";
+                        if (data.Actions && data.Actions.length) {
+                            // v1.13.4 : actions réussies du tour (le toast
+                            // Emby DisplayMessage n'est pas rendu par le
+                            // client web sur cette page — le serveur renvoie
+                            // donc les libellés ici). Pas rejoué par
+                            // l'historique : l'info reste dans le texte.
+                            actionsHtml = '<div class="chatActions">' +
+                                data.Actions.map(function (a) {
+                                    var t = String(a || "").replace(/^Chat : /, "");
+                                    return '<div>🤖 ' + esc(t) + '</div>';
+                                }).join("") + '</div>';
+                        }
+                        appendChatTurn("assistant", renderMarkdown(reply) + actionsHtml);
                         chatHistory.push({ role: "assistant", content: reply });
                         // Identifiant de session (mémoire de conversation) :
                         // retourné à chaque tour, rejoué au suivant.

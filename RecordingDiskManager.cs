@@ -31,8 +31,8 @@ namespace LLM_AI
     /// <c>libre + Σ tailles taguées ≥ seuil × marge</c> — c'est-à-dire que la
     /// suppression de tout ce qui est tagué ramènerait le volume au-dessus du
     /// seuil avec une marge de sécurité. Le plugin ne supprime JAMAIS de
-    /// fichier : le genre <see cref="DeleteGenre"/> est une suggestion que
-    /// l'usager concrétise lui-même (filtre bibliothèque par genre,
+    /// fichier : le tag <see cref="DeleteTag"/> est une suggestion que
+    /// l'usager concrétise lui-même (filtre bibliothèque par tag,
     /// multi-sélection, suppression). Une passe déclenchée alors que l'espace
     /// s'est libéré ne fait donc que retirer les tags obsolètes.</para>
     /// </summary>
@@ -42,18 +42,19 @@ namespace LLM_AI
     /// MovieRecordingPath / SeriesRecordingPath, repli défaut Emby
     /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c>) sont candidats au tag.</para>
     /// <para><b>Persistance des tags</b> : réutilise
-    /// <see cref="AiGenreTagger.AddAsync"/>/<see cref="AiGenreTagger.RemoveAllAsync"/>
-    /// (même mécanique que le genre « AI Tonight » — le cleanup nocturne
-    /// <c>AiTonightCleanupTask</c> ne touche pas à ce genre).</para>
+    /// <see cref="AiTagger.AddAsync"/>/<see cref="AiTagger.RemoveAllAsync"/>
+    /// (même mécanique que le tag « AI Tonight » — le cleanup nocturne
+    /// <c>AiTonightCleanupTask</c> ne touche pas à ce tag).</para>
     /// </remarks>
     internal static class RecordingDiskManager
     {
         /// <summary>
-        /// Genre appliqué aux enregistrements suggérés à la suppression.
+        /// Tag appliqué aux enregistrements suggérés à la suppression
+        /// (ex-genre, migré par <c>AiTagger.RemoveAllAsync</c>).
         /// Distinct de « AI Tonight » / « AI Suggestion » pour garder tous les
         /// nettoyages indépendants.
         /// </summary>
-        public const string DeleteGenre = "AI Delete";
+        public const string DeleteTag = "AI Delete";
 
         /// <summary>
         /// Marge de sécurité : l'objectif de la passe est
@@ -173,7 +174,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Exécute la passe complète (voir doc de classe) :
-        /// (1) retire tous les tags <see cref="DeleteGenre"/> précédents,
+        /// (1) retire tous les tags <see cref="DeleteTag"/> précédents,
         /// (2) si l'espace libre est sous le seuil et que le tagging est activé,
         /// re-tag les enregistrements visionnés, du plus ancien au plus récent,
         /// jusqu'à l'objectif <c>libre + Σ ≥ seuil × marge</c>, puis notifie.
@@ -199,7 +200,7 @@ namespace LLM_AI
                 // (1) Clear-first : chaque passe repart de zéro. Les tags
                 //     reflètent toujours la DERNIÈRE évaluation — si l'usager
                 //     a libéré de l'espace, tout disparaît ici.
-                await AiGenreTagger.RemoveAllAsync(library, logger, DeleteGenre, ct).ConfigureAwait(false);
+                await AiTagger.RemoveAllAsync(library, logger, DeleteTag, ct).ConfigureAwait(false);
 
                 // (2) Re-tag seulement si le seuil est réellement franchi et
                 //     que la suggestion est activée.
@@ -277,13 +278,13 @@ namespace LLM_AI
                 }
 
                 var ids = picked.Select(i => i.Id.ToString()).ToList();
-                await AiGenreTagger.AddAsync(library, logger, ids, DeleteGenre, ct).ConfigureAwait(false);
+                await AiTagger.AddAsync(library, logger, ids, DeleteTag, ct).ConfigureAwait(false);
 
                 bool covered = freeBytes + reclaimed >= target;
                 string summary = string.Format(
                     System.Globalization.CultureInfo.InvariantCulture,
                     "[LLM_AI] Passe tag disque : {0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2} Go récupérables) — libre {3} Go / seuil {4} Go, objectif {5}.",
-                    picked.Count, DeleteGenre,
+                    picked.Count, DeleteTag,
                     (reclaimed / (double)GiB).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
                     (freeBytes / (double)GiB).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
                     (thresholdBytes / (double)GiB).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
@@ -323,7 +324,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Notifie tous les usagers : N enregistrements tagués « AI Delete »
-        /// (~X Go récupérables) — filtrer la bibliothèque par ce genre pour
+        /// (~X Go récupérables) — filtrer la bibliothèque par ce tag pour
         /// supprimer à la main. <paramref name="covered"/> = false → mentionne
         /// que l'objectif n'est pas couvert par les seuls visionnés.
         /// </summary>
@@ -339,7 +340,7 @@ namespace LLM_AI
             string desc = string.Format(
                 System.Globalization.CultureInfo.InvariantCulture,
                 I18n.S(covered ? "disktag.notif.desc" : "disktag.notif.desc.uncovered", langKey),
-                count, DeleteGenre, reclaimedBytes / (double)GiB);
+                count, DeleteTag, reclaimedBytes / (double)GiB);
             string url = (cfg?.EmbyPublicUrl ?? string.Empty).Trim();
 
             List<MediaBrowser.Controller.Entities.User> list;
