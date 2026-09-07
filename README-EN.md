@@ -8,6 +8,104 @@
 
 > French version: see [README.md](README.md).
 
+## In plain words: the assistant that knows your TV
+
+### The problem
+
+You have an Emby server that records TV. Every night, the same question: *"what
+should I watch or record tonight?"* Answering it yourself means leafing through the
+TV guide (hundreds of shows), remembering what you've already seen, what you've
+already recorded, checking whether the movie is worth it… It's tedious sorting work
+— and exactly the kind of thing an AI does well.
+
+### The idea
+
+**LLM_AI** is an assistant built into Emby that **reads the TV guide for you** and
+tells you what to watch or record. It isn't a robot doing random things: it asks your
+server questions (what's on tonight? what do I already like? what do I already
+have?), fills in from external sources (movie databases, the web, new-release
+lists), then **thinks and proposes** — always with an explanation in plain
+language.
+
+### What it does
+
+- **A "Recommendations" page**: series and movies to record soon, each with its
+  reason.
+- **"Watch tonight"**: a selection personalized per household member — your tastes,
+  what you started but never finished, recordings piling up ("you have 6 episodes of
+  this series: time to start").
+- **Delivery to your taste**: playlist, collection, tag, favorites, cards in a
+  library, or recording scheduled directly — each option is checked independently,
+  and everything cleans itself up every night. **The plugin never deletes anything
+  itself.**
+
+### It learns over time
+
+- **It learns from its mistakes**: once a week, it compares what it recommended with
+  what you actually watched, and adjusts its suggestions.
+- **It keeps a notebook**: recommendations, watch events, abandons are journaled,
+  and it regularly rewrites a "memory card" of its strategy, which it re-reads before
+  proposing.
+- **You stay in charge**: every suggestion can be rejected ("Forget"), and sensitive
+  actions are off by default — you have to opt in deliberately.
+
+### The extras
+
+- **A chat with the assistant**: ask questions in natural language ("what
+  documentaries are on this week?").
+- **A server health report**: on demand, it inspects Emby (disk, logs, performance)
+  and writes a report with advice.
+- **Incomplete records repaired**: when a recorded show ends up without a record
+  (title not found in the catalogs), it finds it on the web and fills in the missing
+  information, just like a manual search would.
+
+### What it needs: clean data
+
+The assistant **can only evaluate what it is shown**. And the TV guide and your
+library don't speak the same words: the guide writes "Kids", your library says
+"Enfant"; the show is rated "PG-13" or "13+" on one side, "14A" on the other. For an
+assistant that compares lists, these are different words — and less accurate
+comparisons.
+
+Two plugins do this cleanup upstream and are **highly recommended**:
+
+- **GenreCleaner** — a single vocabulary for genres across the whole library;
+- **Classification Mapper** — a single list for content ratings.
+
+When they are installed, LLM_AI reads their work automatically, translates the TV
+guide itself into the same vocabulary, and can even propose missing translations that
+you validate with one click. **Clean metadata upstream, relevant recommendations
+downstream** — the assistant doesn't replace the cleanup, it extends it.
+
+### Anyone can use it, no powerhouse required
+
+People often assume AI requires a big machine. Not necessarily:
+
+- **A free online model** — with a simple **free Ollama account**, you use their base
+  models hosted on their servers. It's the simplest path: no software to install, no
+  technical configuration, and it's enough for everything the plugin does. It's also
+  the option for small machines: even on a **Raspberry Pi 4**, the computer doesn't
+  do the thinking work — it delegates it to the cloud.
+- **A local model, optionally** — running the AI **at home** is the fully private
+  variant (nothing leaves your network), but it takes hardware: **a computer with a
+  graphics card with at least 8 GB of memory**. Below that, the model runs, but its
+  answers take forever. On a small machine, leave that work to the cloud.
+- **Both at once** — the plugin accepts several services in parallel and picks for
+  itself: your local model when it's enough, the online model as backup, and it
+  **switches automatically** if one is unavailable.
+
+In short: the cost can be **zero dollars**, and depending on your hardware, the
+thinking happens at home (a machine with an 8 GB+ GPU) or for free in the Ollama
+cloud — either way, the plugin adapts.
+
+### In one sentence
+
+**It's a butler for your TV: it watches the guide, knows your tastes, tells you what
+to watch or record, and tidies up the information — but it never throws anything
+away and never makes a sensitive decision without your approval.**
+
+---
+
 ## 📡 One recommendation, several outputs
 
 The plugin shows its recommendations on a **web page** (Recommendations,
@@ -78,12 +176,13 @@ button, taste signals feeding the same journal, see
 10. [Server health audit](#server-health-audit)
 11. [Orphan recording identification](#orphan-recording-identification)
 12. [AI genre translation (GenreCleaner)](#ai-genre-translation-genrecleaner)
-13. [LLM chat (admin)](#llm-chat-admin)
-14. [Reflective memory](#reflective-memory)
-15. [HTTP API](#http-api)
-16. [i18n (FR / EN)](#i18n-fr--en)
-17. [Troubleshooting](#troubleshooting)
-18. [Changelog](#changelog)
+13. [Official ratings (Classification Mapper)](#official-ratings-classification-mapper)
+14. [LLM chat (admin)](#llm-chat-admin)
+15. [Reflective memory](#reflective-memory)
+16. [HTTP API](#http-api)
+17. [i18n (FR / EN)](#i18n-fr--en)
+18. [Troubleshooting](#troubleshooting)
+19. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -487,6 +586,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `DefaultPrompts.cs` | `DefaultPrompts` (internal static) | **Single source** of the four default prompts/directives (FR + EN): the `RagDirectives` baseline (verify via tools before asserting, never recommend an owned/scheduled title, slight preference for recent productions without penalizing a missing year), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`. Feeds both the `PluginConfiguration` initializers (fresh installs) and the **Reset** button content. |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | **AI genre translation** endpoints (admin): `GET /Plugins/LLMAI/GenreProposals` (collects EPG genres of **upcoming** programs not covered by GenreCleaner, per movie/series section, capped at 60/section, then a one-shot LLM call via `ChatWithFallbackAsync` proposes for each a curated-vocabulary target, a new genre, or nothing) and `POST /Plugins/LLMAI/GenreApply` (re-validates then writes into `GenreCleaner.xml` via `GenreCleanerMap`, records into `GenreAliasApplied`, triggers `NotifyPendingRestart`). Suggestion language = `ResolveMetaLangKey` cascade (`ResponseLanguage`). See [AI genre translation](#ai-genre-translation-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (internal static) | **GenreCleaner.xml bridge**: reading (`Allowed`/`IsMapped`/`IsCovered` — a genre is covered when mapped OR present as-is in AllowedGenres), idempotent writing (`AddMappings` — dedup by normalized key, AllowedGenres add for `new` entries, identity mappings like `Action→Action` rejected except new genres) and **self-healing** (`HealApplied`: re-writes into the XML the mappings recorded in `GenreAliasApplied` that went missing — `new:true` also restores the AllowedGenres entry). |
+| `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Serves **only** those two fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 12 system-audit actions (sessions, tasks, transcoding, disks, logs, host metrics, processes, library) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
@@ -526,7 +626,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 
 | `Name` | Action(s) / Description |
 |---|---|
-| `get_emby_info` | **Emby queries** — actions: `summary` (library summary), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (upcoming series EPG), `epg_movies` (upcoming movies EPG), `epg_tonight` (EPG within the "tonight" window, `HasAired=false`, marks `is_scheduled`, "best airing" per-title dedup — the premiere wins over the rerun), `scheduled` / `planning` (programmed timers). Applies whitelists, flags, drop list. |
+| `get_emby_info` | **Emby queries** — actions: `summary` (library summary), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (upcoming series EPG), `epg_movies` (upcoming movies EPG), `epg_tonight` (EPG within the "tonight" window, `HasAired=false`, marks `is_scheduled`, "best airing" per-title dedup — the premiere wins over the rerun), `scheduled` / `planning` (programmed timers), `find` (unified library + EPG search — free-text term, types, person, genres, **classification** normalized, per-user watched/favorites, `source` `library|epg|both` with title dedup — library wins). Applies whitelists, flags, drop list. |
 | `tmdb_lookup` | TMDB search / details (rating, poster, overview, cast) via `TmdbApiKey`. |
 | `tvdb_search` | TVDB search (series) via `TvdbApiKey`. |
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
@@ -1080,6 +1180,43 @@ works on clean genres**:
    profile. And when a new channel introduces unknown genres, the analysis catches
    them on the next pass — vocabulary maintenance becomes one click instead of a
    manual XML editing session.
+
+---
+
+## Official ratings (Classification Mapper)
+
+**Classification Mapper** (a companion plugin) rewrites the official ratings
+(`OfficialRating`) of the **library** to a canonical vocabulary maintained in its UI
+("CA-G", "CA-PG", "CA-14A", "CA-18A", "CA-R", "CA-A", "NR"…). But the **EPG (Gracenote)
+emits heterogeneous raw ratings** ("PG-13", "TV-14", "13+", "14A"…): without a bridge,
+the ratings seen by the LLM come from **two different vocabularies**, and a "13+" filter
+would miss both "PG-13" (EPG) and "CA-14A" (rewritten library). `ClassificationMap.cs`
+closes that gap, **mirroring the [GenreCleaner](#ai-genre-translation-genrecleaner)
+bridge** (which does the same for genres):
+
+- **Normalization on both sides** — `ClassificationMap.Normalize` converts each official
+  rating to its Classification Mapper canonical value ("13+" → "CA-14A",
+  "PG-13" → "CA-14A"). Applied to the results **and the filter** of the `find` action of
+  `get_emby_info`: a rating requested in any raw form matches the library **and** the
+  EPG, and the `classification` field emitted to the LLM is always canonical.
+- **Lazy reading of `classification_mapper_config.json`** — the file Classification
+  Mapper drops into the **server's** configuration directory
+  (`ConfigurationDirectoryPath`, e.g. `/var/lib/emby/config` — not the plugins'
+  configurations directory). Reloaded whenever the file changes (mtime, re-stat
+  throttled at 30 s): mappings edited in the Classification Mapper UI are followed
+  **without restarting Emby**.
+- **Raw → canonical reverse index**: the canonical value itself is indexed too (items
+  already rewritten by Classification Mapper pass through unchanged). Key folding is
+  trim + lowercase + internal-space removal ("PG 13" ≡ "PG-13"); the canonical display
+  case from the JSON is preserved in the output ("CA-14A", not "ca-14a") — ratings
+  emitted to the LLM stay readable.
+- **Neutral when Classification Mapper is not installed**: missing file or unreadable
+  JSON → empty table, each rating simply comes back case-normalized (uppercase) — the
+  behavior of a server without the plugin. The reader never throws (fail-open).
+
+Unlike the AI genre translation (which **writes** into `GenreCleaner.xml`), this bridge
+has **no config flag and no endpoint**: read-only access to the other plugin's config,
+never a write.
 
 ---
 
