@@ -66,6 +66,13 @@ namespace LLM_AI
 
         private const string MarkerFile = ".llmai_reco";
 
+        /// <summary>
+        /// Ressource embedded du poster par défaut (même image que
+        /// <see cref="DefaultImageApplier"/>). Servie en repli quand ni TMDB ni
+        /// l'affiche EPG locale ne fournissent de poster.
+        /// </summary>
+        private const string DefaultPosterResource = "LLM_AI.default_poster.jpg";
+
         public StrmLibraryGenerator(ILibraryManager library, ILiveTvManager liveTv,
             IServerApplicationHost host, ILogger logger, LlmRunner runner = null)
         {
@@ -328,12 +335,12 @@ namespace LLM_AI
             // Repli : récupère l'affiche Primary du programme EPG pointé par
             // r.Id (téléfilm/titre régional absent de TMDB mais dont la
             // chaîne fournit déjà un poster, souvent un vrai portrait 2:3).
-            // L'affiche peut être un fichier local OU une URL distante
-            // (Gracenote/TMS référence presque toujours une URL http).
+            // Fichier local uniquement : une URL distante (Gracenote/TMS)
+            // n'est JAMAIS téléchargée (voir TryCopyProgramPoster) — le
+            // poster par défaut embarqué est posé à la place.
             if (!posterWritten)
             {
-                try { posterWritten = await TryCopyProgramPosterAsync(root, r, epgProgram, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
+                try { posterWritten = TryCopyProgramPoster(root, r, epgProgram); }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
             }
 
@@ -897,16 +904,17 @@ namespace LLM_AI
         /// que le poster par défaut générique.
         /// <para>L'affiche EPG peut être un <b>fichier local</b> (image en cache
         /// sur disque) OU une <b>URL distante</b> : les programmes Gracenote/TMS
-        /// référencent presque toujours une URL <c>ebyl.[domaine-retire]</c> dans le
-        /// champ Path de leur image Primary — un <c>File.Exists</c> seul échoue
-        /// donc systématiquement sur ce type de source (bug des cartes sans
-        /// poster alors que l'EPG en affiche une). Le chemin http est alors
-        /// téléchargé avec le <see cref="HttpClient"/> partagé du générateur.</para>
+        /// référencent presque toujours une URL distante (domaine Gracenote/TMS)
+        /// dans le champ Path de leur image Primary. Les URL distantes ne sont
+        /// <b>jamais téléchargées</b> : sur demande d'Emby (facturation des
+        /// requêtes Gracenote), le plugin ne sollicite plus ce domaine — le
+        /// poster par défaut embarqué (<see cref="WriteEmbeddedDefaultPoster"/>)
+        /// est posé à la place, pour que la carte ne reste pas sans image.</para>
         /// Best-effort, ne lève jamais. Chaque garde logue sa raison (Info) pour
         /// rendre les « carte sans poster » diagnosticables. <c>true</c> si
         /// poster écrit.
         /// </summary>
-        private async Task<bool> TryCopyProgramPosterAsync(string root, AutoProgrammer.Reco r, BaseItem program, CancellationToken ct)
+        private bool TryCopyProgramPoster(string root, AutoProgrammer.Reco r, BaseItem program)
         {
             // Logue la raison du renoncement puis retourne false — remplace les
             // return false silencieux d'origine (cartes sans poster indiagnosticables).
@@ -932,8 +940,7 @@ namespace LLM_AI
                 if (!Directory.Exists(folder)) return Skip("dossier de carte absent : " + folder);
 
                 string dst = Path.Combine(folder, "poster.jpg");
-                bool isLocal = File.Exists(src);
-                if (isLocal)
+                if (File.Exists(src))
                 {
                     // Image en cache sur disque : simple copie.
                     File.Copy(src, dst, overwrite: true);
@@ -941,14 +948,12 @@ namespace LLM_AI
                 else if (Uri.TryCreate(src, UriKind.Absolute, out Uri uri)
                     && (uri.Scheme == "http" || uri.Scheme == "https"))
                 {
-                    // Affiche distante (Gracenote/TMS) : téléchargement via le
-                    // HttpClient partagé, comme un poster TMDB.
-                    using (var resp = await s_http.GetAsync(src, ct).ConfigureAwait(false))
-                    {
-                        resp.EnsureSuccessStatusCode();
-                        using (var fs = File.Create(dst))
-                            await (await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false)).CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
-                    }
+                    // Affiche distante (domaine Gracenote/TMS) : AUCUN
+                    // téléchargement — sur demande d'Emby (facturation Gracenote),
+                    // le plugin ne sollicite plus ce domaine. On pose le poster
+                    // par défaut embarqué à la place.
+                    if (!WriteEmbeddedDefaultPoster(dst))
+                        return Skip("URL distante non téléchargée (domaine Gracenote interdit) et poster par défaut indisponible");
                 }
                 else
                 {
@@ -956,15 +961,33 @@ namespace LLM_AI
                 }
 
                 _logger?.Info("[LLM_AI] Strm library : poster EPG {0} pour « {1} » (depuis programme {2}).",
-                    isLocal ? "copié" : "téléchargé", r.Title, r.Id);
+                    File.Exists(src) ? "copié" : "par défaut (URL distante non téléchargée)", r.Title, r.Id);
                 return true;
             }
-            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : récupération échouée ({1}).", r.Title, ex.Message);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Écrit le poster par défaut embarqué (<see cref="DefaultPosterResource"/>,
+        /// même ressource que <see cref="DefaultImageApplier"/>) vers
+        /// <paramref name="dst"/>. Best-effort : <c>false</c> si la ressource
+        /// manque ou si l'écriture échoue.
+        /// </summary>
+        private static bool WriteEmbeddedDefaultPoster(string dst)
+        {
+            try
+            {
+                using var stream = typeof(StrmLibraryGenerator).Assembly.GetManifestResourceStream(DefaultPosterResource);
+                if (stream == null) return false;
+                using var fs = File.Create(dst);
+                stream.CopyTo(fs, 81920);
+                return true;
+            }
+            catch { return false; }
         }
 
         // ------------------------------------------------------------------

@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.5.0] — 2026-09-08
+
+### Fixed — Repli poster EPG : plus aucun téléchargement d'URL distante, sur demande d'Emby
+
+- Emby a demandé (courriel du 2026-09-08) la suppression de l'usage d'un
+  domaine Gracenote par le repli poster EPG de la bibliothèque `.strm` —
+  chaque téléchargement est une requête Gracenote facturée.
+- `StrmLibraryGenerator.TryCopyProgramPoster` ne télécharge **plus jamais**
+  d'URL distante : les affiches EPG distantes (domaine Gracenote/TMS dans le
+  champ Path de l'image Primary) sont ignorées ; le **poster par défaut
+  embarqué** (même ressource que `DefaultImageApplier`) est posé à la place
+  pour que la carte ne reste pas sans image. Les affiches en **fichier local**
+  (cache disque Emby) restent copiées — aucun réseau.
+- Concerne la génération planifiée **et** le tool chat `create_card`
+  (chemin commun `WriteCardWithMetaAsync`). Aucun autre composant du plugin
+  ne sollicite un domaine Gracenote (vérifié par recherche de code).
+
 ## [1.13.4.4] — 2026-09-06
 
 ### Changed — Lien documentation avec ancre GitHub
@@ -1697,11 +1714,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   cas « Moonflower Murders on Masterpiece ») : le repli poster
   `TryCopyProgramPoster` ne gérait que les fichiers locaux — mais les programmes
   EPG Gracenote/TMS référencent presque toujours une **URL distante**
-  (`ebyl.[domaine-retire]/…`) dans le champ Path de leur image Primary. Le garde
+  (domaine Gracenote/TMS) dans le champ Path de leur image Primary. Le garde
   `File.Exists(URL)` échouait donc silencieusement (`return false` sans log) et la
   carte restait sans affiche quand le lookup TMDB échouait aussi (titres suffixés
-  du type « … on Masterpiece » introuvables sur TMDB). Le repli télécharge
-  désormais les URL http(s) via le `HttpClient` partagé (les fichiers locaux
+  du type « … on Masterpiece » introuvables sur TMDB). Le repli téléchargeait
+  dès lors les URL http(s) via le `HttpClient` partagé (les fichiers locaux
   restent copiés) et **chaque garde logue sa raison** (programme introuvable,
   sans image, chemin absent, dossier absent…) — plus de `return false` muet.
   Complément : si le lookup TMDB échoue sur le titre complet, le générateur
@@ -1710,14 +1727,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Murders ») — la forme complète est toujours essayée d'abord, un titre
   légitime contenant « on » n'est donc tronqué qu'après échec ; le titre de la
   carte (dossier/.nfo) reste inchangé, seule la requête est nettoyée.
+  *(Comportement de téléchargement supersédé en 1.13.5.0 : les URL distantes
+  ne sont plus jamais téléchargées — poster par défaut embarqué à la place,
+  cf. entrée 1.13.5.0 ci-dessus.)*
   **STRM cards with no poster while the EPG shows one** (fixed 2026-08-30,
   "Moonflower Murders on Masterpiece" case): the poster fallback
   `TryCopyProgramPoster` only handled local files — but Gracenote/TMS EPG
-  programs almost always reference a **remote URL** (`ebyl.[domaine-retire]/…`) in
+  programs almost always reference a **remote URL** (Gracenote/TMS domain) in
   their Primary image's Path field. The `File.Exists(URL)` guard failed
   silently (`return false`, no log) and the card was left posterless whenever
   the TMDB lookup also failed (suffixed titles like "… on Masterpiece" have no
-  TMDB match). The fallback now downloads http(s) URLs via the shared
+  TMDB match). The fallback then downloaded http(s) URLs via the shared
   `HttpClient` (local files are still copied) and **every guard logs its
   reason** (missing program, no image, missing path, missing folder…) — no more
   silent `return false`. Complement: if the TMDB lookup fails on the full
@@ -1726,6 +1746,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   TMDB entry "Moonflower Murders") — the full form is always tried first, so a
   legitimate title containing "on" is only stripped after a failed lookup; the
   card title (folder/.nfo) is unchanged, only the query is cleaned.
+  *(Download behavior superseded in 1.13.5.0: remote URLs are no longer
+  fetched at all — embedded default poster applied instead, see the 1.13.5.0
+  entry above.)*
 - **Crash NaN/Infinity en JSON** : `disk_storage` divisait par `TotalSize == 0` (volumes
   tels `/var/snap/lxd`, `/sys/…`), produisant `NaN`/`∞` que `System.Text.Json` refusait de
   sérialiser — l'exception escapait le digest déterministe et faisait échouer tout l'audit.
