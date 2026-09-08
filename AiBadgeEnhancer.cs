@@ -59,7 +59,7 @@ namespace LLM_AI
         /// <summary>
         /// Clé de cache des images badgées « AI » (suggestion). <b>Scopée par
         /// item</b> (suffixe <c>InternalId</c>) : les épisodes d'une série
-        /// partagent la même pochette Gracenote (URL unique au niveau série),
+        /// partagent la même pochette du guide (URL unique au niveau série),
         /// et la clé de cache fait partie du chemin du fichier caché — sans
         /// suffixe, le badge d'un programme serait resservi à tous les
         /// épisodes partageant la même image.
@@ -161,7 +161,7 @@ namespace LLM_AI
         /// du fichier caché, donc basculer AI ↔ possédé (ex. la série vient
         /// d'être importée en bibliothèque) régénère l'image au lieu de
         /// resservir l'ancien badge. Le suffixe <c>InternalId</c> sépare les
-        /// épisodes d'une même série : ils partagent la même pochette Gracenote
+        /// épisodes d'une même série : ils partagent la même pochette du guide
         /// (URL unique au niveau série), et sans ce suffixe la première image
         /// badgée serait resservie à tous les épisodes partageant l'artwork,
         /// ce qui ferait fuiter le badge d'un épisode sur les autres.</remarks>

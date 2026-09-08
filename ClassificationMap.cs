@@ -17,8 +17,7 @@ namespace LLM_AI
     /// </summary>
     /// <remarks>
     /// Miroir de <see cref="GenreCleanerMap"/> : la bibliothèque est déjà
-    /// réécrite par Classification Mapper lui-même, mais l'EPG (Gracenote)
-    /// émet des classifications brutes hétérogènes. Sans ce pont, les
+    /// réécrite par Classification Mapper lui-même, mais l'EPG émet des classifications brutes hétérogènes. Sans ce pont, les
     /// classifications envoyées au LLM viennent de DEUX vocabulaires
     /// différents et un filtre « 13+ » raterait à la fois « PG-13 » (EPG) et
     /// « CA-14A » (biblio réécrite). En normalisant les deux côtés, un filtre

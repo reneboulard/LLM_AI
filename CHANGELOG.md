@@ -10,22 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.6.0] — 2026-09-08
+
+### Added — Repli poster EPG via l'endpoint image d'Emby (toute source de guide)
+
+- Le repli poster de la bibliothèque `.strm` récupère à nouveau les affiches
+  EPG sans fichier local — mais **uniquement via l'endpoint image d'Emby**
+  (`/emby/Items/{id}/Images/Primary`), le même chemin que l'affichage EPG.
+  Le plugin ne contacte **que l'origine Emby locale** : jamais l'hôte distant
+  de l'affiche (les requêtes directes au fournisseur d'images de guide sont
+  facturées — demande de son éditeur). Aucun domaine n'apparaît dans le code.
+- Fonctionne pour toute source de guide : fichier local copié comme avant ;
+  sinon Emby sert la variante redimensionnée depuis son cache disque ou la
+  récupère lui-même (testé avec une source XMLTV, affiches servies par le CDN
+  du tuner).
+- Volume borné : `poster.jpg` déjà présent → retour immédiat (une requête
+  réseau au maximum par programme sur la vie du disque) et un cap de
+  10 récupérations par génération. Échec → poster par défaut embarqué.
+- `StrmLibraryGenerator.TryCopyProgramPoster` devient
+  `TryWriteProgramPosterAsync` (async, annulation propagée).
+
 ## [1.13.5.0] — 2026-09-08
 
-### Fixed — Repli poster EPG : plus aucun téléchargement d'URL distante, sur demande d'Emby
+### Fixed — Repli poster EPG : plus aucun appel direct à l'hôte distant
 
-- Emby a demandé (courriel du 2026-09-08) la suppression de l'usage d'un
-  domaine Gracenote par le repli poster EPG de la bibliothèque `.strm` —
-  chaque téléchargement est une requête Gracenote facturée.
+- Les URL distantes des affiches EPG pointent vers le CDN d'un fournisseur
+  d'images de guide (requêtes facturées) : le plugin ne les appelle jamais
+  directement, sur demande de l'éditeur d'Emby.
 - `StrmLibraryGenerator.TryCopyProgramPoster` ne télécharge **plus jamais**
-  d'URL distante : les affiches EPG distantes (domaine Gracenote/TMS dans le
-  champ Path de l'image Primary) sont ignorées ; le **poster par défaut
-  embarqué** (même ressource que `DefaultImageApplier`) est posé à la place
-  pour que la carte ne reste pas sans image. Les affiches en **fichier local**
-  (cache disque Emby) restent copiées — aucun réseau.
+  d'URL distante : les affiches EPG distantes (URL distante dans le champ
+  Path de l'image Primary) sont ignorées ; le **poster par défaut embarqué**
+  (même ressource que `DefaultImageApplier`) est posé à la place pour que la
+  carte ne reste pas sans image. Les affiches en **fichier local** (cache
+  disque Emby) restent copiées — aucun réseau.
 - Concerne la génération planifiée **et** le tool chat `create_card`
   (chemin commun `WriteCardWithMetaAsync`). Aucun autre composant du plugin
-  ne sollicite un domaine Gracenote (vérifié par recherche de code).
+  ne sollicite le fournisseur d'images (vérifié par recherche de code).
 
 ## [1.13.4.4] — 2026-09-06
 
@@ -1232,7 +1252,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     **cet épisode précis** doit y figurer (n° saison/épisode `s{S}e{E}` d'abord, puis
     titre d'épisode normalisé) — posséder la série ne badge **pas** toutes ses
     diffusions, seuls les épisodes réellement possédés le sont (vérifié empiriquement :
-    les épisodes EPG partagent la même pochette Gracenote au niveau série, mais le
+    les épisodes EPG partagent la même pochette de guide au niveau série, mais le
     rapprochement et la clé de cache sont désormais par épisode). Repli conservateur :
     un programme EPG sans numérotation dont le titre ne matche aucun épisode possédé
     retombe sur le niveau série (comportement historique — on ne peut pas prouver que
@@ -1241,7 +1261,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     clés d'épisodes biblio caché 10 min (jamais par requête). Le vert gagne en cas
     de conflit.
   - **Clé de cache par état ET par item** (`ownedbadge-v2`/`aibadge-v2` + suffixe
-    `InternalId`) : les épisodes d'une même série partagent la même pochette Gracenote
+    `InternalId`) : les épisodes d'une même série partagent la même pochette du guide
     (URL unique au niveau série) — sans suffixe par item, le badge du premier épisode
     servi serait resservi à tous les épisodes partageant l'artwork, faisant fuiter le
     badge d'un épisode (ou d'une suggestion AI d'un programme) sur les autres. Le
@@ -1264,14 +1284,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     episode** must exist there (season/episode number `s{S}e{E}` first, then normalized
     episode title) — owning a series does **not** badge all its airings, only the
     actually-owned episodes get the chip (empirically verified: EPG episodes share the
-    series-level Gracenote artwork, but both the match and the cache key are now
+    series-level guide artwork, but both the match and the cache key are now
     per-episode). Conservative fallback: an EPG program with no episode numbering whose
     title matches no owned episode falls back to series level (historical behavior —
     the episode's absence cannot be proven). Reuses the normalized name matching
     (`GetEmbyInfoTool.Norm`) from the epg_series/epg_movies exclusion; library names +
     episode keys cached 10 min (never per request). Green wins on conflict.
   - **Cache key per state AND per item** (`ownedbadge-v2`/`aibadge-v2` + `InternalId`
-    suffix): episodes of the same series share the same Gracenote artwork (one
+    suffix): episodes of the same series share the same guide artwork (one
     series-level URL) — without a per-item suffix, the first served episode's badge
     would be re-served to every episode sharing the artwork, leaking one episode's
     badge (or one program's AI suggestion) onto the others. The per-item suffix
@@ -1636,8 +1656,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   drop list, dédup) SUPPRIMAIT les diacritiques au lieu de les
   translittérer — « leçons » → « le**ons** » ≠ « lecons » ; (b)
   `LlmRunner.NormTitle` (rapprochement EPG↔reco et reco↔bibliothèque)
-  gardait le caractère accentué — « leçons » ≠ « lecons » aussi. Or l'EPG
-  Gracenote porte le titre accentué tandis que l'item bibliothèque porte
+  gardait le caractère accentué — « leçons » ≠ « lecons » aussi. Or l'EPG porte le titre accentué tandis que l'item bibliothèque porte
   souvent la variante sans accents (nom de fichier, métadonnées du provider) :
   l'exclusion « déjà possédé » ratait donc systématiquement ces titres.
   Nouveau pliage partagé `GetEmbyInfoTool.FoldAscii` (décomposition Unicode
@@ -1656,7 +1675,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   exclusion of `epg_series`/`epg_movies`, drop list, dedup) DELETED
   diacritics instead of transliterating them — "leçons" → "le**ons**" ≠
   "lecons"; (b) `LlmRunner.NormTitle` (EPG↔reco and reco↔library matching)
-  kept the accented character — "leçons" ≠ "lecons" too. Since Gracenote's
+  kept the accented character — "leçons" ≠ "lecons" too. Since the guide's
   EPG carries the accented title while the library item often carries the
   unaccented variant (filename, provider metadata), the already-owned
   exclusion systematically missed those titles. New shared folding
@@ -1712,9 +1731,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `source` classification.
 - **Cartes .strm sans poster alors que l'EPG en affiche une** (corrigé 2026-08-30,
   cas « Moonflower Murders on Masterpiece ») : le repli poster
-  `TryCopyProgramPoster` ne gérait que les fichiers locaux — mais les programmes
-  EPG Gracenote/TMS référencent presque toujours une **URL distante**
-  (domaine Gracenote/TMS) dans le champ Path de leur image Primary. Le garde
+  `TryCopyProgramPoster` ne gérait que les fichiers locaux — mais les programmes EPG des
+  guides sous abonnement référencent presque toujours une **URL distante**
+  dans le champ Path de leur image Primary. Le garde
   `File.Exists(URL)` échouait donc silencieusement (`return false` sans log) et la
   carte restait sans affiche quand le lookup TMDB échouait aussi (titres suffixés
   du type « … on Masterpiece » introuvables sur TMDB). Le repli téléchargeait
@@ -1722,8 +1741,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   restent copiés) et **chaque garde logue sa raison** (programme introuvable,
   sans image, chemin absent, dossier absent…) — plus de `return false` muet.
   Complément : si le lookup TMDB échoue sur le titre complet, le générateur
-  retente **une fois** sans le suffixe de chaîne « on … » (convention Gracenote/
-  PBS : « Moonflower Murders on Masterpiece » → entrée TMDB « Moonflower
+  retente **une fois** sans le suffixe de chaîne « on … » (convention de titrage du
+  guide : « Moonflower Murders on Masterpiece » → entrée TMDB « Moonflower
   Murders ») — la forme complète est toujours essayée d'abord, un titre
   légitime contenant « on » n'est donc tronqué qu'après échec ; le titre de la
   carte (dossier/.nfo) reste inchangé, seule la requête est nettoyée.
@@ -1732,9 +1751,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   cf. entrée 1.13.5.0 ci-dessus.)*
   **STRM cards with no poster while the EPG shows one** (fixed 2026-08-30,
   "Moonflower Murders on Masterpiece" case): the poster fallback
-  `TryCopyProgramPoster` only handled local files — but Gracenote/TMS EPG
-  programs almost always reference a **remote URL** (Gracenote/TMS domain) in
-  their Primary image's Path field. The `File.Exists(URL)` guard failed
+  `TryCopyProgramPoster` only handled local files — but subscription-guide EPG
+  programs almost always reference a **remote URL** in their Primary image's
+  Path field. The `File.Exists(URL)` guard failed
   silently (`return false`, no log) and the card was left posterless whenever
   the TMDB lookup also failed (suffixed titles like "… on Masterpiece" have no
   TMDB match). The fallback then downloaded http(s) URLs via the shared
@@ -1742,7 +1761,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reason** (missing program, no image, missing path, missing folder…) — no more
   silent `return false`. Complement: if the TMDB lookup fails on the full
   title, the generator retries **once** with the "on …" channel suffix
-  stripped (Gracenote/PBS convention: "Moonflower Murders on Masterpiece" →
+  stripped (guide title convention: "Moonflower Murders on Masterpiece" →
   TMDB entry "Moonflower Murders") — the full form is always tried first, so a
   legitimate title containing "on" is only stripped after a failed lookup; the
   card title (folder/.nfo) is unchanged, only the query is cleaned.

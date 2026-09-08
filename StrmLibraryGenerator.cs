@@ -64,6 +64,12 @@ namespace LLM_AI
             Timeout = TimeSpan.FromSeconds(20)
         };
 
+        // Compteur de récupérations d'affiche EPG via l'endpoint image d'Emby
+        // (TryWriteProgramPosterAsync) — borné par génération pour que le repli
+        // ne puisse jamais générer un volume réseau non maîtrisé.
+        private int _posterFetches;
+        private const int MaxEpgPosterFetchesPerRun = 10;
+
         private const string MarkerFile = ".llmai_reco";
 
         /// <summary>
@@ -223,7 +229,7 @@ namespace LLM_AI
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : lookup TMDB échoué pour « {0} » ({1}).", r.Title, ex.Message); }
 
-            // Suffixe « on <chaîne> » : les titres Gracenote du type
+            // Suffixe « on <chaîne> » : les titres du guide du type
             // « Moonflower Murders on Masterpiece » n'ont PAS de match TMDB
             // sous leur forme complète (l'entrée TMDB s'appelle « Moonflower
             // Murders »). Si le lookup complet échoue, on retente UNE fois
@@ -335,12 +341,13 @@ namespace LLM_AI
             // Repli : récupère l'affiche Primary du programme EPG pointé par
             // r.Id (téléfilm/titre régional absent de TMDB mais dont la
             // chaîne fournit déjà un poster, souvent un vrai portrait 2:3).
-            // Fichier local uniquement : une URL distante (Gracenote/TMS)
-            // n'est JAMAIS téléchargée (voir TryCopyProgramPoster) — le
-            // poster par défaut embarqué est posé à la place.
+            // Copie locale si Emby a l'image sur disque ; sinon requête à
+            // l'endpoint image d'Emby (le plugin ne contacte jamais l'hôte
+            // distant de l'affiche — voir TryWriteProgramPosterAsync).
             if (!posterWritten)
             {
-                try { posterWritten = TryCopyProgramPoster(root, r, epgProgram); }
+                try { posterWritten = await TryWriteProgramPosterAsync(root, r, epgProgram, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, ex.Message); }
             }
 
@@ -797,7 +804,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Suffixe « on &lt;chaîne/brand&gt; » en fin de titre (1 à 3 mots) :
-        /// convention Gracenote/PBS du type « Moonflower Murders on Masterpiece »
+        /// convention de titrage du guide (PBS) du type « Moonflower Murders on Masterpiece »
         /// — l'entrée TMDB correspondante s'appelle « Moonflower Murders ».
         /// </summary>
         private static readonly Regex s_channelSuffix = new Regex(
@@ -833,7 +840,7 @@ namespace LLM_AI
         /// image.tmdb.org/t/p/w500). Retourne <c>true</c> si <c>poster.jpg</c> a
         /// été écrit, <c>false</c> sinon (URL absente ou échec réseau) —
         /// l'appelant enchaîne alors sur le repli par poster EPG
-        /// (<see cref="TryCopyProgramPoster"/>).
+        /// (<see cref="TryWriteProgramPosterAsync"/>).
         /// </summary>
         private async Task<bool> DownloadPosterAsync(string root, AutoProgrammer.Reco r, string posterUrl, CancellationToken ct)
         {
@@ -862,7 +869,7 @@ namespace LLM_AI
         /// <c>r.Id</c> (programId). Une seule requête in-process par reco, partagée
         /// entre (a) la lecture de l'<c>Overview</c> natif du diffuseur — placé en
         /// tête du <c>&lt;plot&gt;</c> via <see cref="BuildNfo"/> — et (b) le repli
-        /// poster (<see cref="TryCopyProgramPoster"/>). Best-effort : retourne
+        /// poster (<see cref="TryWriteProgramPosterAsync"/>). Best-effort : retourne
         /// <c>null</c> si l'id est absent/invalide ou si le lookup échoue.
         /// </summary>
         /// <remarks>
@@ -903,18 +910,27 @@ namespace LLM_AI
         /// un vrai poster portrait fourni par la chaîne, donc de meilleure facture
         /// que le poster par défaut générique.
         /// <para>L'affiche EPG peut être un <b>fichier local</b> (image en cache
-        /// sur disque) OU une <b>URL distante</b> : les programmes Gracenote/TMS
-        /// référencent presque toujours une URL distante (domaine Gracenote/TMS)
-        /// dans le champ Path de leur image Primary. Les URL distantes ne sont
-        /// <b>jamais téléchargées</b> : sur demande d'Emby (facturation des
-        /// requêtes Gracenote), le plugin ne sollicite plus ce domaine — le
-        /// poster par défaut embarqué (<see cref="WriteEmbeddedDefaultPoster"/>)
-        /// est posé à la place, pour que la carte ne reste pas sans image.</para>
-        /// Best-effort, ne lève jamais. Chaque garde logue sa raison (Info) pour
-        /// rendre les « carte sans poster » diagnosticables. <c>true</c> si
-        /// poster écrit.
+        /// sur disque) OU une <b>URL distante</b> — les guides sous abonnement
+        /// référencent presque toujours une URL distante dans le champ Path de
+        /// leur image Primary. Dans tous les cas le plugin ne contacte
+        /// <b>jamais</b> l'hôte distant de l'image (sur demande d'Emby — chaque
+        /// requête est une donnée facturée du fournisseur de guide) : le fichier
+        /// local est copié, et l'URL distante est demandée à l'<b>endpoint image
+        /// d'Emby</b> (<c>/emby/Items/{id}/Images/Primary</c>, le même chemin que
+        /// l'affichage EPG), qui sert la variante redimensionnée depuis son cache
+        /// disque — ou la récupère lui-même s'il ne l'a pas encore. Le plugin ne
+        /// parle donc qu'à l'origine Emby locale. Volume borné : poster.jpg déjà
+        /// présent → retour immédiat (une requête réseau au maximum par
+        /// programme sur la vie du disque), et un cap de récupérations par
+        /// génération (<see cref="MaxEpgPosterFetchesPerRun"/>). Échec → poster
+        /// par défaut embarqué (<see cref="WriteEmbeddedDefaultPoster"/>), pour
+        /// que la carte ne reste pas sans image.</para>
+        /// Best-effort, ne lève jamais (hors annulation réelle). Chaque garde
+        /// logue sa raison (Info) pour rendre les « carte sans poster »
+        /// diagnosticables. <c>true</c> si poster écrit.
         /// </summary>
-        private bool TryCopyProgramPoster(string root, AutoProgrammer.Reco r, BaseItem program)
+        private async Task<bool> TryWriteProgramPosterAsync(string root, AutoProgrammer.Reco r,
+            BaseItem program, CancellationToken ct)
         {
             // Logue la raison du renoncement puis retourne false — remplace les
             // return false silencieux d'origine (cartes sans poster indiagnosticables).
@@ -927,6 +943,7 @@ namespace LLM_AI
             if (program == null) return Skip("programme EPG introuvable");
             if (string.IsNullOrWhiteSpace(r.Title)) return Skip("titre absent de la reco");
 
+            string dst = null;
             try
             {
                 if (!program.HasImage(ImageType.Primary, 0)) return Skip("programme sans image Primary");
@@ -938,35 +955,65 @@ namespace LLM_AI
                 if (string.IsNullOrWhiteSpace(safe)) safe = "reco_" + SanitizeName(r.Id);
                 string folder = Path.Combine(root, safe);
                 if (!Directory.Exists(folder)) return Skip("dossier de carte absent : " + folder);
+                dst = Path.Combine(folder, "poster.jpg");
 
-                string dst = Path.Combine(folder, "poster.jpg");
+                // Cache permanent : poster déjà écrit → retour immédiat, sans
+                // re-copie ni re-téléchargement (au maximum une requête réseau
+                // par programme sur la vie du disque).
+                if (File.Exists(dst)) return true;
+
+                // Image en cache sur disque côté Emby : simple copie.
                 if (File.Exists(src))
                 {
-                    // Image en cache sur disque : simple copie.
                     File.Copy(src, dst, overwrite: true);
-                }
-                else if (Uri.TryCreate(src, UriKind.Absolute, out Uri uri)
-                    && (uri.Scheme == "http" || uri.Scheme == "https"))
-                {
-                    // Affiche distante (domaine Gracenote/TMS) : AUCUN
-                    // téléchargement — sur demande d'Emby (facturation Gracenote),
-                    // le plugin ne sollicite plus ce domaine. On pose le poster
-                    // par défaut embarqué à la place.
-                    if (!WriteEmbeddedDefaultPoster(dst))
-                        return Skip("URL distante non téléchargée (domaine Gracenote interdit) et poster par défaut indisponible");
-                }
-                else
-                {
-                    return Skip("source ni fichier local ni URL : " + src);
+                    _logger?.Info("[LLM_AI] Strm library : poster EPG copié pour « {0} » (depuis programme {1}).", r.Title, r.Id);
+                    return true;
                 }
 
-                _logger?.Info("[LLM_AI] Strm library : poster EPG {0} pour « {1} » (depuis programme {2}).",
-                    File.Exists(src) ? "copié" : "par défaut (URL distante non téléchargée)", r.Title, r.Id);
+                // URL distante : JAMAIS appelée directement. On demande l'affiche
+                // à Emby lui-même (endpoint image = même chemin que l'affichage
+                // EPG), qui la sert de son cache disque ou la récupère lui-même
+                // — le plugin ne contacte que l'origine locale.
+                string baseApi = null;
+                try { baseApi = _host?.GetLocalHostApiUrl(); }
+                catch (Exception ex) { _logger?.Info("[LLM_AI] Strm library : GetLocalHostApiUrl indisponible ({0}).", ex.Message); }
+
+                bool FailToDefault(string why)
+                {
+                    if (WriteEmbeddedDefaultPoster(dst))
+                    {
+                        _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : poster par défaut embarqué ({1}).", r.Title, why);
+                        return true;
+                    }
+                    return Skip(why);
+                }
+
+                if (string.IsNullOrWhiteSpace(baseApi))
+                    return FailToDefault("endpoint image Emby indisponible");
+
+                if (_posterFetches >= MaxEpgPosterFetchesPerRun)
+                    return FailToDefault("cap de récupérations par génération atteint");
+
+                string url = baseApi.TrimEnd('/') + "/Items/" + program.InternalId + "/Images/Primary?maxWidth=400";
+                using (var resp = await s_http.GetAsync(url, ct).ConfigureAwait(false))
+                {
+                    resp.EnsureSuccessStatusCode();
+                    using (var fs = File.Create(dst))
+                        await (await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false)).CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
+                }
+                _posterFetches++;
+                _logger?.Info("[LLM_AI] Strm library : poster EPG récupéré via l'endpoint image Emby pour « {0} » (programme {1}).", r.Title, r.Id);
                 return true;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : récupération échouée ({1}).", r.Title, ex.Message);
+                // Échec réseau/écriture → poster par défaut embarqué. Un timeout
+                // HttpClient se manifeste en TaskCanceledException SANS
+                // annulation réelle — la garde ci-dessus ne repropage donc que
+                // l'annulation demandée (cf. gotcha TaskCanceledException).
+                _logger?.Info("[LLM_AI] Strm library : poster EPG « {0} » : récupération via l'endpoint Emby échouée ({1}).", r.Title, ex.Message);
+                if (dst != null && WriteEmbeddedDefaultPoster(dst)) return true;
                 return false;
             }
         }

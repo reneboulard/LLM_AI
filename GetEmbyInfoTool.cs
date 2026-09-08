@@ -859,7 +859,7 @@ namespace LLM_AI
 
             // Défaut des genres exclus : seulement en mode premieres_only
             // (emby-ai-suggest.sh exclut news + documentary). Sinon aucun.
-            // Défauts bilingues : l'EPG (Gracenote) émet souvent l'anglais, mais
+            // Défauts bilingues : l'EPG émet souvent l'anglais, mais
             // un EPG français émet « Documentaire »/« Nouvelles » — et avec le
             // mapping GenreCleaner les genres deviennent français. On exclut
             // les deux formes (le matching essaie brute ET mappée).
@@ -1793,7 +1793,7 @@ namespace LLM_AI
         /// </summary>
         /// <remarks>
         /// Indispensable pour la comparaison EPG ↔ bibliothèque : l'EPG
-        /// Gracenote porte souvent le titre accentué (« … en 10 leçons »)
+        /// porte souvent le titre accentué (« … en 10 leçons »)
         /// tandis que l'item bibliothèque porte la variante non accentuée
         /// (« … en 10 lecons », nom de fichier ou métadonnées du provider).
         /// Avant ce pliage, <see cref="Norm"/> SUPPRIMAIT les diacritiques au
