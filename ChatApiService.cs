@@ -89,7 +89,9 @@ namespace LLM_AI
         /// conversation (user/assistant), maintenus par la page et re-postés
         /// à chaque appel (serveur stateless). <c>Session</c> : identifiant
         /// de session de mémoire de conversation (retourné par la première
-        /// réponse puis rejoué ; vide = nouvelle conversation).
+        /// réponse puis rejoué ; vide = nouvelle conversation). <c>Context</c>
+        /// : identifiant du contexte déroulant choisi dans la page (v1.13.8,
+        /// liste blanche <see cref="ChatContexts"/> ; vide = aucun).
         /// </summary>
         [Route("/Plugins/LLMAI/Chat", "POST")]
         public class ChatRequest : IReturn<object>
@@ -97,6 +99,7 @@ namespace LLM_AI
             public string Message { get; set; }
             public List<ChatTurn> History { get; set; }
             public string Session { get; set; }
+            public string Context { get; set; }
         }
 
         /// <summary>
@@ -119,6 +122,31 @@ namespace LLM_AI
             /// affichés par la page de chat sous la réponse (le toast Emby
             /// n'est pas rendu sur la page de config). Null si aucune.</summary>
             public List<string> Actions { get; set; }
+            /// <summary>Proposition de modification de prompt en attente
+            /// d'approbation créée par le tool <c>plugin_prompts</c> pendant
+            /// ce tour (v1.13.8) — la page rend la carte de diff
+            /// Approuver/Refuser. Null si aucune.</summary>
+            public PendingApprovalInfo Pending { get; set; }
+        }
+
+        /// <summary>
+        /// Descriptif d'une écriture de prompt en attente d'approbation
+        /// (two-phase) : la page reçoit l'ancien et le nouveau texte pour
+        /// rendre la carte de diff ; le clic n'envoie QUE
+        /// <see cref="ActionId"/> — les paramètres de l'écriture restent
+        /// côté serveur (<see cref="ChatPromptStore"/>, expiration 10 min).
+        /// </summary>
+        public class PendingApprovalInfo
+        {
+            public string ActionId { get; set; }
+            public string Field { get; set; }
+            public string Label { get; set; }
+            public string OldText { get; set; }
+            public string NewText { get; set; }
+            /// <summary>Avertissement de divergence (null si aucun) : le
+            /// nouveau texte recouvre peu le texte courant — la carte de
+            /// diff l'affiche en bandeau (v1.13.9).</summary>
+            public string Warning { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -145,6 +173,15 @@ namespace LLM_AI
             string message = (req?.Message ?? string.Empty).Trim();
             if (message.Length == 0)
                 return new ChatResponse { Enabled = true, Error = "Message vide." };
+
+            // Contexte déroulant (v1.13.8) : résolu contre le registre
+            // statique (liste blanche) — un id inconnu est simplement ignoré
+            // (fail-open : aucun bloc injecté, jamais d'erreur de tour).
+            string contextId = (req?.Context ?? string.Empty).Trim();
+            string contextBlock = ChatContexts.BuildBlock(cfg, contextId, ApplicationHost);
+            if (contextBlock.Length > 0)
+                Logger.Info("[LLM_AI] [CHAT] Contexte « {0} » actif ({1} caractères injectés).",
+                    contextId, contextBlock.Length);
 
             // Historique re-posté par la page → messages LLM. La page ne
             // stocke que les tours user/assistant (textes finaux) ; on
@@ -207,12 +244,23 @@ namespace LLM_AI
                     actionTools.Count, cfg.ChatActionBudget);
             }
 
+            // Édition de prompts par le chat (v1.13.8, opt-in) : le tool
+            // plugin_prompts (list/get/set two-phase) — l'écriture passe par
+            // l'approbation, jamais par le LLM. Indépendant du budget
+            // d'actions (une approbation n'est pas une action Emby).
+            if (cfg.ChatPromptsEnabled)
+            {
+                actionTools ??= new List<ILlmTool>();
+                actionTools.Add(new ChatPromptsTool(cfg, sessionId, userId, contextId, Logger));
+                Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts).");
+            }
+
             string reply;
             try
             {
                 reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
                     _sessions, _tasks, _notifications, ct, memoryBlock,
-                    actionTools, actionsWorkflow).ConfigureAwait(false);
+                    actionTools, actionsWorkflow, contextBlock).ConfigureAwait(false);
             }
             // Requête avortée (déconnexion client, timeout page) : répondre un
             // JSON propre au lieu de laisser l'OperationCanceledException
@@ -234,6 +282,63 @@ namespace LLM_AI
                 throw;
             }
 
+            // ------------------------------------------------------------------
+            //  Filet structurel anti-différence (v1.13.9.11) : en mode d'édition,
+            //  certains modèles (vécu gemma4:26b) répondent en posant une
+            //  question de validation (« Souhaitez-vous que je prépare le
+            //  texte ? ») au lieu de livrer le texte révisé — malgré les
+            //  règles injectées (CommonRules + description du tool). Un rappel
+            //  PONCTUEL suffit (l'instruction ponctuelle est suivie là où la
+            //  règle de fond est ignorée — constaté côté page v1.13.9.8) :
+            //  on le rejoue donc automatiquement ici, une seule fois, pour que
+            //  l'usager n'ait JAMAIS à rappeler le format. Déclencheur :
+            //  réponse sans AUCUNE clôture ET qui se termine par une question
+            //  (le pattern exact de la déférence — une vraie réponse Q&A ou
+            //  une annonce « voici le texte actuel » ne se terminent pas par
+            //  une question posée à l'usager). Un set déjà soumis (proposition
+            //  en attente) ou une réponse d'échec ne déclenchent pas le filet.
+            //  ------------------------------------------------------------------
+            if (contextBlock.Length > 0 && cfg.ChatPromptsEnabled
+                && !string.IsNullOrWhiteSpace(reply)
+                && !reply.StartsWith("Échec du chat", StringComparison.Ordinal)
+                && ChatPromptStore.PeekPagePending(sessionId) == null
+                && reply.IndexOf("```", StringComparison.Ordinal) < 0
+                && reply.TrimEnd().EndsWith("?", StringComparison.Ordinal))
+            {
+                Logger.Info("[LLM_AI] [CHAT] Filet prose : réponse-question sans clôture en mode " +
+                    "d'édition — nudge automatique (une seule fois).");
+                var nudge = "[Admin] Ne demandez pas de validation : livrez MAINTENANT, dans votre " +
+                    "prochaine réponse, le texte COMPLET du prompt révisé dans un bloc de code clôturé " +
+                    "```text … ``` (une seule clôture, en tout dernier du message). L'approbation existe " +
+                    "déjà : la carte de diff Approuver/Refuser de la page porte ce bloc.";
+                var nudgedHistory = new List<LlmClient.ChatMessage>(history)
+                {
+                    new LlmClient.ChatMessage { Role = "user", Content = message },
+                    new LlmClient.ChatMessage { Role = "assistant", Content = reply },
+                    new LlmClient.ChatMessage { Role = "user", Content = nudge }
+                };
+                try
+                {
+                    string nudged = await runner.RunChatAsync(cfg, "CHAT-NUDGE", nudgedHistory,
+                        nudge, _sessions, _tasks, _notifications, ct, memoryBlock,
+                        actionTools, actionsWorkflow, contextBlock).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(nudged)
+                        && !nudged.StartsWith("Échec du chat", StringComparison.Ordinal))
+                    {
+                        reply = nudged;
+                        Logger.Info("[LLM_AI] [CHAT] Filet prose : réponse corrigée fournie.");
+                    }
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    // Timeout backend LLM sur le nudge : on rend la réponse
+                    // d'origine (déférente) plutôt qu'une erreur — l'usager a
+                    // le bouton de secours de la page en dernier ressort.
+                    Logger.Info("[LLM_AI] [CHAT] Filet prose : nudge annulé (délai backend) — réponse d'origine rendue.");
+                }
+                catch (OperationCanceledException) { throw; }
+            }
+
             // Journalise le tour (usager + assistant) dans la session —
             // seulement en cas de SUCCÈS : un tour raté n'est pas rejoué par
             // la page (retry possible) et ne doit pas polluer la mémoire.
@@ -253,13 +358,31 @@ namespace LLM_AI
             // page de configuration (constat 2026-09-06).
             var turnActions = ChatActions.TakeActions(sessionId);
 
+            // Proposition de prompt en attente créée pendant le tour
+            // (plugin_prompts set) : la page rend la carte de diff.
+            var pendingInfo = (PendingApprovalInfo)null;
+            var pending = ChatPromptStore.TakePagePending(sessionId);
+            if (pending != null)
+            {
+                pendingInfo = new PendingApprovalInfo
+                {
+                    ActionId = pending.ActionId,
+                    Field = pending.Field,
+                    Label = pending.Label,
+                    OldText = pending.OldText,
+                    NewText = pending.NewText,
+                    Warning = pending.Warn
+                };
+            }
+
             return new ChatResponse
             {
                 Enabled = true,
                 Reply = reply,
                 Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 Session = savedSession,
-                Actions = turnActions.Count > 0 ? turnActions : null
+                Actions = turnActions.Count > 0 ? turnActions : null,
+                Pending = pendingInfo
             };
         }
 
@@ -589,6 +712,163 @@ namespace LLM_AI
             Logger.Info("[LLM_AI] [CHAT] Mémoire de conversation oubliée ({0}).",
                 session.Length > 0 ? session : "toutes les sessions");
             return new ChatMemoryGetResponse { Enabled = true };
+        }
+
+        // ------------------------------------------------------------------
+        //  Contextes déroulants + approbation des prompts (v1.13.8)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <c>GET /Plugins/LLMAI/ChatContexts</c> — la liste des contextes
+        /// prédéfinis disponibles pour le menu déroulant de la page chat
+        /// (registre statique <see cref="ChatContexts"/>). Réservé aux
+        /// administrateurs.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatContexts", "GET")]
+        public class ChatContextsRequest : IReturn<object>
+        {
+        }
+
+        public class ChatContextInfo
+        {
+            public string Id { get; set; }
+            public string Label { get; set; }
+        }
+
+        public class ChatContextsResponse
+        {
+            public bool Enabled { get; set; }
+            public string Error { get; set; }
+            public List<ChatContextInfo> Contexts { get; set; }
+        }
+
+        public object Get(ChatContextsRequest req)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null || !cfg.ChatEnabled)
+                return new ChatContextsResponse { Enabled = false };
+
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatContextsResponse { Enabled = true, Error = "Réservé aux administrateurs." };
+
+            var list = new List<ChatContextInfo>();
+            foreach (var c in ChatContexts.All)
+                list.Add(new ChatContextInfo { Id = c.Id, Label = c.Label });
+            return new ChatContextsResponse { Enabled = true, Contexts = list };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/ChatPrompt/Approve</c> — approbation par
+        /// l'admin d'une modification de prompt proposée par le chat. Le
+        /// navigateur n'envoie QUE <c>ActionId</c> : le champ, l'ancien et
+        /// le nouveau texte viennent du store serveur
+        /// (<see cref="ChatPromptStore"/>, expiration 10 min, action liée à
+        /// la session ET à l'usager approbateur) — anti-détournement.
+        /// L'écriture est exécutée en C# déterministe
+        /// (<see cref="ChatPromptsTool.SetPrompt"/> +
+        /// <c>SaveConfiguration</c>) ; le LLM n'a aucun rôle dans
+        /// l'exécution.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatPrompt/Approve", "POST")]
+        public class ChatPromptApproveRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public class ChatPromptDecisionResponse
+        {
+            public bool Ok { get; set; }
+            public string Field { get; set; }
+            public string Label { get; set; }
+            /// <summary>Comment tester la nouvelle directive, selon le champ
+            /// (chemin réel quand il existe, simulation sinon) — affiché par
+            /// la page dans la carte et poussé dans le fil pour le LLM.</summary>
+            public string TestHint { get; set; }
+            public string Error { get; set; }
+        }
+
+        public object Post(ChatPromptApproveRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatPromptDecisionResponse { Error = "Réservé aux administrateurs." };
+
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return new ChatPromptDecisionResponse { Error = "Configuration du plugin indisponible." };
+
+            var action = ChatPromptStore.Consume(req?.ActionId, RequestSessionHint(),
+                admin.Id.ToString(), Logger);
+            if (action == null)
+                return new ChatPromptDecisionResponse { Error =
+                    "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau la sauvegarde dans la conversation." };
+
+            string text = (action.NewText ?? string.Empty).Trim();
+            if (!ChatPromptsTool.IsKnownField(action.Field) || text.Length == 0 ||
+                text.Length > ChatPromptsTool.MaxPromptChars)
+                return new ChatPromptDecisionResponse { Error = "Proposition invalide — rien n'a été écrit." };
+
+            ChatPromptsTool.SetPrompt(cfg, action.Field, text);
+            Plugin.Instance.SaveConfiguration();
+            Logger.Info("[LLM_AI] Chat prompts : champ « {0} » écrasé par approbation de l'admin " +
+                "(action_id={1}, {2} caractères).", action.Field, action.ActionId, text.Length);
+
+            return new ChatPromptDecisionResponse
+            {
+                Ok = true,
+                Field = action.Field,
+                Label = action.Label ?? ChatPromptsTool.LabelOf(action.Field),
+                TestHint = ChatPromptsTool.TestHintFor(action.Field)
+            };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/ChatPrompt/Refuse</c> — retire l'action en
+        /// attente (la conversation peut continuer, une nouvelle proposition
+        /// créera un nouveau pending). Le refus n'écrit rien.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatPrompt/Refuse", "POST")]
+        public class ChatPromptRefuseRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public object Post(ChatPromptRefuseRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatPromptDecisionResponse { Error = "Réservé aux administrateurs." };
+
+            ChatPromptStore.Discard(req?.ActionId, Logger);
+            return new ChatPromptDecisionResponse { Ok = true };
+        }
+
+        /// <summary>Indice de session pour la consommation d'un pending :
+        /// la page rejoue son id de session à chaque tour — l'endpoint
+        /// d'approbation accepte le même champ optionnel (query
+        /// <c>session</c>) pour lier le clic à la session émettrice (vide =
+        /// indicateur absent, la vérification usager reste). Lecture par
+        /// énumération défensive : l'indexeur de QueryParamCollection sur
+        /// clé absente n'est pas contractuellement null-safe.</summary>
+        private string RequestSessionHint()
+        {
+            try
+            {
+                var qs = Request?.QueryString;
+                if (qs == null) return "";
+                foreach (var nv in qs)
+                {
+                    if (nv == null || !string.Equals(nv.Name, "session", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    return (nv.Value ?? "").Trim();
+                }
+                return "";
+            }
+            catch { return ""; }
         }
 
         // ------------------------------------------------------------------

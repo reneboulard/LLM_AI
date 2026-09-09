@@ -12,9 +12,9 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Version du plugin : BasePlugin.Version est sealed et renseignée par
          l'hôte Emby depuis la version de l'assembly au chargement. -->
-    <Version>1.13.6.0</Version>
-    <AssemblyVersion>1.13.6.0</AssemblyVersion>
-    <FileVersion>1.13.6.0</FileVersion>
+    <Version>1.13.9.11</Version>
+    <AssemblyVersion>1.13.9.11</AssemblyVersion>
+    <FileVersion>1.13.9.11</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

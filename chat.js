@@ -78,8 +78,7 @@ define([], function () {
     // échappe d'abord tout le texte, puis on convertit les constructions
     // supportées (titres #/##/###, listes -/*, gras **…**, `code` inline,
     // paragraphes, lignes de code séparées). Pas de dépendance externe.
-    function renderMarkdown(md) {
-        var lines = String(md == null ? "" : md).replace(/\r\n?/g, "\n").split("\n");
+    function renderLines(lines) {
         var out = [];
         var inUl = false;
         var para = [];
@@ -112,6 +111,63 @@ define([], function () {
         return out.join("\n");
     }
 
+    // Extension v1.13.9.5 : blocs clôturés ```lang … ``` rendus en conteneur
+    // avec boutons Copier / Demander l'enregistrement (portage du pattern
+    // _renderCodeBlock de llm_core, repli execCommand pour HTTP non-localhost).
+    var CODE_EXT = {
+        javascript: "js", js: "js", python: "py", py: "py", php: "php",
+        html: "html", css: "css", bash: "sh", sh: "sh", shell: "sh",
+        json: "json", xml: "xml", yaml: "yaml", yml: "yml", sql: "sql",
+        markdown: "md", md: "md", csharp: "cs", cs: "cs", cpp: "cpp",
+        "c++": "cpp", java: "java", go: "go", rust: "rs", rs: "rs",
+        ruby: "rb", rb: "rb", text: "txt"
+    };
+
+    function codeBlockHtml(lang, code, allowSave) {
+        var l = (lang || "").trim().toLowerCase();
+        var ext = CODE_EXT[l] || "txt";
+        var label = "📄 code." + ext + (l ? " (" + l + ")" : "");
+        var btns = '<button type="button" class="chatCodeBtn chatCodeCopy" data-code="' + esc(code) +
+            '" title="' + esc(i18n ? i18n.t("chat.code.copy") : "Copier") + '">📋</button>';
+        // Bouton de sauvegarde : uniquement en mode d'édition (un contexte
+        // est sélectionné) — le message prérédigé vise le « mode actif ».
+        if (allowSave) {
+            btns += '<button type="button" class="chatCodeBtn chatCodeSave" data-code="' + esc(code) +
+                '" title="' + esc(i18n ? i18n.t("chat.code.save") : "") + '">💾</button>';
+        }
+        return '<div class="chatCode"><div class="chatCodeHead">' +
+            '<span class="chatCodeName">' + esc(label) + '</span>' +
+            '<span class="chatCodeBtns">' + btns + '</span></div>' +
+            '<pre class="chatCodePre"><code>' + esc(code) + '</code></pre></div>';
+    }
+
+    function renderMarkdown(md, allowSave) {
+        var lines = String(md == null ? "" : md).replace(/\r\n?/g, "\n").split("\n");
+        var out = [];
+        var buf = [];
+        var i = 0;
+        function flushBuf() {
+            if (buf.length) { out.push(renderLines(buf)); buf = []; }
+        }
+        while (i < lines.length) {
+            var open = /^\s*```([A-Za-z0-9+#\-]*)\s*$/.exec(lines[i]);
+            if (open) {
+                flushBuf();
+                var code = [];
+                i++;
+                // Fence non fermé (réponse tronquée) : tout le reste est code.
+                while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { code.push(lines[i]); i++; }
+                if (i < lines.length) i++; // saute la clôture
+                out.push(codeBlockHtml(open[1], code.join("\n"), allowSave === true));
+                continue;
+            }
+            buf.push(lines[i]);
+            i++;
+        }
+        flushBuf();
+        return out.join("\n");
+    }
+
     return function (view) {
         view.addEventListener("viewshow", function () {
             i18nReady().then(function () {
@@ -133,6 +189,96 @@ define([], function () {
                 var chatInput = view.querySelector("#txtChatInput");
                 var chatSendBtn = view.querySelector("#btnSendChat");
                 var chatClearBtn = view.querySelector("#btnClearChat");
+                var chatContextSel = view.querySelector("#selChatContext");
+
+                // ----------------------------------------------------------------
+                //  Blocs de code des réponses (v1.13.9.5) : Copier (repli
+                //  execCommand — navigator.clipboard n'existe pas en contexte
+                //  non sécurisé, ex. HTTP sur IP LAN) et Demander
+                //  l'enregistrement (envoie un message prérédigé : le LLM
+                //  reste l'émetteur du set, la carte diff reste
+                //  l'autorisation). Délégation sur #chatLog : aucun
+                //  gestionnaire par bouton.
+                // ----------------------------------------------------------------
+                function copyCodeText(txt, btn) {
+                    function done() {
+                        var o = btn.textContent;
+                        btn.textContent = "✅";
+                        setTimeout(function () { btn.textContent = o; }, 2000);
+                    }
+                    function legacy() {
+                        var ta = document.createElement("textarea");
+                        ta.value = txt;
+                        ta.style.position = "fixed";
+                        ta.style.opacity = "0";
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { document.execCommand("copy"); done(); } catch (e) { /* silencieux */ }
+                        document.body.removeChild(ta);
+                    }
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(txt).then(done, legacy);
+                    } else legacy();
+                }
+                if (chatLog) {
+                    chatLog.addEventListener("click", function (ev) {
+                        var btn = ev.target;
+                        while (btn && btn !== chatLog && !(btn.classList && btn.classList.contains("chatCodeBtn"))) {
+                            btn = btn.parentNode;
+                        }
+                        if (!btn || !btn.classList) return;
+                        if (btn.classList.contains("chatCodeCopy")) {
+                            copyCodeText(btn.getAttribute("data-code") || "", btn);
+                        } else if (btn.classList.contains("chatCodeSave")) {
+                            if (chatBusy) return;
+                            // v1.13.9.7 : message autoporteur — le texte du
+                            // bloc cliqué est embarqué dans le message, donc
+                            // le clic vise toujours SON bloc (plusieurs
+                            // propositions dans la conversation sans
+                            // ambiguïté « réponse précédente »). Le bouton de
+                            // secours au niveau du tour (réponse en prose)
+                            // n'a pas de data-code : message générique.
+                            var code = btn.getAttribute("data-code");
+                            if (code != null) {
+                                sendChatText(i18n.t("chat.code.save_request", code));
+                            } else {
+                                // v1.13.9.8 : le bouton de secours (réponse en
+                                // prose) ne demande plus l'enregistrement
+                                // direct — le ciblage « ta dernière réponse »
+                                // est ambigu si la conversation a avancé. Il
+                                // fait réémettre la révision en bloc ```text :
+                                // instruction ponctuelle (suivie, là où la
+                                // règle de fond de CommonRules est ignorée),
+                                // puis le bloc porte son 💾 autoporteur.
+                                sendChatText(i18n.t("chat.code.reemit_request"));
+                            }
+                        }
+                    });
+                }
+
+                // ----------------------------------------------------------------
+                //  Contextes déroulants (v1.13.8) : modes de conversation servis
+                //  par le registre statique serveur. Le choix est un paramètre
+                //  de chaque tour — changer de mode n'exige JAMAIS de reset
+                //  (le serveur réinjecte le bloc à chaque tour).
+                // ----------------------------------------------------------------
+                if (chatContextSel) {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/ChatContexts"),
+                        type: "GET",
+                        dataType: "json"
+                    }).then(function (data) {
+                        data = data || {};
+                        if (data.Error || data.Enabled === false || !data.Contexts) return;
+                        data.Contexts.forEach(function (c) {
+                            if (!c || !c.Id) return;
+                            var opt = document.createElement("option");
+                            opt.value = c.Id;
+                            opt.textContent = c.Label || c.Id;
+                            chatContextSel.appendChild(opt);
+                        });
+                    }, function () { /* indisponible : chat sans modes (fail-open) */ });
+                }
 
                 function chatTurnHtml(role, bodyHtml) {
                     var who = i18n.t(role === "user" ? "cfg.chat.you" : "cfg.chat.assistant");
@@ -197,10 +343,17 @@ define([], function () {
                     if (chatBusy || !chatInput || !chatSendBtn) return;
                     var msg = (chatInput.value || "").trim();
                     if (!msg) return;
+                    chatInput.value = "";
+                    sendChatText(msg);
+                }
+
+                // Cœur de l'envoi (v1.13.9) : partagé par le bouton « Envoyer »
+                // et par l'annonce automatique au changement de mode.
+                function sendChatText(msg) {
+                    if (chatBusy || !chatSendBtn) return;
 
                     chatBusy = true;
                     chatSendBtn.disabled = true;
-                    chatInput.value = "";
                     appendChatTurn("user", "<p>" + esc(msg) + "</p>");
                     chatHistory.push({ role: "user", content: msg });
                     appendChatTurn("assistant",
@@ -212,7 +365,10 @@ define([], function () {
                     var payload = {
                         Message: msg,
                         History: chatHistory.slice(0, -1).slice(-40),
-                        Session: chatSessionId
+                        Session: chatSessionId,
+                        // Mode de conversation (contexte déroulant) : envoyé à
+                        // CHAQUE tour ; vide = assistant général.
+                        Context: chatContextSel ? (chatContextSel.value || "") : ""
                     };
 
                     ApiClient.ajax({
@@ -265,8 +421,28 @@ define([], function () {
                                     return '<div>🤖 ' + esc(t) + '</div>';
                                 }).join("") + '</div>';
                         }
-                        appendChatTurn("assistant", renderMarkdown(reply) + actionsHtml);
+                        // v1.13.9.7 : bouton de secours au niveau du tour —
+                        // en mode d'édition, si la réponse ne contient AUCUN
+                        // bloc clôturé (LLM en prose, vécu 12:52:55) et que
+                        // aucun set n'est déjà en attente, un bouton sous la
+                        // réponse permet de demander l'enregistrement sans
+                        // taper. Exactement un chemin de sauvegarde visible
+                        // par tour : bloc 💾 si clôturé, sinon bouton de tour.
+                        var bodyHtml = renderMarkdown(reply, !!(chatContextSel && chatContextSel.value)) + actionsHtml;
+                        if (chatContextSel && chatContextSel.value && !data.Pending &&
+                            reply.indexOf("```") === -1) {
+                            bodyHtml += '<div class="chatSaveTurnRow">' +
+                                '<button type="button" class="chatCodeBtn chatCodeSave" title="' +
+                                esc(i18n.t("chat.code.save_turn")) + '">💾 ' +
+                                esc(i18n.t("chat.code.save_turn_short")) + '</button></div>';
+                        }
+                        appendChatTurn("assistant", bodyHtml);
                         chatHistory.push({ role: "assistant", content: reply });
+                        // Proposition de prompt en attente (v1.13.8) : carte
+                        // de diff Approuver/Refuser sous la réponse.
+                        if (data.Pending && data.Pending.ActionId) {
+                            appendPendingCard(data.Pending);
+                        }
                         // Identifiant de session (mémoire de conversation) :
                         // retourné à chaque tour, rejoué au suivant.
                         if (data.Session) chatSessionId = data.Session;
@@ -285,6 +461,159 @@ define([], function () {
 
                 if (chatSendBtn) {
                     chatSendBtn.addEventListener("click", sendChat);
+                }
+
+                // Annonce au changement de mode (v1.13.9, pattern llm_core) :
+                // la page envoie automatiquement une note [Admin] pour que le
+                // LLM annonce le champ visé et le texte courant AVANT toute
+                // proposition — l'ancrage read-modify-write dès l'entrée en
+                // mode (vécu 2026-09-09 : le LLM a soumis le mauvais champ).
+                // Rien pour « Aucun » ; si un tour est en cours, l'annonce
+                // est sautée (le mode est de toute façon porté par le tour
+                // suivant).
+                if (chatContextSel) {
+                    chatContextSel.addEventListener("change", function () {
+                        var mode = chatContextSel.value || "";
+                        if (!mode || chatBusy) return;
+                        var opt = chatContextSel.options[chatContextSel.selectedIndex];
+                        var labelTxt = (opt && opt.textContent) || mode;
+                        sendChatText("[Admin] J'ai sélectionné le mode « " + labelTxt + " ». " +
+                            "Avant toute chose : indique clairement sur quel prompt tu travailles " +
+                            "(champ concerné) et affiche le texte actuel que tu vas modifier.");
+                    });
+                }
+
+                // ----------------------------------------------------------------
+                //  Approbation de prompts (v1.13.8, two-phase) : la carte de
+                //  diff rend l'ancien et le nouveau texte ; le clic n'envoie
+                //  QUE l'identifiant d'action (les paramètres de l'écriture
+                //  restent côté serveur). Le résultat est annoncé au LLM
+                //  dans le fil (note usager dans l'historique).
+                // ----------------------------------------------------------------
+                // Verrouille une carte de diff périmée (v1.13.9) : une seule
+                // proposition est actionnable (la plus récente) — les cartes
+                // antérieures encore à l'écran sont marquées, leurs boutons
+                // cachés (un clic n'aurait de toute façon donné qu'une erreur
+                // serveur « expirée/inconnue » ; vécu 2026-09-09 : deux
+                // cartes simultanées, laquelle est approuvée ?).
+                function lockStaleCard(card) {
+                    if (!card || card.dataset.locked) return;
+                    card.dataset.locked = "1";
+                    var btns = card.querySelector(".chatPendingButtons");
+                    if (btns) btns.hidden = true;
+                    var res = card.querySelector(".chatPendingResult");
+                    if (res && !res.textContent) {
+                        res.textContent = i18n.t("chat.pending.stale");
+                        res.style.color = "#9a9a9a";
+                        res.hidden = false;
+                    }
+                }
+
+                function appendPendingCard(pending) {
+                    if (!chatLog) return;
+                    var previous = chatLog.querySelectorAll(".chatPending");
+                    for (var i = 0; i < previous.length; i++) lockStaleCard(previous[i]);
+                    var card = document.createElement("div");
+                    card.className = "chatPending";
+                    card.innerHTML =
+                        '<div class="chatPendingTitle">⏳ ' + esc(i18n.t("chat.pending.title")) + '</div>' +
+                        (pending.Warning
+                            ? '<div class="chatPendingWarn">' + esc(pending.Warning) + '</div>'
+                            : '') +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.pending.field")) + ' : ' +
+                            esc(pending.Label || "?") + '</div>' +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.pending.before")) + '</div>' +
+                        '<pre class="chatPendingText"></pre>' +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.pending.after")) + '</div>' +
+                        '<pre class="chatPendingText"></pre>' +
+                        '<div class="chatPendingButtons">' +
+                            '<button is="emby-button" type="button" class="raised btnApprovePrompt" data-i18n="chat.pending.approve">Approuver</button>' +
+                            '<button is="emby-button" type="button" class="raised btnRefusePrompt" data-i18n="chat.pending.refuse">Refuser</button>' +
+                        '</div>' +
+                        '<div class="chatPendingResult" hidden></div>';
+                    var texts = card.querySelectorAll(".chatPendingText");
+                    // textContent (jamais innerHTML) : le texte du prompt est
+                    // affiché brut, quel que soit son contenu.
+                    if (texts[0]) texts[0].textContent = pending.OldText || "(vide)";
+                    if (texts[1]) texts[1].textContent = pending.NewText || "";
+                    chatLog.appendChild(card);
+                    chatLog.scrollTop = chatLog.scrollHeight;
+
+                    var actionId = String(pending.ActionId || "");
+                    // makeNote(resp) : la note poussée dans le fil (le LLM la
+                    // rejoue au tour suivant). Pour l'approbation, elle
+                    // embarque l'indication de test du serveur — le LLM peut
+                    // alors OFFRIR d'exécuter le test.
+                    function decide(url, doneHtml, makeNote) {
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl(url, { session: chatSessionId || "" }),
+                            type: "POST",
+                            data: JSON.stringify({ ActionId: actionId }),
+                            contentType: "application/json",
+                            dataType: "json"
+                        }).then(function (resp) {
+                            resp = resp || {};
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                if (resp.Ok) {
+                                    res.textContent = doneHtml;
+                                    // Indication de test selon le champ
+                                    // (serveur) : ligne dédiée sous le
+                                    // verdict d'approbation.
+                                    if (resp.TestHint) {
+                                        var hint = document.createElement("div");
+                                        hint.className = "chatPendingHint";
+                                        hint.textContent = resp.TestHint;
+                                        res.appendChild(hint);
+                                    }
+                                } else {
+                                    res.textContent = i18n.t("chat.pending.error") +
+                                        " : " + (resp.Error || "?");
+                                    res.style.color = "#e57373";
+                                }
+                                res.hidden = false;
+                            }
+                            if (resp.Ok) {
+                                // Annonce au LLM dans le fil (note usager —
+                                // re-postée à chaque tour, le serveur la
+                                // rejoue comme un tour user).
+                                chatHistory.push({ role: "user", content: makeNote(resp) });
+                            }
+                        }, function (err) {
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                res.textContent = i18n.t("chat.pending.error") +
+                                    " : " + (err && err.status ? "HTTP " + err.status : "?");
+                                res.style.color = "#e57373";
+                                res.hidden = false;
+                            }
+                        });
+                    }
+
+                    var approveBtn = card.querySelector(".btnApprovePrompt");
+                    var refuseBtn = card.querySelector(".btnRefusePrompt");
+                    if (approveBtn) approveBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decide("Plugins/LLMAI/ChatPrompt/Approve",
+                            i18n.t("chat.pending.approved"),
+                            function (resp) {
+                                return "[Admin] J'ai approuvé la modification du prompt « " +
+                                    (pending.Label || pending.Field) + " » — elle a été enregistrée " +
+                                    "dans la configuration." +
+                                    (resp && resp.TestHint ? " Façon de tester : " + resp.TestHint : "");
+                            });
+                    });
+                    if (refuseBtn) refuseBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decide("Plugins/LLMAI/ChatPrompt/Refuse",
+                            i18n.t("chat.pending.refused"),
+                            function () {
+                                return "[Admin] J'ai refusé la modification du prompt « " +
+                                    (pending.Label || pending.Field) + " » — rien n'a été écrit.";
+                            });
+                    });
                 }
                 if (chatInput) {
                     chatInput.addEventListener("keydown", function (e) {
@@ -355,12 +684,15 @@ define([], function () {
                                 var turns = info.Last || [];
                                 for (var i = 0; i < turns.length; i++) {
                                     var t = turns[i];
-                                    if (!t || !t.content) continue;
-                                    var role = t.role === "user" ? "user" : "assistant";
-                                    chatHistory.push({ role: role, content: t.content });
+                                    // NB : DTO serveur PascalCase (Role/Content)
+                                    // — l'ancien t.role/t.content rendait le
+                                    // replay silencieusement vide.
+                                    if (!t || !t.Content) continue;
+                                    var role = t.Role === "user" ? "user" : "assistant";
+                                    chatHistory.push({ role: role, content: t.Content });
                                     appendChatTurn(role, role === "user"
-                                        ? "<p>" + esc(t.content) + "</p>"
-                                        : renderMarkdown(t.content));
+                                        ? "<p>" + esc(t.Content) + "</p>"
+                                        : renderMarkdown(t.Content));
                                 }
                                 banner.hidden = true;
                             });

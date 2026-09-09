@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -74,6 +75,14 @@ namespace LLM_AI
             "Audite la santé du serveur Emby, du système hôte ET de la bibliothèque. Retourne du JSON minimal. " +
             "Actions (lecture seule) : server_info, system_config (configuration serveur : HTTPS, ports, " +
             "mode maintenance, cache path, rétention des logs — via IServerConfigurationManager, cross-OS), " +
+            "security_check (sécurité : mots de passe des comptes/admins, accès distant et HTTPS, " +
+            "UPnP, en-têtes proxy, preuves d'accès externe — sessions actives ET historique des appareils " +
+            "avec IP publique ; si un accès externe est observé, les avertissements sont rehaussés critique " +
+            "— constats severity critique/avertissement/ok avec correctif), " +
+            "upnp_check (interroge le routeur en UPnP : passerelle détectée ? IP WAN externe ? table de " +
+            "redirection de ports — UN MAPPING VERS LE PORT EMBY 8096/8920 EST CRITIQUE ; lecture seule, " +
+            "n'ajoute/supprime JAMAIS de mapping ; attention : les redirections manuelles du routeur sont " +
+            "invisibles pour l'UPnP, seul un test externe les voit), " +
             "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
             "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
             "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
@@ -82,7 +91,7 @@ namespace LLM_AI
             "stop_session, trigger_task, send_message.";
 
         public string ArgumentsSchema => @"{
-  ""action"": ""server_info | system_config | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | stop_session | trigger_task | send_message"",
+  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | stop_session | trigger_task | send_message"",
   ""limit"": ""(active_sessions / list_logs) nombre max de résultats (défaut 50)"",
   ""include_hidden"": ""(scheduled_tasks) true pour inclure les tâches cachées (défaut false)"",
   ""top_n"": ""(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)"",
@@ -153,6 +162,8 @@ namespace LLM_AI
                 {
                     case "server_info":      result = await ServerInfoAsync(ct).ConfigureAwait(false); break;
                     case "system_config":   result = SystemConfig(); break;
+                    case "security_check":   result = SecurityCheck(); break;
+                    case "upnp_check":       result = await UpnpCheckAsync(ct).ConfigureAwait(false); break;
                     case "active_sessions":  result = ActiveSessions(args); break;
                     case "scheduled_tasks":   result = ScheduledTasks(args); break;
                     case "list_logs":         result = await ListLogsAsync(args, ct).ConfigureAwait(false); break;
@@ -1057,6 +1068,636 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Sécurité : comptes & exposition réseau (lecture seule)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Suggestion de test externe transmise au LLM : la sonde locale ne
+        /// peut jamais confirmer la joignabilité WAN (redirections manuelles
+        /// invisibles à l'UPnP, port ouvert jamais scanné). GRC ShieldsUP!!
+        /// est le test externe de référence, gratuit, sans installation —
+        /// le plugin ne l'appelle JAMAIS lui-même (aucune requête sortante
+        /// vers un tiers) : c'est l'usager qui clique.
+        /// </summary>
+        private const string ShieldsUpHint =
+            "Test externe suggéré : GRC ShieldsUP!! (https://www.grc.com/shieldsup) — " +
+            "gratuit, sans installation. Lancer « Custom Port Scanner » sur les ports 8096 et 8920 : " +
+            "« Stealth » ou « Closed » = port non joignable depuis Internet ; « Open » = exposé " +
+            "(corriger immédiatement : retirer la redirection de port du routeur, activer HTTPS, " +
+            "verrouiller les comptes sans mot de passe).";
+
+        /// <summary>Condition d'inclusion du test externe : une surface distante existe.</summary>
+        private static bool ShouldSuggestExternalTest(bool remoteAccess, bool publicAccessObserved) =>
+            remoteAccess || publicAccessObserved;
+
+        /// <summary>
+        /// Validation de sécurité consolidée (action <c>security_check</c>) :
+        /// <list type="bullet">
+        /// <item><b>Comptes</b> : mots de passe manquants — un admin sans mot
+        ///   de passe est 🔴 critique (n'importe qui sur le réseau prend le
+        ///   rôle), un simple usager ⚠️. Comptes désactivés comptés à part.
+        ///   L'entité <c>User</c> n'a pas de HasPassword (le DTO REST l'ajoute)
+        ///   : on teste <c>Password</c>/<c>Salt</c> vides, sans jamais exposer
+        ///   le hash.</item>
+        /// <item><b>Réseau</b> : accès distant sans HTTPS, HTTPS activé sans
+        ///   certificat, UPnP (ouverture de ports automatique),
+        ///   <c>ProxyHeaderMode != None</c> sans reverse proxy (en-têtes
+        ///   X-Forwarded-*/X-Real-Ip forgables), absence de filtre IP.</item>
+        /// <item><b>Exposition observée</b> : sessions actives dont
+        ///   <c>RemoteEndPoint</c> est une IP publique (preuve directe, temps
+        ///   réel) ET historique des appareils <c>IDeviceManager.GetDevices</c>
+        ///   (table Devices2 de authentication.db — preuve durable : tout
+        ///   appareil jamais connecté avec une IP publique).</item>
+        /// </list>
+        /// <b>Escalade de sévérité</b> : si un accès externe est observé
+        /// (session ou appareil historique avec IP publique), tout constat
+        /// ⚠️ avertissement est rehaussé 🔴 critique — un défaut de config
+        /// combiné à une exposition RÉELLE n'est plus un avertissement.
+        /// Chaque constat porte une <c>severity</c> (critique / avertissement /
+        /// ok) et un <c>fix</c> d'une ligne avec le chemin exact du dashboard —
+        /// le LLM les reprend tels quels dans le rapport. La sonde reste
+        /// honnête : l'ABSENCE de visite ne prouve pas la non-exposition
+        /// (port ouvert jamais scanné) ; le <c>note</c> le rappelle. Ne lève pas.
+        /// </summary>
+        private string SecurityCheck()
+        {
+            // Constats stockés en tuples mutables : la passe d'escalade (accès
+            // externe observé → avertissement rehaussé critique) réécrit la
+            // sévérité AVANT sérialisation et comptage.
+            var findings = new List<(string severity, string title, string detail, string fix)>();
+            void Add(string severity, string title, string detail, string fix) =>
+                findings.Add((severity, title, detail ?? "", fix ?? ""));
+
+            // ---- Comptes & mots de passe --------------------------------
+            int totalUsers = 0, disabledUsers = 0;
+            var adminsNoPassword = new List<string>();
+            var usersNoPassword = new List<string>();
+            try
+            {
+                var users = _users.GetUserList(new UserQuery()) ?? Array.Empty<User>();
+                foreach (var u in users)
+                {
+                    if (u == null) continue;
+                    totalUsers++;
+                    if (u.Policy?.IsDisabled == true) { disabledUsers++; continue; }
+                    // L'entité User n'expose pas HasPassword (le DTO REST l'ajoute) :
+                    // un compte sans mot de passe a Password/Salt vides. On ne sort
+                    // JAMAIS le hash lui-même — seulement le booléen.
+                    if (!string.IsNullOrEmpty(u.Password) || !string.IsNullOrEmpty(u.Salt))
+                        continue;
+                    usersNoPassword.Add(u.Name ?? u.Id.ToString());
+                    if (u.Policy?.IsAdministrator == true)
+                        adminsNoPassword.Add(u.Name ?? u.Id.ToString());
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check usagers : {0}", ex.Message);
+                Add("info", "Comptes usagers non vérifiables",
+                    "IUserManager indisponible : " + ex.Message, null);
+            }
+            if (totalUsers > 0)
+            {
+                if (adminsNoPassword.Count > 0)
+                    Add("critique", "Administrateur sans mot de passe",
+                        string.Join(", ", adminsNoPassword) +
+                        " — n'importe qui sur le réseau (ou Internet si exposé) obtient le rôle admin sans credential.",
+                        "Dashboard → Utilisateurs → sélectionner le compte → « Définir un mot de passe ».");
+                else
+                    Add("ok", "Tous les administrateurs ont un mot de passe", null, null);
+                var nonAdminNoPw = usersNoPassword.Where(n => !adminsNoPassword.Contains(n)).ToList();
+                if (nonAdminNoPw.Count > 0)
+                    Add("avertissement", "Usagers sans mot de passe",
+                        string.Join(", ", nonAdminNoPw) +
+                        " — secret vide = aucune barrière si le compte a un accès (même local).",
+                        "Dashboard → Utilisateurs → sélectionner chaque compte → « Définir un mot de passe ».");
+            }
+
+            // ---- Configuration réseau -----------------------------------
+            bool remote = false, https = false, behindProxy = false, upnp = false;
+            bool certConfigured = false, httpsRead = false, requireHttps = false;
+            string proxyHeaderMode = null;
+            int ipFilterCount = 0;
+            bool ipFilterBlacklist = false;
+            try
+            {
+                var mgr = _host.TryResolve<MediaBrowser.Controller.Configuration.IServerConfigurationManager>();
+                var c = mgr?.Configuration;
+                if (c != null)
+                {
+                    httpsRead = true;
+                    remote = c.EnableRemoteAccess;
+                    https = c.EnableHttps || c.RequireHttps;
+                    requireHttps = c.RequireHttps;
+                    behindProxy = c.IsBehindProxy;
+                    upnp = c.EnableUPnP;
+                    certConfigured = !string.IsNullOrWhiteSpace(c.CertificatePath);
+                    ipFilterCount = c.RemoteIPFilter?.Length ?? 0;
+                    ipFilterBlacklist = c.IsRemoteIPFilterBlacklist;
+                    // Type de ProxyHeaderMode variable selon la version (enum ou
+                    // string) : lecture par réflexion → nom lisible dans les deux cas.
+                    proxyHeaderMode = c.GetType().GetProperty("ProxyHeaderMode")
+                        ?.GetValue(c, null)?.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check réseau : {0}", ex.Message);
+            }
+
+            if (!httpsRead)
+            {
+                Add("info", "Configuration réseau non vérifiable",
+                    "IServerConfigurationManager non résolu — aucun réglage réseau lu.", null);
+            }
+            else if (!remote)
+            {
+                Add("ok", "Accès distant désactivé",
+                    "Le serveur n'est prévu que pour le réseau local.", null);
+            }
+            else if (behindProxy)
+            {
+                Add("info", "Accès distant derrière un reverse proxy",
+                    "Emby délègue le transport au proxy : vérifier que lui seul termine TLS (certificat valide).",
+                    null);
+            }
+            else if (https && certConfigured)
+            {
+                Add("ok", "Accès distant sécurisé (HTTPS)",
+                    "RequireHttps=" + requireHttps + ", certificat configuré.", null);
+            }
+            else if (https && !certConfigured)
+            {
+                Add("avertissement", "HTTPS activé sans certificat",
+                    "EnableHttps/RequireHttps actifs mais CertificatePath vide : le serveur HTTPS ne peut pas démarrer — les clients retombent en HTTP clair.",
+                    "Dashboard → Réseau → « Chemin du certificat SSL » ou repasser le mode de connexion sécurisée sur « Désactivé » (et assumer HTTP).");
+            }
+            else
+            {
+                Add("critique", "Accès distant sans HTTPS",
+                    "EnableRemoteAccess=true, EnableHttps=false : si le port est joignable depuis Internet (redirection de port, UPnP routeur), tout circule en clair — mots de passe, tokens, flux.",
+                    "Dashboard → Réseau → « Mode de connexion sécurisée » → « Requis (HTTPS) » + renseigner un certificat ; ou désactiver l'accès distant ; ou placer un reverse proxy avec TLS.");
+            }
+
+            if (httpsRead && remote && !behindProxy
+                && !string.IsNullOrEmpty(proxyHeaderMode)
+                && !proxyHeaderMode.Equals("None", StringComparison.OrdinalIgnoreCase))
+            {
+                Add("avertissement", "En-têtes proxy lus depuis toutes les adresses",
+                    "ProxyHeaderMode=" + proxyHeaderMode +
+                    " sans reverse proxy : un client distant peut forger X-Real-Ip / X-Forwarded-For pour mentir sur son adresse.",
+                    "Dashboard → Réseau → « Read proxy header » → « Non » (None) tant qu'aucun reverse proxy n'est en place.");
+            }
+            if (upnp)
+            {
+                Add("avertissement", "UPnP activé",
+                    "Le serveur ouvre automatiquement les ports du routeur — exposition WAN possible sans action consciente de l'admin.",
+                    "Dashboard → Réseau → décocher « Activer la mise en correspondance de ports UPnP ».");
+            }
+            if (httpsRead && remote && ipFilterCount == 0)
+            {
+                Add("info", "Aucun filtre d'adresses IP distant",
+                    "Toute adresse peut tenter de se connecter (whitelist RemoteIPFilter vide).",
+                    "Optionnel : Dashboard → Réseau → « Filtre d'adresses externes » en mode whitelist.");
+            }
+
+            // ---- Exposition observée (preuves directes) ------------------
+            // Temps réel : sessions actives ; durable : appareils historiques
+            // (IDeviceManager → table Devices2 de authentication.db, chaque
+            // appareil jamais connecté avec sa dernière IP rapportée).
+            var publicPeers = new List<string>();
+            try
+            {
+                foreach (var s in _sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
+                {
+                    string ep = s.RemoteEndPoint?.ToString();
+                    if (IsPublicEndPoint(ep))
+                        publicPeers.Add((s.UserName ?? "?") + "@" + ep);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check sessions : {0}", ex.Message);
+            }
+            if (publicPeers.Count > 0)
+            {
+                Add("avertissement", "Connexions depuis des IP publiques",
+                    string.Join(", ", publicPeers.Distinct()) +
+                    " — le serveur est EFFECTIVEMENT joignable depuis Internet (session active).",
+                    "Vérifier la redirection de ports du routeur et la légitimité de ces adresses.");
+            }
+
+            int devicesTotal = 0;
+            var publicDevices = new List<string>();
+            try
+            {
+                // Résolution souple (pas d'injection constructeur) : IDeviceManager
+                // n'est pas disponible sur toutes les versions/registres DI — un
+                // échec ne fait que dégrader la preuve « historique », la sonde
+                // continue (même contrat que system_config).
+                var devices = _host.TryResolve<MediaBrowser.Controller.Devices.IDeviceManager>()
+                    ?.GetDevices(new MediaBrowser.Model.Devices.DeviceQuery())?.Items;
+                if (devices != null)
+                {
+                    foreach (var d in devices)
+                    {
+                        if (d == null) continue;
+                        devicesTotal++;
+                        // DeviceInfo.IpAddress est un IPAddress (pas une string) ;
+                        // 0.0.0.0 = l'appareil n'a jamais rapporté d'IP utilisable.
+                        string ip = d.IpAddress?.ToString();
+                        if (!IsPublicEndPoint(ip)) continue;
+                        string activity = d.DateLastActivity != default
+                            ? ", dernière activité " + d.DateLastActivity.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                            : "";
+                        publicDevices.Add(string.Equals(ip, "0.0.0.0", StringComparison.Ordinal)
+                            ? (d.Name ?? d.ReportedDeviceId ?? "?") + " (IP non rapportée)"
+                            : (d.Name ?? "?") + " [" + (d.LastUserName ?? "?") + "] @ " + ip
+                              + activity);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check devices : {0}", ex.Message);
+            }
+            if (publicDevices.Count > 0)
+            {
+                Add("avertissement", "Appareils historiques avec IP publique",
+                    string.Join(" ; ", publicDevices) +
+                    " — des accès DEPUIS Internet ont déjà eu lieu (historique d'appareils).",
+                    "Vérifier la redirection de ports du routeur et la légitimité de ces appareils.");
+            }
+            bool publicAccessObserved = publicPeers.Count > 0 || publicDevices.Count > 0;
+
+            // ---- Escalade de sévérité ------------------------------------
+            // Règle de l'usager : accès externe observé + mauvaise config ⇒ le
+            // constat n'est plus un avertissement. Tout ⚠️ est rehaussé 🔴
+            // (y compris le constat d'exposition lui-même : une preuve
+            // d'accès public sur un serveur sans HTTPS n'est pas un
+            // avertissement). Les constats ok/info ne bougent pas.
+            if (publicAccessObserved)
+            {
+                for (int i = 0; i < findings.Count; i++)
+                {
+                    if (findings[i].severity != "avertissement") continue;
+                    var f = findings[i];
+                    findings[i] = ("critique", f.title,
+                        f.detail + (f.detail.Length > 0 ? " " : "") +
+                        "[Sévérité rehaussée en critique : accès depuis Internet observé.]",
+                        f.fix);
+                }
+            }
+
+            int crit = findings.Count(f => f.severity == "critique");
+            int warn = findings.Count(f => f.severity == "avertissement");
+            int ok = findings.Count(f => f.severity == "ok");
+
+            return JsonSerializer.Serialize(new
+            {
+                findings = findings.Select(f => new
+                {
+                    severity = f.severity,
+                    title = f.title,
+                    detail = f.detail,
+                    fix = f.fix
+                }),
+                summary = new { critique = crit, avertissement = warn, ok },
+                external_access_observed = publicAccessObserved,
+                users = new
+                {
+                    total = totalUsers,
+                    disabled = disabledUsers,
+                    no_password = usersNoPassword,
+                    admins_no_password = adminsNoPassword
+                },
+                network = new
+                {
+                    enable_remote_access = remote,
+                    enable_https_or_require = https,
+                    is_behind_proxy = behindProxy,
+                    proxy_header_mode = proxyHeaderMode,
+                    enable_upnp = upnp,
+                    certificate_configured = certConfigured,
+                    remote_ip_filter_count = ipFilterCount,
+                    remote_ip_filter_blacklist = ipFilterBlacklist
+                },
+                devices = new
+                {
+                    total_known = devicesTotal,
+                    public_ip = publicDevices
+                },
+                note = "Preuves d'accès externe : sessions actives (temps réel) et historique des appareils " +
+                       "(dernière IP rapportée par appareil — pas un historique exhaustif des connexions). " +
+                       "L'ABSENCE de visite ne prouve pas la non-exposition : un port ouvert jamais scanné est " +
+                       "invisible ; le champ external_test fournit la recette de confirmation (GRC ShieldsUP!!) — " +
+                       "inclus-la dans les « Actions recommandées » dès qu'une surface distante existe. Quand " +
+                       "external_access_observed=true, les avertissements sont déjà rehaussés critique. " +
+                       "Reprends les constats (severity + fix) tels quels dans le rapport.",
+                external_test = ShouldSuggestExternalTest(remote, publicAccessObserved) ? ShieldsUpHint : null
+            }, s_json);
+        }
+
+        /// <summary>
+        /// Vrai si <paramref name="endPoint"/> (format « ip:port » / « [v6]:port »)
+        /// parse vers une adresse IP publique : ni loopback, ni privée
+        /// (RFC1918), ni link-local, ni CGNAT, ni unique-local v6. Retourne
+        /// false pour toute valeur non parsable (hôte résolu, vide…).
+        /// </summary>
+        private static bool IsPublicEndPoint(string endPoint)
+        {
+            if (string.IsNullOrWhiteSpace(endPoint)) return false;
+            string host = endPoint.Trim();
+            // IPv6 littéral entre crochets, sinon coupe le port v4 (un seul ':').
+            if (host.StartsWith("[")) host = host.Trim('[', ']');
+            else
+            {
+                int colon = host.IndexOf(':');
+                if (colon >= 0 && host.IndexOf(':', colon + 1) < 0)
+                    host = host.Substring(0, colon);
+            }
+            if (!System.Net.IPAddress.TryParse(host, out var ip)) return false;
+            if (System.Net.IPAddress.IsLoopback(ip)) return false;
+
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+            {
+                var b = ip.GetAddressBytes();
+                if (b[0] == 10) return false;                                       // 10/8
+                if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return false;          // 172.16/12
+                if (b[0] == 192 && b[1] == 168) return false;                       // 192.168/16
+                if (b[0] == 169 && b[1] == 254) return false;                       // link-local
+                if (b[0] == 100 && b[1] >= 64 && b[1] <= 127) return false;         // CGNAT 100.64/10
+                return true;
+            }
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            {
+                if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return false;
+                var b = ip.GetAddressBytes();
+                if ((b[0] & 0xFE) == 0xFC) return false;                            // fc00::/7 ULA
+                return true;
+            }
+            return false;
+        }
+
+        // ------------------------------------------------------------------
+        //  UPnP : sonde de la passerelle (lecture seule)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Sonde UPnP du routeur (action <c>upnp_check</c>) — répond à la
+        /// question « le port Emby est-il ouvert sur le WAN via UPnP ? » :
+        /// <list type="bullet">
+        /// <item><b>Découverte</b> : M-SEARCH SSDP multicast
+        ///   (239.255.255.250:1900) pour InternetGatewayDevice / WANIPConnection
+        ///   / WANPPPConnection, écoute ~3 s. Aucune réponse = UPnP désactivé
+        ///   (ou muet) au routeur — un verdict <c>ok</c> pour la fuite.</item>
+        /// <item><b>Description</b> : GET du XML LOCATION → URL de contrôle du
+        ///   service WANIPConnection/WANPPPConnection.</item>
+        /// <item><b>SOAP</b> : <c>GetExternalIPAddress</c> (IP WAN réelle) puis
+        ///   boucle <c>GetGenericPortMappingEntry</c> (index 0→39, stop au
+        ///   premier refus) pour énumérer la table de redirection. Un mapping
+        ///   dont le port interne est 8096/8920 (ou pointant vers l'hôte Emby)
+        ///   est un constat <b>critique</b> : exposition WAN effective.</item>
+        /// </list>
+        /// <b>Strictement lecture seule</b> : seules des actions Get* sont
+        /// envoyées — jamais Add/DeletePortMapping. Limite honnête rappelée
+        /// dans le <c>note</c> : la table UPnP ne contient que les redirections
+        /// créées VIA UPnP ; une redirection manuelle (UI du routeur) est
+        /// invisible — seul un test externe la voit. Budget temps borné
+        /// (~3 s découverte + ~4 s HTTP + boucle mappages plafonnée).
+        /// Ne lève pas (erreurs capturées → <c>{"error":…}</c>).
+        /// </summary>
+        private async Task<string> UpnpCheckAsync(CancellationToken ct)
+        {
+            var sw = Stopwatch.StartNew();
+
+            // ---- 1) Découverte SSDP ------------------------------------
+            // M-SEARCH multicast sur les ST de passerelle, puis écoute ~3 s.
+            // On dédoublonne par LOCATION (une passerelle répond à plusieurs ST).
+            var locations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                using var udp = new System.Net.Sockets.UdpClient();
+                udp.Client.ReceiveTimeout = 500;
+                foreach (var st in new[]
+                {
+                    "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+                    "urn:schemas-upnp-org:service:WANIPConnection:1",
+                    "urn:schemas-upnp-org:service:WANIPConnection:2",
+                    "urn:schemas-upnp-org:service:WANPPPConnection:1"
+                })
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var msg = Encoding.ASCII.GetBytes(
+                        "M-SEARCH * HTTP/1.1\r\n" +
+                        "HOST: 239.255.255.250:1900\r\n" +
+                        "MAN: \"ssdp:discover\"\r\n" +
+                        "MX: 2\r\n" +
+                        "ST: " + st + "\r\n\r\n");
+                    udp.Send(msg, msg.Length, "239.255.255.250", 1900);
+                }
+                var deadline = DateTime.UtcNow.AddSeconds(3);
+                var anyEp = new IPEndPoint(IPAddress.Any, 0);
+                while (DateTime.UtcNow < deadline && locations.Count < 8)
+                {
+                    try
+                    {
+                        var data = udp.Receive(ref anyEp);
+                        var head = Encoding.UTF8.GetString(data);
+                        var loc = Regex.Match(head, "LOCATION:\\s*(\\S+)", RegexOptions.IgnoreCase);
+                        if (!loc.Success) continue;
+                        var stM = Regex.Match(head, "ST:\\s*(\\S+)", RegexOptions.IgnoreCase);
+                        locations[loc.Groups[1].Value] = stM.Success ? stM.Groups[1].Value : "?";
+                    }
+                    catch (System.Net.Sockets.SocketException) { /* ReceiveTimeout — on boucle */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit upnp_check découverte SSDP : {0}", ex.Message);
+            }
+
+            if (locations.Count == 0)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    upnp_available = false,
+                    verdict = "ok",
+                    checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                    note = "Aucune passerelle UPnP n'a répondu au SSDP (UPnP désactivé ou muet au routeur) : " +
+                           "aucune redirection de port ne peut être créée à l'insu de l'admin. Ne conclus " +
+                           "PAS pour autant que le port est fermé : les redirections MANUELLES de l'UI du " +
+                           "routeur sont invisibles ici — le champ external_test donne le test de confirmation. " +
+                           "Croiser avec security_check (preuves d'accès externe).",
+                    external_test = ShieldsUpHint
+                }, s_json);
+            }
+
+            // ---- 2) Description de la passerelle → URL de contrôle ------
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
+            string controlUrl = null, controlServiceType = null, friendlyName = null;
+            foreach (var loc in locations.Keys)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    string xml = await http.GetStringAsync(loc).ConfigureAwait(false);
+                    if (friendlyName == null)
+                    {
+                        var fn = Regex.Match(xml, "<friendlyName>\\s*([^<]+)");
+                        if (fn.Success) friendlyName = fn.Groups[1].Value.Trim();
+                    }
+                    foreach (Match svc in Regex.Matches(xml,
+                        "<service>.*?</service>", RegexOptions.Singleline))
+                    {
+                        var stTxt = Regex.Match(svc.Value, "<serviceType>\\s*([^<]+)").Groups[1].Value.Trim();
+                        if (!stTxt.Contains("WANIPConnection", StringComparison.OrdinalIgnoreCase)
+                            && !stTxt.Contains("WANPPPConnection", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        var cu = Regex.Match(svc.Value, "<controlURL>\\s*([^<]+)").Groups[1].Value.Trim();
+                        if (string.IsNullOrEmpty(cu)) continue;
+                        controlUrl = new Uri(new Uri(loc), cu).AbsoluteUri;
+                        controlServiceType = stTxt;
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit upnp_check description {0} : {1}", loc, ex.Message);
+                }
+                if (controlUrl != null) break;
+            }
+
+            if (controlUrl == null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    upnp_available = true,
+                    gateway = friendlyName,
+                    discovered_locations = locations.Keys.ToArray(),
+                    verdict = "info",
+                    checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                    note = "Une passerelle UPnP répond mais aucun service WANIPConnection/WANPPPConnection " +
+                           "n'expose d'URL de contrôle (UPnP limité au DLNA ?). Impossible d'énumérer la " +
+                           "table de redirection — traiter comme « passerelle présente, état des ports " +
+                           "inconnu » et rappeler la limite des redirections manuelles.",
+                    external_test = ShieldsUpHint
+                }, s_json);
+            }
+
+            // ---- 3) SOAP : IP WAN + table de redirection ----------------
+            // POST SOAP minimal. Retourne le corps de la réponse (réponse ou
+            // fault SOAP — l'appelant décide), jamais d'exception.
+            async Task<string> SoapAsync(string action, string body)
+            {
+                try
+                {
+                    var env = "<?xml version=\"1.0\"?>" +
+                        "<SOAP-ENV:Envelope xmlns:SOAP-ENV=\"http://schemas.xmlsoap.org/soap/envelope/\" " +
+                        "SOAP-ENV:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">" +
+                        "<SOAP-ENV:Body><u:" + action + " xmlns:u=\"" + controlServiceType + "\">" +
+                        body + "</u:" + action + "></SOAP-ENV:Body></SOAP-ENV:Envelope>";
+                    using var req = new HttpRequestMessage(HttpMethod.Post, controlUrl);
+                    req.Content = new StringContent(env, Encoding.UTF8, "text/xml");
+                    req.Headers.TryAddWithoutValidation("SOAPACTION",
+                        "\"" + controlServiceType + "#" + action + "\"");
+                    using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+                    return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit upnp_check SOAP {0} : {1}", action, ex.Message);
+                    return null;
+                }
+            }
+            static string Tag(string xml, string tag)
+            {
+                var m = Regex.Match(xml, "<" + tag + ">\\s*([^<]+)");
+                return m.Success ? m.Groups[1].Value.Trim() : null;
+            }
+
+            string externalIp = null;
+            try
+            {
+                var ext = await SoapAsync("GetExternalIPAddress", "").ConfigureAwait(false);
+                if (ext != null) externalIp = Tag(ext, "NewExternalIPAddress");
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* IP WAN indisponible — non bloquant */ }
+
+            // IP locales de l'hôte (pour repérer les mappings qui pointent ici).
+            var localIps = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                    foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+                        if (ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                            localIps.Add(ua.Address.ToString());
+            }
+            catch { }
+
+            var mappings = new List<object>();
+            bool mappedToEmby = false;
+            for (int i = 0; i < 40 && sw.Elapsed.TotalSeconds < 25; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var resp = await SoapAsync("GetGenericPortMappingEntry",
+                    "<NewPortMappingIndex>" + i + "</NewPortMappingIndex>").ConfigureAwait(false);
+                if (resp == null) break;
+                // La fin de table est une fault SOAP (SpecifiedArrayIndexInvalid…) :
+                // si le champ attendu est absent, on s'arrête.
+                string internalClient = Tag(resp, "NewInternalClient");
+                if (internalClient == null) break;
+                string internalPortStr = Tag(resp, "NewInternalPort");
+                string proto = (Tag(resp, "NewProtocol") ?? "").ToUpperInvariant();
+                string desc = Tag(resp, "NewPortMappingDescription") ?? "";
+                int.TryParse(internalPortStr, out int internalPort);
+                bool targetsEmby = internalPort == 8096 || internalPort == 8920;
+                bool targetsHost = localIps.Contains(internalClient) || internalClient == "0.0.0.0";
+                if (targetsEmby) mappedToEmby = true;
+                mappings.Add(new
+                {
+                    external_port = Tag(resp, "NewExternalPort"),
+                    protocol = proto,
+                    internal_client = internalClient,
+                    internal_port = internalPort,
+                    targets_emby_port = targetsEmby,
+                    targets_this_host = targetsHost,
+                    description = desc,
+                    lease_seconds = Tag(resp, "NewLeaseDuration")
+                });
+            }
+
+            string verdict = mappedToEmby ? "critique" : (mappings.Count > 0 ? "info" : "ok");
+            return JsonSerializer.Serialize(new
+            {
+                upnp_available = true,
+                gateway = friendlyName,
+                external_ip = externalIp,
+                verdict,
+                mapping_count = mappings.Count,
+                mappings,
+                checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                note = mappedToEmby
+                    ? "UN MAPPING UPnP EXPOSE LE PORT EMBY SUR LE WAN — constat CRITIQUE : le port 8096/8920 " +
+                      "est joignable depuis Internet. Reproduis ce constat tel quel, avec la ligne du mapping. " +
+                      "L'admin peut supprimer le mapping dans l'UI du routeur et désactiver son UPnP."
+                    : "Table de redirection UPnP énumérée en lecture seule (aucune action Add/Delete envoyée). " +
+                      "Limite : la table ne contient que les redirections créées VIA UPnP — les redirections " +
+                      "MANUELLES de l'UI du routeur sont invisibles ici. Croiser avec security_check.",
+                external_test = mappedToEmby
+                    ? null // exposition déjà confirmée — pas besoin de test externe
+                    : ShieldsUpHint,
+                external_ip_note = externalIp == null
+                    ? null
+                    : (IsPublicEndPoint(externalIp + ":0")
+                        ? "IP WAN publique de la passerelle — utile au test externe."
+                        : "IP WAN non publique (CGNAT du fournisseur ?) : sans redirection explicite, le serveur " +
+                          "n'est PAS joignable depuis Internet quelle que soit la config locale.")
+            }, s_json);
+        }
+
+        // ------------------------------------------------------------------
         //  Rassemblement déterministe (mode AuditMode=deterministic)
         // ------------------------------------------------------------------
         // Arguments vides réutilisables : les actions read-only ont toutes des
@@ -1134,6 +1775,8 @@ namespace LLM_AI
             SectionSync("gpu_transcode", () => GpuTranscode());
             SectionSync("library_stats", () => LibraryStats());
             SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
+            SectionSync("security_check", () => SecurityCheck());
+            await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);
 
             string logs = null;
             try { logs = await ListLogsAsync(s_emptyArgs, ct).ConfigureAwait(false); }

@@ -130,6 +130,115 @@
                 flex: 1 1 auto;
                 min-width: 0;
             }
+            .LLMAIChatPage .chatContextRow {
+                display: flex;
+                align-items: center;
+                gap: 0.6em;
+                margin: 0 0 0.8em 0;
+            }
+            .LLMAIChatPage .chatContextRow select {
+                max-width: 320px;
+            }
+            .LLMAIChatPage .chatPending {
+                margin: 0.6em 0 0.2em;
+                padding: 0.7em 0.8em;
+                background: rgba(255,196,0,0.07);
+                border: 1px solid rgba(255,196,0,0.35);
+                border-radius: 6px;
+            }
+            .LLMAIChatPage .chatPendingTitle {
+                color: #ffd479;
+                font-weight: bold;
+                font-size: 0.92em;
+                margin-bottom: 0.4em;
+            }
+            .LLMAIChatPage .chatPendingText {
+                color: #c8c8c8;
+                font-size: 12px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: rgba(0,0,0,0.35);
+                border-radius: 4px;
+                padding: 0.5em;
+                margin: 0.3em 0;
+                max-height: 180px;
+                overflow-y: auto;
+            }
+            .LLMAIChatPage .chatPendingWarn {
+                color: #e5a53a;
+                font-size: 0.88em;
+                margin: 0.4em 0;
+                padding: 0.4em 0.6em;
+                background: rgba(229,165,58,0.1);
+                border: 1px solid rgba(229,165,58,0.4);
+                border-radius: 4px;
+            }
+            .LLMAIChatPage .chatCode {
+                border: 1px solid rgba(255,255,255,0.15);
+                border-radius: 6px;
+                margin: 0.6em 0;
+                overflow: hidden;
+            }
+            .LLMAIChatPage .chatCodeHead {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 0.35em 0.7em;
+                background: rgba(255,255,255,0.06);
+                border-bottom: 1px solid rgba(255,255,255,0.12);
+            }
+            .LLMAIChatPage .chatCodeName {
+                font-family: monospace;
+                font-size: 0.85em;
+                color: #8ab4f8;
+            }
+            .LLMAIChatPage .chatCodeBtns {
+                display: flex;
+                gap: 0.4em;
+            }
+            .LLMAIChatPage .chatSaveTurnRow {
+                margin: 0.4em 0 0.2em;
+            }
+            .LLMAIChatPage .chatCodeBtn {
+                cursor: pointer;
+                padding: 0.15em 0.5em;
+                font-size: 0.9em;
+                background: rgba(255,255,255,0.08);
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 4px;
+            }
+            .LLMAIChatPage .chatCodePre {
+                margin: 0;
+                padding: 0.7em;
+                overflow-x: auto;
+                background: rgba(0,0,0,0.35);
+            }
+            .LLMAIChatPage .chatCodePre code {
+                font-family: monospace;
+                font-size: 12px;
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .LLMAIChatPage .chatPendingLabel {
+                color: #8ab4f8;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            .LLMAIChatPage .chatPendingButtons {
+                display: flex;
+                gap: 0.6em;
+                margin-top: 0.5em;
+            }
+            .LLMAIChatPage .chatPendingResult {
+                color: #7ec97e;
+                font-size: 0.88em;
+                margin-top: 0.5em;
+            }
+            .LLMAIChatPage .chatPendingHint {
+                color: #b8c9e8;
+                font-size: 0.95em;
+                margin-top: 0.4em;
+            }
         </style>
 
         <div data-role="content">
@@ -153,6 +262,11 @@
                         Posez une question à l'assistant — il interrogera vos données Emby
                         (EPG, bibliothèque, santé du serveur) pour répondre.
                     </div>
+                </div>
+                <div class="chatContextRow">
+                    <select is="emby-select" id="selChatContext" data-i18n-label="chat.context" aria-label="Mode de conversation">
+                        <option value="" data-i18n="chat.context.none">Aucun (assistant général)</option>
+                    </select>
                 </div>
                 <div class="chatInputRow">
                     <input is="emby-input" type="text" id="txtChatInput"

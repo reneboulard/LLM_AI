@@ -3,7 +3,7 @@ using System;
 namespace LLM_AI
 {
     /// <summary>
-    /// Les quatre prompts/directives éditables de la page de configuration,
+    /// Les cinq prompts/directives éditables de la page de configuration,
     /// dans leur version « propre » d'origine — FR et EN. Sert de source de
     /// vérité unique : les valeurs par défaut des propriétés de
     /// <see cref="PluginConfiguration"/> (nouvelle installation) ET le bouton
@@ -23,14 +23,16 @@ namespace LLM_AI
         public string ScheduleTask { get; }
         public string ScheduleTaskMovies { get; }
         public string TonightPrompt { get; }
+        public string AuditPrompt { get; }
 
         public PromptDefaults(string ragDirectives, string scheduleTask,
-            string scheduleTaskMovies, string tonightPrompt)
+            string scheduleTaskMovies, string tonightPrompt, string auditPrompt)
         {
             RagDirectives = ragDirectives ?? "";
             ScheduleTask = scheduleTask ?? "";
             ScheduleTaskMovies = scheduleTaskMovies ?? "";
             TonightPrompt = tonightPrompt ?? "";
+            AuditPrompt = auditPrompt ?? "";
         }
     }
 
@@ -80,7 +82,26 @@ namespace LLM_AI
                 "le source=\"live\" ; pour source=\"recording\", reprends id tel quel depuis la liste " +
                 "des enregistrements. Tu peux enrichir via tmdb_lookup/web_search si utile, mais reste " +
                 "pratique et rapide : l'objectif est une courte sélection personnalisée pour ce soir, " +
-                "pas un audit exhaustif.");
+                "pas un audit exhaustif.",
+            auditPrompt:
+                "Audite la santé de ce serveur Emby. Appelle system_audit avec les actions " +
+                "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
+                "transcode, gpu_transcode, security_check (validation de sécurité : mots de passe " +
+                "des comptes — admins surtout —, accès distant/HTTPS, UPnP, en-têtes proxy ; " +
+                "reprends ses constats gravés et leurs correctifs tels quels), list_logs (et " +
+                "inspect_log si un journal semble pertinent). Croise les constats : redémarrage en " +
+                "attente (HasPendingRestart), mise à jour disponible, tâche planifiée en échec, " +
+                "disque faible, transcodage avec CPU élevé ou logiciel (software) au lieu de " +
+                "matériel (hardware), sessions inactives/stalées, scan de bibliothèque en cours, " +
+                "maintenance. Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
+                "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions recommandées ». " +
+                "Si une surface distante existe (accès distant activé), recommande un test externe de " +
+                "confirmation : GRC ShieldsUP!! (https://www.grc.com/shieldsup), Custom Port Scanner " +
+                "sur les ports 8096 et 8920. N'exécute JAMAIS d'action de remédiation (stop_session, " +
+                "trigger_task, send_message) de ton propre chef : mentionne-les dans la section " +
+                "« Actions recommandées » ; l'usager te demandera explicitement si il veut que tu les " +
+                "exécutes. Sois factuel et précis (reprends les valeurs chiffrées retournées par les " +
+                "outils).");
 
         /// <summary>
         /// Version anglaise — jamais installée automatiquement : elle sert au
@@ -115,6 +136,23 @@ namespace LLM_AI
                 "to watch now). Copy title/channel/start verbatim from epg_tonight for source=\"live\"; " +
                 "for source=\"recording\", copy id verbatim from the recordings list. You may enrich " +
                 "via tmdb_lookup/web_search if useful, but stay practical and fast: the goal is a " +
-                "short personalized selection for tonight, not an exhaustive audit.");
+                "short personalized selection for tonight, not an exhaustive audit.",
+            auditPrompt:
+                "Audit the health of this Emby server. Call system_audit with the actions " +
+                "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
+                "transcode, gpu_transcode, security_check (security validation: account passwords " +
+                "— admins above all —, remote access/HTTPS, UPnP, proxy headers; copy its graded " +
+                "findings and fixes verbatim), list_logs (and inspect_log if a log looks relevant). " +
+                "Cross-check findings: pending restart (HasPendingRestart), available update, failed " +
+                "scheduled task, low disk, transcoding with high CPU or software instead of hardware, " +
+                "idle/stale sessions, library scan in progress, maintenance. Produce a concise " +
+                "Markdown REPORT: a list of findings tagged by severity (🔴 critical / ⚠️ warning / " +
+                "✅ ok) + a « Recommended actions » section. If a remote surface exists (remote " +
+                "access enabled), recommend an external confirmation test: GRC ShieldsUP!! " +
+                "(https://www.grc.com/shieldsup), Custom Port Scanner on ports 8096 and 8920. NEVER " +
+                "execute a remediation action (stop_session, trigger_task, send_message) on your " +
+                "own: mention them in the « Recommended actions » section; the user will explicitly " +
+                "ask you to execute them if wanted. Be factual and precise (copy the numeric values " +
+                "returned by the tools).");
     }
 }

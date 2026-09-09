@@ -939,25 +939,15 @@ namespace LLM_AI
 
         /// <summary>
         /// Template du prompt envoyé au LLM pour l'audit santé (message user).
-        /// L'éventuel paramètre <c>Focus</c> de l'endpoint (ex. « transcoding »,
-        /// « disk ») est appendé à ce template à l'exécution pour orienter
-        /// l'audit. Défaut : audit complet de la santé du serveur.
+        /// Éditable dans la page de config (textarea + « Réinitialiser ») ;
+        /// le défaut vient de <see cref="DefaultPrompts"/> (source de vérité
+        /// unique). L'éventuel paramètre <c>Focus</c> de l'endpoint (ex.
+        /// « transcoding », « disk ») est appendé à ce template à l'exécution
+        /// pour orienter l'audit. NB : les garde-fous de remédiation ne
+        /// dépendent PAS de ce texte — ils vivent dans AUDIT_WORKFLOW
+        /// (system prompt, LlmRunner) et la gate AuditRemediationEnabled.
         /// </summary>
-        public string AuditPrompt { get; set; } =
-            "Audite la santé de ce serveur Emby. Appelle system_audit avec les actions " +
-            "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
-            "transcode, gpu_transcode, list_logs (et inspect_log si un journal semble " +
-            "pertinent). Croise les constats : redémarrage en attente (HasPendingRestart), " +
-            "mise à jour disponible, tâche planifiée en échec, disque faible, transcodage " +
-            "avec CPU élevé ou logiciel (software) au lieu de matériel (hardware), " +
-            "sessions inactives/stalées, scan de bibliothèque en cours, maintenance. " +
-            "Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
-            "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions " +
-            "recommandées ». N'exécute JAMAIS d'action de remédiation (stop_session, " +
-            "trigger_task, send_message) de ton propre chef : mentionne-les dans la " +
-            "section « Actions recommandées » ; l'usager te demandera explicitement si " +
-            "il veut que tu les exécutes. Sois factuel et précis (reprends les valeurs " +
-            "chiffrées retournées par les outils).";
+        public string AuditPrompt { get; set; } = DefaultPrompts.Fr.AuditPrompt;
 
         /// <summary>
         /// Stratégie d'exécution de l'audit santé.
@@ -1042,5 +1032,20 @@ namespace LLM_AI
         /// au maximum, directives plafonnées à 500 caractères.
         /// </summary>
         public bool ChatTonightRunEnabled { get; set; } = false;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : autorise le tool de
+        /// chat <c>plugin_prompts</c> (v1.13.8) — lecture des cinq
+        /// prompts/directives de la config et, surtout, PROPOSITION
+        /// d'écriture. L'écriture est two-phase : le tool ne fait que
+        /// sérialiser la modification (chat_pending.json, expiration
+        /// 10 min, une par conversation) ; elle n'est appliquée qu'au clic
+        /// « Approuver » de l'admin sur la carte de diff de la page chat,
+        /// en C# déterministe — le LLM n'a aucun chemin d'écriture direct.
+        /// Les modes d'édition du menu déroulant (contextes, injection du
+        /// texte courant + guide) restent disponibles sans ce flag : ils ne
+        /// font que de la lecture.
+        /// </summary>
+        public bool ChatPromptsEnabled { get; set; } = false;
     }
 }

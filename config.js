@@ -758,6 +758,7 @@ define(["loading"], function (loading) {
         view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
         // Mode d'exécution de l'audit : single (boucle agent) | deterministic (rassemblement C# + synthèse).
         view.querySelector("#selAuditMode").value = cfg.AuditMode === "deterministic" ? "deterministic" : "single";
+        view.querySelector("#txtAuditPrompt").value = cfg.AuditPrompt || "";
         view.querySelector("#txtAuditFocus").value = "";
         // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
         view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
@@ -769,6 +770,9 @@ define(["loading"], function (loading) {
         var cac = parseInt(cfg.ChatActionConversationCap, 10);
         view.querySelector("#numChatActionCap").value = isNaN(cac) ? 30 : cac;
         view.querySelector("#chkChatTonightRun").checked = !!cfg.ChatTonightRunEnabled;
+        // Édition de prompts par le chat (v1.13.8, opt-in) : tool
+        // plugin_prompts avec approbation deux phases.
+        view.querySelector("#chkChatPrompts").checked = !!cfg.ChatPromptsEnabled;
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -866,13 +870,12 @@ define(["loading"], function (loading) {
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),
             MovieFlags: arrayToJson(collectChecked(view.querySelector("#wlMovieFlags"))),
-            // Audit santé — pas d'éditeur de prompt en v1 : on porte le
-            // template serveur (AuditPrompt) en carry-forward pour ne pas
-            // l'écraser par défaut. Seuls les deux commutateurs sont édités.
+            // Audit santé — prompt éditable (textarea + bouton « Réinitialiser »
+            // via /Plugins/LLMAI/DefaultPrompts) : on enregistre le champ tel quel.
             AuditEnabled: view.querySelector("#chkAuditEnabled").checked,
             AuditRemediationEnabled: view.querySelector("#chkAuditRemediationEnabled").checked,
             AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
-            AuditPrompt: (loadedCfg && loadedCfg.AuditPrompt) || "",
+            AuditPrompt: view.querySelector("#txtAuditPrompt").value,
             // Chat interactif — simple booléen, pas de carry-forward spécial.
             ChatEnabled: view.querySelector("#chkChatEnabled").checked,
             // Mémoire de conversation (opt-in) — les sessions vivent dans
@@ -881,7 +884,9 @@ define(["loading"], function (loading) {
             // Couche d'action du chat (v1.13).
             ChatActionBudget: parseInt(view.querySelector("#numChatActionBudget").value, 10) || 0,
             ChatActionConversationCap: parseInt(view.querySelector("#numChatActionCap").value, 10) || 30,
-            ChatTonightRunEnabled: view.querySelector("#chkChatTonightRun").checked
+            ChatTonightRunEnabled: view.querySelector("#chkChatTonightRun").checked,
+            // Édition de prompts par le chat (v1.13.8, opt-in).
+            ChatPromptsEnabled: view.querySelector("#chkChatPrompts").checked
         };
     }
 

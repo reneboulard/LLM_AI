@@ -985,6 +985,25 @@
                             demande de toute façon au LLM de ne jamais agir sans demande explicite.
                         </div>
 
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtAuditPrompt"
+                                      label="Prompt de l'audit"
+                                      data-i18n-label="cfg.audit.prompt"
+                                      rows="6"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtAuditPrompt" data-default-key="AuditPrompt"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
+                            <div class="fieldDescription" data-i18n-html="cfg.audit.prompt.desc">
+                                Template du prompt envoyé au LLM (message user). Le workflow d'audit
+                                (quelles actions appeler, règle d'or de remédiation) est injecté par le
+                                plugin indépendamment de ce texte — le modifier n'affaiblit donc pas les
+                                garde-fous. Conservez néanmoins la phrase d'interdiction d'exécution des
+                                actions de remédiation.
+                            </div>
+                        </div>
+
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
                             <select is="emby-select" id="selAuditMode" label="Mode d'exécution de l'audit" data-i18n-label="cfg.audit.mode">
                                 <option value="single" data-i18n="cfg.audit.mode.single">Boucle agent (adaptatif — modèle costaud / cloud)</option>
@@ -1113,6 +1132,19 @@
                             caractères max, valables pour ce run uniquement, jamais persistées).
                             Limites : un seul run chat à la fois, 2 par conversation. La page
                             Recommandations affiche un badge « générée via chat ».
+                        </div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkChatPrompts" />
+                            <span class="checkboxLabel" data-i18n="cfg.chat.prompts">Autoriser le chat à proposer des modifications des prompts (plugin_prompts)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.prompts.desc">
+                            Opt-in. Le chat peut lire les cinq prompts de la configuration et
+                            <b>proposer</b> leur réécriture. L'écriture est <b>deux phases</b> : la
+                            proposition attend le clic « Approuver » de l'admin sur la carte de diff
+                            de la page chat (expiration 10 min, une par conversation) — le LLM n'a
+                            aucun chemin d'écriture direct. Les modes d'édition du menu déroulant
+                            de la page chat (lecture du prompt courant + guide) restent disponibles
+                            sans ce flag.
                         </div>
 
                         <div>

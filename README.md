@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.4.4 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.9.11 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -283,13 +283,13 @@ vide est traité comme un backend local).
   timeout 30 s) — testable avant enregistrement. Les clés API ne sont pas postées par
   la page : le serveur les relit depuis la config enregistrée. Résultat inline sous
   l'en-tête de la ligne : OK + latence ou message d'échec.
-- **Bouton « Réinitialiser » sur les quatre prompts éditables** (Directives RAG, tâche
-  Séries, tâche Films, prompt « ce soir ») : restaure la version propre dans la langue
-  de l'interface (`?Lang=` forcé, sinon `ResponseLanguage` si renseignée, sinon langue
-  d'affichage Emby). Une installation neuve installe le français ; un usager anglophone
-  clique Réinitialiser et obtient la directive en anglais. Le bouton remplit le textarea
-  sans enregistrer. Source unique : `DefaultPrompts.cs` (FR + EN), aussi utilisée par
-  les valeurs par défaut des champs pour une nouvelle installation.
+- **Bouton « Réinitialiser » sur les cinq prompts éditables** (Directives RAG, tâche
+  Séries, tâche Films, prompt « ce soir », audit santé) : restaure la version propre
+  dans la langue de réponse (`?Lang=` forcé, sinon `ResponseLanguage` si renseignée,
+  sinon langue d'affichage Emby). Une installation neuve installe le français ; un
+  usager anglophone clique Réinitialiser et obtient la directive en anglais. Le bouton
+  remplit le textarea sans enregistrer. Source unique : `DefaultPrompts.cs` (FR + EN),
+  aussi utilisée par les valeurs par défaut des champs pour une nouvelle installation.
 - **Sections repliables** : chaque titre de section replie son contenu (chevron,
   clavier Enter/Espace) ; bouton global « Replier tout / Déplier tout » ; l'état par
   section est mémorisé par navigateur. Le bouton « Enregistrer » reste toujours visible.
@@ -547,6 +547,12 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   borne cumulative par conversation. `ChatTonightRunEnabled` (bool, défaut
   `false` — opt-in) — autorise le tool `run_tonight_run`. Voir
   [Couche d'action du chat](#couche-daction-du-chat).
+- `ChatPromptsEnabled` (bool, défaut `false` — opt-in) — autorise le tool de chat
+  `plugin_prompts` (lecture + proposition d'écriture des cinq prompts de la
+  configuration). L'écriture est **two-phase** : proposition sérialisée puis application
+  au clic « Approuver » de l'admin sur la carte de diff. Les contextes d'édition (modes
+  déroulants) restent en lecture sans ce flag. Voir
+  [Édition des prompts par le chat](#édition-des-prompts-par-le-chat).
 
 ### Mémoire réflexive (expérimental)
 
@@ -593,6 +599,9 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 30, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Voir [Mémoire réflexive](#mémoire-réflexive). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (statique interne) | Mémoire de conversation du chat (`chat_memory.json`, par usager, 5 sessions / 30 j) : tours verbatim (compressés aux 6 derniers après résumé), résumé de session (≤ 1500 car.). `BuildInjectionBlock` : résumé de la session précédente + derniers échanges, accolé au workflow de chat (jetable — le résumé suivant le remplace). Opt-in `ChatMemoryEnabled`. Voir [Mémoire de conversation](#mémoire-de-conversation). |
 | `ChatActions.cs` | `ChatActions` (statique interne) | **Couche d'action du chat** (v1.13) : 8 tools (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `run_tonight_run` opt-in) réutilisant les primitives du plugin ; budget par tour + par conversation (consommation au succès, lots all-or-nothing), gate « un run chat à la fois », trace des items ajoutés (seuls retirables), bloc de workflow (budget + étiquette de confirmation), trace visuelle des actions réussies (toast Emby + libellé `TurnActions` renvoyé à la page — v1.13.1/v1.13.4). Voir [Couche d'action du chat](#couche-daction-du-chat). |
+| `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (statique interne) | **Contextes d'édition du chat** (v1.13.8, portage du pattern « contextes » de llm_core) : cinq modes déroulants (un par prompt éditable). `BuildBlock` injecte à CHAQUE tour : guide d'édition (rôle, invariants, conventions), TEXTE COURANT du prompt (source de vérité read-modify-write, relu de la config) et langue cible résolue serveur. Porte aussi les `CommonRules` (canal de livraison ```text, read-modify-write, conventions de rédaction, langues, sauvegarde, mode exclusif) appendées en fin de bloc. La liste servie à la page et la validation `context_id` dérivent du registre `All` (une entrée = un mode). Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
+| `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (statique interne) | Store des propositions de modification en attente (`chat_pending.json`, expiration 10 min, une par conversation, par usager). `TakePagePending` (relève la carte de diff pour le tour), `PeekPagePending` (consulte sans consommer — filet nudge), `Consume` (approbation : retire l'action si elle existe, n'a pas expiré, appartient à cet usager ET à cette session). |
+| `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Tool de chat `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`) : `list`/`get` (lecture des cinq champs) et `set` — **two-phase** : valide (liste blanche, plafond 8000 car., texte non vide, champ = mode actif) puis sérialise la proposition dans `ChatPromptStore` ; l'écriture n'a lieu qu'au clic « Approuver » (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, C# déterministe) — le LLM n'a AUCUN chemin d'écriture direct. Avertissement de divergence (recouvrement lexical < 25 %) porté par la carte de diff. Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series) → S1 (nettoyage titre + recherche TMDB multilingue) → S2 (LLM propose un id validé via TMDB `/find`) → S3 (recherche web SearXNG → id IMDb, même porte d'acceptation), écrit ids+Overview+Genres+poster si vides, **verrouille `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette du guide de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
@@ -601,8 +610,8 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}], Session}` (la page garde l'historique ; `Session` = identifiant de mémoire de conversation), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager, bloc mémoire accolé). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. Porte aussi la **mémoire de conversation** : résolution de session, journalisation des tours (`ChatMemoryStore`), condensation paresseuse des sessions passées (un appel LLM en tâche de fond, note de continuité + ligne `SIGNALS:` → décisions `kind="chat"`), et les endpoints `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget`. |
-| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les quatre prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
-| `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des quatre prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
+| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les cinq prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
+| `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des cinq prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | Endpoints **traduction IA des genres** (admin) : `GET /Plugins/LLMAI/GenreProposals` (collecte les genres EPG des programmes **à venir** non couverts par GenreCleaner, par section films/séries, plafonnés à 60/section, puis un appel LLM one-shot via `ChatWithFallbackAsync` propose pour chacun une cible du vocabulaire curaté, un nouveau genre, ou rien) et `POST /Plugins/LLMAI/GenreApply` (re-valide puis écrit dans `GenreCleaner.xml` via `GenreCleanerMap`, enregistre dans `GenreAliasApplied`, déclenche `NotifyPendingRestart`). Langue des suggestions = cascade `ResolveMetaLangKey` (`ResponseLanguage`). Voir [Traduction IA des genres](#traduction-ia-des-genres-epg-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (statique interne) | **Pont GenreCleaner.xml** : lecture (`Allowed`/`IsMapped`/`IsCovered` — un genre est couvert s'il est mappé OU présent tel quel dans AllowedGenres), écriture idempotente (`AddMappings` — dedup par clé normalisée, ajout AllowedGenres pour les entrées `new`, rejet des mappages identité `Action→Action` sauf nouveaux genres) et **auto-guérison** (`HealApplied` : ré-écrit dans le XML les mappages enregistrés dans `GenreAliasApplied` qui manqueraient — `new:true` restaure aussi l'entrée AllowedGenres). |
 | `ClassificationMap.cs` | `ClassificationMap` (statique interne) | **Pont Classification Mapper** (lecture seule) : lecteur paresseux de `classification_mapper_config.json` (dossier de configuration du **serveur**, pas des plugins ; re-stat mtime throttlé 30 s — les mappings édités dans l'UI de Classification Mapper sont suivis sans redémarrage) ; normalise les classifications officielles hétérogènes (« PG-13 », « TV-14 », « 13+ »…) vers les valeurs canoniques de l'UI (« CA-G », « CA-14A »…). Neutre si le plugin est absent (passthrough en casse). Utilisé par l'action `find` de `get_emby_info`. Voir [Classifications officielles](#classifications-officielles-classification-mapper). |
@@ -617,7 +626,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |
 | `recommendations.html` / `recommendations.js` | — | Page Recommandations (rendu des 3 sections, cartes, boutons). |
-| `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). |
+| `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). Contextes d'édition (v1.13.8) : liste déroulante des modes, annonce `[Admin]` automatique au changement, rendu des blocs clôturés en conteneur avec boutons Copier / Sauvegarder (message autoporteur), bouton de secours au niveau du tour si la réponse arrive en prose. |
 | `i18n.js` | — | Chaînes localisées FR/EN + endpoint `web/ConfigurationPage?name=LLMAII18n`. |
 | `deploy.sh` | — | Build + déploiement + redémarrage (voir [Installation](#installation)). |
 
@@ -1351,6 +1360,48 @@ strictes (`ChatActions.cs`) :
   déjà présents ne consomment pas de budget). Le reset complet reste le
   destroy+recréate du run Tonight ; `playlist_remove` signale l'inopérance
   du retrait à l'usager.
+
+### Édition des prompts par le chat
+
+Un cas d'usage de bout en bout : *« ajoute la règle X à ma directive films »* dit dans
+le chat, approuvé sur la page — sans jamais ouvrir la page de configuration à la main.
+
+- **Contextes d'édition (v1.13.8)** : une liste déroulante de la page chat sélectionne
+  un mode parmi cinq (un par prompt éditable — Directives RAG, Tâche séries, Tâche
+  films, Run « ce soir », Audit santé). À CHAQUE tour, le serveur réinjecte un bloc
+  système portant le **guide d'édition** du mode (rôle du prompt, invariants à
+  préserver), son **texte courant** relu de la config (règle read-modify-write — des
+  règles de l'usager peuvent n'exister que dans sa config live) et la **langue cible**
+  (résolue serveur : `ResponseLanguage`, sinon langue d'affichage Emby). Changer de
+  mode n'exige jamais de réinitialiser la conversation ; au changement, la page envoie
+  une note `[Admin]` automatique qui ancre le texte courant.
+- **Tool `plugin_prompts` (two-phase, opt-in `ChatPromptsEnabled`)** : `list`/`get`
+  lisent les cinq champs ; `set` ne fait que **proposer** — la proposition est
+  sérialisée dans `chat_pending.json` (expiration 10 min, une par conversation) et la
+  page affiche une **carte de diff** Approuver/Refuser. L'écriture n'a lieu qu'au clic
+  « Approuver », en C# déterministe (endpoint `ChatPrompt/Approve`) : le LLM n'a
+  AUCUN chemin d'écriture direct, l'approbation n'est pas contournable par prompt.
+  Garde-fous : liste blanche des champs, plafond 8000 caractères, **validation
+  croisée champ ↔ mode** (un set ne peut viser que le prompt du mode actif) et
+  **avertissement de divergence** (recouvrement lexical < 25 % avec le texte courant
+  → bandeau sur la carte).
+- **Le bloc ```text comme canal de livraison (v1.13.9.11)** : toute révision proposée
+  se termine par le texte COMPLET du prompt révisé dans un bloc clôturé ```text — le
+  seul canal par lequel le texte parvient à l'interface, qui active le bouton de
+  sauvegarde 💾 (message autoporteur : le clic vise SON bloc). La confirmation porte
+  sur l'exécution du bloc déjà livré (carte de diff), jamais sur sa production — le
+  modèle ne doit jamais demander « voulez-vous que je prépare le texte ? » avant de
+  livrer. Les règles sont injectées à chaque tour (`CommonRules`) ET portées par la
+  description du tool.
+- **Filet structurel** : en mode d'édition, une réponse sans aucune clôture et qui se
+  termine par une question (pattern de déférence, vécu gemma4:26b) déclenche côté
+  serveur UN nudge automatique (« livrez maintenant le texte complet en bloc
+  ```text ») — seule la réponse corrigée part à la page. Un seul par tour, réponse
+  d'origine rendue en cas d'échec ; un bouton de secours au niveau du tour reste
+  disponible.
+- **Après approbation** : le LLM rappelle de recharger la page de configuration — un
+  enregistrement ultérieur de la page avec des valeurs affichées périmées écraserait
+  la modification.
 
 ---
 

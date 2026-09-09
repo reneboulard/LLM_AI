@@ -232,7 +232,13 @@ namespace LLM_AI
                             "Ton tableau d'appels d'outils est malformé (JSON invalide). " +
                             "Renvoie UNIQUEMENT un tableau JSON d'appels d'outils bien formé, " +
                             "ex. [{\"tool\":\"web_search\",\"arguments\":{\"query\":\"...\"}}], " +
-                            "sans texte autour ni backticks. " + finalFormatHint });
+                            "sans texte autour ni backticks. " +
+                            "Échappe les guillemets doubles (\\\") à l'intérieur des valeurs " +
+                            "— ou remplace-les par des apostrophes/guillemets français — " +
+                            "sinon le JSON reste invalide. " +
+                            "Si tu ne peux pas produire un tableau valide, dis-le honnêtement " +
+                            "en texte : ne prétends JAMAIS qu'une action d'outil a été effectuée. " +
+                            finalFormatHint });
                         continue;
                     }
 
@@ -465,18 +471,31 @@ namespace LLM_AI
             foreach (var t in tools)
             {
                 sb.Append("- ").Append(t.Name).Append(" : ").AppendLine(t.Description);
-                sb.AppendLine("  arguments (JSON) :");
+                sb.AppendLine("  schéma des arguments (JSON) :");
                 sb.Append("  ").AppendLine(t.ArgumentsSchema);
+                // v1.13.9.3 : qwen2.5:14b imitait le schéma nu ({"action":...})
+                // en omettant l'emballage — montrer la forme enveloppée avec le
+                // vrai nom de l'outil supprime le seul exemple d'objet nu.
+                sb.Append("  formulaire d'appel OBLIGATOIRE : [{\"tool\":\"").Append(t.Name)
+                  .AppendLine("\",\"arguments\":{ ...arguments conformes au schéma ci-dessus... }}]");
             }
             sb.AppendLine();
             sb.AppendLine("### PROTOCOLE DE TOOL-CALLING");
-            sb.AppendLine("Pour demander de la donnée, réponds UNIQUEMENT par un tableau JSON d'appels d'outils, ");
-            sb.AppendLine("sans texte autour. Exemple :");
+            // v1.13.9.4 : ancrage par crochets + contrat de terminaison,
+            // repris des directives éprouvées de llm_core (agent_directives.md).
+            sb.AppendLine("Pour demander de la donnée, réponds UNIQUEMENT par un tableau JSON d'appels d'outils : ");
+            sb.AppendLine("il doit commencer par [ en tout premier caractère et finir par ] en dernier — ");
+            sb.AppendLine("sans texte, sans balises Markdown autour. Exemple :");
             sb.AppendLine("[{\"tool\":\"get_emby_info\",\"arguments\":{\"action\":\"library\",\"type\":\"movie\",\"limit\":5}}]");
+            // v1.13.9.3 : contre-exemple explicite (vécu qwen2.5:14b en chat —
+            // objet nu émis comme réponse finale, jamais exécuté).
+            sb.AppendLine("INTERDIT : un objet JSON nu (ex. {\"action\":\"get\",...}) n'est JAMAIS une réponse ");
+            sb.AppendLine("valide — les arguments seuls doivent être enveloppés dans un tableau avec le nom de l'outil.");
             sb.AppendLine("Tu peux mettre plusieurs appels dans le même tableau. Les résultats te seront ");
             sb.AppendLine("renvoyés sous la forme [{\"tool\":\"...\",\"result\":{...}}].");
-            sb.AppendLine("Quand tu as toutes les informations nécessaires pour répondre à la demande, ");
-            sb.AppendLine("réponds en Markdown (texte normal), SANS tableau JSON.");
+            sb.AppendLine("L'absence de tableau JSON est le signal que tu as terminé : quand tu as toutes les ");
+            sb.AppendLine("informations nécessaires pour répondre à la demande, réponds en Markdown (texte normal) — ");
+            sb.AppendLine("une réponse finale ne doit contenir AUCUN tableau JSON, même partiel.");
             sb.AppendLine("Ne retourne que l'information demandée, rien de plus. Sois concis.");
             sb.AppendLine();
             if (!string.IsNullOrWhiteSpace(workflow))
@@ -566,11 +585,24 @@ namespace LLM_AI
         /// Distingue trois cas : appels valides, tentative malformée (à réparer),
         /// ou réponse finale (Markdown / tableau de recommandations).
         /// </summary>
-        private static ToolCallParse TryParseToolCalls(string reply)
+        private ToolCallParse TryParseToolCalls(string reply)
         {
             if (string.IsNullOrWhiteSpace(reply)) return new ToolCallParse();
 
             var arr = ExtractJsonArray(reply);
+
+            // Filet de sécurité (v1.13.9.2, vécu 11:20) : si l'extraction du
+            // tableau échoue (ex. guillemets non échappés qui dérèglent le
+            // suivi de chaînes jusqu'au crochet « orphelin ») MAIS que la
+            // réponse contient encore une clé « tool », c'est une tentative
+            // d'appel d'outil malformée — JAMAIS une réponse finale à
+            // afficher telle quelle (le JSON brut était parti dans le chat).
+            if (string.IsNullOrEmpty(arr) &&
+                reply.IndexOf("\"tool\"", StringComparison.Ordinal) >= 0)
+            {
+                _logger?.Warn("[LLM_AI] Réponse d'appel d'outils non extractible — traitée comme tentative malformée.");
+                return new ToolCallParse { MalformedToolAttempt = true, Error = "tableau non extractible" };
+            }
             if (string.IsNullOrEmpty(arr)) return new ToolCallParse();
 
             // Un tableau d'appels d'outils contient toujours un champ « tool ».
@@ -585,9 +617,9 @@ namespace LLM_AI
             // On assainit en échappant ces contrôles avant désérialisation.
             arr = SanitizeJsonControlChars(arr);
 
+            var opts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             try
             {
-                var opts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 var calls = JsonSerializer.Deserialize<List<ToolCall>>(arr, opts);
                 if (calls != null && calls.Count > 0 && !calls.Any(c => string.IsNullOrWhiteSpace(c.Tool)))
                     return new ToolCallParse { Calls = calls };
@@ -599,7 +631,32 @@ namespace LLM_AI
                 // traiter comme une réponse finale (ce qui persisterait du
                 // déchet à la place des recommandations).
                 if (hasTool)
+                {
+                    // Dernier recours avant le renvoi : réparation des
+                    // guillemets doubles non échappés (vécu 2026-09-09,
+                    // gemma4 : « (kind="series") » dans un texte de prompt
+                    // ferme prématurément la chaîne JSON et fait rejeter
+                    // tout le tableau, 5 renvois identiques d'affilée).
+                    var repaired = RepairUnescapedQuotes(arr);
+                    if (!string.Equals(repaired, arr, StringComparison.Ordinal))
+                    {
+                        try
+                        {
+                            var fixedCalls = JsonSerializer.Deserialize<List<ToolCall>>(repaired, opts);
+                            if (fixedCalls != null && fixedCalls.Count > 0 &&
+                                !fixedCalls.Any(c => string.IsNullOrWhiteSpace(c.Tool)))
+                            {
+                                _logger?.Info("[LLM_AI] Appels d'outils réparés (guillemets non échappés) — {0} appel(s).", fixedCalls.Count);
+                                return new ToolCallParse { Calls = fixedCalls };
+                            }
+                        }
+                        catch
+                        {
+                            // Réparation insuffisante → renvoi demandé plus bas.
+                        }
+                    }
                     return new ToolCallParse { MalformedToolAttempt = true, Error = ex.Message };
+                }
                 // Tableau final malformé (sans « tool ») : on ne répare pas,
                 // on le laisse comme réponse finale (au pire dégradée).
                 return new ToolCallParse();
@@ -626,7 +683,20 @@ namespace LLM_AI
             {
                 if (inStr)
                 {
-                    if (esc) { sb.Append(c); esc = false; continue; }
+                    if (esc)
+                    {
+                        // Échappement invalide en JSON (vécu 2026-09-09, gemma4 :
+                        // \' dans « l'historique » émis avec un anti-slash) — les
+                        // échappements valides sont " \ / b f n r t u ; pour tout
+                        // autre caractère, on tombe le backslash (le caractère
+                        // seul suffit : \' → ', \A → A).
+                        if (c != '"' && c != '\\' && c != '/' && c != 'b' && c != 'f' &&
+                            c != 'n' && c != 'r' && c != 't' && c != 'u')
+                            sb.Length--;
+                        sb.Append(c);
+                        esc = false;
+                        continue;
+                    }
                     if (c == '\\') { sb.Append(c); esc = true; continue; }
                     if (c == '"') { sb.Append(c); inStr = false; continue; }
                     if (c < 0x20)
@@ -637,6 +707,58 @@ namespace LLM_AI
                             case '\r': sb.Append("\\r"); break;
                             case '\t': sb.Append("\\t"); break;
                             default: sb.Append("\\u").Append(((int)c).ToString("x4")); break;
+                        }
+                        continue;
+                    }
+                    sb.Append(c);
+                    continue;
+                }
+                if (c == '"') { inStr = true; sb.Append(c); continue; }
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Réparation tolérante des guillemets doubles NON échappés à
+        /// l'intérieur des valeurs string (vécu 2026-09-09, gemma4 :
+        /// « (kind="series") » dans un texte de prompt ferme prématurément
+        /// la chaîne JSON et fait rejeter tout le tableau d'appels). Un « " »
+        /// rencontré dans une chaîne est traité comme du contenu (réécrit
+        /// « \" ») sauf s'il est suivi — blancs optionnels — d'un caractère
+        /// structurel (, } ] ou :) auquel cas il ferme la chaîne.
+        /// Heuristique : une citation contenant elle-même , } ] ou : juste
+        /// après un guillemet reste ambiguë — la désérialisation stricte du
+        /// résultat tranche ; en cas d'échec on retombe sur le renvoi demandé
+        /// au modèle (comportement antérieur, aucune régression).
+        /// </summary>
+        private static string RepairUnescapedQuotes(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return json;
+            var sb = new StringBuilder(json.Length + 16);
+            bool inStr = false, esc = false;
+            for (int i = 0; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inStr)
+                {
+                    if (esc) { sb.Append(c); esc = false; continue; }
+                    if (c == '\\') { sb.Append(c); esc = true; continue; }
+                    if (c == '"')
+                    {
+                        int j = i + 1;
+                        while (j < json.Length &&
+                               (json[j] == ' ' || json[j] == '\t' || json[j] == '\r' || json[j] == '\n')) j++;
+                        char next = j < json.Length ? json[j] : '\0';
+                        if (next == ',' || next == '}' || next == ']' || next == ':')
+                        {
+                            sb.Append(c);
+                            inStr = false;
+                        }
+                        else
+                        {
+                            // Guillemet de contenu → échappé.
+                            sb.Append('\\').Append('"');
                         }
                         continue;
                     }

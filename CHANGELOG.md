@@ -10,6 +10,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.9.11] — 2026-09-09
+
+### Fixed — La révision proposée par le chat arrive en bloc ```text, sans rappel
+
+- **Règles de révision réellement injectées** : le bloc de règles communes
+  (`ChatContexts.CommonRules` — livraison du texte complet, read-modify-write,
+  conventions de rédaction, langues, sauvegarde, mode exclusif) était défini
+  mais jamais injecté dans le system prompt ; le LLM ne l'avait jamais vu et
+  l'usager devait lui rappeler le format à chaque tour. Il est maintenant
+  appendé en tout dernier du bloc contexte (effet de récence).
+- **Cadrage « canal de livraison »** (pattern repris des directives admin de
+  llm_core) : le bloc clôturé ```text n'est plus présenté comme une préférence
+  de format mais comme le SEUL canal par lequel le texte révisé parvient à
+  l'interface (même mécanique qu'une commande bash proposée dans un bloc) ;
+  la confirmation porte sur l'EXÉCUTION du bloc déjà livré (carte de diff
+  Approuver/Refuser), jamais sur sa production — le modèle ne demande plus
+  « voulez-vous que je prépare le texte ? » avant de livrer.
+- **Filet structurel côté serveur** : en mode d'édition, une réponse sans
+  AUCUNE clôture ET qui se termine par une question (pattern exact de la
+  déférence) déclenche UN nudge automatique rejoué au LLM (« livrez
+  MAINTENANT le texte complet en bloc ```text ») — seule la réponse corrigée
+  part à la page, l'usager ne voit rien. Un seul nudge par tour ; réponse
+  d'origine rendue si le nudge échoue (le bouton de secours de la page reste
+  le dernier ressort). `ChatPromptStore.PeekPagePending` ajouté pour
+  consulter la proposition en attente sans la consommer.
+- Description du tool `plugin_prompts` alignée sur le même cadrage (double
+  ancrage : les descriptions d'outils sont fortement pondérées par les petits
+  modèles).
+
+## [1.13.9.0] — 2026-09-09
+
+### Changed — Édition de prompts par le chat : garde-fous et ergonomie (1.13.9.0 → 1.13.9.8)
+
+- **Validation croisée champ ↔ mode** : la sauvegarde (`plugin_prompts` set)
+  ne peut viser que le prompt du mode d'édition actif de la liste déroulante —
+  la confusion vécue (texte « tâche séries » soumis pour le champ RAG sans que
+  rien ne le signale) devient impossible côté serveur.
+- **Avertissement de divergence** sur la carte de diff : recouvrement lexical
+  mot à mot < 25 % avec le texte courant → bandeau « diffère fortement ».
+- **Durcissement du tool-calling** (vécu qwen2.5:14b) : le system prompt
+  montre le formulaire d'appel enveloppé ` [{"tool":"…","arguments":{…}}]` par
+  outil et un contre-exemple explicite (un objet JSON nu n'est JAMAIS une
+  réponse valide).
+- **Page chat** : les blocs clôturés ``` sont rendus en conteneur avec boutons
+  Copier / Sauvegarder ; le clic 💾 embarque le texte de SON bloc dans le
+  message (autoporteur, plusieurs propositions sans ambiguïté) ; si la
+  réponse arrive en prose, un bouton de secours au niveau du tour demande la
+  réémission en bloc ; l'annonce automatique au changement de mode ([Admin])
+  ancre le read-modify-write dès l'entrée.
+
+## [1.13.8.0] — 2026-09-09
+
+### Added — Édition des prompts du plugin par le chat (contextes d'édition)
+
+- **Cinq contextes déroulants** (`ChatContexts.cs`, portage du pattern
+  « contextes » de llm_core) : un mode par prompt éditable — Directives RAG,
+  Tâche séries, Tâche films, Run « ce soir », Audit santé. Le bloc injecté à
+  CHAQUE tour porte le guide d'édition (rôle, invariants, conventions), le
+  TEXTE COURANT du prompt (source de vérité read-modify-write) et la langue
+  cible résolue côté serveur. Changer de mode n'exige jamais de réinitialiser
+  la conversation.
+- **Tool `plugin_prompts`** (list/get/set) : écriture **two-phase** — le set
+  ne fait que sérialiser la proposition (`ChatPromptStore`, expiration 10 min,
+  une par conversation) ; elle n'est appliquée qu'au clic « Approuver » de
+  l'admin sur la carte de diff de la page, en C# déterministe. Le LLM n'a
+  AUCUN chemin d'écriture direct. Opt-in explicite (`ChatPromptsEnabled`,
+  défaut false) ; les modes d'édition restent en lecture sans ce flag.
+- **Cinq prompts éditables dans la page de configuration** (textarea) avec
+  bouton « Réinitialiser » : l'endpoint `/Plugins/LLMAI/DefaultPrompts`
+  installe la version propre dans la langue de réponse configurée (repli
+  langue d'affichage) — source de vérité unique FR/EN (`DefaultPrompts.cs`).
+- Nouveaux fichiers : `ChatContexts.cs`, `ChatPromptStore.cs`,
+  `ChatPromptsTool.cs`.
+
+## [1.13.7.0] — 2026-09-08
+
+### Added — Audit sécurité et diagnostics étendus (system_audit)
+
+- **`security_check`** : validation consolidée — mots de passe des comptes
+  (admins surtout), accès distant et HTTPS, ouverture de ports automatique
+  (UPnP), en-têtes proxy (X-Forwarded-For), IP publiques ; constats gravés
+  avec gravité et correctifs, repris tels quels dans le rapport.
+- **`upnp_check`** : sonde SOAP du routeur (lecture seule) — confirme l'état
+  réel de l'ouverture automatique des ports.
+- Nouvelles actions de diagnostic : `system_config`, `processes`,
+  `library_stats`, `missing_metadata`.
+- **Prompt d'audit éditable** (`AuditPrompt`) : injectable/orientable par la
+  page de configuration ; les garde-fous de remédiation ne dépendent PAS de
+  ce texte — ils vivent dans le workflow d'audit (system prompt) et la gate
+  `AuditRemediationEnabled`.
+
 ## [1.13.6.0] — 2026-09-08
 
 ### Added — Repli poster EPG via l'endpoint image d'Emby (toute source de guide)

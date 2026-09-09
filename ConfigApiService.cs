@@ -21,7 +21,7 @@ namespace LLM_AI
     /// LLM (provider/url/modèle postés par la page, donc testables AVANT
     /// enregistrement) pour vérifier qu'il répond ; renvoie OK/échec +
     /// latence. Réservé aux administrateurs.</item>
-    /// <item><c>GET /Plugins/LLMAI/DefaultPrompts</c> — les quatre
+    /// <item><c>GET /Plugins/LLMAI/DefaultPrompts</c> — les cinq
     /// prompts/directives par défaut dans la langue configurée, pour le
     /// bouton « Réinitialiser » de la page (usager qui a modifié une
     /// directive et veut retrouver la version propre).</item>
@@ -182,7 +182,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Réponse : la langue résolue (<c>Lang</c>) et les quatre prompts
+        /// Réponse : la langue résolue (<c>Lang</c>) et les cinq prompts
         /// par défaut dans cette langue. La page remplit le textarea visé —
         /// rien n'est enregistré tant que l'admin n'a pas cliqué
         /// « Enregistrer ».
@@ -194,6 +194,7 @@ namespace LLM_AI
             public string ScheduleTask { get; set; }
             public string ScheduleTaskMovies { get; set; }
             public string TonightPrompt { get; set; }
+            public string AuditPrompt { get; set; }
             public string Error { get; set; }
         }
 
@@ -224,7 +225,8 @@ namespace LLM_AI
                 RagDirectives = d.RagDirectives,
                 ScheduleTask = d.ScheduleTask,
                 ScheduleTaskMovies = d.ScheduleTaskMovies,
-                TonightPrompt = d.TonightPrompt
+                TonightPrompt = d.TonightPrompt,
+                AuditPrompt = d.AuditPrompt
             };
         }
 

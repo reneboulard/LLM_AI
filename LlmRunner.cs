@@ -303,7 +303,9 @@ namespace LLM_AI
         /// </summary>
         internal const string AUDIT_ROLE_INTRO =
             "Tu es un assistant Emby chargé d'auditer la santé du serveur. Tu as accès " +
-            "à l'outil system_audit (inspection système : server_info, active_sessions, " +
+            "à l'outil system_audit (inspection système : server_info, security_check " +
+            "(sécurité : mots de passe des comptes, accès distant/HTTPS, UPnP, en-têtes " +
+            "proxy), active_sessions, " +
             "scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, gpu_transcode, " +
             "disk_storage ; remédiation : stop_session, trigger_task, send_message — ces " +
             "dernières requièrent AuditRemediationEnabled activé en config, sinon elles " +
@@ -333,7 +335,18 @@ namespace LLM_AI
             "5. Si un symptôme le justifie (erreur de tâche, transcodage en échec), appelle " +
             "action=\"list_logs\" puis action=\"inspect_log\" (tail ~150) sur le journal le " +
             "plus récent pertinent, avec grep si besoin (ex. \"error|exception|ffmpeg\").\n" +
-            "6. Produis un RAPPORT Markdown concis :\n" +
+            "6. Appelle action=\"security_check\" (mots de passe manquants des comptes — " +
+            "admins surtout, accès distant/HTTPS, UPnP, en-têtes proxy, preuves d'accès externe : " +
+            "sessions actives ET appareils historiques avec IP publique — si un accès externe est " +
+            "observé, les avertissements y sont déjà rehaussés critique) puis action=\"upnp_check\" " +
+            "(interroge le routeur en lecture seule : passerelle UPnP, IP WAN, table de redirection — " +
+            "un mapping UPnP vers le port Emby 8096/8920 est CRITIQUE) et reprends leurs constats " +
+            "(severity critique/avertissement/ok + fix) tels quels dans le rapport : n'atténue " +
+            "JAMAIS un constat critique de sécurité. Dès qu'une surface distante existe (accès distant " +
+            "activé ou accès externe observé), inclus le test externe GRC ShieldsUP!! du champ " +
+            "external_test dans les « Actions recommandées » — l'usager seul peut confirmer la " +
+            "joignabilité réelle du WAN.\n" +
+            "7. Produis un RAPPORT Markdown concis :\n" +
             "   - « ## Constats » : liste de puces taguées par gravité " +
             "(🔴 critique / ⚠️ attention / ✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
             "   - « ## Actions recommandées » : ce qu'il faudrait faire, classé par priorité.\n" +
@@ -550,7 +563,8 @@ namespace LLM_AI
             System.Threading.CancellationToken ct,
             string conversationMemory = null,
             List<ILlmTool> extraTools = null,
-            string extraWorkflow = null)
+            string extraWorkflow = null,
+            string contextBlock = null)
         {
             try
             {
@@ -572,7 +586,12 @@ namespace LLM_AI
                 // exclure la diversité ; vide = inchangé (fail-open).
                 // Mémoire de conversation (chat_memory) : résumé de la
                 // session précédente + derniers échanges (ChatApiService).
-                string workflow = CHAT_WORKFLOW + MemoryCard.BuildInjectionBlock(cfg)
+                // Contexte déroulant (v1.13.8) : le bloc du mode choisi
+                // (guide d'édition + texte courant du prompt + langue
+                // cible) est réinjecté à CHAQUE tour — changer de contexte
+                // n'exige jamais de réinitialiser la conversation.
+                string workflow = CHAT_WORKFLOW + (contextBlock ?? "")
+                    + MemoryCard.BuildInjectionBlock(cfg)
                     + (conversationMemory ?? "")
                     + (extraWorkflow ?? "");
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
