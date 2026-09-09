@@ -543,6 +543,48 @@ namespace LLM_AI
             "explique comment la réaliser dans l'UI Emby.";
 
         /// <summary>
+        /// Bloc « liens profonds » du chat (v1.13.9.12) : quand le LLM cite un
+        /// item dont un outil a fourni l'id, il le rend cliquable vers la fiche
+        /// web d'Emby (même origine — la page chat est servie par Emby lui-même,
+        /// aucun hôte à deviner ; ouverture dans un nouvel onglet côté page).
+        /// Le serverId est résolu une fois via <c>GetPublicSystemInfo</c> (le
+        /// chemin fiable — <c>GetSystemInfo</c> lève une NRE sur certains hôtes
+        /// Windows) ; vide = bloc omis (fail-open, jamais de lien fabriqué).
+        /// </summary>
+        private string _deepLinkBlock;
+
+        private async System.Threading.Tasks.Task<string> BuildDeepLinkBlockAsync()
+        {
+            if (_deepLinkBlock != null) return _deepLinkBlock;
+            string serverId = null;
+            try
+            {
+                var pub = _host == null
+                    ? null
+                    : await _host.GetPublicSystemInfo(System.Threading.CancellationToken.None).ConfigureAwait(false);
+                serverId = pub?.Id;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Liens profonds chat : serverId indisponible ({0}) — bloc omis.", ex.Message);
+            }
+            if (string.IsNullOrWhiteSpace(serverId))
+            {
+                _deepLinkBlock = string.Empty;
+                return _deepLinkBlock;
+            }
+            _deepLinkBlock =
+                "\n### LIENS PROFONDS EMBY\n" +
+                "Quand tu cites un item (film, série, épisode, enregistrement, programme EPG) dont un " +
+                "outil t'a fourni l'identifiant (champ id), rends le titre cliquable vers sa fiche Emby " +
+                "avec ce gabarit exact : [Titre](/web/index.html#!/item?id=ID&serverId=" + serverId +
+                ") — remplace Titre et ID, ne change rien d'autre. Pour une série (vue groupée par " +
+                "passages), ajoute &asSeries=true avant la parenthèse. Si l'id n'est pas connu, cite le " +
+                "titre SANS lien — ne fabrique JAMAIS un lien avec un id inventé.";
+            return _deepLinkBlock;
+        }
+
+        /// <summary>
         /// Exécute un tour de chat interactif : résout les backends (priorités
         /// LLM configurées par l'usager — aucun changement pour le chat),
         /// construit <b>tous</b> les outils déjà disponibles (recommandation
@@ -590,7 +632,8 @@ namespace LLM_AI
                 // (guide d'édition + texte courant du prompt + langue
                 // cible) est réinjecté à CHAQUE tour — changer de contexte
                 // n'exige jamais de réinitialiser la conversation.
-                string workflow = CHAT_WORKFLOW + (contextBlock ?? "")
+                string workflow = CHAT_WORKFLOW + await BuildDeepLinkBlockAsync().ConfigureAwait(false)
+                    + (contextBlock ?? "")
                     + MemoryCard.BuildInjectionBlock(cfg)
                     + (conversationMemory ?? "")
                     + (extraWorkflow ?? "");

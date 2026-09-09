@@ -93,6 +93,16 @@ define([], function () {
         }
         function inline(s) {
             var h = esc(s);
+            // v1.13.9.12 : liens Markdown [texte](url) vers la fiche Emby —
+            // même origine uniquement (l'URL doit commencer par « / » : la page
+            // chat est servie par Emby lui-même, tout lien absolu du LLM est
+            // rendu comme texte brut — pas de redirection contrôlée par le
+            // modèle). Ouvre dans un nouvel onglet (demande explicite de
+            // l'usager : « consulter la fiche directement sur Emby »).
+            h = h.replace(/\[([^\]]+)\]\(([^()\s][^()]*?)\)/g, function (m, txt, url) {
+                if (!/^\/[^/]/.test(url) && url !== "/") return m;
+                return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + txt + '</a>';
+            });
             h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
             h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
             return h;

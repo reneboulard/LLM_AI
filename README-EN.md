@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.9.11 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.9.12 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -607,7 +607,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Specialized LLM tools (see [LLM tools](#llm-tools)). `TmdbLookupTool` additionally exposes `LookupMetaAsync`/`LookupMetaMultiLangAsync` (search, S1), `FindByExternalIdAsync` (`/find`, validates a proposed id), `LookupMetaByIdAsync` (detail by id), `CleanEpgTitle` — reused by `StrmLibraryGenerator` and `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Configuration page (entry of the fields above). |
 | `recommendations.html` / `recommendations.js` | — | Recommendations page (renders the 3 sections, cards, buttons). |
-| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history, shared Markdown rendering, "Resume" banner (conversation memory, opt-in `ChatMemoryEnabled`). Editing contexts (v1.13.8): modes dropdown, automatic `[Admin]` announcement on mode change, fenced-block rendering as a container with Copy / Save buttons (self-contained message), per-turn fallback button when the reply arrives as prose. |
+| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history, shared Markdown rendering, "Resume" banner (conversation memory, opt-in `ChatMemoryEnabled`). Editing contexts (v1.13.8): modes dropdown, automatic `[Admin]` announcement on mode change, fenced-block rendering as a container with Copy / Save buttons (self-contained message), per-turn fallback button when the reply arrives as prose. Deep links (v1.13.9.12): rendering of `[text](url)` Markdown links to Emby item pages, same-origin only, new tab — see [Deep links to Emby item pages](#deep-links-to-emby-item-pages-v113912). |
 | `i18n.js` | — | Localized FR/EN strings + `web/ConfigurationPage?name=LLMAII18n` endpoint. |
 | `deploy.sh` | — | Build + deploy + restart (see [Installation](#installation)). |
 
@@ -1247,6 +1247,27 @@ scheduled task (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
   introspection.
 - Usage: explore the library in natural language, prepare/evaluate an evening, ask
   the agent what it could recommend — without spending a full run.
+
+### Deep links to Emby item pages (v1.13.9.12)
+
+When a reply cites an item (movie, series, episode, recording, EPG program) whose id
+was provided by a tool, the title renders as a **clickable link to its Emby item
+page**, opened in a new tab — from there, favorite or record it as applicable.
+
+- **Server side**: a `### LIENS PROFONDS EMBY` block is injected into the chat
+  workflow (`LlmRunner.cs`) with the exact template
+  `[Title](/web/index.html#!/item?id=ID&serverId=…)` (`&asSeries=true` for the
+  series grouped view). The `serverId` is fetched once via `GetPublicSystemInfo` and
+  cached (block omitted, fail-open, if unavailable). Explicit rule: without a known
+  id, the title is cited **without** a link — never a fabricated id.
+- **Page side** (`chat.js`, `inline()`): Markdown link rendering with two
+  guardrails — **same-origin only** (the URL must start with `/`; any absolute link
+  proposed by the LLM stays plain text, no model-controlled redirect) and
+  `target="_blank" rel="noopener noreferrer"`.
+- Tool projections already emit an `id` everywhere — library
+  (`i.InternalId.ToString()`) as well as EPG (`p.Id` from the `GetPrograms` DTOs,
+  the same shape as the `EpgLink` links in the .strm NFOs); no change to
+  `GetEmbyInfoTool.cs`.
 
 ### Conversation memory
 

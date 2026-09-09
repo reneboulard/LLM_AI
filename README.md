@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.9.11 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.9.12 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -626,7 +626,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |
 | `recommendations.html` / `recommendations.js` | — | Page Recommandations (rendu des 3 sections, cartes, boutons). |
-| `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). Contextes d'édition (v1.13.8) : liste déroulante des modes, annonce `[Admin]` automatique au changement, rendu des blocs clôturés en conteneur avec boutons Copier / Sauvegarder (message autoporteur), bouton de secours au niveau du tour si la réponse arrive en prose. |
+| `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). Contextes d'édition (v1.13.8) : liste déroulante des modes, annonce `[Admin]` automatique au changement, rendu des blocs clôturés en conteneur avec boutons Copier / Sauvegarder (message autoporteur), bouton de secours au niveau du tour si la réponse arrive en prose. Liens profonds (v1.13.9.12) : rendu des liens Markdown `[texte](url)` vers les fiches Emby, même origine uniquement, nouvel onglet — voir [Liens profonds vers les fiches Emby](#liens-profonds-vers-les-fiches-emby-v113912). |
 | `i18n.js` | — | Chaînes localisées FR/EN + endpoint `web/ConfigurationPage?name=LLMAII18n`. |
 | `deploy.sh` | — | Build + déploiement + redémarrage (voir [Installation](#installation)). |
 
@@ -1285,6 +1285,28 @@ tâche planifiée (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`�
   expose l'introspection de la bibliothèque et de l'EPG.
 - Usage : explorer la bibliothèque en langage naturel, préparer/évaluer une soirée,
   questionner l'agent sur ce qu'il peut recommander — sans consommer un run complet.
+
+### Liens profonds vers les fiches Emby (v1.13.9.12)
+
+Quand une réponse cite un item (film, série, épisode, enregistrement, programme EPG)
+dont un outil a fourni l'identifiant, le titre est rendu **cliquable vers sa fiche
+Emby**, ouverte dans un nouvel onglet — de là, mettre en favori ou enregistrer selon
+le cas.
+
+- **Côté serveur** : un bloc `### LIENS PROFONDS EMBY` est injecté dans le workflow du
+  chat (`LlmRunner.cs`) avec le gabarit exact `[Titre](/web/index.html#!/item?id=ID&serverId=…)`
+  (`&asSeries=true` pour la vue groupée des séries). Le `serverId` est obtenu une
+  seule fois via `GetPublicSystemInfo` et mis en cache (bloc omis, fail-open, si
+  indisponible). Règle explicite : sans id connu, le titre est cité **sans** lien —
+  jamais d'id inventé.
+- **Côté page** (`chat.js`, `inline()`) : rendu des liens Markdown avec deux
+  garde-fous — **même origine uniquement** (l'URL doit commencer par `/` ; tout lien
+  absolu proposé par le LLM reste du texte brut, pas de redirection contrôlée par le
+  modèle) et `target="_blank" rel="noopener noreferrer"`.
+- Les projections des outils émettent déjà un `id` partout — bibliothèque
+  (`i.InternalId.ToString()`) comme EPG (`p.Id` des DTO de `GetPrograms`, la même
+  forme que les liens `EpgLink` des NFO .strm) ; aucune modification de
+  `GetEmbyInfoTool.cs`.
 
 ### Mémoire de conversation
 

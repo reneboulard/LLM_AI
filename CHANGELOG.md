@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.9.12] — 2026-09-09
+
+### Added — Liens profonds Emby dans le chat : titres cliquables vers la fiche
+
+- **Injection côté serveur** (`LlmRunner.cs`) : un bloc `### LIENS PROFONDS
+  EMBY` est ajouté au workflow du chat. Il donne au LLM le gabarit exact
+  `[Titre](/web/index.html#!/item?id=ID&serverId=…)` — le `serverId` est
+  obtenu une seule fois via `GetPublicSystemInfo` et mis en cache (bloc omis,
+  fail-open, si l'info est indisponible) — et ajoute `&asSeries=true` pour la
+  vue groupée des séries. Règle explicite : sans id connu, le titre est cité
+  SANS lien — jamais d'id inventé.
+- **Rendu côté page** (`chat.js`) : la fonction `inline()` rend les liens
+  Markdown `[texte](url)` avec deux garde-fous — même origine uniquement
+  (l'URL doit commencer par `/` ; tout lien absolu proposé par le LLM reste
+  du texte brut, pas de redirection contrôlée par le modèle) et
+  `target="_blank" rel="noopener noreferrer"` (nouvel onglet, demande
+  explicite de l'usager).
+- **Données : aucune modification** — les projections des outils émettaient
+  déjà un `id` partout, bibliothèque (`i.InternalId.ToString()`) comme EPG
+  (`p.Id` des DTO de `GetPrograms`) ; la forme EPG est la même que celle
+  validée en production par `EpgLink` (liens des NFO de la bibliothèque
+  .strm). Le clic ouvre la fiche Emby où l'usager peut mettre en favori ou
+  enregistrer selon le cas.
+- Version → 1.13.9.12 (bust du cache client : `chat.js` a changé).
+
 ## [1.13.9.11] — 2026-09-09
 
 ### Fixed — La révision proposée par le chat arrive en bloc ```text, sans rappel
