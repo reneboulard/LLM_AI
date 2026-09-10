@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.10.1] — 2026-09-10
+
+### Fixed — Playlist « AI Tonight » : séries jamais commencées (repli next up)
+
+- **Repli « next up »** (`AiTonightPlaylistManager.ResolveLeafIds`) : sur ce build
+  Emby (4.10.0.40), `ITVSeriesManager.GetNextUp` retourne **vide pour une série
+  jamais commencée** (0 épisode vu — vérifié aussi via le REST natif
+  `/Shows/NextUp` pour 2 usagers) : il ne « commence » pas la série. Une reco
+  série non vue était donc **sautée** — le run du 2026-09-10 (08:29) a produit
+  2 recos watch bucket (série + film) mais la playlist n'en contenait qu'**une**
+  (journal : « série … sans épisode next up (tout vu ?) — sautée »).
+- Le repli calcule le « prochain » à la main : **premier épisode non vu** en
+  ordre saison/épisode (`Folder.GetItemList` + `IUserDataManager.GetUserData` —
+  même pattern que le stock du binge de `TonightService`). Déclenché aussi quand
+  le next up retourné est **déjà vu** (le build peut le renvoyer).
+- La série n'est sautée que si **tout est vu** (message de journal explicite).
+  S'applique aux deux chemins : run Tonight (`EnsureAsync`) **et** ajout par le
+  chat (`AddItemsAsync`). Toujours **une feuille par reco série** — jamais
+  l'expansion en tous les épisodes (quirks playlist 4.9.5.0).
+- Version → 1.13.10.1.
+
 ## [1.13.10.0] — 2026-09-10
 
 ### Added — Persistance du dernier rapport d'audit, affiché par défaut dans la page de config
@@ -1145,7 +1166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   error to the model, same mechanism as the malformed-tool-call resend.
 
 - **Tâche planifiée : un run LLM vide n'efface plus les recommandations**
-  (vécu 2026-09-02 03:01, serveur principal : LLM local étouffé — SÉRIES a répondu
+  (vécu 2026-09-02 03:01 : LLM local étouffé — SÉRIES a répondu
   `[]`, FILMS un appel d'outil malformé `[{"action":"epg_movies"}]` passé comme
   réponse finale → fusion vide persistée → recos de la veille effacées, et les
   consommateurs « tout remplacer » (badges, `CleanPrevious` des cartes `.strm`)

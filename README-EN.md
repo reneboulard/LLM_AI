@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.10.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.10.1 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -225,7 +225,7 @@ Card buttons let you **Schedule** (SeriesTimer for a series, single Timer for a 
    sudo bash install.sh
    ```
    `install.sh` detects the Emby plugins folder (`/var/lib/emby/plugins` by default) and
-   service (`emby-server`), removes the old `mon-plugin.dll`, copies the DLL, and
+   service (`emby-server`), removes the old plugin DLL, copies the DLL, and
    restarts Emby. Optional env vars: `EMBY_PLUGINS_DIR`, `EMBY_SERVICE`.
 4. In Emby: **Plugins** → **LLM_AI** → configure (see [Configuration](#configuration)).
 5. Simply reload the page (**F5**) once Emby has restarted — **a fresh browser
@@ -241,7 +241,7 @@ Card buttons let you **Schedule** (SeriesTimer for a series, single Timer for a 
 Prerequisites: Emby Server (net8.0 build), .NET SDK 8.
 
 - `bash deploy.sh` from the project root: builds `Release net8.0`, copies `LLM_AI.dll`
-  to `/var/lib/emby/plugins/`, removes the old `mon-plugin.dll`, restarts `emby-server`,
+  to `/var/lib/emby/plugins/`, removes the old plugin DLL, restarts `emby-server`,
   and tails the log.
 - `bash package.sh`: builds + produces `dist/LLM_AI-<version>.zip` (self-contained
   release, see above).
@@ -913,6 +913,28 @@ browses it like any collection in any client.
 - Populated on fresh runs (reconcile remove-all-then-add-all), **independent** of
   the tag (both can coexist). Verified: `CreateCollection(ParentId=0)` shows up
   in the Collections list.
+
+### "AI Tonight" playlist (watch bucket)
+
+`AiTonightPlaylistManager` maintains a **playable** `AI Tonight` **playlist**
+(option `TonightPlaylistEnabled`): destroyed then **recreated on every fresh**
+"Tonight" run — exactly the day's recommendations, no accumulation — for
+direct sequential playback from any Emby client (mirror of the collection,
+same 3 a.m. cleanup).
+
+- **One playable leaf per reco**: a **series/season** reco is never added as-is
+  (Emby expands it into ALL its episodes — verified: one series id → 52
+  entries); it is resolved to a **single unwatched "next up" episode** for the
+  Tonight user; movies/episodes pass through as-is.
+- **Next-up fallback (v1.13.10.1)**: on this Emby build, `GetNextUp` returns
+  EMPTY for a **never-started series** — the fallback picks the **first
+  unwatched episode** in season/episode order (so S1E1 for a new series), and
+  also when the returned next-up episode is already watched. The series is
+  skipped only when **everything is watched**. Also applies to the chat's
+  `playlist_add`.
+- **Hygiene (v1.13.2)**: on this Emby build, `RemoveFromPlaylist` is a no-op —
+  the reset goes through destroy + recreate; the chat's `playlist_remove`
+  honestly reports the no-op (traced items remain removable from the Emby UI).
 
 ### Cleanup (`AiTonightCleanupTask`)
 

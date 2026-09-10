@@ -318,13 +318,18 @@ namespace LLM_AI
         /// Normalise les ids du watch bucket en <b>feuilles jouables</b> :
         /// une reco <see cref="MediaBrowser.Controller.Entities.TV.Series"/> /
         /// <c>Season</c> devient son épisode « next up » non vu pour l'usager
-        /// Tonight (<c>ITVSeriesManager.GetNextUp</c> — le même « à suivre »
-        /// qu'Emby propose en fin de lecture ; aucun next up → série sautée,
-        /// tout est déjà vu), les autres items (film, épisode) passent tels
-        /// quels. Déduplique. <b>Pourquoi</b> : Emby développe une série ou
-        /// saison ajoutée à une playlist en TOUS ses épisodes (vérifié
-        /// 2026-09-06 : un id série → 52 entrées) — sans cette normalisation,
-        /// chaque run gonflait la playlist de ~50 entrées par reco série.
+        /// Tonight, les autres items (film, épisode) passent tels quels.
+        /// Déduplique. <b>Pourquoi</b> : Emby développe une série ou saison
+        /// ajoutée à une playlist en TOUS ses épisodes (vérifié 2026-09-06 :
+        /// un id série → 52 entrées) — sans cette normalisation, chaque run
+        /// gonflait la playlist de ~50 entrées par reco série.
+        /// <para><b>Next up + repli (v1.13.10.1)</b> : sur ce build Emby
+        /// (4.10.0.40), <c>GetNextUp</c> retourne VIDE pour une série
+        /// <b>jamais commencée</b> (aucun épisode vu — vérifié aussi via le
+        /// REST natif <c>/Shows/NextUp</c>) et peut renvoyer un épisode DÉJÀ
+        /// VU. Le repli calcule le « prochain » à la main
+        /// (<see cref="FirstUnwatchedEpisode"/>) : premier épisode non vu en
+        /// ordre saison/épisode — tout vu = série sautée.</para>
         /// </summary>
         private static List<long> ResolveLeafIds(
             ILibraryManager library, IServerApplicationHost host,
@@ -334,8 +339,13 @@ namespace LLM_AI
             if (itemIds == null) return leaves;
 
             ITVSeriesManager tv = null;
-            try { tv = host?.TryResolve<ITVSeriesManager>(); }
-            catch { /* résolution impossible → séries sautées (log ci-dessous) */ }
+            MediaBrowser.Controller.Library.IUserDataManager userData = null;
+            try
+            {
+                tv = host?.TryResolve<ITVSeriesManager>();
+                userData = host?.TryResolve<MediaBrowser.Controller.Library.IUserDataManager>();
+            }
+            catch { /* résolution impossible → replis limités (logs ci-dessous) */ }
 
             foreach (var raw in itemIds)
             {
@@ -358,38 +368,55 @@ namespace LLM_AI
                         logger?.Warn("[LLM_AI] Playlist : série introuvable pour la saison « {0} » — sautée.", item.Name);
                         continue;
                     }
-                    if (tv == null)
+
+                    BaseItem ep = null;
+                    if (tv != null)
                     {
-                        logger?.Warn("[LLM_AI] Playlist : ITVSeriesManager indisponible — série « {0} » sautée.", series.Name);
-                        continue;
+                        try
+                        {
+                            var next = tv.GetNextUp(
+                                new NextUpQuery
+                                {
+                                    SeriesId = series.InternalId,
+                                    UserId = user.InternalId,
+                                    Limit = 1,
+                                    EnableTotalRecordCount = false
+                                },
+                                user,
+                                new DtoOptions());
+                            ep = next?.Items != null && next.Items.Length > 0 ? next.Items[0] : null;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger?.Warn("[LLM_AI] Playlist : next up échoué pour « {0} » : {1} — repli.", series.Name, ex.Message);
+                        }
+                        // Un next up DÉJÀ VU ne vaut pas mieux que vide (le
+                        // build peut renvoyer un épisode visionné) : repli.
+                        if (ep != null && IsPlayedForUser(userData, user, ep))
+                        {
+                            logger?.Info("[LLM_AI] Playlist : next up « {0} » de « {1} » déjà vu — repli.",
+                                ep.Name, series.Name);
+                            ep = null;
+                        }
+                    }
+                    else
+                    {
+                        logger?.Warn("[LLM_AI] Playlist : ITVSeriesManager indisponible — repli pour « {0} ».", series.Name);
                     }
 
-                    try
+                    // Repli (série jamais commencée : GetNextUp est VIDE sur ce
+                    // build) : premier épisode NON VU en ordre saison/épisode.
+                    if (ep == null)
+                        ep = FirstUnwatchedEpisode(library, userData, user, series, logger);
+
+                    if (ep == null)
                     {
-                        var next = tv.GetNextUp(
-                            new NextUpQuery
-                            {
-                                SeriesId = series.InternalId,
-                                UserId = user.InternalId,
-                                Limit = 1,
-                                EnableTotalRecordCount = false
-                            },
-                            user,
-                            new DtoOptions());
-                        var ep = next?.Items != null && next.Items.Length > 0 ? next.Items[0] : null;
-                        if (ep == null)
-                        {
-                            logger?.Info("[LLM_AI] Playlist : série « {0} » sans épisode next up (tout vu ?) — sautée.", series.Name);
-                            continue;
-                        }
-                        logger?.Info("[LLM_AI] Playlist : série « {0} » → épisode next up « {1} » (id={2}).",
-                            series.Name, ep.Name, ep.InternalId);
-                        if (!leaves.Contains(ep.InternalId)) leaves.Add(ep.InternalId);
+                        logger?.Info("[LLM_AI] Playlist : série « {0} » sans épisode non vu (tout vu ?) — sautée.", series.Name);
+                        continue;
                     }
-                    catch (Exception ex)
-                    {
-                        logger?.Warn("[LLM_AI] Playlist : next up échoué pour « {0} » : {1} — série sautée.", series.Name, ex.Message);
-                    }
+                    logger?.Info("[LLM_AI] Playlist : série « {0} » → épisode « {1} » (id={2}).",
+                        series.Name, ep.Name, ep.InternalId);
+                    if (!leaves.Contains(ep.InternalId)) leaves.Add(ep.InternalId);
                     continue;
                 }
 
@@ -397,6 +424,66 @@ namespace LLM_AI
                 if (!leaves.Contains(item.InternalId)) leaves.Add(item.InternalId);
             }
             return leaves;
+        }
+
+        /// <summary>État « vu » de l'item pour CET usager (<c>IUserDataManager</c> —
+        /// <c>BaseItem</c> ne porte pas de UserData). userData indisponible =
+        /// pas vu (fail-open : l'épisode next up est retenu tel quel).</summary>
+        private static bool IsPlayedForUser(
+            MediaBrowser.Controller.Library.IUserDataManager userData, User user, BaseItem item)
+        {
+            if (userData == null || user == null || item == null) return false;
+            try { return userData.GetUserData(user, item)?.Played ?? false; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Repli « next up » : premier épisode <b>non vu</b> (pour l'usager) de
+        /// la série, en ordre saison/épisode — le même choix que le début du
+        /// stock du binge (TonightService). Requête par le dossier de la série
+        /// (<c>Folder.GetItemList</c>, chemin validé par le listing playlist) ;
+        /// l'état « vu » est relu par usager via <c>IUserDataManager</c> en C#
+        /// (pas de filtre de requête). userData indisponible ou tout vu =
+        /// null (série sautée). Best-effort, ne lève jamais.
+        /// </summary>
+        private static BaseItem FirstUnwatchedEpisode(
+            ILibraryManager library, MediaBrowser.Controller.Library.IUserDataManager userData,
+            User user, BaseItem seriesItem, ILogger logger)
+        {
+            if (userData == null || user == null || seriesItem == null) return null;
+            try
+            {
+                var items = (seriesItem as Folder)?.GetItemList(new InternalItemsQuery
+                {
+                    Recursive = true,
+                    IncludeItemTypes = new[] { "Episode" },
+                    EnableTotalRecordCount = false
+                });
+                if (items == null) return null;
+                BaseItem best = null;
+                int bestSeason = int.MaxValue, bestNumber = int.MaxValue;
+                foreach (var it in items)
+                {
+                    if (it == null) continue;
+                    if (userData.GetUserData(user, it)?.Played ?? false) continue;
+                    int season = it.ParentIndexNumber ?? int.MaxValue;
+                    int number = it.IndexNumber ?? int.MaxValue;
+                    if (best == null || season < bestSeason
+                        || (season == bestSeason && number < bestNumber))
+                    {
+                        best = it; bestSeason = season; bestNumber = number;
+                    }
+                }
+                if (best != null)
+                    logger?.Info("[LLM_AI] Playlist : repli next up — premier épisode non vu « {0} » de « {1} ».",
+                        best.Name, seriesItem.Name);
+                return best;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Playlist : repli next up échoué pour « {0} » : {1}", seriesItem.Name, ex.Message);
+                return null;
+            }
         }
 
         /// <summary>

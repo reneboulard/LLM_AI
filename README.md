@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.10.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.10.1 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -233,7 +233,7 @@ et d'**Oublier** (ajoute le titre à la liste de rejet `DroppedTitles`).
    sudo bash install.sh
    ```
    `install.sh` détecte le dossier des plugins Emby (`/var/lib/emby/plugins` par défaut)
-   et le service (`emby-server`), supprime l'ancien `mon-plugin.dll`, copie la DLL et
+   et le service (`emby-server`), supprime l'ancienne DLL du plugin, copie la DLL et
    redémarre Emby. Variables d'env optionnelles : `EMBY_PLUGINS_DIR`, `EMBY_SERVICE`.
 4. Dans Emby : **Plugins** → **LLM_AI** → configurer (voir [Configuration](#configuration)).
 5. Recharger simplement la page (**F5**) après le redémarrage d'Emby — **une
@@ -249,7 +249,7 @@ et d'**Oublier** (ajoute le titre à la liste de rejet `DroppedTitles`).
 Prérequis : Emby Server (build net8.0), .NET SDK 8.
 
 - `bash deploy.sh` depuis la racine du projet : compile en `Release net8.0`, copie
-  `LLM_AI.dll` dans `/var/lib/emby/plugins/`, supprime l'ancien `mon-plugin.dll`,
+  `LLM_AI.dll` dans `/var/lib/emby/plugins/`, supprime l'ancienne DLL du plugin,
   redémarre `emby-server` et affiche la fin du journal.
 - `bash package.sh` : compile + produit `dist/LLM_AI-<version>.zip` (release
   auto-suffisante, voir ci-dessus).
@@ -931,6 +931,29 @@ la parcourt comme n'importe quelle collection dans n'importe quel client.
 - Peuplée sur les runs frais (reconcile remove-all-then-add-all), **indépendante**
   du genre (les deux peuvent cohabiter). Vérifié : `CreateCollection(ParentId=0)`
   ressort dans la liste des Collections.
+
+### Playlist « AI Tonight » (watch bucket)
+
+`AiTonightPlaylistManager` maintient une **playlist jouable** `AI Tonight`
+(option `TonightPlaylistEnabled`) : détruite puis **recréée à chaque run frais**
+de « À regarder ce soir » — la liste exacte des recommandations du jour, sans
+accumulation — pour un enchaînement direct depuis n'importe quel client Emby
+(miroir de la collection, même nettoyage de 3 h).
+
+- **Une feuille jouable par reco** : une reco **série ou saison** n'est jamais
+  ajoutée telle quelle (Emby développe une série ajoutée à une playlist en
+  TOUS ses épisodes — vérifié : un id série → 52 entrées) mais résolue en **un
+  épisode « next up » non vu** pour l'usager Tonight ; les films/épisodes
+  passent tels quels.
+- **Repli next up (v1.13.10.1)** : sur ce build Emby, `GetNextUp` retourne
+  **vide pour une série jamais commencée** — le repli prend le **premier
+  épisode non vu** en ordre saison/épisode (donc S1E1 pour une série neuve),
+  et aussi quand le next up retourné est déjà vu. La série n'est sautée que si
+  **tout est vu**. S'applique aussi au `playlist_add` du chat.
+- **Hygiène (v1.13.2)** : sur ce build Emby, `RemoveFromPlaylist` est inopérant
+  — le reset passe par destruction + recréation ; le `playlist_remove` du chat
+  signale honnêtement l'inopérance (les items tracés du tour
+  restent retirables via l'interface Emby).
 
 ### Nettoyage (tâche `AiTonightCleanupTask`)
 
