@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.10.0] — 2026-09-10
+
+### Added — Persistance du dernier rapport d'audit, affiché par défaut dans la page de config
+
+- **`AuditReportStore.cs`** (nouveau) : le dernier rapport d'audit **réussi** est
+  persisté dans `audit_report.json` (dossier de configuration du plugin, convention
+  `ChatMemoryStore` — JSON `System.Text.Json.Nodes`, écriture best-effort fail-open).
+  Un seul enregistrement, écrasé à chaque run : la **relecture ne coûte aucun LLM**,
+  une rétention N rapports serait une évolution distincte.
+- **Endpoint** (`AuditApiService.cs`) : `GET /Plugins/LLMAI/Audit?Last=true` — lecture
+  seule du dernier rapport persisté **sans exécuter d'audit** (zéro LLM), toujours
+  admin-only. Un run réussi persiste le rapport **avec son mode, son focus et sa
+  date** ; les messages d'échec de `RunAuditAsync` (« Aucun backend configuré… »,
+  « Échec de l'audit… ») ne peuvent **jamais** écraser le dernier vrai rapport.
+- **Page de config** (`config.js`, `i18n.js`) : au chargement de la page, la zone
+  rapport affiche par défaut le dernier rapport persisté avec la méta
+  « Dernier rapport persisté — [date locale] (mode …) » ; le bouton « Lancer l'audit »
+  régénère et écrase. La date du run est désormais formatée localement
+  (`toLocaleString`) au lieu de l'ISO brut. Description de la section mise à jour
+  (FR + EN).
+- Version → 1.13.10.0.
+
+## [1.13.9.13] — 2026-09-10
+
+### Fixed — Rapports d'audit : Markdown pur exigé, filet de formatage, ligne UPnP toujours présente
+
+- **Artéfacts de restitution corrigés** : le LLM émettait de la notation math LaTeX
+  (`$\rightarrow$` — le `\r` avalé comme retour chariot produisait
+  « Dashboard $ ightarrow$ Réseau ») et du HTML cru (`809<code>96</code>`). Le filet
+  **`LlmRunner.SanitizeReport`** remplace les flèches LaTeX (`\rightarrow`, `\to`,
+  `\Rightarrow`, `\leftarrow`) par leur glyphe texte, retire les dollars de math-mode
+  résiduels, dénude les balises d'habillage (`code`/`b`/`strong`/`i`/`em`) et convertit
+  les `<br>` — appliqué aux sorties **audit** (boucle agent + mode déterministe) **et
+  chat**. Best-effort, n'élève jamais, insensible aux montants en dollars.
+- **Règle « Markdown pur » dans les prompts** (`LlmRunner.cs` — `AUDIT_WORKFLOW` §7 et
+  `AUDIT_SYNTHESIS_WORKFLOW` ; `DefaultPrompts.cs` — `auditPrompt` FR + EN) : jamais de
+  notation math/LaTeX, jamais de balises HTML, flèches en « → » texte simple.
+- **Ligne UPnP toujours présente** : le workflow exige désormais un constat ✅ explicite
+  (« UPnP désactivé / aucun mapping routeur ») quand `upnp_check` ne trouve aucun
+  mapping — la sonde ne peut plus passer sous silence dans le rapport.
+- Version → 1.13.9.13.
+
 ## [1.13.9.12] — 2026-09-09
 
 ### Added — Liens profonds Emby dans le chat : titres cliquables vers la fiche

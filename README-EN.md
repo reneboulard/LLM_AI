@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.9.12 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.10.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -54,7 +54,7 @@ language.
 - **A chat with the assistant**: ask questions in natural language ("what
   documentaries are on this week?").
 - **A server health report**: on demand, it inspects Emby (disk, logs, performance)
-  and writes a report with advice.
+  and writes a report with advice — kept for re-reading, without re-running the audit.
 - **Incomplete records repaired**: when a recorded show ends up without a record
   (title not found in the catalogs), it finds it on the web and fills in the missing
   information, just like a manual search would.
@@ -139,9 +139,10 @@ decides which tool calls to make on its own (agent / tool-calling loop).
 It also exposes an **on-demand server health audit** (`GET /Plugins/LLMAI/Audit`,
 admin-only): an LLM agent queries the `system_audit` tool (sessions, scheduled tasks,
 transcoding, disks, logs, host metrics, library) and produces a **Markdown health
-report** (severity-tagged findings + recommended actions). **Remediation** (stop a
-session, trigger a task, notify a user) is disabled by default (opt-in). See
-[Server health audit](#server-health-audit).
+report** (severity-tagged findings + recommended actions). The **last successful report
+is persisted** and displayed by default when the config page loads — reading it costs no
+LLM. **Remediation** (stop a session, trigger a task, notify a user) is disabled by
+default (opt-in). See [Server health audit](#server-health-audit).
 
 The plugin also ships two bridges: an **AI genre translation** feature that teams up
 with **GenreCleaner** (the official Emby-catalog genre-cleanup plugin) — for every EPG genre
@@ -487,6 +488,11 @@ tool). See [Server health audit](#server-health-audit).
 - `AuditPrompt` — prompt template sent to the LLM (user message). The optional `Focus`
   parameter of the endpoint is appended at runtime to orient the audit.
 
+The **last successful report** is persisted (`audit_report.json`, see
+[Server health audit](#server-health-audit)) and displayed by default when the page
+loads — `GET /Plugins/LLMAI/Audit?Last=true` returns it without running an audit
+(zero LLM).
+
 ### Orphan recording identification
 
 Daily **04:00** scheduled task that identifies **unidentified library items**
@@ -589,7 +595,8 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
-| `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report. |
+| `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
+| `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (internal static) | Persistence of the **last audit report** (`audit_report.json`, plugin configuration folder, `ChatMemoryStore` convention): date, mode, focus, Markdown report. Best-effort fail-open; a single record overwritten at each successful run. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}], Session}` (the page keeps the history; `Session` = conversation-memory id), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities, memory block appended). The system prompt (tool docs + directives) is built server-side, once per conversation. Also carries the **conversation memory**: session resolution, turn journaling (`ChatMemoryStore`), lazy condensation of past sessions (one LLM call as a background task, continuity note + `SIGNALS:` line → decisions `kind="chat"`), and the `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget` endpoints. |
 | `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | **Admin** utility endpoints for the config page: `POST /Plugins/LLMAI/TestLlm` (test a backend **as edited** — provider/url/model posted, API keys re-read server-side from saved config, reply carries OK/failure + latency + excerpt, 30 s timeout) and `GET /Plugins/LLMAI/DefaultPrompts` (the five default prompts in the resolved language: `?Lang=` → `ResponseLanguage` → Emby display language — deliberately NOT the metadata/TmdbLanguage cascade) and `GET`/`POST /Plugins/LLMAI/MemoryCard` (admin view/edit of the memory card — version and history unchanged). See [Config page helpers](#config-page-helpers). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (internal static) | **Single source** of the five default prompts/directives (FR + EN): the `RagDirectives` baseline (verify via tools before asserting, never recommend an owned/scheduled title, slight preference for recent productions without penalizing a missing year), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Feeds both the `PluginConfiguration` initializers (fresh installs) and the **Reset** button content. |
@@ -599,7 +606,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Serves **only** those two fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 12 system-audit actions (sessions, tasks, transcoding, disks, logs, host metrics, processes, library) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
-| `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
+| `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). |
 | `LlmClient.cs` | `LlmClient` (static) | Raw HTTP calls to Ollama / Gemini (no keys logged in the clear). |
@@ -990,6 +997,39 @@ The endpoint accepts a free-form `Focus` (config-page field) appended to the `Au
 template to orient the audit (e.g. `disk`, `transcoding`) or to make an explicit
 remediation request (e.g. "stop session XYZ" — which only succeeds if remediation is
 enabled **and** the mode is `single`).
+
+### Last report persistence (v1.13.10)
+
+The report used to live only in the page DOM: leaving the page lost it, and re-reading
+required re-running an audit (needless LLM cost). Since v1.13.10, the **last successful
+report** is persisted in `audit_report.json` (plugin configuration folder, best-effort
+writes — `AuditReportStore.cs`), with its date, mode and focus. A single record,
+overwritten at each run: reading it costs **no LLM**.
+
+- **Written on every successful run**: the failure messages returned by
+  `RunAuditAsync` ("No LLM backend configured…", "Audit failed…") can **never**
+  overwrite the last genuine report.
+- **`GET /Plugins/LLMAI/Audit?Last=true`**: read-only access to the persisted report,
+  **without running an audit** (zero LLM), admin-only. The response carries
+  `LastReport` / `LastGeneratedAt` / `LastMode`.
+- **Config page**: on load, the report area shows the persisted report by default
+  ("Last persisted report — [date] (mode …)"); the "Run health audit" button regenerates
+  and overwrites. Every admin response also carries the `Last*` fields (never populated
+  for a non-admin — the report exposes server state).
+
+### Report quality (v1.13.9.13)
+
+Two guard rails on report (and chat reply) rendering:
+
+- **`LlmRunner.SanitizeReport` filter**: small models sometimes emit LaTeX math
+  notation (`$\rightarrow$`) and raw HTML (`<code>`) that Markdown rendering makes
+  unreadable. The filter replaces LaTeX arrows with their text glyph ("→"), strips
+  residual math-mode dollars and unwraps decoration tags — best-effort, applied to
+  audit outputs (both modes) **and** chat.
+- **"Pure Markdown" rule** injected into the audit prompts (agent loop +
+  deterministic synthesis, FR + EN): no LaTeX, no HTML tags. And the **UPnP line**
+  always appears in the findings: no mapping found = explicit ✅ finding (the
+  `upnp_check` probe can no longer go unmentioned).
 
 ---
 
@@ -1478,15 +1518,19 @@ curl "http://localhost:8096/emby/Plugins/LLMAI/Activate?programId=<id>&kind=movi
 
 ```
 GET /Plugins/LLMAI/Audit?focus=<optional text>
+GET /Plugins/LLMAI/Audit?Last=true
 ```
 
 **On-demand health audit**: launches a dedicated agent run (`system_audit` tool) and
 returns a **Markdown** server health report. See [Server health audit](#server-health-audit).
+`?Last=true`: read-only access to the **persisted last successful report**, without
+running an audit (zero LLM) — the call made when the config page loads.
 
-**Response:** `{ Enabled, Report, Date, Error }` — `Report` is the raw Markdown report
-(rendered client-side by config.js via a safe minimal Markdown→HTML converter).
-`Enabled=false` if `AuditEnabled` is off; `Error="Réservé aux administrateurs."` if the
-caller is not an admin.
+**Response:** `{ Enabled, Report, Date, Error, LastReport, LastGeneratedAt, LastMode }` —
+`Report` is the raw Markdown report (rendered client-side by config.js via a safe
+minimal Markdown→HTML converter); the `Last*` fields carry the persisted last report
+(`Last=true` or successful run). `Enabled=false` if `AuditEnabled` is off;
+`Error="Réservé aux administrateurs."` if the caller is not an admin.
 
 **`focus` parameter:** free-form audit orientation (a domain to inspect, or an explicit
 remediation request). Appended to the `AuditPrompt` template. Leave empty for a full audit.

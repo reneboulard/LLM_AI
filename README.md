@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.9.12 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.10.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -56,7 +56,8 @@ avec une explication en bon français.
 - **Un chat avec l'assistant** : posez vos questions en langage naturel
   (« qu'est-ce qu'il y a comme documentaire cette semaine ? »).
 - **Un rapport de santé du serveur** : à la demande, il inspecte Emby (disque,
-  journaux, performances) et rédige un bilan avec des conseils.
+  journaux, performances) et rédige un bilan avec des conseils — conservé d'une
+  relecture à l'autre, sans relancer l'audit.
 - **Les fiches incomplètes réparées** : quand une émission enregistrée reste sans
   fiche (titre introuvable dans les catalogues), il la retrouve sur le web et remplit
   les informations manquantes, comme le ferait une recherche manuelle.
@@ -146,9 +147,10 @@ d'outils à effectuer (boucle d'agent / tool-calling).
 Il expose aussi un **audit santé du serveur** à la demande (`GET /Plugins/LLMAI/Audit`,
 admin) : un agent LLM interroge l'outil `system_audit` (sessions, tâches planifiées,
 transcodage, disques, journaux, métriques hôte, bibliothèque) et produit un **rapport
-Markdown** de santé (constats tagués par gravité + actions recommandées). La
-**remédiation** (arrêter une session, déclencher une tâche, notifier un usager) est
-désactivée par défaut (opt-in). Voir [Audit santé](#audit-santé).
+Markdown** de santé (constats tagués par gravité + actions recommandées). Le **dernier
+rapport réussi est persisté** et affiché par défaut au chargement de la page de config —
+sa relecture ne coûte aucun LLM. La **remédiation** (arrêter une session, déclencher une
+tâche, notifier un usager) est désactivée par défaut (opt-in). Voir [Audit santé](#audit-santé).
 
 Le plugin comprend enfin deux ponts avec **GenreCleaner** (plugin de nettoyage des
 genres du catalogue officiel Emby) : une **traduction IA des genres EPG** qui fait proposer par le
@@ -504,6 +506,10 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
 - `AuditPrompt` — template du prompt envoyé au LLM (message user). L'éventuel
   paramètre `Focus` de l'endpoint est appendé à l'exécution pour orienter l'audit.
 
+Le **dernier rapport réussi** est persisté (`audit_report.json`, voir
+[Audit santé](#audit-santé)) et affiché par défaut au chargement de la page —
+`GET /Plugins/LLMAI/Audit?Last=true` le renvoie sans exécuter d'audit (zéro LLM).
+
 ### Identification des enregistrements orphelins
 
 Tâche planifiée **quotidienne 04:00** qui identifie les **items de bibliothèque non
@@ -608,7 +614,8 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (statique) | Registre des programmes suggérés par la tâche nocturne : remplacé à chaque run (`ApplyRecos`, filtres record bucket), persisté `AiBadgeProgramIds`, rechargement paresseux au 1er `Supports` (le constructeur du plugin ne touche jamais `Configuration` — `AssemblyFilePath` n'est posé qu'après construction). |
 | `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
-| `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut. |
+| `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
+| `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (statique interne) | Persistance du **dernier rapport d'audit** (`audit_report.json`, dossier de configuration du plugin, convention `ChatMemoryStore`) : date, mode, focus, rapport Markdown. Best-effort fail-open ; un seul enregistrement écrasé à chaque run réussi. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}], Session}` (la page garde l'historique ; `Session` = identifiant de mémoire de conversation), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager, bloc mémoire accolé). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. Porte aussi la **mémoire de conversation** : résolution de session, journalisation des tours (`ChatMemoryStore`), condensation paresseuse des sessions passées (un appel LLM en tâche de fond, note de continuité + ligne `SIGNALS:` → décisions `kind="chat"`), et les endpoints `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget`. |
 | `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les cinq prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des cinq prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
@@ -618,7 +625,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | Endpoints **usager** de la page Recommandations : `GET /Plugins/LLMAI/Recos` (dernières recommandations de la tâche planifiée + date, tout usager authentifié — la page ne lit plus la config plugin via l'endpoint hôte admin `/Configuration`, qui renvoyait 403 aux non-admin) et `POST /Plugins/LLMAI/Forget {Title}` (bouton **Oublier** : ajoute à `DroppedTitles` serveur-side via `SaveConfiguration`). Ne sert **que** ces deux champs — jamais la config complète (clés API, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Update` : compare le tag de la dernière release GitHub (`releases/latest`, workflow `release.yml`) à la version d'assembly installée → bannière de mise à jour sur la page de config. Lecture seule (aucun téléchargement), cache 1 h sous verrou (limite API GitHub), `Force=1` pour bypasser, ne lève jamais (`Error` → pas de bannière). |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 12 actions d'audit système (sessions, tâches, transcodage, disques, journaux, métriques hôte, processus, bibliothèque) + 3 actions de remédiation gated par `AuditRemediationEnabled`. Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
-| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary` (rapprochement bibliothèque : titre exact/flou, **repli par id IMDb** via `AnyProviderIdEquals` — reco possédée → `library_id`, exclue du record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (pliage d'accents partagé `FoldAscii` : « leçons » ≡ « lecons »), résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Path chat : `RunChatAsync` (multi-tours, tous les outils existants, priorités LLM usager). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService` **et** `OrphanIdentifyTask`. |
+| `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary` (rapprochement bibliothèque : titre exact/flou, **repli par id IMDb** via `AnyProviderIdEquals` — reco possédée → `library_id`, exclue du record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (pliage d'accents partagé `FoldAscii` : « leçons » ≡ « lecons »), résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Filet de formatage `SanitizeReport` (flèches LaTeX → « → », balises HTML dénudées) appliqué aux sorties audit et chat. Path chat : `RunChatAsync` (multi-tours, tous les outils existants, priorités LLM usager). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService` **et** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (statique interne) | Résolution bilingue des ids Emby : longs (InternalId — forme canonique du plugin, la seule que la couche REST/UI accepte) **et** Guids historiques (input legacy seulement, jamais émis). Corriger la devise d'ids qui faisait échouer toutes les validations Tonight. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour les paths audit et chat (sans toucher aux appelants recommandation). `RunChatAsync` : entrée multi-tours qui rejoue l'historique (user/assistant, borné) entre le system prompt et le nouveau message — même boucle partagée (`RunLoopAsync`). |
 | `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). |
@@ -1012,6 +1019,40 @@ L'endpoint accepte un `Focus` libre (champ de la page de config) appendé au tem
 `AuditPrompt` pour orienter l'audit (ex. `disk`, `transcoding`) ou formuler une demande
 explicite de remédiation (ex. « arrête la session XYZ » — qui n'aboutira que si la
 remédiation est activée **et** le mode est `single`).
+
+### Persistance du dernier rapport (v1.13.10)
+
+Le rapport n'existait que dans le DOM de la page : quitter la page le perdait, et toute
+relecture exigeait de relancer un audit (coût LLM inutile). Depuis v1.13.10, le
+**dernier rapport réussi** est persisté dans `audit_report.json` (dossier de
+configuration du plugin, écriture best-effort — `AuditReportStore.cs`), avec sa date,
+son mode et son focus. Un seul enregistrement, écrasé à chaque run : la relecture ne
+coûte **aucun LLM**.
+
+- **Écriture à chaque run réussi** : les messages d'échec de `RunAuditAsync`
+  (« Aucun backend configuré… », « Échec de l'audit… ») ne peuvent **jamais** écraser
+  le dernier vrai rapport.
+- **`GET /Plugins/LLMAI/Audit?Last=true`** : lecture seule du dernier rapport persisté,
+  **sans exécuter d'audit** (zéro LLM), admin-only. La réponse porte
+  `LastReport` / `LastGeneratedAt` / `LastMode`.
+- **Page de config** : au chargement, la zone rapport affiche par défaut le dernier
+  rapport persisté (« Dernier rapport persisté — [date] (mode …) ») ; le bouton
+  « Lancer l'audit » régénère et écrase. Toute réponse admin porte aussi les champs
+  `Last*` (jamais peuplés pour un non-admin — le rapport expose l'état du serveur).
+
+### Qualité du rapport (v1.13.9.13)
+
+Deux garde-fous sur la restitution du rapport (et de la réponse de chat) :
+
+- **Filet `LlmRunner.SanitizeReport`** : les petits modèles émettent parfois de la
+  notation math LaTeX (`$\rightarrow$`) et du HTML cru (`<code>`) que la restitution
+  Markdown rend illisible. Le filet remplace les flèches LaTeX par leur glyphe texte
+  (« → »), retire les dollars de math-mode résiduels et dénude les balises
+  d'habillage — best-effort, appliqué aux sorties audit (les deux modes) **et** chat.
+- **Règle « Markdown pur »** injectée dans les prompts d'audit (boucle agent +
+  synthèse déterministe, FR + EN) : jamais de LaTeX, jamais de balises HTML. Et la
+  **ligne UPnP** figure toujours dans les constats : aucun mapping trouvé = constat
+  ✅ explicite (la sonde `upnp_check` ne peut plus passer sous silence).
 
 ---
 
@@ -1527,15 +1568,19 @@ curl "http://localhost:8096/emby/Plugins/LLMAI/Activate?programId=<id>&kind=movi
 
 ```
 GET /Plugins/LLMAI/Audit?focus=<texte optionnel>
+GET /Plugins/LLMAI/Audit?Last=true
 ```
 
 **Audit santé à la demande** : lance un run agent dédié (outil `system_audit`) et
 renvoie un **rapport Markdown** de santé du serveur. Voir [Audit santé](#audit-santé).
+`?Last=true` : lecture seule du **dernier rapport réussi persisté**, sans exécuter
+d'audit (zéro LLM) — c'est l'appel du chargement de la page de config.
 
-**Réponse :** `{ Enabled, Report, Date, Error }` — `Report` est le rapport Markdown brut
-(rendu côté config.js via un mini-convertisseur Markdown→HTML sûr). `Enabled=false` si
-`AuditEnabled` est off ; `Error="Réservé aux administrateurs."` si l'appelant n'est pas
-admin.
+**Réponse :** `{ Enabled, Report, Date, Error, LastReport, LastGeneratedAt, LastMode }` —
+`Report` est le rapport Markdown brut (rendu côté config.js via un mini-convertisseur
+Markdown→HTML sûr) ; les champs `Last*` portent le dernier rapport persisté (`Last=true`
+ou run réussi). `Enabled=false` si `AuditEnabled` est off ; `Error="Réservé aux
+administrateurs."` si l'appelant n'est pas admin.
 
 **Paramètre `focus` :** orientation libre de l'audit (un domaine à inspecter, ou une
 demande explicite de remédiation). Appendé au template `AuditPrompt`. Laisser vide pour
