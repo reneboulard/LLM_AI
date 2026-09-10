@@ -69,11 +69,16 @@ namespace LLM_AI
         /// « transcoding », « disk », ou une demande explicite de remédiation
         /// comme « arrête la session XYZ »). Appendé au template de prompt
         /// <see cref="PluginConfiguration.AuditPrompt"/>.
+        /// <para><c>Last</c> : lecture seule — renvoie le dernier rapport
+        /// persisté (<see cref="AuditReportStore"/>) SANS exécuter d'audit
+        /// (zéro LLM) : c'est l'appel du chargement de la page. Null/absent =
+        /// exécution d'un nouvel audit (comportement historique).</para>
         /// </summary>
         [Route("/Plugins/LLMAI/Audit", "GET")]
         public class AuditRequest : IReturn<object>
         {
             public string Focus { get; set; }
+            public bool Last { get; set; }
         }
 
         /// <summary>
@@ -82,6 +87,13 @@ namespace LLM_AI
         /// mini-convertisseur Markdown→HTML sûr). <c>Date</c> : date/heure
         /// (UTC ISO) de production. <c>Enabled</c> : false si l'audit est
         /// désactivé en config. <c>Error</c> : message (ex. accès non-admin).
+        /// <para><c>LastReport</c>/<c>LastGeneratedAt</c>/<c>LastMode</c> :
+        /// le dernier rapport RÉUSSI persisté (<see cref="AuditReportStore"/>,
+        /// v1.13.10) — renvoyés même sans exécution, pour l'affichage par
+        /// défaut dans la page. Sur un run réussi ils reflètent le rapport
+        /// courant (<c>Report</c>/<c>Date</c> restent les champs du run).
+        /// Jamais peuplés pour un appelant non-admin : le rapport expose l'état
+        /// du serveur.</para>
         /// </summary>
         public class AuditResponse
         {
@@ -89,6 +101,9 @@ namespace LLM_AI
             public string Report { get; set; }
             public string Date { get; set; }
             public string Error { get; set; }
+            public string LastReport { get; set; }
+            public string LastGeneratedAt { get; set; }
+            public string LastMode { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -112,6 +127,23 @@ namespace LLM_AI
             if (!isAdmin)
                 return new AuditResponse { Enabled = true, Error = "Réservé aux administrateurs." };
 
+            // Lecture seule du dernier rapport (chargement de la page) : zéro
+            // LLM, aucune exécution. Absent = LastReport null (la page ne
+            // montre que l'état « pas encore d'audit persisté »).
+            if (req?.Last ?? false)
+            {
+                var last = AuditReportStore.Load();
+                return new AuditResponse
+                {
+                    Enabled = true,
+                    LastReport = last?.Report,
+                    LastGeneratedAt = last != null && last.GeneratedAt != default
+                        ? last.GeneratedAt.ToString("o", CultureInfo.InvariantCulture)
+                        : null,
+                    LastMode = last?.Mode
+                };
+            }
+
             // Prompt = template config + focus optionnel (l'orientation ou la
             // demande explicite de remédiation de l'usager).
             string prompt = cfg.AuditPrompt ?? string.Empty;
@@ -126,11 +158,36 @@ namespace LLM_AI
             string report = await runner.RunAuditAsync(cfg, "AUDIT", prompt, _sessions, _tasks, _notifications, ct)
                 .ConfigureAwait(false);
 
+            var now = DateTimeOffset.UtcNow;
+
+            // Persistance du dernier rapport (v1.13.10) : UNIQUEMENT si le run
+            // a produit un vrai rapport. Les messages d'échec renvoyés par
+            // RunAuditAsync (« Aucun backend configuré… », « Échec de l'audit… »)
+            // commencent par une phrase d'erreur et ne doivent JAMAIS écraser
+            // le dernier vrai rapport. Test : RunAuditAsync ne préfixe ses
+            // échecs ni par « ## » ni par « 🔴 » — un rapport commence par du
+            // Markdown de rapport. Best-effort : un échec IO n'interrompt pas.
+            if (!string.IsNullOrWhiteSpace(report) &&
+                !report.StartsWith("Aucun backend", StringComparison.OrdinalIgnoreCase) &&
+                !report.StartsWith("Échec de l'audit", StringComparison.OrdinalIgnoreCase))
+            {
+                AuditReportStore.Save(new LastAuditReport
+                {
+                    GeneratedAt = now,
+                    Mode = cfg.AuditMode,
+                    Focus = focus,
+                    Report = report
+                }, Logger);
+            }
+
             return new AuditResponse
             {
                 Enabled = true,
                 Report = report,
-                Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+                Date = now.ToString("o", CultureInfo.InvariantCulture),
+                LastReport = report,
+                LastGeneratedAt = now.ToString("o", CultureInfo.InvariantCulture),
+                LastMode = cfg.AuditMode
             };
         }
 

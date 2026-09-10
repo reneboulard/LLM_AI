@@ -95,6 +95,10 @@ namespace LLM_AI
                 "matériel (hardware), sessions inactives/stalées, scan de bibliothèque en cours, " +
                 "maintenance. Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
                 "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions recommandées ». " +
+                "La sonde UPnP (action upnp_check) figure TOUJOURS dans les constats : aucun mapping " +
+                "trouvé = constat ✅ explicite (« UPnP désactivé / aucun mapping routeur »), mapping " +
+                "vers 8096/8920 = critique. Markdown PUR : JAMAIS de notation math/LaTeX ($...$, " +
+                "\\rightarrow — écris « → » en texte simple) ni de balises HTML (<code>, <b>…). " +
                 "Si une surface distante existe (accès distant activé), recommande un test externe de " +
                 "confirmation : GRC ShieldsUP!! (https://www.grc.com/shieldsup), Custom Port Scanner " +
                 "sur les ports 8096 et 8920. N'exécute JAMAIS d'action de remédiation (stop_session, " +
@@ -147,7 +151,11 @@ namespace LLM_AI
                 "scheduled task, low disk, transcoding with high CPU or software instead of hardware, " +
                 "idle/stale sessions, library scan in progress, maintenance. Produce a concise " +
                 "Markdown REPORT: a list of findings tagged by severity (🔴 critical / ⚠️ warning / " +
-                "✅ ok) + a « Recommended actions » section. If a remote surface exists (remote " +
+                "✅ ok) + a « Recommended actions » section. The UPnP probe (upnp_check action) " +
+                "ALWAYS appears in the findings: no mapping found = explicit ✅ finding (\"UPnP " +
+                "disabled / no router mapping\"), mapping to 8096/8920 = critical. Pure Markdown: " +
+                "NEVER use math/LaTeX notation ($...$, \\rightarrow — write \"→\" as plain text) " +
+                "or HTML tags (<code>, <b>…). If a remote surface exists (remote " +
                 "access enabled), recommend an external confirmation test: GRC ShieldsUP!! " +
                 "(https://www.grc.com/shieldsup), Custom Port Scanner on ports 8096 and 8920. NEVER " +
                 "execute a remediation action (stop_session, trigger_task, send_message) on your " +

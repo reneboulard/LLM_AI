@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -342,7 +343,10 @@ namespace LLM_AI
             "(interroge le routeur en lecture seule : passerelle UPnP, IP WAN, table de redirection — " +
             "un mapping UPnP vers le port Emby 8096/8920 est CRITIQUE) et reprends leurs constats " +
             "(severity critique/avertissement/ok + fix) tels quels dans le rapport : n'atténue " +
-            "JAMAIS un constat critique de sécurité. Dès qu'une surface distante existe (accès distant " +
+            "JAMAIS un constat critique de sécurité. La sonde UPnP figure TOUJOURS dans les " +
+            "constats : aucun mapping trouvé = constat ✅ explicite (« UPnP désactivé / aucun " +
+            "mapping routeur ») — ne tais JAMAIS la ligne UPnP du rapport. Dès qu'une surface " +
+            "distante existe (accès distant " +
             "activé ou accès externe observé), inclus le test externe GRC ShieldsUP!! du champ " +
             "external_test dans les « Actions recommandées » — l'usager seul peut confirmer la " +
             "joignabilité réelle du WAN.\n" +
@@ -350,6 +354,9 @@ namespace LLM_AI
             "   - « ## Constats » : liste de puces taguées par gravité " +
             "(🔴 critique / ⚠️ attention / ✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
             "   - « ## Actions recommandées » : ce qu'il faudrait faire, classé par priorité.\n" +
+            "   - Markdown PUR : JAMAIS de notation math/LaTeX ($...$, \\rightarrow — écris " +
+            "« → » en texte simple) ni de balises HTML (<code>, <b>…) — ces artefacts rendent " +
+            "le rapport illisible à la restitution.\n" +
             "Sois factuel et précis : reprends les valeurs retournées par les outils, ne " +
             "spécule pas.\n" +
             "### RÈGLE D'OR — REMÉDIATION\n" +
@@ -400,6 +407,11 @@ namespace LLM_AI
             "- « ## Constats » : puces taguées par gravité (🔴 critique / ⚠️ attention / " +
             "✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
             "- « ## Actions recommandées » : ce qu'il faudrait faire, classé par priorité.\n" +
+            "La ligne UPnP (section upnp_check du digest) figure TOUJOURS dans les constats : " +
+            "aucun mapping trouvé = constat ✅ explicite (« UPnP désactivé / aucun mapping " +
+            "routeur »), mapping vers 8096/8920 = 🔴 critique.\n" +
+            "Markdown PUR : JAMAIS de notation math/LaTeX ($...$, \\rightarrow — écris « → » en " +
+            "texte simple) ni de balises HTML (<code>, <b>…).\n" +
             "Sois factuel et précis : reprends les valeurs des sections, ne spécule pas.\n" +
             "### RÈGLE D'OR — REMÉDIATION\n" +
             "Tu n'as aucun outil en mode synthèse : tu ne peux PAS exécuter d'action de " +
@@ -477,6 +489,7 @@ namespace LLM_AI
                 var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
 
                 var (reply, _) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
+                reply = SanitizeReport(reply);
 
                 _logger.Info("[LLM_AI] [{0}] Rapport d'audit :\n{1}", label, reply);
                 return reply;
@@ -649,8 +662,8 @@ namespace LLM_AI
                 if (extraTools != null && extraTools.Count > 0)
                     tools.AddRange(extraTools);
 
-                string reply = await agent.RunChatAsync(history, userMessage, tools, ct)
-                    .ConfigureAwait(false);
+                string reply = SanitizeReport(await agent.RunChatAsync(history, userMessage, tools, ct)
+                    .ConfigureAwait(false));
 
                 _logger.Info("[LLM_AI] [{0}] Réponse chat :\n{1}", label, reply);
                 return reply;
@@ -665,6 +678,35 @@ namespace LLM_AI
                 _logger.ErrorException("[LLM_AI] [{0}] Échec du chat : {1}", ex, label, ex.Message);
                 return "Échec du chat : " + ex.Message;
             }
+        }
+
+        // ------------------------------------------------------------------
+        //  Filet de formatage des rapports (v1.13.9.13) : les petits modèles
+        //  émettent de la notation math LaTeX ($\rightarrow$) et du HTML cru
+        //  (<code>) que la restitution Markdown rend illisible (flèches
+        //  « $ ightarrow$ », balises visibles). Le prompt interdit désormais
+        //  ces notations ; ce filet rattrape ce qui passe quand même — même
+        //  philosophie que RepairUnescapedQuotes pour le JSON des outils.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Filet de formatage d'une réponse LLM « rapport » (audit, chat) :
+        /// remplace les flèches LaTeX par leur glyphe texte (« → », « ⇒ »,
+        /// « ← »), retire les dollars de math-mode qui les entourent encore
+        /// (« $ → $ » → « → »), convertit les <c>&lt;br&gt;</c> en sauts de
+        /// ligne et dénude les balises d'habillage courantes (code/b/strong/
+        /// i/em — le texte interne est conservé). Best-effort : n'élève jamais.
+        /// </summary>
+        internal static string SanitizeReport(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            string s = Regex.Replace(text, @"\\(?:rightarrow|to)\b", "→");
+            s = Regex.Replace(s, @"\\Rightarrow\b", "⇒");
+            s = Regex.Replace(s, @"\\leftarrow\b", "←");
+            s = Regex.Replace(s, @"\$\s*(→|⇒|←)\s*\$", "$1");
+            s = Regex.Replace(s, @"<br\s*/?>", "\n");
+            s = Regex.Replace(s, @"</?(?:code|strong|b|em|i)>", "");
+            return s;
         }
 
         /// <summary>
@@ -713,6 +755,7 @@ namespace LLM_AI
 
             string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
                 system, user, label, ct).ConfigureAwait(false);
+            reply = SanitizeReport(reply);
 
             _logger.Info("[LLM_AI] [{0}] Rapport d'audit (mode déterministe) :\n{1}", label, reply);
             return reply;

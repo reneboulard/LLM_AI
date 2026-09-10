@@ -178,7 +178,7 @@ define([], function () {
 
             // -- Audit santé (endpoint à la demande, agent system_audit) ---
             "cfg.audit.h": "Audit santé du serveur",
-            "cfg.audit.desc": "Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches planifiées, transcodage, disques, journaux, métriques hôte) et produit un <b>rapport Markdown</b> de santé : constats tagués par gravité + actions recommandées. Réservé aux administrateurs. La <b>remédiation</b> (arrêter une session, déclencher une tâche, notifier un usager) est désactivée par défaut.",
+            "cfg.audit.desc": "Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches planifiées, transcodage, disques, journaux, métriques hôte) et produit un <b>rapport Markdown</b> de santé : constats tagués par gravité + actions recommandées. Le <b>dernier rapport réussi</b> est persisté et affiché par défaut au chargement de la page (sa relecture ne coûte aucun LLM ; un nouvel audit l'écrase). Réservé aux administrateurs. La <b>remédiation</b> (arrêter une session, déclencher une tâche, notifier un usager) est désactivée par défaut.",
             "cfg.audit.enabled": "Activer l'endpoint d'audit (/Plugins/LLMAI/Audit)",
             "cfg.audit.remediation": "Autoriser la remédiation (stop_session, trigger_task, send_message)",
             "cfg.audit.remediation.desc": "Option <b>opt-in</b> (décochée par défaut). Si cochée, le LLM peut <b>exécuter</b> des actions de remédiation pendant l'audit (arrêter une lecture, déclencher une tâche, envoyer un message). Tant que décochée, ces actions renvoient une erreur et le LLM se contente de les <b>recommander</b> dans le rapport. Le prompt d'audit demande de toute façon au LLM de ne jamais agir sans demande explicite.",
@@ -194,6 +194,7 @@ define([], function () {
             "cfg.audit.running": "Audit en cours… (l'agent interroge le serveur, ~30–60 s)",
             "cfg.audit.done": "Audit terminé",
             "cfg.audit.disabled": "Audit désactivé en configuration.",
+            "cfg.audit.last": "Dernier rapport persisté — {0} (mode {1})",
             "cfg.chat.h": "Chat avec l'assistant IA",
             "cfg.update.available": "Nouvelle version {0} disponible sur GitHub (installée : {1}).",
             "cfg.update.link": "Voir la release",
@@ -483,7 +484,7 @@ define([], function () {
             "cfg.orphan.retry.desc": "When checked, orphans tagged <b>needs-review</b> are reprocessed (instead of skipped) — to run S3 on them once SearXNG is configured. On success the tag becomes <b>identified</b>. Already-identified items stay skipped.",
 
             "cfg.audit.h": "Server health audit",
-            "cfg.audit.desc": "Launches an LLM agent that queries the <b>system_audit</b> tool (sessions, scheduled tasks, transcoding, disks, logs, host metrics) and produces a Markdown health report: severity-tagged findings + recommended actions. Admin-only. <b>Remediation</b> (stop a session, trigger a task, notify a user) is disabled by default.",
+            "cfg.audit.desc": "Launches an LLM agent that queries the <b>system_audit</b> tool (sessions, scheduled tasks, transcoding, disks, logs, host metrics) and produces a Markdown health report: severity-tagged findings + recommended actions. The <b>last successful report</b> is persisted and displayed by default when the page loads (reading it costs no LLM; a new audit overwrites it). Admin-only. <b>Remediation</b> (stop a session, trigger a task, notify a user) is disabled by default.",
             "cfg.audit.enabled": "Enable the audit endpoint (/Plugins/LLMAI/Audit)",
             "cfg.audit.remediation": "Allow remediation (stop_session, trigger_task, send_message)",
             "cfg.audit.remediation.desc": "Opt-in (off by default). When checked, the LLM can <b>execute</b> remediation actions during the audit (stop a playback, trigger a task, send a message). While unchecked, these actions return an error and the LLM only <b>recommends</b> them in the report. The audit prompt also instructs the LLM never to act without an explicit request.",
@@ -499,6 +500,7 @@ define([], function () {
             "cfg.audit.running": "Audit running… (the agent is querying the server, ~30–60 s)",
             "cfg.audit.done": "Audit complete",
             "cfg.audit.disabled": "Audit is disabled in configuration.",
+            "cfg.audit.last": "Last persisted report — {0} (mode {1})",
             "cfg.chat.h": "Chat with the AI assistant",
             "cfg.update.available": "New version {0} available on GitHub (installed: {1}).",
             "cfg.update.link": "View release",

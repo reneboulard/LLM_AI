@@ -983,6 +983,12 @@ define(["loading"], function (loading) {
             // Audit santé : déclenche l'endpoint /Plugins/LLMAI/Audit et rend
             // le rapport Markdown retourné dans #auditReport. La page de config
             // étant déjà en contexte admin, la porte d'auth côté serveur passe.
+            // Formatage local de la date ISO de l'endpoint (le rapport persisté
+            // et le run partagent le même rendu).
+            var fmtAuditDate = function (iso) {
+                if (!iso) return "";
+                try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+            };
             var runAuditBtn = view.querySelector("#btnRunAudit");
             if (runAuditBtn) {
                 runAuditBtn.addEventListener("click", function () {
@@ -1018,7 +1024,7 @@ define(["loading"], function (loading) {
                         }
                         var meta = '<div class="auditMeta">' +
                             esc(i18n.t("cfg.audit.done")) +
-                            (data.Date ? ' — ' + esc(data.Date) : '') +
+                            (data.Date ? ' — ' + esc(fmtAuditDate(data.Date)) : '') +
                             '</div>';
                         reportEl.innerHTML = meta + renderMarkdown(data.Report || "");
                     }, function (err) {
@@ -1033,6 +1039,32 @@ define(["loading"], function (loading) {
                         }
                     });
                 });
+
+                // Dernier rapport persisté (v1.13.10) : affiché PAR DÉFAUT au
+                // chargement de la page — lecture seule GET ?Last=true, zéro
+                // LLM. Relire un audit ne coûte plus une exécution ; le bouton
+                // ci-dessus régénère et écrase. Best-effort : échec réseau ou
+                // rapport absent = la zone reste masquée (état d'origine).
+                var lastEl = view.querySelector("#auditReport");
+                if (lastEl) {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/Audit", { Last: "true" }),
+                        type: "GET"
+                    }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (data) {
+                        if (!data || !data.LastReport) return;
+                        var meta = '<div class="auditMeta">' +
+                            esc(i18n.t("cfg.audit.last",
+                                fmtAuditDate(data.LastGeneratedAt),
+                                data.LastMode === "deterministic" ?
+                                    i18n.t("cfg.audit.mode.deterministic") :
+                                    i18n.t("cfg.audit.mode.single"))) +
+                            '</div>';
+                        lastEl.style.display = "block";
+                        lastEl.innerHTML = meta + renderMarkdown(data.LastReport);
+                    }, function () { /* pas de rapport : état d'origine */ });
+                }
             }
 
             // Traduction des genres (IA) : GET /Plugins/LLMAI/GenreProposals
