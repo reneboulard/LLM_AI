@@ -335,11 +335,21 @@ namespace LLM_AI
             // CreateSeriesTimer attend le type interne SeriesTimerInfo (pas le
             // DTO) — on copie les champs communs. TimerType est calculé (get
             // only) sur les deux types : pas besoin de le transférer.
+            // CANAL : le type interne n'a PAS de ChannelId sur Emby 4.10
+            // (retiré ; il ne reste que ChannelIds, présent sur les deux
+            // builds) — un accès compilé à la propriété manquante casserait
+            // le JIT (MissingMethodException). On ne passe donc que par
+            // ChannelIds, alimenté par le DTO (ChannelIds, sinon ChannelId
+            // de la base commune).
+            var channels = dto.ChannelIds;
+            if ((channels == null || channels.Length == 0)
+                && !string.IsNullOrWhiteSpace(dto.ChannelId))
+                channels = new[] { dto.ChannelId };
+
             var info = new SeriesTimerInfo
             {
                 ProgramId = dto.ProgramId,
-                ChannelId = dto.ChannelId,
-                ChannelIds = dto.ChannelIds,
+                ChannelIds = channels,
                 Name = dto.Name,
                 Overview = dto.Overview,
                 StartDate = dto.StartDate,

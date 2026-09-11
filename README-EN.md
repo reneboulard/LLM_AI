@@ -412,6 +412,55 @@ Playing an "AI Suggestions" card is no longer a silent gesture
   Pre-v1.12 cards (without the `card` param) still play, without toast or
   deletion.
 
+#### Recording permission gate (v1.13.11.0)
+
+Scheduling a recording is a **household-level** decision, driven by the native
+`EnableLiveTvManagement` permission; viewing interest (Watch Tonight) remains
+per user. An account without that permission:
+
+- **cannot trigger a recording by playing a .strm card** — .strm requests carry
+  no Emby auth and the playing session only becomes visible after the stream
+  opens, so the check is asynchronous (same mechanism as the toast): once the
+  reader is identified, the timers created by that playback are **cancelled**
+  (only those of this activation — a pre-existing legitimate timer is never
+  touched) and a dedicated toast informs them ("🤖 Recording not allowed for
+  this account: Title"); the card stays in the library. Unidentifiable account
+  (server probe, api_key) → behavior unchanged, logged (`PermissionGate.cs`).
+- **does not see the recording sections of the Recommendations page** —
+  `/Plugins/LLMAI/Recos` now answers `CanRecord` (policy read live) and the page
+  hides Series/Movies sections without that permission; the "Watch tonight"
+  section stays visible. The "Schedule" button is anyway natively protected by
+  Emby's LiveTv API.
+
+Setup recommendation: reserve the "AI Suggestions" library (per-folder access
+in the dashboard) to accounts holding the recording permission — the dashboard
+remains the master of access, the plugin never modifies accounts.
+
+#### Viewing recommendations respect user permissions (v1.13.12.0)
+
+Viewing interest is **per user**, so the "Watch Tonight" recommendation now
+respects the requesting user's permissions (policy read live, never cached):
+
+- **Live TV** (`EnableLiveTvAccess`): **the EPG is only consulted when the user
+  holds this permission**. Without it, the run's EPG tools
+  (`epg_tonight`/`epg_series`/`epg_movies` and the EPG leg of `find`) return an
+  **empty but legitimate result** (explicit note, the LLM reorients), the
+  validation EPG snapshot is skipped and pure live recos are dropped (kept only
+  when enriched with a `library_id`, i.e. watchable from the library). With the
+  permission, behavior is unchanged.
+- **Media library access** (`EnableAllFolders`/`EnabledFolders`): the library
+  reserve and the "binge-ready" series only propose items from libraries
+  accessible to the user. No-op when unrestricted; fail-open when resolution
+  fails (a transient failure never empties the recos). The "recordings" bucket
+  (household-level decision) and the taste profile (already-watched history)
+  are not filtered.
+- **Recommendations page**: `/Plugins/LLMAI/Recos` and `/Plugins/LLMAI/Tonight`
+  carry the user's permissions (`CanRecord`, `CanLiveTv`) — without Live TV
+  access, the "Watch live" button is hidden; without the recording permission,
+  the tonight cards' "Schedule" button is hidden too (Emby's native refusal
+  remains the safety net).
+- Media deletion permission has no impact: the plugin never deletes media.
+
 ### Native surfaces (.strm library, genre, collection)
 
 Three **opt-in** levers (default `false`) that expose recos directly in Emby
@@ -476,6 +525,12 @@ tool). See [Server health audit](#server-health-audit).
   the LLM only **recommends** them in the report. Double control: the audit prompt also
   instructs the LLM never to act without an explicit request — this flag only opens the
   *capability*, not autonomy.
+- **Household surfaces (v1.13.13.0)** — the security part of the audit also checks
+  access coherence across the plugin's surfaces: the public **"AI Tonight"**
+  playlist (items outside the libraries shared with a user, or above their parental
+  limit → ⚠️) and the **.strm** library (access without the record right → ⚠️,
+  right without access → ℹ️). The admin then decides "who gets access to what" in
+  the dashboard; the plugin never modifies accounts.
 - `AuditMode` (`single` | `deterministic`, default `single`) — execution strategy:
   - `single` — a single agent loop: the LLM calls `system_audit` itself, adaptively (can
     drill into a log after a finding). Suited to a capable / cloud model. **The only
@@ -571,8 +626,9 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `TonightService.cs` | `TonightService` (internal) | **Shared generation** for "Watch tonight": taste profile, unwatched recordings, library reserve, binge-ready series (opt-in, `BingeNotified` anti-spam gate), LLM run, enrichment, watched-guard (marks already-watched reruns `watched=true` — per-user `BuildWatchedIndex`), **per-user cache** (static, shared by endpoint + login). Used by `TonightApiService`, `TonightLoginService` and the chat tool `run_tonight_run` (ephemeral session directives + chat origin, v1.13). |
 | `AutoProgrammer.cs` | `AutoProgrammer` (internal) | Auto-programming: creates the Emby timers (SeriesTimer / single Timer) for the **record bucket** — recos to record not owned / not already scheduled / outside drop list. Server-side port of the "Schedule" logic from `recommendations.js`. `ProgramOneAsync(Reco, …)` (returns `OneOutcome`) shared with the Activate endpoint. |
 | `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (internal) | `.strm` library: writes a `.strm`+`.nfo`+poster card per record-bucket reco, `.llmai_reco` cleanup, TMDB poster download (retries with the "on <channel>" suffix stripped when the full title has no match). Poster fallback: **copies the EPG program's Primary image** when it is a local file (Emby disk cache); a remote URL is requested from **Emby's image endpoint** (the image's remote host is never contacted) — the embedded default poster is applied instead. Each guard's reason is logged. The `.nfo` `<plot>` starts with the **native EPG overview** (original language) then the enrichment in the user's language; adds **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` when available (TMDB/IMDb/TVDB deep links). |
-| `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | `GET /Plugins/LLMAI/Activate` endpoint (`[Unauthenticated]` DTO): programs a single reco, notifies by toast + has Emby delete the card on success (v1.12), then streams `recording_activated.mp4`. Gated by `StrmSecret`. |
+| `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | `GET /Plugins/LLMAI/Activate` endpoint (`[Unauthenticated]` DTO): programs a single reco, notifies by toast + has Emby delete the card on success (v1.12), then streams `recording_activated.mp4`. Gated by `StrmSecret` + **asynchronous permission gate** (v1.13.11.0: reader identified via session without `EnableLiveTvManagement` → timers of this activation cancelled + dedicated toast). |
 | `ActivateFeedback.cs` | `ActivateFeedback` (static) | .strm card feedback (v1.12): Emby toast to the session playing the card (session found by .strm path, `DisplayMessage`), card deletion THROUGH EMBY (`FindByPath` → `DeleteItem`, delayed ~60 s, success only), duplicate-suppression cache (5-min TTL) for the multiple GETs of a single playback. |
+| `PermissionGate.cs` | `PermissionGate` (static) | User permission gate (v1.13.11.0): resolves the user (request token or playing session) and reads their Emby policy **live** (never cached, no plugin-owned accounts). `CanRecordLive` = `EnableLiveTvManagement`; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Library-candidate filtering by media library access (`FilterAccessible`, v1.13.12.0). Targeted cancellation of timers created by an activation (`CancelCreatedTimers` — only ids missing from the pre-existing capture). |
 | `AiTagger.cs` | `AiTagger` (static) | `AI Tonight` / `AI Delete` tag tagging: `AddAsync` / `RemoveAllAsync` via `UpdateToRepository` (also removes the legacy genre of the same name — v1.13.3 migration). |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` tag (+ legacy genre, migration) + empties the collection (always active). Also hosts the daily disk probe ("AI Delete" tag pass, opt-in). |
@@ -603,7 +659,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | **AI genre translation** endpoints (admin): `GET /Plugins/LLMAI/GenreProposals` (collects EPG genres of **upcoming** programs not covered by GenreCleaner, per movie/series section, capped at 60/section, then a one-shot LLM call via `ChatWithFallbackAsync` proposes for each a curated-vocabulary target, a new genre, or nothing) and `POST /Plugins/LLMAI/GenreApply` (re-validates then writes into `GenreCleaner.xml` via `GenreCleanerMap`, records into `GenreAliasApplied`, triggers `NotifyPendingRestart`). Suggestion language = `ResolveMetaLangKey` cascade (`ResponseLanguage`). See [AI genre translation](#ai-genre-translation-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (internal static) | **GenreCleaner.xml bridge**: reading (`Allowed`/`IsMapped`/`IsCovered` — a genre is covered when mapped OR present as-is in AllowedGenres), idempotent writing (`AddMappings` — dedup by normalized key, AllowedGenres add for `new` entries, identity mappings like `Action→Action` rejected except new genres) and **self-healing** (`HealApplied`: re-writes into the XML the mappings recorded in `GenreAliasApplied` that went missing — `new:true` also restores the AllowedGenres entry). |
 | `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
-| `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Serves **only** those two fields — never the full config (API keys, prompts). |
+| `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Also answers `CanRecord`/`CanLiveTv` (v1.13.12.0: caller's permissions, policy read live). Serves **only** those fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
 | `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 12 system-audit actions (sessions, tasks, transcoding, disks, logs, host metrics, processes, library) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |

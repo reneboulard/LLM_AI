@@ -10,6 +10,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.13.2] — 2026-09-11
+
+### Fixed — Création des timers séries compatible 4.10 (activation .strm d'une série)
+
+- **Problème** : `SeriesTimerInfo` (type interne Controller) n'a plus la
+  propriété `ChannelId` sur Emby 4.10 (il ne reste que `ChannelIds`, présent
+  sur toutes les builds). L'initialiseur compilé
+  `new SeriesTimerInfo { ChannelId = … }` cassait au JIT
+  (`MissingMethodException: set_ChannelId(System.String)`) — l'activation d'une
+  carte .strm **série** échouait systématiquement à la création du timer
+  (chaîne .strm observée en prod : « Bienvenue à Kingston-Falls »).
+- **Correctif** : ne passer plus que par `ChannelIds` (formé du DTO, repli sur
+  `ChannelId` de la base commune si vide) — les champs restants de
+  l'initialiseur ont été vérifiés présents sur les deux builds, et le chemin
+  film (`TimerInfoDto`, Model) est inchangé entre les builds.
+
+## [1.13.13.1] — 2026-09-11
+
+### Fixed — Lecture de `LiveTvOptions` compatible 4.10 (échecs d'activation des cartes .strm)
+
+- **Problème** : `LiveTvOptions` n'a plus les propriétés string
+  `RecordingPath`/`MovieRecordingPath`/`SeriesRecordingPath` sur Emby 4.10
+  (remplacées par les ids de dossiers `RecordingFolderId`/…). L'accès **compilé**
+  à une propriété absente casse le JIT (`MissingMethodException`) —
+  `RecordingDiskManager.TryResolveRecordingPath` plantait, bloquant **à la fois**
+  le gate disque du `Activate` (cartes .strm : échec création timer) et
+  l'auto-programmeur. Le DVR natif Emby, sans référence à ces propriétés,
+  enregistrait normalement.
+- **Correctif** : lecture des propriétés **par réflexion** (absente → null,
+  jamais de `MissingMethodException`) ; repli sur les **ids de dossiers** 4.10
+  (`RecordingFolderId`/`MovieRecordingFolderId`/`SeriesRecordingFolderId`
+  résolus dans la bibliothèque → `BaseItem.Path`) ; repli **défaut Emby**
+  `<ProgramData>/data/livetv/recordings` inchangé (le dossier effectivement
+  utilisé quand rien n'est configuré). Insensible à la build hôte.
+
+## [1.13.13.0] — 2026-09-11
+
+### Added — Audit : cohérence d'accès des surfaces foyer (playlist + bibliothèque .strm)
+
+- **Principe** : la playlist **« AI Tonight »** et la bibliothèque **.strm**
+  sont des surfaces foyer, remplies par le watch bucket du run — un compte
+  peut donc y voir une reco hébergée dans une bibliothèque qui ne lui est pas
+  partagée (titre + poster visibles, lecture refusée par Emby), ou au-dessus
+  de sa limite parentale. L'audit signale ces décalages à l'admin — le
+  dashboard reste maître des accès, le plugin ne modifie jamais les comptes.
+- **Nouveau volet « Surfaces plugin » de l'action `security_check`
+  (`SystemAuditTool.SecurityCheck`)**, après la section réseau (les
+  avertissements participent à l'escalade existante : exposition externe
+  observée → critique) :
+  - **Playlist** : pour chaque usager actif (désactivés exclus) — items hors
+    des bibliothèques accessibles détectés par le même mécanisme que les recos
+    (`PermissionGate.FilterAccessible`, requête `ItemIds`+`AncestorIds`,
+    fail-open) → ⚠️ *« … il voit la reco mais ne peut pas la lire »* ;
+    contenu au-dessus de sa limite parentale (`MaxParentalRating` vs
+    `GetInheritedParentalRatingValue`) → ⚠️ distinct.
+  - **Bibliothèque .strm** : accès détecté (`EnableAllFolders` ou une
+    bibliothèque de `EnabledFolders` résolue sous la racine .strm) sans le
+    droit d'enregistrement → ⚠️ (règle v1.13.11.0 : réserver les cartes aux
+    comptes à droit d'enregistrer) ; inverse — droit d'enregistrer sans accès
+    .strm — → ℹ️ info (les cartes sont invisibles pour ce compte).
+  - **Fallbacks honnêtes** : playlist absente/vide ET bibliothèque .strm non
+    configurée → ℹ️ info (rien à vérifier encore) ; échec de lecture →
+    ℹ️ « non vérifiable », jamais une erreur ; tout propre → ✅ « accès
+    cohérents ».
+
+## [1.13.12.0] — 2026-09-11
+
+### Added — Reco visionnage « Watch Tonight » conforme aux droits de l'usager
+
+- **Principe** : l'intérêt de visionnement est **par usager** — la recommandation
+  « Watch Tonight » respecte désormais les droits de l'usager demandeur :
+  **TV en direct** (`EnableLiveTvAccess`), **accès médiathèque**
+  (`EnableAllFolders`/`EnabledFolders`). Le droit d'enregistrement (v1.13.11.0)
+  complète le tableau ; la suppression de médias n'a aucun impact (le plugin ne
+  supprime jamais de médias).
+- **EPG consulté seulement avec le droit TV en direct** :
+  - **Tools `get_emby_info`** (`GetEmbyInfoTool.RunUser`, posé par
+    `LlmRunner.BuildTools` pour les runs per-usager) : sans
+    `EnableLiveTvAccess`, les actions `epg_tonight`/`epg_series`/`epg_movies`
+    et la jambe EPG de `find` renvoient un résultat **vide ET légitime**
+    (`{total: 0, note: …}`) — pas une erreur, le LLM réoriente vers les
+    enregistrements et la réserve bibliothèque. Null (tâche planifiée, chat)
+    → comportement global inchangé.
+  - **Prompt** (`TonightService`) : ligne « CONTRAINTE D'ACCÈS » injectée
+    quand le droit manque (filet double avec la note des tools).
+  - **Validation** (`ValidateAndFilter`) : sans le droit, PAS de snapshot EPG
+    (donnée à laquelle l'usager n'a pas droit) et les recos `source="live"`
+    pures sont **droppées** (compteur `liveNotPermitted`) — conservées
+    seulement si enrichies d'un `library_id` (watchables depuis la
+    bibliothèque). Avec le droit, la logique fail-open existante est inchangée.
+- **Candidats bibliothèque filtrés** (`PermissionGate.FilterAccessible`) : la
+  réserve bibliothèque et les séries « prêtes à dévorer » (binge) restent dans
+  les bibliothèques accessibles à l'usager (`EnableAllFolders`/`EnabledFolders`,
+  policy lue à chaud). No-op si non restrictif ; fail-open si la résolution des
+  bibliothèques échoue (une indisponibilité ne vide jamais les recos). Le
+  bucket « enregistrements » (tier foyer) et le profil de goût (historique déjà
+  visionné) ne sont pas filtrés.
+- **Page Recommandations** : `CanLiveTv` servi par `/Plugins/LLMAI/Recos` **et**
+  `/Plugins/LLMAI/Tonight` (les cartes tonight passent par cette dernière) —
+  sans le droit TV en direct, le bouton « Regarder en direct » est masqué ;
+  sans le droit d'enregistrement, le bouton « Programmer » des cartes tonight
+  est également masqué (le refus natif Emby reste le filet).
+- Version → 1.13.12.0.
+
+## [1.13.11.0] — 2026-09-11
+
+### Added — Gate de droits d'enregistrement (facettes .strm et page Recommandations)
+
+- **Principe** : programmer un enregistrement est une décision **foyer** pilotée
+  par le droit d'enregistrement Emby (`EnableLiveTvManagement`) ; l'intérêt de
+  visionnement (Watch Tonight) reste par usager. Un usager sans ce droit ne doit
+  ni déclencher d'enregistrement ni voir les recommandations d'enregistrement.
+- **`PermissionGate.cs`** (nouveau) : résolution de l'usager (token de la
+  requête, ou session de lecture) et lecture de sa policy **à chaud** — jamais
+  mise en cache, jamais de comptes propres au plugin (la policy Emby est la
+  source de vérité).
+- **Gate .strm** (`ActivateApiService`) : les requêtes `.strm` ne portent pas
+  l'auth Emby et la session lecteur n'est visible qu'après l'ouverture du flux —
+  le contrôle est donc **asynchrone** (même finder que le toast v1.12) : une
+  fois le lecteur identifié, un usager sans `EnableLiveTvManagement` voit les
+  timers créés par sa lecture **annulés** (seulement ceux de cette activation —
+  capture des ids préexistants) et reçoit un toast dédié (« Enregistrement non
+  autorisé pour ce compte : … ») ; la carte reste en bibliothèque. Usager non
+  identifiable (sonde serveur, api_key, cartes d'avant v1.12) → comportement
+  inchangé (fail-open, logué). La fraîcheur d'activation (anti-doublon des GET
+  répétés) est décidée une fois par lecture : la création de timer n'a plus lieu
+  que sur le premier GET.
+- **Page Recommandations** (`RecosApiService` + `recommendations.js`) : la
+  réponse `/Plugins/LLMAI/Recos` porte désormais `CanRecord` (policy de l'appelant) ;
+  sans ce droit, les sections d'enregistrement (Séries/Films) **ne sont pas
+  rendues** — la section « À regarder ce soir » reste visible. Le bouton
+  « Programmer » était déjà protégé nativement (l'API LiveTv d'Emby refuse un
+  usager sans le droit).
+- **Config** : note dans la section « Bibliothèque .strm des recommandations » —
+  réserver la bibliothèque (accès par dossier du dashboard) aux comptes disposant
+  du droit d'enregistrement.
+- Version → 1.13.11.0.
+
 ## [1.13.10.1] — 2026-09-10
 
 ### Fixed — Playlist « AI Tonight » : séries jamais commencées (repli next up)
