@@ -911,6 +911,14 @@
                                 timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger
                                 l'endpoint d'activation.
                             </div>
+                            <div class="fieldDescription" style="margin-top:0.6em;" data-i18n-html="cfg.strmlib.perm">
+                                <b>Droits d'accès</b> : lire une carte programme un enregistrement — réservez donc la
+                                bibliothèque, dans le tableau de bord Emby (Utilisateurs → autoriser un accès par
+                                dossier), aux comptes disposant du droit <b>EnableLiveTvManagement</b> (Enregistrer).
+                                Le plugin refuse par ailleurs l'activation déclenchée par un compte sans ce droit
+                                (toast dédié, aucun timer créé), et la page Recommandations masque ses sections
+                                d'enregistrement pour ces comptes.
+                            </div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.orphan.h">Identification des enregistrements orphelins</h3>

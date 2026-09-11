@@ -248,6 +248,7 @@ namespace LLM_AI
                     ["activate.toast.duplicate"] = "Déjà programmé : {0}",
                     ["activate.toast.failed"] = "Échec de l'enregistrement : {0}",
                     ["activate.toast.diskgate"] = "Disque d'enregistrements plein — programmation suspendue : {0}",
+                    ["activate.toast.unauthorized"] = "Enregistrement non autorisé pour ce compte : {0}",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -283,6 +284,7 @@ namespace LLM_AI
                     ["activate.toast.duplicate"] = "Already scheduled: {0}",
                     ["activate.toast.failed"] = "Recording failed: {0}",
                     ["activate.toast.diskgate"] = "Recordings disk full — scheduling suspended: {0}",
+                    ["activate.toast.unauthorized"] = "Recording not allowed for this account: {0}",
                     ["task.category"] = "LLM AI",
                 },
             };

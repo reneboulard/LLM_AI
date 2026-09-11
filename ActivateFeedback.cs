@@ -170,7 +170,10 @@ namespace LLM_AI
         /// OrdinalIgnoreCase, chemin trimé, sur <c>FullNowPlayingItem.Path</c>
         /// puis repli <c>NowPlayingItem.Path</c>). Null si rien en <see cref="SessionWait"/>.
         /// </summary>
-        private static async Task<SessionInfo> FindPlayingSessionAsync(
+        /// <remarks>Internal (v1.13.11.0) : réutilisé par le gate de permission
+        /// d'<c>ActivateApiService</c> pour identifier le lecteur d'une carte
+        /// .strm (les requêtes .strm ne portent pas l'auth Emby).</remarks>
+        internal static async Task<SessionInfo> FindPlayingSessionAsync(
             ISessionManager sessions, string strmPath, ILogger logger)
         {
             var deadline = DateTimeOffset.UtcNow + SessionWait;

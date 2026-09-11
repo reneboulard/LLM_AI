@@ -164,6 +164,7 @@ define([], function () {
             "cfg.strmlib.flag": "Activer la bibliothèque .strm des recommandations",
             "cfg.strmlib.name": "Nom de la bibliothèque Emby dédiée",
             "cfg.strmlib.name.desc": "Nom exact (casse ignorée) de la bibliothèque Emby où écrire les cartes. Indépendant de l'auto-programmation (les deux peuvent cohabiter : le dedup évite les timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger l'endpoint d'activation.",
+            "cfg.strmlib.perm": "<b>Droits d'accès</b> : lire une carte programme un enregistrement — réservez donc la bibliothèque, dans le tableau de bord Emby (Utilisateurs → autoriser un accès par dossier), aux comptes disposant du droit <b>EnableLiveTvManagement</b> (Enregistrer). Le plugin refuse par ailleurs l'activation déclenchée par un compte sans ce droit (toast dédié, aucun timer créé), et la page Recommandations masque ses sections d'enregistrement pour ces comptes.",
 
             // -- Identification des enregistrements orphelins (tâche planifiée 04 h) ---
             "cfg.orphan.h": "Identification des enregistrements orphelins",
@@ -471,6 +472,7 @@ define([], function () {
             "cfg.strmlib.flag": "Enable the recommendations .strm library",
             "cfg.strmlib.name": "Dedicated Emby library name",
             "cfg.strmlib.name.desc": "Exact name (case-insensitive) of the Emby library where cards are written. Independent of auto-programming (both can coexist: dedup prevents duplicate timers). A security token is auto-generated on the first run to protect the activation endpoint.",
+            "cfg.strmlib.perm": "<b>Access rights</b>: playing a card schedules a recording — so reserve the library, in the Emby dashboard (Users → allow access per folder), to accounts holding the <b>EnableLiveTvManagement</b> (record) permission. Independently, the plugin refuses activations triggered by an account without that permission (dedicated toast, no timer created), and the Recommendations page hides its recording sections for such accounts.",
 
             // -- Orphan recording identification (scheduled task, 4 AM) ---
             "cfg.orphan.h": "Orphan recording identification",

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,6 +8,8 @@ using MediaBrowser.Controller.Api;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Net;
+using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.LiveTv;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Services;
 
@@ -83,8 +86,11 @@ namespace LLM_AI
         /// le toast de confirmation et la suppression de la carte par Emby en
         /// cas de succès, voir <see cref="ActivateFeedback"/> ; absent sur les
         /// cartes d'avant v1.12 → feedback simplement ignoré). <c>T</c> : jeton
-        /// de capacité (<see cref="PluginConfiguration.StrmSecret"/>) — la seule
-        /// gate d'accès, le lecteur média ne transmettant pas l'auth Emby.
+        /// de capacité (<see cref="PluginConfiguration.StrmSecret"/>) — gate
+        /// d'accès, le lecteur média ne transmettant pas l'auth Emby ; complété
+        /// par le gate de permission asynchrone (v1.13.11.0) : le lecteur
+        /// identifié via sa session sans <c>EnableLiveTvManagement</c> voit les
+        /// timers créés par sa lecture annulés et reçoit un toast dédié.
         /// </summary>
         [Route("/Plugins/LLMAI/Activate", "GET")]
         [Unauthenticated]
@@ -115,11 +121,29 @@ namespace LLM_AI
                 return Array.Empty<byte>();
             }
 
+            // ---- Fraîcheur de l'activation (UNE décision par lecture, v1.13.11.0) ----
+            // Une même lecture de carte génère plusieurs GET (sonde ffprobe,
+            // requêtes Range du lecteur). La fraîcheur est décidée ICI, une fois
+            // (TTL 5 min d'ActivateFeedback) : seul le premier GET de la lecture
+            // tente la création de timer et déclenche le gate de permission ; les
+            // suivants servent le clip sans réactivation (idempotence élargie :
+            // la création n'est plus refaite à chaque GET — le dedup la
+            // neutralisait de toute façon, et un timer annulé par le gate ne
+            // serait pas recréé par un GET tardif de la même lecture).
+            string strmPath = TryResolveCardPath(req?.Card);
+            string key = strmPath ?? string.Join("|", req?.ProgramId ?? "?", req?.Kind ?? "?");
+            if (!ActivateFeedback.TryMarkFresh(key))
+            {
+                Logger?.Info("[LLM_AI] Activate : activation récente (key={0}) — clip servi sans réactivation.", key);
+                return ClipResponse();
+            }
+
             // ---- Activation de l'enregistrement (best-effort) ----
             // Réutilise la même logique que la tâche planifiée : dedup contre
             // les timers existants, puis SeriesTimer (série) / Timer (film).
-            // Idempotent : re-lire la carte renvoie le clip sans créer de
-            // doublon (le dedup neutralise un second timer).
+            var sessions = _host?.TryResolve<ISessionManager>();
+            var users = _host?.TryResolve<MediaBrowser.Controller.Library.IUserManager>();
+            var preTimerIds = new HashSet<string>(StringComparer.Ordinal);
             AutoProgrammer.OneOutcome? outcome = null;
             try
             {
@@ -156,6 +180,25 @@ namespace LLM_AI
                 var ap = new AutoProgrammer(_liveTv, _library, Logger, _host);
                 var programIds = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var names = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+
+                // Capture des ids de timers PRÉEXISTANTS (avant création) — le
+                // gate permission (ci-dessous) n'annulera QUE les timers créés
+                // par cette activation, jamais un timer antérieur légitime.
+                try
+                {
+                    foreach (var t in _liveTv.GetTimers(new TimerQuery { IsScheduled = true })?.Items ?? new TimerInfoDto[0])
+                        if (!string.IsNullOrEmpty(t?.Id)) preTimerIds.Add(t.Id);
+                    foreach (var s in _liveTv.GetSeriesTimers(new SeriesTimerQuery())?.Items ?? new SeriesTimerInfoDto[0])
+                        if (!string.IsNullOrEmpty(s?.Id)) preTimerIds.Add(s.Id);
+                }
+                catch (Exception ex)
+                {
+                    // Capture impossible : le gate n'annulera rien (fail-open
+                    // total pour cette lecture) — cohérent avec le dedup
+                    // tolérant d'AutoProgrammer.
+                    Logger?.Warn("[LLM_AI] Activate : capture des timers préexistants échouée : {0}", ex.Message);
+                }
+
                 ap.BuildExistingTimerSets(programIds, names);
 
                 var reco = new AutoProgrammer.Reco
@@ -175,7 +218,59 @@ namespace LLM_AI
                 Logger?.Warn("[LLM_AI] Activate : échec création timer (programId={0}) : {1}", req.ProgramId, ex.Message);
             }
 
-            // ---- Retour visuel (toast + suppression carte en cas de succès) ----
+            // ---- Gate permission (v1.13.11.0) : contrôle ASYNCHRONE ----
+            // Les requêtes .strm ne portent PAS l'auth Emby, et la session
+            // lecteur n'est visible dans ISessionManager qu'APRÈS l'ouverture
+            // du flux (c'est pour cela que le toast v1.12 poll en arrière-plan).
+            // Un contrôle synchrone dans ce GET ne verrait donc jamais le
+            // lecteur : le contrôle est reporté en arrière-plan (même finder que
+            // le toast). Usager résolu sans EnableLiveTvManagement → annulation
+            // des timers créés par CETTE activation + toast dédié ; la carte
+            // reste en bibliothèque. Usager jamais résolu (probe serveur sans
+            // session, api_key, cartes d'avant v1.12 sans chemin) → fail-open :
+            // comportement inchangé.
+            if (strmPath != null && sessions != null && users != null)
+            {
+                var liveTv = _liveTv;
+                var lib = _library;
+                var logger = Logger;
+                var host = _host;
+                var card = req;
+                var outcomeSnapshot = outcome ?? AutoProgrammer.OneOutcome.Failed;
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        var session = await ActivateFeedback.FindPlayingSessionAsync(sessions, strmPath, logger).ConfigureAwait(false);
+                        var reader = PermissionGate.FromSession(session, users);
+                        if (reader != null && !PermissionGate.CanRecordLive(reader))
+                        {
+                            logger?.Warn("[LLM_AI] Activate : usager « {0} » sans droit d'enregistrement (programId={1}) — annulation des timers créés par cette activation.",
+                                reader.Name, card?.ProgramId);
+                            PermissionGate.CancelCreatedTimers(liveTv, card?.ProgramId, preTimerIds, logger);
+                            string title = ActivateFeedback.ResolveProgramTitle(lib, card?.ProgramId);
+                            string text = string.Format(
+                                System.Globalization.CultureInfo.InvariantCulture,
+                                I18n.S("activate.toast.unauthorized", I18n.ResolveDisplayLangKey(host)), title);
+                            await ActivateFeedback.SendToastAsync(sessions, strmPath, text, logger).ConfigureAwait(false);
+                            return;
+                        }
+                        // Comportement v1.12 inchangé : toast de statut + suppression
+                        // carte par Emby en cas de succès.
+                        DispatchFeedback(outcomeSnapshot, card);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Warn("[LLM_AI] Activate : gate permission échouée (ignorée) : {0}", ex.Message);
+                        try { DispatchFeedback(outcomeSnapshot, card); } catch { /* best-effort */ }
+                    }
+                });
+                return ClipResponse();
+            }
+
+            // Repli historique (carte sans param `card`, session manager ou
+            // gestionnaire d'usagers indisponible) : feedback v1.12 immédiat,
+            // pas de gate (l'usager n'est pas identifiable par le chemin).
             DispatchFeedback(outcome ?? AutoProgrammer.OneOutcome.Failed, req);
 
             // ---- Clip de confirmation (Range-aware) ----
@@ -191,10 +286,11 @@ namespace LLM_AI
         /// fire-and-forget) : toast Emby à la session qui lit la carte, et —
         /// en cas de succès (<see cref="AutoProgrammer.OneOutcome.Created"/> ou
         /// <see cref="AutoProgrammer.OneOutcome.Dedup"/>) — suppression de la
-        /// carte PAR EMBY (item + fichier .strm, différée ~60 s). Anti-doublon :
-        /// une même lecture génère plusieurs GET (sonde ffmpeg, Range…) — seul
-        /// le premier déclenche le feedback. Sans carte identifiable (cartes
-        /// d'avant v1.12, bibliothèque introuvable) → feedback ignoré, logué.
+        /// carte PAR EMBY (item + fichier .strm, différée ~60 s). La fraîcheur
+        /// (anti-doublon des GET répétés d'une même lecture) est désormais
+        /// propriété du handler <see cref="Get"/> (v1.13.11.0) — ce feedback ne
+        /// marque plus rien. Sans carte identifiable (cartes d'avant v1.12,
+        /// bibliothèque introuvable) → feedback ignoré, logué.
         /// Ne lève jamais vers le handler.
         /// </summary>
         private void DispatchFeedback(AutoProgrammer.OneOutcome outcome, ActivateRequest req, bool gateDisk = false)
@@ -202,14 +298,9 @@ namespace LLM_AI
             try
             {
                 // Clé d'anti-doublon : le chemin .strm de la carte si connu,
-                // sinon programId|kind.
+                // sinon programId|kind (identique à la décision de fraîcheur du
+                // handler — même clé, le TTL est consommé par Get).
                 string strmPath = TryResolveCardPath(req?.Card);
-                string key = strmPath ?? string.Join("|", req?.ProgramId ?? "?", req?.Kind ?? "?");
-                if (!ActivateFeedback.TryMarkFresh(key))
-                {
-                    Logger?.Info("[LLM_AI] Activate : feedback déjà envoyé pour cette carte récemment — ignoré (key={0}).", key);
-                    return;
-                }
 
                 // Texte i18n selon l'issue. Succès = Created (timer créé) ou
                 // Dedup (déjà couvert par un timer existant). Tout le reste
