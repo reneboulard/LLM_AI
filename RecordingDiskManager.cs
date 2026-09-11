@@ -38,9 +38,10 @@ namespace LLM_AI
     /// </summary>
     /// <remarks>
     /// <para><b>Scope</b> : seuls les items dont le fichier est sous le chemin
-    /// d'enregistrements résolu (<c>LiveTvOptions.RecordingPath</c>, repli
-    /// MovieRecordingPath / SeriesRecordingPath, repli défaut Emby
-    /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c>) sont candidats au tag.</para>
+    /// d'enregistrements résolu (<c>LiveTvOptions</c> — chemins string 4.9.x,
+    /// ids de dossiers 4.10+, repli défaut Emby
+    /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c> — voir
+    /// <see cref="TryResolveRecordingPath"/>) sont candidats au tag.</para>
     /// <para><b>Persistance des tags</b> : réutilise
     /// <see cref="AiTagger.AddAsync"/>/<see cref="AiTagger.RemoveAllAsync"/>
     /// (même mécanique que le tag « AI Tonight » — le cleanup nocturne
@@ -73,7 +74,10 @@ namespace LLM_AI
         /// <summary>
         /// Résout le chemin d'enregistrements effectif :
         /// <c>LiveTvOptions.RecordingPath</c>, repli <c>MovieRecordingPath</c>,
-        /// repli <c>SeriesRecordingPath</c>, repli <b>défaut Emby</b>
+        /// repli <c>SeriesRecordingPath</c> (builds 4.9.x), repli
+        /// <c>RecordingFolderId</c>/<c>MovieRecordingFolderId</c>/
+        /// <c>SeriesRecordingFolderId</c> résolus dans la bibliothèque (builds
+        /// 4.10+ : l'emplacement est un id de dossier), repli <b>défaut Emby</b>
         /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c> (le dossier que
         /// Emby utilise quand aucun chemin n'est configuré — constaté sur ce
         /// serveur). Vide/inconnu → faux (les appelants traitent cela comme
@@ -83,6 +87,13 @@ namespace LLM_AI
         /// clé <c>livetv</c> (confirmé par réflexion du serveur live :
         /// <c>LiveTvConfigurationFactory → ConfigurationStore Key="livetv"</c>),
         /// lue via <c>IConfigurationManager.GetConfiguration("livetv")</c>.</para>
+        /// <para><b>Lecture par réflexion</b> : la forme de
+        /// <c>LiveTvOptions</c> varie selon la build hôte — un accès compilé à
+        /// une propriété absente (ex. <c>RecordingPath</c> retirée en 4.10)
+        /// casse le JIT (MissingMethodException) et bloque toute la chaîne
+        /// appelante (Activate, auto-program). Les propriétés sont donc lues
+        /// par réflexion, et un id de dossier est résolu via
+        /// <see cref="ItemIdResolver.Resolve"/> → <c>BaseItem.Path</c>.</para>
         /// </summary>
         internal static bool TryResolveRecordingPath(
             IServerApplicationHost host, ILogger logger, out string path)
@@ -92,7 +103,29 @@ namespace LLM_AI
             {
                 var cm = host?.TryResolve<MediaBrowser.Common.Configuration.IConfigurationManager>();
                 var opts = cm?.GetConfiguration("livetv") as MediaBrowser.Model.LiveTv.LiveTvOptions;
-                path = FirstNonEmpty(opts?.RecordingPath, opts?.MovieRecordingPath, opts?.SeriesRecordingPath);
+                path = FirstNonEmpty(
+                    OptString(opts, "RecordingPath"),
+                    OptString(opts, "MovieRecordingPath"),
+                    OptString(opts, "SeriesRecordingPath"));
+
+                // Builds 4.10+ : l'emplacement est un id de dossier de
+                // bibliothèque (aucun chemin string sur LiveTvOptions).
+                if (string.IsNullOrWhiteSpace(path) && opts != null)
+                {
+                    var lib = host?.TryResolve<ILibraryManager>();
+                    foreach (var idProp in new[] { "RecordingFolderId", "MovieRecordingFolderId", "SeriesRecordingFolderId" })
+                    {
+                        var raw = OptString(opts, idProp);
+                        if (string.IsNullOrWhiteSpace(raw) || raw == Guid.Empty.ToString()) continue;
+                        var folder = ItemIdResolver.Resolve(lib, raw);
+                        var folderPath = folder?.Path;
+                        if (!string.IsNullOrWhiteSpace(folderPath))
+                        {
+                            path = folderPath;
+                            break;
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -128,6 +161,24 @@ namespace LLM_AI
             foreach (var p in paths ?? Array.Empty<string>())
                 if (!string.IsNullOrWhiteSpace(p)) return p;
             return null;
+        }
+
+        /// <summary>
+        /// Lecture d'une propriété par réflexion, tolérante aux builds :
+        /// renvoie null si la propriété n'existe pas (forme de
+        /// <c>LiveTvOptions</c> différente sur une autre build hôte) — jamais
+        /// de MissingMethodException, le JIT n'ayant aucune référence compilée.
+        /// Gère string (chemins 4.9.x) et types-valeur (ids Guid 4.10+).
+        /// </summary>
+        private static string OptString(object obj, string propertyName)
+        {
+            try
+            {
+                var prop = obj?.GetType().GetProperty(propertyName);
+                if (prop == null || !prop.CanRead) return null;
+                return Convert.ToString(prop.GetValue(obj, null));
+            }
+            catch { return null; }
         }
 
         /// <summary>
