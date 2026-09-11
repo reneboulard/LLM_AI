@@ -87,6 +87,29 @@ namespace LLM_AI
             _logger = logger;
         }
 
+        /// <summary>
+        /// Usager porteur du run (facultatif). Posé par <see cref="LlmRunner.BuildTools"/>
+        /// pour les runs per-usager (« Watch Tonight ») : quand il est renseigné et que
+        /// la policy ne porte pas <c>EnableLiveTvAccess</c>, les actions EPG
+        /// (<c>epg_tonight</c>/<c>epg_series</c>/<c>epg_movies</c> et la jambe EPG de
+        /// <c>find</c>) renvoient un résultat vide ET légitime (le LLM réoriente vers les
+        /// enregistrements et la réserve bibliothèque). Null (tâche planifiée, chat) →
+        /// comportement global inchangé. Réglé via initialiseur d'objet, le constructeur
+        /// 5-arguments étant partagé par tous les call sites.
+        /// </summary>
+        public User RunUser { get; set; }
+
+        /// <summary>
+        /// L'EPG est-il consultable pour ce run ? Raison du résultat vide quand
+        /// non (note renvoyée au LLM), null si consultable.
+        /// </summary>
+        private string EpgBlockedReason()
+        {
+            if (RunUser != null && !PermissionGate.CanWatchLive(RunUser))
+                return "EPG indisponible : la TV en direct n'est pas accessible pour cet usager";
+            return null;
+        }
+
         /// <summary>URL publique Emby pour construire les image_url.</summary>
         private string EmbyUrl => Plugin.Instance?.Configuration?.EmbyPublicUrl;
 
@@ -110,9 +133,28 @@ namespace LLM_AI
                     case "person":         result = Person(args); break;
                     case "find":          result = Find(args); break;
                     case "genre_stats":   result = GenreStats(args); break;
-                    case "epg_series":    result = EpgSeries(args); break;
-                    case "epg_movies":    result = EpgMovies(args); break;
-                    case "epg_tonight":   result = EpgTonight(args); break;
+                    case "epg_series":
+                    case "epg_movies":
+                    case "epg_tonight":
+                        {
+                            // Gate droit TV en direct (run per-usager) : résultat
+                            // vide ET légitime, pas une erreur — le LLM réoriente
+                            // vers les enregistrements et la réserve bibliothèque.
+                            string epgBlocked = EpgBlockedReason();
+                            if (epgBlocked != null)
+                            {
+                                _logger?.Info("[LLM_AI] get_emby_info : action {0} bloquée — {1} (usager={2})",
+                                    action, epgBlocked, RunUser.Name);
+                                result = JsonSerializer.Serialize(new { total = 0, note = epgBlocked }, s_json);
+                            }
+                            else if (action.Equals("epg_series", StringComparison.OrdinalIgnoreCase))
+                                result = EpgSeries(args);
+                            else if (action.Equals("epg_movies", StringComparison.OrdinalIgnoreCase))
+                                result = EpgMovies(args);
+                            else
+                                result = EpgTonight(args);
+                            break;
+                        }
                     case "scheduled":     result = Scheduled(); break;
                     case "planning":      result = Scheduled(); break;
                     default:
@@ -481,7 +523,13 @@ namespace LLM_AI
 
             // --- Jambe EPG ----------------------------------------------------
             var epgMatches = new List<FindResult>();
-            if (source != "library")
+            // Gate droit TV en direct (run per-usager) : jambe EPG sautée, note
+            // ajoutée au résultat — même sémantique que les actions epg_*.
+            string findEpgBlocked = source != "library" ? EpgBlockedReason() : null;
+            if (findEpgBlocked != null)
+                _logger?.Info("[LLM_AI] get_emby_info : find (jambe EPG) bloquée — {0} (usager={1})",
+                    findEpgBlocked, RunUser.Name);
+            if (source != "library" && findEpgBlocked == null)
             {
                 const int POOL = 300;
                 var q = new InternalItemsQuery { HasAired = false, Limit = POOL };
@@ -600,7 +648,11 @@ namespace LLM_AI
 
             _logger?.Info("[LLM_AI] find : source={0} lib={1} epg={2} → {3} résultat(s) (tri={4}, offset={5}).",
                 source, libMatches.Count, epgMatches.Count, page.Count, sortBy, offset);
-            return JsonSerializer.Serialize(new { total = merged.Count, results }, s_json);
+            // Note EPG bloquée (droit TV en direct) : portée dans la réponse pour
+            // que le LLM sache pourquoi la jambe EPG est vide.
+            return findEpgBlocked != null
+                ? JsonSerializer.Serialize(new { total = merged.Count, results, note = findEpgBlocked }, s_json)
+                : JsonSerializer.Serialize(new { total = merged.Count, results }, s_json);
         }
 
         /// <summary>Tri C# des résultats find (hors date_played, trié côté SQL).</summary>

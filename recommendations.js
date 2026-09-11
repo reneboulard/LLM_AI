@@ -17,6 +17,16 @@
 //   DroppedTitles se fait serveur-side (même raison : le round-trip config
 //   get/update est admin-only). Réponse {Added} — false = déjà présent.
 //   Exclusion effective à la prochaine exécution (epg_series lit DroppedTitles).
+//
+// Gate permission (v1.13.11.0) : /Plugins/LLMAI/Recos répond CanRecord = le
+//   droit d'enregistrement Emby (EnableLiveTvManagement) de l'usager appelant.
+//   Sans ce droit, les sections d'enregistrement (Séries/Films) ne sont pas
+//   rendues — la section « À regarder ce soir » reste visible. Le bouton
+//   « Programmer », lui, est nativement protégé par Emby (l'API LiveTv refuse
+//   un usager sans le droit, quel que soit le client).
+// Gate permission (v1.13.12.0) : CanLiveTv (Recos ET Tonight) = le droit TV
+//   en direct (EnableLiveTvAccess) — masque le bouton « Regarder en direct »
+//   des cartes tonight ; CanRecord masque aussi leur bouton « Programmer ».
 define([], function () {
     "use strict";
 
@@ -126,6 +136,13 @@ define([], function () {
         return it.image_url || "";
     }
 
+    // Gate permission (v1.13.12.0) : droits du run courant, lus depuis les
+    // réponses /Plugins/LLMAI/Recos (render) et /Plugins/LLMAI/Tonight
+    // (tonightSectionHtml). cardHtml est module-level : ces variables de
+    // module lui servent de contexte. Défauts true (compat serveurs antérieurs).
+    var gCanRecord = true;
+    var gCanLiveTv = true;
+
     // Badge de type : différencie une reco « À venir » (programme EPG du soir
     // à regarder en direct / à enregistrer) d'une reco déjà disponible
     // (enregistrement ou item de bibliothèque, prêts à lire maintenant). Un
@@ -193,10 +210,11 @@ define([], function () {
         // Bouton « Regarder en direct » : uniquement pour la section tonight
         // (it.section==="tonight"), source live, si le programme a déjà
         // commencé et qu'on dispose d'un channel_id, ET que la lecture client
-        // est disponible (playbackManager via require).
+        // est disponible (playbackManager via require). Gate v1.13.12.0 : ne
+        // s'affiche que si l'usager porte le droit TV en direct (CanLiveTv).
         var watchLive = "";
         if (it.section === "tonight" && !isWatchItem && !isAired && !isWatched && (it.channel_id || it.channel_id === 0)
-            && canWatch() && hasAiringStarted(it)) {
+            && gCanLiveTv && canWatch() && hasAiringStarted(it)) {
             watchLive = '<button class="ai-btn-watchlive" type="button" data-channel="' +
                 esc(it.channel_id) + '" title="' + esc(i18n.t("rec.tonight.watchLive")) +
                 '">▶ ' + esc(i18n.t("rec.tonight.watchLive")) + '</button>';
@@ -225,8 +243,10 @@ define([], function () {
         // « Programmer » : uniquement pour source live non encore diffusé (un
         // enregistrement / un item de bibliothèque n'a pas de timer à créer,
         // et un programme déjà diffusé ou déjà visionné n'a plus rien à
-        // programmer).
-        var recordBtn = (isWatchItem || isAired || isWatched) ? '' :
+        // programmer). Gate v1.13.12.0 : masqué sans le droit d'enregistrement
+        // (l'API LiveTv d'Emby le refuserait nativement — clic mort évité ; le
+        // refus natif reste le filet).
+        var recordBtn = (isWatchItem || isAired || isWatched || !gCanRecord) ? '' :
             '<button class="ai-btn-record" type="button"' +
                 (hasId ? '' : ' disabled') +
                 ' data-id="' + esc(it.id || "") + '"' +
@@ -350,6 +370,14 @@ define([], function () {
     // Rafraîchir) + grille de cartes.
     function tonightSectionHtml(items, fromCache, data) {
         var count = items.length;
+        // Gate permission (v1.13.12.0) : les droits servent les cartes de CETTE
+        // section (route /Plugins/LLMAI/Tonight) — synchronisés ici pour
+        // cardHtml, qui est module-level. undefined (serveur antérieur) →
+        // true (compat) : on n'écrase pas si absent.
+        if (data) {
+            if (typeof data.CanRecord === "boolean") gCanRecord = data.CanRecord;
+            if (typeof data.CanLiveTv === "boolean") gCanLiveTv = data.CanLiveTv;
+        }
         var badge = fromCache
             ? ' <span class="tonight-cache">' + esc(i18n.t("rec.tonight.fromCache")) + '</span>'
             : '';
@@ -650,9 +678,36 @@ define([], function () {
             if (Array.isArray(parsed)) items = parsed;
         } catch (e) { items = null; }
 
+        // Gate permission (v1.13.11.0) : les sections d'enregistrement
+        // (Séries/Films) sont réservées aux usagers disposant du droit
+        // d'enregistrement Emby (CanRecord, servi par /Plugins/LLMAI/Recos).
+        // Sans ce droit : les sections ne sont pas rendues du tout (ni le JSON
+        // brut, qui est le payload d'enregistrement) ; la section « À regarder
+        // ce soir » (intérêt de visionnement, par usager) reste visible.
+        // undefined (serveur antérieur à v1.13.11.0) → true (compat).
+        var canRecord = cfg.CanRecord !== false;
+        // Gate permission (v1.13.12.0) : CanLiveTv = droit TV en direct
+        // (EnableLiveTvAccess) — masque le bouton « Regarder en direct » des
+        // cartes tonight (la lecture d'un canal exige ce droit côté Emby ; on
+        // évite le clic mort). undefined (serveur antérieur) → true (compat).
+        var canLiveTv = cfg.CanLiveTv !== false;
+        // cardHtml est module-level : publie les droits pour les cartes rendues
+        // ci-dessous (sections Séries/Films) — tonightSectionHtml les
+        // resynchronisera depuis /Plugins/LLMAI/Tonight.
+        gCanRecord = canRecord;
+        gCanLiveTv = canLiveTv;
+
         // Le conteneur tonight (#recTonight) précède toujours les sections
         // planifiées : c'est la recommandation la plus pertinente « maintenant ».
         var tonightHost = '<div id="recTonight" class="recSection"></div>';
+
+        if (!canRecord) {
+            content.innerHTML = tonightHost +
+                '<div class="recEmpty">' + i18n.t("rec.section.empty") + '</div>';
+            btn.style.display = "none";
+            if (countEl) countEl.textContent = "";
+            return;
+        }
 
         if (items && items.length) {
             // Section 1 : séries — Section 2 : films (tri par kind).
@@ -718,7 +773,8 @@ define([], function () {
                     }
                     render(view, {
                         Recommendations: data.Items || "",
-                        RecommendationsDate: data.Date || ""
+                        RecommendationsDate: data.Date || "",
+                        CanRecord: data.CanRecord
                     });
                     // Section « À regarder ce soir » : appel endpoint plugin
                     // personnalisé (asynchrone, peut prendre 10–60 s la 1re fois).

@@ -142,11 +142,15 @@ namespace LLM_AI
         /// Construit la liste d'outils exposés au LLM pour un run. Les outils
         /// optionnels ne sont inclus que si la config correspondante est active.
         /// </summary>
-        public List<ILlmTool> BuildTools(PluginConfiguration cfg)
+        /// <param name="runUser">Usager porteur du run ( Tonight uniquement ;
+        /// null pour la tâche planifiée et le chat) — transposé au tool
+        /// <c>get_emby_info</c> pour la gate EPG (v1.13.12.0).</param>
+        public List<ILlmTool> BuildTools(PluginConfiguration cfg, User runUser = null)
         {
             var tools = new List<ILlmTool>
             {
                 new GetEmbyInfoTool(_library, _users, _liveTv, _host, _logger)
+                    { RunUser = runUser }
             };
             if (!string.IsNullOrWhiteSpace(cfg.TmdbApiKey))
                 tools.Add(new TmdbLookupTool(_logger));
@@ -191,10 +195,15 @@ namespace LLM_AI
         /// <para>Méthode commune utilisée par la tâche planifiée et par
         /// l'endpoint tonight : un seul endroit code la séquence
         /// backends → outils → run → extract → enrich.</para>
+        /// <para><paramref name="runUser"/> : usager porteur du run (Tonight
+        /// per-usager uniquement) — active la gate EPG du tool
+        /// <c>get_emby_info</c> si l'usager n'a pas le droit TV en direct
+        /// (<see cref="PermissionGate.CanWatchLive"/>) ; null = comportement
+        /// global (tâche planifiée, chat).</para>
         /// </summary>
         public async System.Threading.Tasks.Task<(string payload, bool ok)> RunAsync(
             PluginConfiguration cfg, string label, string userPrompt, string workflow,
-            System.Threading.CancellationToken ct)
+            System.Threading.CancellationToken ct, User runUser = null)
         {
             try
             {
@@ -211,7 +220,7 @@ namespace LLM_AI
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
                     responseLanguage: cfg.ResponseLanguage);
-                var tools = BuildTools(cfg);
+                var tools = BuildTools(cfg, runUser);
 
                 var (reply, toolResults) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
 

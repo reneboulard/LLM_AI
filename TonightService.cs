@@ -333,6 +333,20 @@ namespace LLM_AI
                 + "BIBLIOTHÈQUE ci-dessus (source=\"library\", reprends id). Ne dépasse pas le "
                 + "minimum avec la réserve — l'EPG et les enregistrements restent prioritaires.";
 
+            // Gate droit TV en direct (v1.13.12.0) : si l'usager ne porte pas
+            // EnableLiveTvAccess, l'EPG n'est PAS consulté (tools epg_* → vide
+            // légitime, snapshot de validation sauté) — dit au LLM en amont pour
+            // qu'il réoriente sans tâtonner (filet double avec la note des tools).
+            bool canLive = PermissionGate.CanWatchLive(user);
+            if (!canLive)
+            {
+                prompt += "\n\n### CONTRAINTE D'ACCÈS (droits de l'usager)\n"
+                    + "La TV en direct n'est pas accessible pour cet usager : l'EPG renverra vide "
+                    + "(note « Live TV non accessible »). Ne recommande QUE depuis les enregistrements "
+                    + "non visionnés (source=\"recording\") et la réserve bibliothèque "
+                    + "(source=\"library\") — aucune reco source=\"live\".";
+            }
+
             // 4) Run agent (boucle de tool-calling) — même logique que la tâche
             //    planifiée : backends, outils, enrichissement (match titres →
             //    id/channel_id/rating/image_url) gérés par LlmRunner.
@@ -344,7 +358,7 @@ namespace LLM_AI
                 + "-" + (user.Id.ToString("N").Length >= 6 ? user.Id.ToString("N").Substring(0, 6) : user.Id.ToString("N"));
             if (cfg.DecisionLogEnabled)
                 DecisionStore.BeginRun(runId);
-            var (payload, ok) = await runner.RunAsync(cfg, "TONIGHT", prompt, TONIGHT_WORKFLOW, ct).ConfigureAwait(false);
+            var (payload, ok) = await runner.RunAsync(cfg, "TONIGHT", prompt, TONIGHT_WORKFLOW, ct, user).ConfigureAwait(false);
 
             if (!ok || string.IsNullOrWhiteSpace(payload))
             {
@@ -377,7 +391,7 @@ namespace LLM_AI
             // déjà vues (gardées, mais sans actions obsolètes côté UI).
             // Fail-open : une erreur de requête transitoire ne vide jamais les
             // recos.
-            payload = ValidateAndFilter(payload, watchedIdx, ct);
+            payload = ValidateAndFilter(payload, watchedIdx, ct, canLive);
             if (string.IsNullOrWhiteSpace(payload))
             {
                 if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
@@ -622,8 +636,16 @@ namespace LLM_AI
         ///   parse JSON, index watched indispo) renvoie le payload original
         ///   inchangé — on ne vide jamais les recos sur un échec de requête.
         ///   Ne lève pas.
+        /// <para>Gate droit TV en direct (v1.13.12.0) : <paramref name="canLive"/>
+        /// = <see cref="PermissionGate.CanWatchLive"/> de l'usager du run. Sans le
+        /// droit, PAS de snapshot EPG (donnée à laquelle l'usager n'a pas droit) et
+        /// les recos <c>source="live"</c> pures sont droppées (compteur
+        /// <c>liveNotPermitted</c>) — conservées seulement si enrichies d'un
+        /// <c>library_id</c> (watchables depuis la bibliothèque). Avec le droit, la
+        /// logique fail-open existante est inchangée.</para>
         /// </summary>
-        private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct)
+        private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct,
+            bool canLive = true)
         {
             if (string.IsNullOrWhiteSpace(payload)) return payload;
 
@@ -648,8 +670,18 @@ namespace LLM_AI
                 // la fenêtre « ce soir ». Couvre les programmes récemment
                 // diffusés (détection « Diffusé », gère la fraîcheur du cache
                 // jusqu'à ~24 h) + ceux à venir ce soir. Une seule requête.
+                // Gate droit TV en direct (v1.13.12.0) : PAS de snapshot si
+                // l'usager ne porte pas EnableLiveTvAccess — l'EPG est une donnée
+                // à laquelle il n'a pas droit ; les recos live pures sont
+                // droppées plus bas (liveNotPermitted), celles enrichies
+                // library_id (watchables depuis la bibliothèque) sont conservées.
                 Dictionary<string, BaseItemDto> epg;
-                try
+                if (!canLive)
+                {
+                    _logger?.Info("[LLM_AI] Tonight validation : pas de droit TV en direct (usager) — pas de snapshot EPG, recos live pures droppées.");
+                    epg = null;
+                }
+                else try
                 {
                     epg = new Dictionary<string, BaseItemDto>(StringComparer.OrdinalIgnoreCase);
                     var q = new InternalItemsQuery
@@ -754,7 +786,7 @@ namespace LLM_AI
                     }
                 }
 
-                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0;
+                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0, liveNotPermitted = 0;
                 for (int i = arr.Count - 1; i >= 0; i--)
                 {
                     if (!(arr[i] is JsonObject obj)) { kept++; continue; }
@@ -763,7 +795,18 @@ namespace LLM_AI
 
                     if (string.Equals(src, "live", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (epg == null) { kept++; continue; } // EPG indispo → fail-open
+                        if (epg == null)
+                        {
+                            // Usager sans droit TV en direct (gate v1.13.12.0) :
+                            // une reco live pure n'est pas watchable ni
+                            // programmable pour lui → drop ; conservée seulement
+                            // si enrichie d'un library_id (watchable depuis la
+                            // bibliothèque). Hors gate : fail-open standard
+                            // (EPG indispo → recos live conservées).
+                            if (!canLive && string.IsNullOrWhiteSpace(ObjStr(obj, "library_id")))
+                            { arr.RemoveAt(i); dropped++; liveNotPermitted++; continue; }
+                            kept++; continue;
+                        }
                         if (epg.TryGetValue(id ?? "", out var p))
                         {
                             // Watched-guard : rediffusion d'un épisode/film déjà
@@ -797,8 +840,8 @@ namespace LLM_AI
                     }
                 }
 
-                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}), rediffusions déjà visionnées marquées : {4}.",
-                    kept, dropped, epgExpired, libMissing, watchedMarked);
+                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}, live sans droit TV : {4}), rediffusions déjà visionnées marquées : {5}.",
+                    kept, dropped, epgExpired, libMissing, liveNotPermitted, watchedMarked);
 
                 return arr.ToJsonString();
             }
@@ -1272,6 +1315,12 @@ namespace LLM_AI
                 };
                 var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
 
+                // Gate accès médiathèque (v1.13.12.0) : les candidats de la réserve
+                // restent dans les bibliothèques accessibles à l'usager
+                // (EnableAllFolders/EnabledFolders) — no-op si non restrictif.
+                var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
+                if (accessible != null) items = accessible.ToArray();
+
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var lines = new List<string>();
                 foreach (var it in items)
@@ -1395,6 +1444,12 @@ namespace LLM_AI
                     EnableTotalRecordCount = false
                 };
                 var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
+
+                // Gate accès médiathèque (v1.13.12.0) : le pool d'épisodes
+                // agrégés reste dans les bibliothèques accessibles à l'usager
+                // (EnableAllFolders/EnabledFolders) — no-op si non restrictif.
+                var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
+                if (accessible != null) items = accessible.ToArray();
 
                 var series = new Dictionary<string, BingeSeries>(StringComparer.Ordinal);
                 foreach (var it in items)

@@ -85,6 +85,11 @@ namespace LLM_AI
         /// date/heure (UTC ISO) de production. <c>FromCache</c> : true si
         /// servi depuis le cache. <c>Enabled</c> : false si la section est
         /// désactivée en config (le JS n'affiche alors pas la section).
+        /// <c>CanRecord</c>/<c>CanLiveTv</c> (v1.13.12.0) : droits du run
+        /// (policy de l'usager résolu, lue à chaud) — la page masque le bouton
+        /// « Programmer » sans le droit d'enregistrement et « Regarder en
+        /// direct » sans le droit TV en direct (les cartes tonight sont servies
+        /// par CETTE route, pas par /Recos).
         /// </summary>
         public class TonightResponse
         {
@@ -100,6 +105,12 @@ namespace LLM_AI
             /// <summary>Directives de session du run chat (informatif, badge).
             /// Vide pour un run normal.</summary>
             public string ChatDirectives { get; set; }
+            /// <summary>Droit d'enregistrement de l'usager (policy
+            /// EnableLiveTvManagement, fail-closed).</summary>
+            public bool CanRecord { get; set; }
+            /// <summary>Droit TV en direct de l'usager (policy
+            /// EnableLiveTvAccess, fail-closed).</summary>
+            public bool CanLiveTv { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -141,7 +152,9 @@ namespace LLM_AI
                     Date = cached.Value.Date,
                     FromCache = true,
                     ViaChat = cached.Value.ViaChat,
-                    ChatDirectives = cached.Value.ChatDirectives
+                    ChatDirectives = cached.Value.ChatDirectives,
+                    CanRecord = PermissionGate.CanRecordLive(user),
+                    CanLiveTv = PermissionGate.CanWatchLive(user)
                 };
 
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
@@ -156,7 +169,9 @@ namespace LLM_AI
                 Date = res.Date,
                 FromCache = res.FromCache,
                 ViaChat = res.ViaChat,
-                ChatDirectives = res.ChatDirectives
+                ChatDirectives = res.ChatDirectives,
+                CanRecord = PermissionGate.CanRecordLive(user),
+                CanLiveTv = PermissionGate.CanWatchLive(user)
             };
         }
 

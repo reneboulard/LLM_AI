@@ -60,12 +60,23 @@ namespace LLM_AI
         /// recommandations) en chaîne — le JS le <c>JSON.parse</c> comme il le
         /// faisait pour <c>cfg.Recommendations</c>. <c>Date</c> : date du
         /// dernier run (champ config <c>RecommendationsDate</c>, ISO).
+        /// <c>CanRecord</c> (v1.13.11.0) : l'usager appelant peut programmer des
+        /// enregistrements (policy <c>EnableLiveTvManagement</c>) — la page
+        /// masque les sections d'enregistrement (Séries/Films) et le bouton
+        /// « Programmer » des cartes tonight sans ce droit.
+        /// <c>CanLiveTv</c> (v1.13.12.0) : l'usager peut regarder la TV en
+        /// direct (policy <c>EnableLiveTvAccess</c>) — le bouton « Regarder en
+        /// direct » des cartes tonight est masqué sans ce droit.
+        /// La section « À regarder ce soir » n'est pas affectée (intérêt de
+        /// visionnement, par usager).
         /// </summary>
         public class RecosResponse
         {
             public string Items { get; set; }
             public string Date { get; set; }
             public string Error { get; set; }
+            public bool CanRecord { get; set; }
+            public bool CanLiveTv { get; set; }
         }
 
         /// <summary>
@@ -125,10 +136,24 @@ namespace LLM_AI
             // Lecture seule des deux champs consommés par la page — rien de la
             // config complète (clés API, prompts, chemins) ne traverse cette
             // route, contrairement à l'endpoint hôte /Configuration.
+            //
+            // Gate permission (v1.13.11.0) : les recommandations
+            // d'enregistrement (sections Séries/Films de la page) sont pilotées
+            // par le droit d'enregistrement Emby de l'usager appelant
+            // (EnableLiveTvManagement, lu à chaud via PermissionGate) — un
+            // usager sans ce droit ne les voit pas (masquage côté page) et le
+            // gate .strm d'Activate refuse de toute façon ses activations.
+            // Fail-closed : usager non résolu → false.
+            // CanLiveTv (v1.13.12.0) : même mécanique pour le droit TV en
+            // direct (EnableLiveTvAccess) — bouton « Regarder en direct » des
+            // cartes tonight. Policy lue à chaud, jamais cachée.
+            var caller = ResolveCaller();
             return new RecosResponse
             {
                 Items = cfg.Recommendations ?? "",
-                Date = cfg.RecommendationsDate ?? ""
+                Date = cfg.RecommendationsDate ?? "",
+                CanRecord = PermissionGate.CanRecordLive(caller),
+                CanLiveTv = PermissionGate.CanWatchLive(caller)
             };
         }
 
