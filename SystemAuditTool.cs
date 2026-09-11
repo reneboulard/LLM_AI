@@ -1108,6 +1108,15 @@ namespace LLM_AI
         ///   réel) ET historique des appareils <c>IDeviceManager.GetDevices</c>
         ///   (table Devices2 de authentication.db — preuve durable : tout
         ///   appareil jamais connecté avec une IP publique).</item>
+        /// <item><b>Surfaces plugin</b> (v1.13.13.0) : la playlist publique
+        ///   « AI Tonight » et la bibliothèque .strm sont des surfaces foyer —
+        ///   vérifie que chaque usager actif ne voit pas d'items hors des
+        ///   bibliothèques partagées avec lui (FilterAccessible, fail-open) ni
+        ///   au-dessus de sa limite parentale (<c>MaxParentalRating</c> vs
+        ///   <c>GetInheritedParentalRatingValue</c>), et que
+        ///   l'accès aux cartes .strm s'accompagne du droit d'enregistrement
+        ///   (règle v1.13.11.0 — inverse en info). Un échec de lecture →
+        ///   constat « info non vérifiable », jamais une erreur.</item>
         /// </list>
         /// <b>Escalade de sévérité</b> : si un accès externe est observé
         /// (session ou appareil historique avec IP publique), tout constat
@@ -1259,6 +1268,151 @@ namespace LLM_AI
                 Add("info", "Aucun filtre d'adresses IP distant",
                     "Toute adresse peut tenter de se connecter (whitelist RemoteIPFilter vide).",
                     "Optionnel : Dashboard → Réseau → « Filtre d'adresses externes » en mode whitelist.");
+            }
+
+            // ---- Surfaces plugin : cohérence d'accès (v1.13.13.0) --------
+            // La playlist « AI Tonight » est PUBLIQUE (surface foyer) et la
+            // bibliothèque .strm expose les cartes d'enregistrement. Un usager
+            // peut donc voir ces surfaces sans avoir accès aux bibliothèques
+            // qui portent leur contenu (il voit la reco — titre, poster —
+            // mais ne peut pas la lire), ou accéder aux cartes .strm sans
+            // porter le droit d'enregistrement (règle v1.13.11.0). On
+            // signale ces décalages à l'admin — le dashboard reste maître
+            // des accès, le plugin ne modifie jamais les comptes.
+            int surfacesFindings = findings.Count;
+            bool playlistChecked = false, strmChecked = false;
+            string strmName = null;
+            try
+            {
+                var cfg = Plugin.Instance?.Configuration;
+                strmName = cfg?.StrmLibraryName;
+                string strmRoot = string.IsNullOrWhiteSpace(strmName)
+                    ? null : StrmLibraryGenerator.ResolveLibraryRoot(_library, strmName, _logger);
+
+                // Usagers actifs (les désactivés ne voient aucune surface).
+                var activeUsers = new List<User>();
+                try
+                {
+                    foreach (var u in _users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                        if (u != null && u.Policy?.IsDisabled != true) activeUsers.Add(u);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit security_check surfaces (usagers) : {0}", ex.Message);
+                }
+
+                // --- A. Playlist « AI Tonight » ---------------------------
+                var members = new List<BaseItem>();
+                try
+                {
+                    var playlist = AiTonightPlaylistManager.FindPlaylist(_library);
+                    if (playlist != null)
+                        foreach (var it in playlist.GetItemList(new InternalItemsQuery
+                        {
+                            EnableTotalRecordCount = false
+                        }) ?? Array.Empty<BaseItem>())
+                            if (it != null) members.Add(it);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit security_check surfaces (playlist) : {0}", ex.Message);
+                    Add("info", "Playlist « AI Tonight » non vérifiable",
+                        "Lecture de la playlist impossible : " + ex.Message, null);
+                }
+
+                if (members.Count > 0)
+                {
+                    playlistChecked = true;
+                    foreach (var u in activeUsers)
+                    {
+                        // Mismatch bibliothèque : même mécanique que le gate des
+                        // recos (v1.13.12.0) — les items de la playlist doivent
+                        // rester dans les bibliothèques accessibles à l'usager.
+                        if (PermissionGate.HasUnrestrictedFolders(u)) continue;
+                        var accessible = PermissionGate.FilterAccessible(u, _library, _logger, members);
+                        if (accessible == null) continue;   // fail-open : résolution échouée
+                        int hidden = members.Count - accessible.Count;
+                        if (hidden > 0)
+                            Add("avertissement", "Playlist « AI Tonight » : items hors des bibliothèques accessibles à " + (u.Name ?? "?"),
+                                hidden + " item(s) sur " + members.Count + " sont hébergés dans des bibliothèques non partagées avec ce compte — il voit la reco dans la playlist publique mais ne peut pas la lire.",
+                                "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → « Accès aux médias » : donner la bibliothèque concernée, ou retirer l'item du watch bucket (page Recommandations).");
+
+                        // Limite parentale : contenu visible dans la playlist
+                        // publique au-dessus de la limite du compte.
+                        // (GetInheritedParentalRatingValue hérite de la fiche
+                        // parentale calculée par le serveur — jamais nulle
+                        // seule : les deux null = contenu non coté, fail-open.)
+                        int? parental = u.Policy?.MaxParentalRating;
+                        if (parental.HasValue)
+                        {
+                            int over = members.Count(m =>
+                            {
+                                int? rating = m.GetInheritedParentalRatingValue()
+                                    ?? m.GetParentalRatingValue();
+                                return rating.HasValue && rating.Value > parental.Value;
+                            });
+                            if (over > 0)
+                                Add("avertissement", "Playlist « AI Tonight » : contenu au-dessus de la limite parentale de " + (u.Name ?? "?"),
+                                    over + " item(s) sur " + members.Count + " dépassent sa limite parentale (" + parental.Value + ") — visibles dans la playlist publique.",
+                                    "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → contrôle parental : ajuster la limite, ou retirer l'item du watch bucket (page Recommandations).");
+                        }
+                    }
+                }
+
+                // --- B. Bibliothèque .strm --------------------------------
+                if (!string.IsNullOrWhiteSpace(strmRoot))
+                {
+                    strmChecked = true;
+                    foreach (var u in activeUsers)
+                    {
+                        // Accès .strm : EnableAllFolders, ou une bibliothèque de
+                        // EnabledFolders résolue dont le chemin couvre la racine
+                        // .strm (heuristique : CollectionFolder.Path = location —
+                        // comparaison dans les deux sens, la forme exacte des ids
+                        // du dashboard varie selon le build).
+                        bool hasStrm = u.Policy?.EnableAllFolders == true;
+                        if (!hasStrm && u.Policy?.EnabledFolders != null)
+                        {
+                            foreach (var raw in u.Policy.EnabledFolders)
+                            {
+                                var lib = ItemIdResolver.Resolve(_library, raw);
+                                if (lib == null || string.IsNullOrWhiteSpace(lib.Path)) continue;
+                                if (TonightService.IsUnderPath(lib.Path, strmRoot)
+                                    || TonightService.IsUnderPath(strmRoot, lib.Path))
+                                {
+                                    hasStrm = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (hasStrm && !PermissionGate.CanRecordLive(u))
+                            Add("avertissement", "Cartes d'enregistrement visibles par un compte sans droit d'enregistrer",
+                                (u.Name ?? "?") + " accède à la bibliothèque .strm mais ne porte pas EnableLiveTvManagement — la lecture d'une carte déclencherait une activation immédiatement refusée (gate d'enregistrement).",
+                                "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " : retirer la bibliothèque .strm de son accès aux médias, ou lui donner le droit d'enregistrement.");
+                        else if (!hasStrm && PermissionGate.CanRecordLive(u))
+                            Add("info", "Cartes .strm invisibles pour un compte autorisé à enregistrer",
+                                (u.Name ?? "?") + " porte le droit d'enregistrement mais n'a pas accès à la bibliothèque .strm — les cartes de recommandation sont invisibles pour ce compte.",
+                                "Optionnel : Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → ajouter la bibliothèque .strm à son accès aux médias.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check surfaces : {0}", ex.Message);
+                Add("info", "Surfaces plugin non vérifiables",
+                    "Lecture playlist / bibliothèque .strm impossible : " + ex.Message, null);
+            }
+            if (!playlistChecked && !strmChecked)
+            {
+                Add("info", "Surfaces plugin absentes ou vides",
+                    "Playlist « AI Tonight » absente ou vide, et bibliothèque .strm non configurée — rien à vérifier pour l'instant (les surfaces apparaissent à la prochaine génération de recommandations).", null);
+            }
+            else if (findings.Count == surfacesFindings)
+            {
+                Add("ok", "Surfaces plugin : accès cohérents",
+                    "Playlist « AI Tonight » et bibliothèque .strm" + (string.IsNullOrWhiteSpace(strmName) ? " (non configurée)" : " (« " + strmName + " »)") +
+                    " : aucun décalage entre les surfaces visibles et les droits des usagers.", null);
             }
 
             // ---- Exposition observée (preuves directes) ------------------
