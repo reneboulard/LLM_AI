@@ -531,6 +531,12 @@ tool). See [Server health audit](#server-health-audit).
   limit → ⚠️) and the **.strm** library (access without the record right → ⚠️,
   right without access → ℹ️). The admin then decides "who gets access to what" in
   the dashboard; the plugin never modifies accounts.
+- **Rating hygiene (v1.13.14.0)** — the audit's `ratings_check` action compares
+  movie/series and EPG ratings (`OfficialRating`) against the server's built-in
+  parental rating table: unrecognized ratings make the parental limit **blind**
+  on those items → ⚠️ with the offending values and a normalization tip (e.g.
+  the Classification Mapper plugin). "Not rated" markers (NR…) are counted
+  separately; EPG is ℹ️ info (raw guide ratings, never normalized).
 - `AuditMode` (`single` | `deterministic`, default `single`) — execution strategy:
   - `single` — a single agent loop: the LLM calls `system_audit` itself, adaptively (can
     drill into a log after a finding). Suited to a capable / cloud model. **The only

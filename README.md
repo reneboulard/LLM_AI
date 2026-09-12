@@ -552,6 +552,13 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
   parentale → ⚠️) et bibliothèque **.strm** (accès sans droit d'enregistrement → ⚠️,
   droit sans accès → ℹ️). L'admin décide ensuite « qui a accès à quoi » dans le
   dashboard ; le plugin ne modifie jamais les comptes.
+- **Hygiène des cotes (v1.13.14.0)** — l'action `ratings_check` de l'audit compare
+  les cotes (`OfficialRating`) des films/séries et de l'EPG à la table parentale
+  intégrée du serveur : des cotes non reconnues rendent la limite parentale
+  **aveugle** sur ces items → ⚠️ avec la liste des valeurs fautives et un conseil
+  de normalisation (ex. plugin Classification Mapper). Marqueurs « non coté »
+  (NR…) comptés à part ; EPG en ℹ️ info (cotes brutes du guide, jamais
+  normalisées).
 - `AuditMode` (`single` | `deterministic`, défaut `single`) — stratégie d'exécution :
   - `single` — une boucle agent : le LLM appelle lui-même `system_audit` de façon
     adaptative (peut creuser un journal suite à un constat). Convient à un modèle

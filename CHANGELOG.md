@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.14.0] — 2026-09-11
+
+### Added — Audit : hygiène des cotes (`ratings_check`)
+
+- **Principe** : une cote (`OfficialRating`) non reconnue par la table
+  parentale intégrée du serveur n'a pas de score numérique — la limite
+  parentale (`MaxParentalRating`) est **aveugle** sur cet item. Les
+  fournisseurs (TMDB/TVDB, guide EPG) livrent des formats nationaux
+  hétérogènes : sans normalisation, la cote est « n'importe quoi ».
+- **Nouvelle action `ratings_check` de `system_audit`** (lecture seule,
+  aussi dans le digest déterministe) :
+  - **Bibliothèque** (films + séries) : census des cotes vs
+    `ILocalizationManager.GetParentalRatings()` — la même liste que le menu
+    de limite parentale du dashboard. Cotes non reconnues → constat
+    **⚠️ avertissement** avec les valeurs les plus fréquentes (détail +
+    exemple d'item) et le **conseil de normalisation** (ex. plugin
+    Classification Mapper) ; aucune → ✅. Les marqueurs « non coté » (NR,
+    Unrated…) sont comptés à part : légitimes, couverts par
+    `BlockUnratedItems`.
+  - **EPG** : census séparé en ℹ️ info — les cotes du guide viennent
+    **brutes** du fournisseur (jamais passées à la normalisation de la
+    bibliothèque, programmes transitoires) ; la comparaison y est
+    indicative, appliquer la limite au contenu en direct exigerait une
+    carte EPG → table serveur.
+  - Fail-open : table ou bibliothèque illisible → JSON d'erreur, jamais une
+    exception.
+
 ## [1.13.13.2] — 2026-09-11
 
 ### Fixed — Création des timers séries compatible 4.10 (activation .strm d'une série)

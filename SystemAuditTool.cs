@@ -86,12 +86,15 @@ namespace LLM_AI
             "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
             "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
             "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
-            "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type). " +
+            "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type), " +
+            "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
+            "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
+            "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
             "Actions de REMÉDIATION (écriture, requièrent AuditRemediationEnabled activé en config) : " +
             "stop_session, trigger_task, send_message.";
 
         public string ArgumentsSchema => @"{
-  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | stop_session | trigger_task | send_message"",
+  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | ratings_check | stop_session | trigger_task | send_message"",
   ""limit"": ""(active_sessions / list_logs) nombre max de résultats (défaut 50)"",
   ""include_hidden"": ""(scheduled_tasks) true pour inclure les tâches cachées (défaut false)"",
   ""top_n"": ""(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)"",
@@ -175,6 +178,7 @@ namespace LLM_AI
                     case "processes":         result = Processes(args); break;
                     case "library_stats":    result = LibraryStats(); break;
                     case "missing_metadata": result = MissingMetadata(args); break;
+                    case "ratings_check":    result = RatingsCheck(); break;
                     case "stop_session":      result = await StopSessionAsync(args, ct).ConfigureAwait(false); break;
                     case "trigger_task":      result = TriggerTask(args); break;
                     case "send_message":      result = await SendMessageAsync(args, ct).ConfigureAwait(false); break;
@@ -1047,6 +1051,154 @@ namespace LLM_AI
                 missing_primary_image = new { count = missingImage, pct = Math.Round(missingImage * pct, 1) },
                 missing_genres = new { count = missingGenres, pct = Math.Round(missingGenres * pct, 1) },
                 examples_missing_overview = examples
+            }, s_json);
+        }
+
+        /// <summary>
+        /// Hygiène des cotes (action <c>ratings_check</c>, lecture seule) :
+        /// compare les cotes <c>OfficialRating</c> des films/séries de la
+        /// bibliothèque ET des programmes EPG à la table parentale intégrée
+        /// du serveur (<c>ILocalizationManager.GetParentalRatings()</c> — la
+        /// même liste que le menu de limite parentale du dashboard).
+        /// <para><b>Pourquoi</b> : une cote non reconnue rend la limite
+        /// parentale (<c>MaxParentalRating</c>) aveugle sur cet item — le
+        /// filtrage natif compare des scores numériques, une cote hors table
+        /// n'a pas de score. Les fournisseurs (TMDB/TVDB, guide EPG) livrent
+        /// des formats nationaux hétérogènes : sans normalisation, la cote
+        /// est « n'importe quoi ». Bibliothèque non alignée → avertissement
+        /// + conseil de normalisation (ex. Classification Mapper). Les
+        /// marqueurs « non coté » (NR, Unrated…) sont comptés à part :
+        /// légitimes, couverts par la policy <c>BlockUnratedItems</c>.
+        /// L'EPG n'est JAMAIS passé à la normalisation de la bibliothèque
+        /// (programmes transitoires, refetchés au guide) : census séparé en
+        /// info, la comparaison y est indicative.</para>
+        /// <para>Fail-open : table ou bibliothèque illisible → JSON d'erreur,
+        /// jamais une exception (ne casse pas la boucle agent).</para>
+        /// </summary>
+        private string RatingsCheck()
+        {
+            // Table parentale du serveur (même source que le menu du dashboard).
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var loc = _host?.TryResolve<MediaBrowser.Model.Globalization.ILocalizationManager>();
+                foreach (var r in loc?.GetParentalRatings() ?? Array.Empty<MediaBrowser.Model.Entities.ParentalRating>())
+                    if (!string.IsNullOrWhiteSpace(r?.Name)) known.Add(r.Name.Trim());
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] ratings_check : table parentale illisible : {0}", ex.Message);
+                return Err("ratings_check : table parentale du serveur illisible : " + ex.Message);
+            }
+            if (known.Count == 0)
+                return Err("ratings_check : la table parentale du serveur est vide.");
+
+            // Marqueurs « non coté » légitimes : hors table, mais pas du
+            // désordre (pas de score à leur donner — BlockUnratedItems couvre).
+            var unratedMarkers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "NR", "Not Rated", "Unrated", "N/A" };
+
+            // --- Bibliothèque (films + séries) --------------------------------
+            int libTotal = 0, libRecognized = 0, libUnrated = 0;
+            var unrecognizedCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var unrecognizedExamples = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                var items = _library.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+                libTotal = items.Length;
+                foreach (var i in items)
+                {
+                    var rating = i?.OfficialRating;
+                    if (string.IsNullOrWhiteSpace(rating)) { libUnrated++; continue; }
+                    var r = rating.Trim();
+                    if (unratedMarkers.Contains(r)) { libUnrated++; continue; }
+                    if (known.Contains(r)) { libRecognized++; continue; }
+                    unrecognizedCounts[r] = unrecognizedCounts.TryGetValue(r, out var c) ? c + 1 : 1;
+                    if (!unrecognizedExamples.ContainsKey(r)) unrecognizedExamples[r] = i?.Name ?? "?";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] ratings_check : lecture bibliothèque impossible : {0}", ex.Message);
+                return Err("ratings_check : lecture bibliothèque impossible : " + ex.Message);
+            }
+
+            int libUnrecognized = unrecognizedCounts.Values.Sum();
+            string libSeverity = libUnrecognized == 0 ? "ok" : "avertissement";
+            string libAdvice = libUnrecognized == 0
+                ? null
+                : "Utilisez un outil de normalisation des cotes (ex. plugin Classification Mapper) pour " +
+                  "aligner les cotes de la bibliothèque sur la table parentale du serveur " +
+                  "(tableau de bord → contrôle parental) — sans cela, toute limite parentale est " +
+                  "aveugle sur ces items.";
+
+            // Top valeurs non reconnues (détail + 1er exemple d'item).
+            var topUnrecognized = unrecognizedCounts
+                .OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Take(10)
+                .Select(kv => new { value = kv.Key, count = kv.Value, example = unrecognizedExamples.TryGetValue(kv.Key, out var n) ? n : "?" })
+                .ToList();
+
+            // --- EPG (cotes brutes du fournisseur de guide) -------------------
+            object epg = null;
+            try
+            {
+                var liveTv = _host?.TryResolve<MediaBrowser.Controller.LiveTv.ILiveTvManager>();
+                var programs = liveTv?.GetPrograms(new InternalItemsQuery
+                {
+                    EnableTotalRecordCount = false
+                })?.Items ?? Array.Empty<BaseItemDto>();
+                int epgTotal = 0, epgRecognized = 0, epgUnrated = 0;
+                var epgUnrecognized = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                foreach (var p in programs)
+                {
+                    var rating = p?.OfficialRating;
+                    if (string.IsNullOrWhiteSpace(rating)) { epgUnrated++; continue; }
+                    var r = rating.Trim();
+                    epgTotal++;
+                    if (unratedMarkers.Contains(r)) { epgUnrated++; continue; }
+                    if (known.Contains(r)) { epgRecognized++; continue; }
+                    epgUnrecognized[r] = epgUnrecognized.TryGetValue(r, out var c) ? c + 1 : 1;
+                }
+                epg = new
+                {
+                    total_programs = epgTotal,
+                    recognized = epgRecognized,
+                    unrecognized = epgUnrecognized.Values.Sum(),
+                    unrecognized_values = epgUnrecognized
+                        .OrderByDescending(kv => kv.Value).Select(kv => kv.Key).Take(15).ToList(),
+                    unrated = epgUnrated,
+                    note = "Les cotes EPG viennent BRUTES du fournisseur de guide (formats nationaux, " +
+                           "jamais passés à la normalisation de la bibliothèque) — attendu ; la comparaison " +
+                           "y est indicative. Appliquer une limite parentale au contenu en direct exige une " +
+                           "carte EPG → table serveur."
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] ratings_check : lecture EPG impossible : {0}", ex.Message);
+                epg = new { note = "EPG non vérifiable : " + ex.Message };
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                server_table_size = known.Count,
+                library = new
+                {
+                    total = libTotal,
+                    recognized = libRecognized,
+                    unrecognized = libUnrecognized,
+                    unrecognized_top = topUnrecognized,
+                    unrated = libUnrated,
+                    severity = libSeverity,
+                    advice = libAdvice
+                },
+                epg
             }, s_json);
         }
 
@@ -1929,6 +2081,7 @@ namespace LLM_AI
             SectionSync("gpu_transcode", () => GpuTranscode());
             SectionSync("library_stats", () => LibraryStats());
             SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
+            SectionSync("ratings_check", () => RatingsCheck());
             SectionSync("security_check", () => SecurityCheck());
             await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);
 

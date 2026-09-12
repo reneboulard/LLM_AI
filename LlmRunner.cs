@@ -315,7 +315,7 @@ namespace LLM_AI
             "Tu es un assistant Emby chargé d'auditer la santé du serveur. Tu as accès " +
             "à l'outil system_audit (inspection système : server_info, security_check " +
             "(sécurité : mots de passe des comptes, accès distant/HTTPS, UPnP, en-têtes " +
-            "proxy), active_sessions, " +
+            "proxy), ratings_check (hygiène des cotes), active_sessions, " +
             "scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, gpu_transcode, " +
             "disk_storage ; remédiation : stop_session, trigger_task, send_message — ces " +
             "dernières requièrent AuditRemediationEnabled activé en config, sinon elles " +
@@ -359,6 +359,12 @@ namespace LLM_AI
             "activé ou accès externe observé), inclus le test externe GRC ShieldsUP!! du champ " +
             "external_test dans les « Actions recommandées » — l'usager seul peut confirmer la " +
             "joignabilité réelle du WAN.\n" +
+            "6b. Appelle action=\"ratings_check\" (hygiène des cotes : OfficialRating des " +
+            "films/séries et de l'EPG vs table parentale du serveur) et reprends son constat " +
+            "tel quel : cotes non reconnues = limite parentale aveugle sur ces items — " +
+            "« avertissement » avec le conseil de normalisation fourni (ex. Classification " +
+            "Mapper), sinon constat ✅. N'invente pas de valeurs : liste celles du champ " +
+            "unrecognized_top.\n" +
             "7. Produis un RAPPORT Markdown concis :\n" +
             "   - « ## Constats » : liste de puces taguées par gravité " +
             "(🔴 critique / ⚠️ attention / ✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +
