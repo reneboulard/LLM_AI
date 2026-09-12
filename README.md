@@ -610,6 +610,18 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
   la playlist ») et bibliothèque **.strm** (accès sans droit d'enregistrement
   → ⚠️, droit sans accès → ℹ️). L'admin décide ensuite « qui a accès à quoi »
   dans le dashboard ; le plugin ne modifie jamais les comptes.
+- **Contrôle parental : collection et règles de tags (v1.13.17.0)** — suite à la
+  validation empirique du BoxSet (le listing de ses membres est filtré
+  **nativement** par Emby pour un compte restreint ; le container reste
+  toujours visible même quand sa cote agrégée dépasse la limite — la
+  collection n'est **pas** un contournement, contrairement à la playlist) :
+  membres de la collection **« AI Tonight »** au-dessus de la limite d'un
+  compte restreint → ℹ️ info (masqués de son listing, « accessibles par accès
+  direct à l'id — comportement Emby natif ») ; `BlockedTags`/`IncludeTags`
+  ne matchant **aucun** item de la bibliothèque (coquille de frappe = règle
+  aveugle : règle noire sans protection, liste blanche sur-bloquante) → ⚠️ ;
+  usager « Tonight » lui-même restreint → ℹ️ (l'intersection de la publique
+  vaut sa propre policy). Résumé ✅ quand les règles sont opérantes.
 - **Hygiène des cotes (v1.13.14.0)** — l'action `ratings_check` de l'audit compare
   les cotes (`OfficialRating`) des films/séries et de l'EPG à la table parentale
   intégrée du serveur : des cotes non reconnues rendent la limite parentale

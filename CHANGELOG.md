@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.17.0] — 2026-09-12
+
+### Added — Audit : volet contrôle parental complété (collection + règles de tags)
+
+Suite à la validation empirique du modèle parental du BoxSet (2026-09-12,
+compte restreint + token réel) :
+
+- **Collection « AI Tonight » (BoxSet) — INFO de transparence** : le listing
+  de ses membres est filtré **nativement** par Emby pour un compte restreint
+  (un item CA-14A ajouté au BoxSet est invisible dans le listing du compte,
+  les items sous la limite restent), et le **container** reste toujours
+  visible, même quand sa cote agrégée (calculée depuis les membres) dépasse
+  la limite. La collection n'est donc **pas** un contournement (contraire-
+  ment à la playlist, corrigée en v1.13.16.0) — l'audit signale en **info**
+  (pas en alerte) les membres au-dessus de la limite d'un compte restreint,
+  avec la mention honnête « accessibles par accès direct à l'id (comporte-
+  ment Emby natif, hors du plugin) ».
+- **Règles de tags inopérantes — AVERTISSEMENT** : un `BlockedTags` ou
+  `IncludeTags` dont la valeur ne matche **aucun** item de la bibliothèque
+  (coquille de frappe, accent) est une règle **aveugle** — règle noire :
+  le compte croit être protégé sans l'être ; liste blanche : le compte ne
+  voit pratiquement rien. Testé par requête `Limit=1` (même filtre que
+  AiTagger), fail-open (pas de fausse alerte si la requête échoue).
+- **INFO : l'usager « Tonight » sous contrôle parental** — l'intersection
+  parentale de la playlist publique vaut alors exactement sa propre policy.
+- Résumé « Contrôle parental : règles et collection cohérentes » quand les
+  comptes restreints ont des règles opérantes et rien à signaler.
+
 ## [1.13.16.0] — 2026-09-12
 
 ### Added — Playlists « AI Tonight » conformes aux droits (privée par usager + publique foyer à intersection parentale)

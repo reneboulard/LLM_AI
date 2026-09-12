@@ -589,6 +589,17 @@ tool). See [Server health audit](#server-health-audit).
   **.strm** library (access without the record right → ⚠️, right without access →
   ℹ️). The admin then decides "who gets access to what" in the dashboard; the
   plugin never modifies accounts.
+- **Parental control: collection and tag rules (v1.13.17.0)** — following the
+  empirical validation of the BoxSet model (its member listing is filtered
+  **natively** by Emby for a restricted account; the container itself stays
+  visible even when its aggregate rating exceeds the limit — the collection is
+  **not** a bypass, unlike the playlist): "AI Tonight" collection members above a
+  restricted account's limit → ℹ️ info (hidden from their listing, "reachable by
+  direct id access — native Emby behavior"); `BlockedTags`/`IncludeTags` values
+  matching **no** library item (a typo = a blind rule: block list without
+  protection, or an over-blocking allow list) → ⚠️; the "Tonight" user itself
+  being restricted → ℹ️ (the public playlist's intersection then equals their own
+  policy). ✅ summary when the rules are operative.
 - **Rating hygiene (v1.13.14.0)** — the audit's `ratings_check` action compares
   movie/series and EPG ratings (`OfficialRating`) against the server's built-in
   parental rating table: unrecognized ratings make the parental limit **blind**

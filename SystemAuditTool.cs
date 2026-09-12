@@ -1261,15 +1261,24 @@ namespace LLM_AI
         ///   réel) ET historique des appareils <c>IDeviceManager.GetDevices</c>
         ///   (table Devices2 de authentication.db — preuve durable : tout
         ///   appareil jamais connecté avec une IP publique).</item>
-        /// <item><b>Surfaces plugin</b> (v1.13.13.0) : la playlist publique
-        ///   « AI Tonight » et la bibliothèque .strm sont des surfaces foyer —
-        ///   vérifie que chaque usager actif ne voit pas d'items hors des
-        ///   bibliothèques partagées avec lui (FilterAccessible, fail-open) ni
-        ///   au-dessus de sa limite parentale (<c>MaxParentalRating</c> vs
-        ///   <c>GetInheritedParentalRatingValue</c>), et que
-        ///   l'accès aux cartes .strm s'accompagne du droit d'enregistrement
-        ///   (règle v1.13.11.0 — inverse en info). Un échec de lecture →
-        ///   constat « info non vérifiable », jamais une erreur.</item>
+        /// <item><b>Surfaces plugin</b> (v1.13.13.0) : les playlists
+        ///   « AI Tonight » (publique foyer + privées par usager,
+        ///   v1.13.16.0 — verdict parental COMPLET du gate) et la bibliothèque
+        ///   .strm sont des surfaces foyer — vérifie que chaque usager actif
+        ///   ne voit pas d'items hors des bibliothèques partagées avec lui
+        ///   (FilterAccessible, fail-open) ni au-dessus de son contrôle
+        ///   parental complet, et que l'accès aux cartes .strm s'accompagne
+        ///   du droit d'enregistrement (règle v1.13.11.0 — inverse en info).
+        ///   Un échec de lecture → constat « info non vérifiable », jamais
+        ///   une erreur.</item>
+        /// <item><b>Contrôle parental : collection et règles de tags</b>
+        ///   (v1.13.17.0) : la collection « AI Tonight » (BoxSet) — le listing
+        ///   de ses membres est filtré NATIVEMENT par Emby (validé) et le
+        ///   container reste visible — est couverte en INFO (pas un
+        ///   contournement, contrairement à la playlist) ; les règles de
+        ///   tags <c>BlockedTags</c>/<c>IncludeTags</c> ne matchant aucun
+        ///   item (règles AVEUGLES) → AVERTISSEMENT ; usager « Tonight »
+        ///   restreint → INFO.</item>
         /// </list>
         /// <b>Escalade de sévérité</b> : si un accès externe est observé
         /// (session ou appareil historique avec IP publique), tout constat
@@ -1601,6 +1610,133 @@ namespace LLM_AI
                                 (u.Name ?? "?") + " porte le droit d'enregistrement mais n'a pas accès à la bibliothèque .strm — les cartes de recommandation sont invisibles pour ce compte.",
                                 "Optionnel : Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → ajouter la bibliothèque .strm à son accès aux médias.");
                     }
+                }
+
+                // --- C. Contrôle parental : collection et règles de tags ----
+                // (v1.13.17.0) Deux volets complémentaires aux playlists :
+                //
+                // • Collection « AI Tonight » (BoxSet) : le listing de ses
+                //   membres est filtré NATIVEMENT par Emby pour un compte
+                //   restreint (validé 2026-09-12 : un item CA-14A ajouté au
+                //   BoxSet est invisible dans le listing du compte, les items
+                //   sous la limite restent visibles) et le container lui-même
+                //   reste toujours visible, même quand sa cote agrégée dépasse
+                //   la limite. Ce n'est donc pas un contournement (contraire-
+                //   ment à la playlist, corrigée en v1.13.16.0) — INFO de
+                //   transparence, pas alerte. L'accès direct par id reste
+                //   possible (comportement Emby natif, hors du plugin).
+                // • Règles de TAGS inopérantes : un BlockedTags / IncludeTags
+                //   dont la valeur ne matche AUCUN item de la bibliothèque
+                //   (coquille de frappe, accent) est une règle AVEUGLE — le
+                //   compte croit être protégé sans l'être (règle noire) ou ne
+                //   voit plus rien (liste blanche). Seul trou parental restant
+                //   côté plugin → AVERTISSEMENT.
+                var restrictedUsers = new List<User>();
+                int parentalFindings = findings.Count;
+                foreach (var u in activeUsers)
+                    if (u != null && PermissionGate.HasParentalRestrictions(u))
+                        restrictedUsers.Add(u);
+
+                if (restrictedUsers.Count > 0)
+                {
+                    // INFO : l'usager « Tonight » porte lui-même des règles —
+                    // l'intersection parentale de la playlist publique vaut
+                    // exactement sa propre policy (la surface foyer ne montre
+                    // jamais plus que ce qu'il voit lui-même).
+                    string tonightName = cfg?.TonightUserName;
+                    if (!string.IsNullOrWhiteSpace(tonightName) && restrictedUsers.Any(u =>
+                            string.Equals(u.Name, tonightName.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        Add("info", "L'usager « Tonight » est sous contrôle parental",
+                            "L'intersection parentale de la playlist publique « " + AiTonightPlaylistManager.PlaylistName +
+                            " » vaut alors exactement la policy de cet usager — la surface foyer ne montre jamais plus que ce qu'il voit lui-même.", null);
+
+                    // INFO de transparence sur la collection (listing filtré
+                    // nativement, pas un contournement).
+                    BaseItem tonightCollection = null;
+                    try
+                    {
+                        foreach (var b in _library.GetItemList(new InternalItemsQuery
+                        {
+                            IncludeItemTypes = new[] { "BoxSet" },
+                            EnableTotalRecordCount = false
+                        }) ?? Array.Empty<BaseItem>())
+                            if (string.Equals(b.Name, AiTonightCollectionManager.CollectionName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                tonightCollection = b;
+                                break;
+                            }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Warn("[LLM_AI] system_audit security_check parental (collection) : {0}", ex.Message);
+                    }
+                    if (tonightCollection != null)
+                    {
+                        var members = new List<BaseItem>();
+                        try
+                        {
+                            // Membres d'un BoxSet : via InternalItemsQuery
+                            // .CollectionIds (ParentId n'existe pas sur cette
+                            // build — voir AiTonightCollectionManager).
+                            foreach (var m in _library.GetItemList(new InternalItemsQuery
+                            {
+                                CollectionIds = new[] { tonightCollection.InternalId },
+                                EnableTotalRecordCount = false
+                            }) ?? Array.Empty<BaseItem>())
+                                if (m != null) members.Add(m);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger?.Warn("[LLM_AI] system_audit security_check parental (membres collection) : {0}", ex.Message);
+                        }
+                        if (members.Count > 0)
+                        {
+                            foreach (var u in restrictedUsers)
+                            {
+                                int blocked = members.Count(m =>
+                                    PermissionGate.IsParentallyAllowed(u, m) != PermissionGate.ParentalVerdict.Allowed);
+                                if (blocked > 0)
+                                    Add("info", "Collection « AI Tonight » : contenu au-dessus du contrôle parental de " + (u.Name ?? "?"),
+                                        blocked + " item(s) sur " + members.Count + " ne passent pas le contrôle parental de ce compte. Sa vue listing les MASQUE (filtrage natif du BoxSet, validé) — ils restent accessibles par accès direct à l'id (comportement Emby natif, hors du plugin). La collection est remplie par le run « Watch Tonight » de l'usager « Tonight », sans intersection parentale (contrairement à la playlist publique).",
+                                        "Optionnel : ajuster la policy du compte (Dashboard → Utilisateurs → contrôle parental), ou garder les recos « Tonight » sous la limite la plus basse du foyer.");
+                            }
+                        }
+                    }
+
+                    // AVERTISSEMENT : règles de tags inopérantes (règle
+                    // aveugle). Existence testée par une requête Limit=1
+                    // (même filtre que AiTagger).
+                    foreach (var u in restrictedUsers)
+                    {
+                        var pol = u.Policy;
+                        if (pol == null) continue;
+
+                        foreach (var tag in pol.BlockedTags ?? Array.Empty<string>())
+                        {
+                            if (string.IsNullOrWhiteSpace(tag)) continue;
+                            if (!TagMatchesAnyItem(tag))
+                                Add("avertissement", "Tag bloqué inopérant pour " + (u.Name ?? "?") + " : « " + tag + " »",
+                                    "Aucun item de la bibliothèque ne porte ce tag — la règle noire de contrôle parental ne bloque donc RIEN (règle aveugle : le compte croit être protégé sans l'être).",
+                                    "Corriger la valeur dans Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → contrôle parental (orthographe et accents exacts).");
+                        }
+
+                        if (pol.IsTagBlockingModeInclusive)
+                            foreach (var tag in pol.IncludeTags ?? Array.Empty<string>())
+                            {
+                                if (string.IsNullOrWhiteSpace(tag)) continue;
+                                if (!TagMatchesAnyItem(tag))
+                                    Add("avertissement", "Tag de liste blanche inopérant pour " + (u.Name ?? "?") + " : « " + tag + " »",
+                                        "Mode « Exclure tous sauf le tag » : aucun item ne porte ce tag — le compte ne voit pratiquement aucun contenu (sur-blocage involontaire, effet miroir de la règle aveugle).",
+                                        "Corriger la valeur dans Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → contrôle parental (orthographe et accents exacts).");
+                            }
+                    }
+
+                    if (findings.Count == parentalFindings)
+                        Add("ok", "Contrôle parental : règles et collection cohérentes",
+                            "Les règles de tags des comptes restreints matchent des items de la bibliothèque" +
+                            (tonightCollection != null
+                                ? ", et la collection « AI Tonight » n'expose rien au-delà des limites dans les listings (filtrage natif du BoxSet, validé)."
+                                : ") — la collection « AI Tonight » n'existe pas (aucun run « Watch Tonight » encore, ou option désactivée)."), null);
                 }
             }
             catch (Exception ex)
@@ -2617,6 +2753,33 @@ namespace LLM_AI
 
         private static string Truncate(string s, int max) =>
             string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
+
+        /// <summary>
+        /// Un tag de règle parentale (BlockedTags / IncludeTags) matche-t-il au
+        /// moins un item de la bibliothèque ? Requête <c>Limit=1</c> avec le
+        /// même filtre que AiTagger (<see cref="InternalItemsQuery.Tags"/>) —
+        /// une coquille de frappe (accent, casse gérée par Emby, mais pas les
+        /// accents) rend la règle AVEUGLE : aucun constat de règle noire
+        /// inopérante ne doit passer inaperçu. Fail-open : erreur de requête =
+        /// on assume que le tag matche (pas de fausse alerte).
+        /// </summary>
+        private bool TagMatchesAnyItem(string tag)
+        {
+            try
+            {
+                return _library.GetItemList(new InternalItemsQuery
+                {
+                    Tags = new[] { tag },
+                    Limit = 1,
+                    EnableTotalRecordCount = false
+                })?.Length > 0;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check parental (match tag) : {0}", ex.Message);
+                return true;
+            }
+        }
 
         // --- Lecture optionnelle des arguments JSON -----------------------
 
