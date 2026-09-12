@@ -15,14 +15,18 @@ using MediaBrowser.Model.Querying;
 namespace LLM_AI
 {
     /// <summary>
-    /// Maintient une <b>playlist Emby</b> nommée <see cref="PlaylistName"/>
-    /// (« AI Tonight ») remplie à chaque run frais de « À regarder ce soir »
-    /// avec les recos du <b>watch bucket</b> (enregistrements non visionnés +
-    /// items possédés). Miroir de <see cref="AiTonightCollectionManager"/>
-    /// (même workflow : surface au run, nettoyage à 3 h par
-    /// <c>AiTonightCleanupTask</c>), mais sous forme de <b>playlist</b> —
-    /// lecture enchaînée directement depuis n'importe quel client Emby,
-    /// là où la collection est une simple navigation.
+    /// Maintient les <b>playlists Emby</b> de « À regarder ce soir » — depuis
+    /// la v1.13.16.0, <b>une privée par usager</b> (« AI Tonight · {usager} »,
+    /// remplie par les runs de chacun avec ses recos déjà filtrées par sa
+    /// policy parentale) et <b>une publique foyer</b> (<see cref="PlaylistName"/>,
+    /// « AI Tonight », remplie par les runs de l'usager « Tonight » avec
+    /// l'<b>intersection parentale</b> : seulement ce que tout compte actif
+    /// peut lire). Le contenu vient du <b>watch bucket</b> du run
+    /// (enregistrements non visionnés + items possédés). Miroir de
+    /// <see cref="AiTonightCollectionManager"/> (même workflow : surface au
+    /// run, nettoyage à 3 h par <c>AiTonightCleanupTask</c>), mais sous forme
+    /// de <b>playlist</b> — lecture enchaînée directement depuis n'importe
+    /// quel client Emby, là où la collection est une simple navigation.
     /// </summary>
     /// <remarks>
     /// <para>Comportement (v1.13.2) : <b>détruite puis recréée à chaque
@@ -66,60 +70,158 @@ namespace LLM_AI
         /// </summary>
         public const string PlaylistName = "AI Tonight";
 
+        /// <summary>
+        /// Nom de la playlist PRIVÉE d'un usager : « AI Tonight · {usager} ».
+        /// Le nom EST le discrimineur de propriétaire (v1.13.16.0) — l'entité
+        /// <see cref="Playlist"/> n'expose pas de champ owner in-process et la
+        /// sémantique de visibilité des requêtes in-process n'est pas fiable
+        /// pour les playlists (validé 2026-09-12 : la vue <c>?UserId=</c>+
+        /// clé admin donne des résultats incohérents) ; le suffixe rend le
+        /// find déterministe sans dépendre de l'une ni de l'autre.
+        /// </summary>
+        public static string UserPlaylistName(User user)
+        {
+            return (user == null || string.IsNullOrWhiteSpace(user.Name))
+                ? PlaylistName + " · ?"
+                : PlaylistName + " · " + user.Name.Trim();
+        }
+
         // ------------------------------------------------------------------
-        //  Maintien de la playlist (création + reset)
+        //  Maintien des playlists (création + reset)
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Garantit que la playlist <see cref="PlaylistName"/> contient
-        /// EXACTEMENT les recos fraîches du run : <b>détruite puis recréée</b>
-        /// à chaque appel. <paramref name="itemGuidIds"/> (ids du watch
-        /// bucket, cf. <see cref="ItemIdResolver"/>) est d'abord normalisé
-        /// en <b>feuilles</b> via <see cref="ResolveLeafIds"/> : une reco
-        /// série/saison devient son épisode « next up » non vu (usager
-        /// Tonight), pas la série entière (Emby développerait la série en
-        /// TOUS ses épisodes à l'ajout — cf. remarque de classe).
-        /// <paramref name="user"/> est l'usager propriétaire. Best-effort :
-        /// un id non résolvable ou un échec d'API est logué sans lever.
+        /// Playlist PRIVÉE du run (v1.13.16.0) : chaque usager a la sienne
+        /// (« AI Tonight · {usager} », <c>IsPublic=false</c> — invisible des
+        /// autres comptes, comportement par défaut d'une playlist Emby créée
+        /// sans MakePublic, validé 2026-09-12). Détruite puis recréée à
+        /// chaque appel avec les recos fraîches du run de CET usager — un
+        /// run ne touche plus jamais la playlist d'un autre (la course du
+        /// remplissage disparaît). Les ids du watch bucket sont normalisés
+        /// en <b>feuilles</b> via <see cref="ResolveLeafItems"/> (série/saison
+        /// → épisode next up), puis re-passés par le <b>filet parental</b>
+        /// (<see cref="PermissionGate.FilterParental"/>) : les recos sont
+        /// déjà filtrées dans <c>ValidateAndFilter</c>, mais une feuille
+        /// résolue (épisode héritant d'une cote au-dessus de la limite)
+        /// ne doit pas entrer dans la playlist. Best-effort : un échec
+        /// d'API est logué sans lever.
         /// </summary>
-        internal static async Task EnsureAsync(
+        internal static async Task EnsureUserAsync(
             IPlaylistManager playlists, ILibraryManager library, ILogger logger,
             IEnumerable<string> itemGuidIds, User user, IServerApplicationHost host, CancellationToken ct)
         {
-            if (playlists == null || library == null || itemGuidIds == null)
+            if (playlists == null || library == null || itemGuidIds == null || user == null)
                 return;
 
-            var freshLongIds = ResolveLeafIds(library, host, itemGuidIds, user, logger, ct);
+            string name = UserPlaylistName(user);
+            var leaves = ResolveLeafItems(library, host, itemGuidIds, user, logger, ct);
+            leaves = PermissionGate.FilterParental(user, leaves, logger) ?? leaves;
 
-            // 1) Destruction systématique de la playlist existante :
-            //    RemoveFromPlaylist est INOPÉRANT sur ce build Emby (4.9.5.0 —
-            //    SQLiteException en REST, no-op en interne ; vécu 2026-09-06 :
-            //    403 entrées dupliquées ×6). Détruire + recréer est le seul
-            //    reset fiable. La coquille change d'id à chaque run : sans
-            //    importance (retrouvée par nom, cf. FindPlaylist).
-            DestroyPlaylist(library, logger);
+            // 1) Destruction systématique de la playlist de l'usager :
+            //    RemoveFromPlaylist est INOPÉRANT sur ce build Emby (cf.
+            //    remarque de classe). Détruire + recréer est le seul reset
+            //    fiable. La coquille change d'id à chaque run : sans
+            //    importance (retrouvée par nom).
+            DestroyPlaylist(library, logger, name, false);
 
-            if (freshLongIds.Count == 0)
+            if (leaves.Count == 0)
             {
                 // Aucun membre frais : rester à zéro (ne jamais recréer vide).
-                logger?.Info("[LLM_AI] Playlist « {0} » : aucun membre frais — playlist absente/supprimée.", PlaylistName);
+                logger?.Info("[LLM_AI] Playlist « {0} » : aucun membre frais — playlist absente/supprimée.", name);
                 return;
             }
 
-            // 2) Création avec les membres fraîchs (feuilles uniquement).
+            // 2) Création privée avec les membres frais (feuilles uniquement).
+            try
+            {
+                var request = new PlaylistCreationRequest
+                {
+                    Name = name,
+                    ItemIdList = leaves.Select(i => i.InternalId).ToArray(),
+                    MediaType = "Video",
+                    // IsPublic non posé = false (playlist privée Emby : le
+                    // seul chemin public est le POST explicite MakePublic,
+                    // jamais appelé ici).
+                    User = user
+                };
+                var result = await playlists.CreatePlaylist(request).ConfigureAwait(false);
+                logger?.Info("[LLM_AI] Playlist « {0} » : recréée (id={1}, privée) avec {2} entrée(s).",
+                    name, result?.Id, result?.ItemAddedCount ?? leaves.Count);
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Playlist « {0} » : échec CreatePlaylist : {1}", name, ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Playlist PUBLIQUE foyer (v1.13.16.0) : « AI Tonight »
+        /// (<c>IsPublic=true</c>, visible de tous), reconstruite par les runs
+        /// de l'usager « Tonight » uniquement. Contenu = <b>intersection
+        /// parentale</b> : un item est écarté si UN SEUL usager actif
+        /// restreint (<paramref name="restrictedUsers"/>) ne peut pas le
+        /// lire — verdict <see cref="PermissionGate.IsParentallyAllowed"/>,
+        /// exactement la décision du gate des recos v1.13.15.0. Pourquoi :
+        /// le contrôle parental Emby est LISTING-ONLY (validé 2026-09-12) —
+        /// un item visible dans une playlist publique est LISIBLE par un
+        /// compte restreint, et la playlist publique est une surface foyer ;
+        /// l'intersection la rend incapable d'exposer ce qu'un compte ne
+        /// peut pas déjà voir. Détruite puis recréée à chaque appel (aucun
+        /// membre acceptable = playlist absente, jamais recréée vide).
+        /// Best-effort : un échec d'API est logué sans lever.
+        /// </summary>
+        internal static async Task EnsurePublicAsync(
+            IPlaylistManager playlists, ILibraryManager library, ILogger logger,
+            IEnumerable<string> itemGuidIds, User owner, List<User> restrictedUsers,
+            IServerApplicationHost host, CancellationToken ct)
+        {
+            if (playlists == null || library == null || itemGuidIds == null || owner == null)
+                return;
+
+            var leaves = ResolveLeafItems(library, host, itemGuidIds, owner, logger, ct);
+
+            var kept = new List<BaseItem>(leaves.Count);
+            int blocked = 0;
+            foreach (var it in leaves)
+            {
+                bool allowed = true;
+                foreach (var u in restrictedUsers ?? new List<User>())
+                {
+                    if (u == null) continue;
+                    if (PermissionGate.IsParentallyAllowed(u, it) != PermissionGate.ParentalVerdict.Allowed)
+                    {
+                        allowed = false;
+                        blocked++;
+                        break;
+                    }
+                }
+                if (allowed) kept.Add(it);
+            }
+            if (blocked > 0)
+                logger?.Info("[LLM_AI] Playlist « {0} » : {1} item(s) écarté(s) par l'intersection parentale ({2} usager(s) actif(s) restreint(s)).",
+                    PlaylistName, blocked, restrictedUsers?.Count ?? 0);
+
+            DestroyPlaylist(library, logger, PlaylistName, true);
+
+            if (kept.Count == 0)
+            {
+                logger?.Info("[LLM_AI] Playlist « {0} » : aucun membre acceptable pour tout le foyer — playlist absente/supprimée.", PlaylistName);
+                return;
+            }
+
             try
             {
                 var request = new PlaylistCreationRequest
                 {
                     Name = PlaylistName,
-                    ItemIdList = freshLongIds.ToArray(),
+                    ItemIdList = kept.Select(i => i.InternalId).ToArray(),
                     MediaType = "Video",
                     IsPublic = true,
-                    User = user
+                    User = owner
                 };
                 var result = await playlists.CreatePlaylist(request).ConfigureAwait(false);
-                logger?.Info("[LLM_AI] Playlist « {0} » : recréée (id={1}) avec {2} entrée(s).",
-                    PlaylistName, result?.Id, result?.ItemAddedCount ?? freshLongIds.Count);
+                logger?.Info("[LLM_AI] Playlist « {0} » : recréée (id={1}, publique, foyer) avec {2} entrée(s).",
+                    PlaylistName, result?.Id, result?.ItemAddedCount ?? kept.Count);
             }
             catch (Exception ex)
             {
@@ -132,13 +234,16 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Ajoute des items à la playlist <see cref="PlaylistName"/> SANS
-        /// reset (additif pur) — contrairement à <see cref="EnsureAsync"/> qui
-        /// remplace tout le contenu. Hygiène (v1.13.2) : les ids sont d'abord
-        /// normalisés en <b>feuilles</b> via <see cref="ResolveLeafIds"/>
-        /// (série/saison → épisode next up), puis <b>dédupliqués</b> contre
-        /// les entrées courantes (un item déjà présent n'est pas re-ajouté).
-        /// Crée la playlist (mêmes options : publique, <paramref name="user"/>
+        /// Ajoute des items à la playlist PUBLIQUE foyer
+        /// <see cref="PlaylistName"/> SANS reset (additif pur) — le chat est
+        /// une surface foyer : il vise « AI Tonight » (publique), jamais la
+        /// playlist privée d'un usager. Contrairement à
+        /// <see cref="EnsurePublicAsync"/> qui remplace tout le contenu.
+        /// Hygiène (v1.13.2) : les ids sont d'abord normalisés en
+        /// <b>feuilles</b> via <see cref="ResolveLeafItems"/> (série/saison →
+        /// épisode next up), puis <b>dédupliqués</b> contre les entrées
+        /// courantes (un item déjà présent n'est pas re-ajouté). Crée la
+        /// playlist (mêmes options : publique, <paramref name="user"/>
         /// propriétaire) si absente ; sinon <c>AddToPlaylist</c> sur la
         /// coquille existante. Retourne les ids <b>réellement ajoutés</b>
         /// (vérifiés par re-listing des entrées après l'appel). Best-effort :
@@ -155,7 +260,7 @@ namespace LLM_AI
             var freshLongIds = ResolveLeafIds(library, host, itemIds, user, logger, ct);
             if (freshLongIds.Count == 0) return new List<long>();
 
-            Playlist playlist = FindPlaylist(library);
+            Playlist playlist = FindPlaylist(library, PlaylistName, true);
             if (playlist != null)
             {
                 // Dédup : ne soumettre que ce qui n'est PAS déjà une entrée
@@ -194,7 +299,7 @@ namespace LLM_AI
 
                 // Comptage honnête : re-listing des entrées après l'appel
                 // (un id non appliqué par Emby ne sera pas compté).
-                playlist = FindPlaylist(library) ?? playlist;
+                playlist = FindPlaylist(library, PlaylistName, true) ?? playlist;
                 var after = new HashSet<long>(GetEntryIds(library, playlist));
                 return arr.Where(id => after.Contains(id)).ToList();
             }
@@ -224,7 +329,7 @@ namespace LLM_AI
             if (playlists == null || library == null || itemIds == null)
                 return new List<long>();
 
-            Playlist playlist = FindPlaylist(library);
+            Playlist playlist = FindPlaylist(library, PlaylistName, true);
             if (playlist == null) return new List<long>();
 
             long[] entryIds = GetEntryIds(library, playlist);
@@ -268,12 +373,13 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// <b>Supprime</b> la playlist <see cref="PlaylistName"/> (item +
-        /// fichier .m3u sous-jacent) — elle est recréée au prochain run
-        /// Tonight. Remplace l'ancien « vidage par RemoveFromPlaylist »,
-        /// inopérant sur ce build Emby (cf. remarque de classe). No-op si la
-        /// playlist n'existe pas. Best-effort : un échec d'API est logué sans
-        /// lever.
+        /// <b>Supprime</b> les playlists du plugin (item + fichier .m3u
+        /// sous-jacent) : la publique foyer <see cref="PlaylistName"/> ET
+        /// toutes les privées par usager (« AI Tonight · … ») — elles sont
+        /// recréées aux prochains runs Tonight. Remplace l'ancien « vidage
+        /// par RemoveFromPlaylist », inopérant sur ce build Emby (cf.
+        /// remarque de classe). No-op si aucune n'existe. Best-effort : un
+        /// échec d'API est logué sans lever.
         /// </summary>
         internal static Task ClearAsync(
             IPlaylistManager playlists, ILibraryManager library, ILogger logger, CancellationToken ct)
@@ -281,7 +387,35 @@ namespace LLM_AI
             if (library == null)
                 return Task.CompletedTask;
 
-            DestroyPlaylist(library, logger);
+            try
+            {
+                var all = library.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Playlist" },
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+                foreach (var p in all.OfType<Playlist>())
+                {
+                    if (p == null || string.IsNullOrWhiteSpace(p.Name)) continue;
+                    bool ours = string.Equals(p.Name, PlaylistName, StringComparison.OrdinalIgnoreCase)
+                        || p.Name.StartsWith(PlaylistName + " · ", StringComparison.OrdinalIgnoreCase);
+                    if (!ours) continue;
+                    try
+                    {
+                        library.DeleteItem(p, new DeleteOptions { DeleteFileLocation = true });
+                        logger?.Info("[LLM_AI] Playlist « {0} » : coquille supprimée (id={1}) — recréation au prochain remplissage.",
+                            p.Name, p.InternalId);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Warn("[LLM_AI] Playlist « {0} » : échec suppression coquille : {1}", p.Name, ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Playlist : échec nettoyage des coquilles : {0}", ex.Message);
+            }
             return Task.CompletedTask;
         }
 
@@ -290,27 +424,29 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Supprime l'item <see cref="Playlist"/> (et son fichier .m3u
+        /// Supprime l'item <see cref="Playlist"/> ciblé (et son fichier .m3u
         /// sous-jacent via <c>DeleteOptions.DeleteFileLocation = true</c>) —
         /// seul reset fiable sur ce build, <c>RemoveFromPlaylist</c> y étant
         /// inopérant (no-op silencieux en interne, SQLiteException via REST ;
         /// vécu 2026-09-06 : 403 entrées dupliquées ×6). La coquille change
         /// d'id à chaque appel : sans importance (retrouvée par nom).
+        /// <paramref name="publicOnly"/> : vrai = ne viser que la coquille
+        /// PUBLIQUE du nom (la privée d'un usager homonyme est préservée).
         /// </summary>
-        private static void DestroyPlaylist(ILibraryManager library, ILogger logger)
+        private static void DestroyPlaylist(ILibraryManager library, ILogger logger, string name, bool publicOnly)
         {
             try
             {
-                Playlist playlist = FindPlaylist(library);
+                Playlist playlist = FindPlaylist(library, name, publicOnly);
                 if (playlist == null) return;
 
                 library.DeleteItem(playlist, new DeleteOptions { DeleteFileLocation = true });
                 logger?.Info("[LLM_AI] Playlist « {0} » : coquille supprimée (id={1}) — recréation au prochain remplissage.",
-                    PlaylistName, playlist.InternalId);
+                    name, playlist.InternalId);
             }
             catch (Exception ex)
             {
-                logger?.Warn("[LLM_AI] Playlist : échec suppression coquille : {0}", ex.Message);
+                logger?.Warn("[LLM_AI] Playlist « {0} » : échec suppression coquille : {1}", name, ex.Message);
             }
         }
 
@@ -335,7 +471,23 @@ namespace LLM_AI
             ILibraryManager library, IServerApplicationHost host,
             IEnumerable<string> itemIds, User user, ILogger logger, CancellationToken ct)
         {
-            var leaves = new List<long>();
+            return ResolveLeafItems(library, host, itemIds, user, logger, ct)
+                .Select(i => i.InternalId).ToList();
+        }
+
+        /// <summary>
+        /// Variante <b>items</b> de <see cref="ResolveLeafIds"/> (v1.13.16.0) :
+        /// retourne les feuilles elles-mêmes (et pas seulement leurs ids) —
+        /// le filet parental (<see cref="PermissionGate.FilterParental"/>) et
+        /// l'intersection parentale de la playlist publique ont besoin des
+        /// <see cref="BaseItem"/> pour évaluer la policy. Dédup par InternalId.
+        /// </summary>
+        private static List<BaseItem> ResolveLeafItems(
+            ILibraryManager library, IServerApplicationHost host,
+            IEnumerable<string> itemIds, User user, ILogger logger, CancellationToken ct)
+        {
+            var leaves = new List<BaseItem>();
+            var seen = new HashSet<long>();
             if (itemIds == null) return leaves;
 
             ITVSeriesManager tv = null;
@@ -416,12 +568,12 @@ namespace LLM_AI
                     }
                     logger?.Info("[LLM_AI] Playlist : série « {0} » → épisode « {1} » (id={2}).",
                         series.Name, ep.Name, ep.InternalId);
-                    if (!leaves.Contains(ep.InternalId)) leaves.Add(ep.InternalId);
+                    if (seen.Add(ep.InternalId)) leaves.Add(ep);
                     continue;
                 }
 
                 // Feuille (film, épisode, vidéo) : telle quelle.
-                if (!leaves.Contains(item.InternalId)) leaves.Add(item.InternalId);
+                if (seen.Add(item.InternalId)) leaves.Add(item);
             }
             return leaves;
         }
@@ -487,26 +639,30 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Recherche la playlist <see cref="PlaylistName"/> parmi les
+        /// Recherche la playlist <paramref name="name"/> parmi les
         /// <see cref="Playlist"/> de la bibliothèque (filtre par type + nom
-        /// exact, comme <c>AiTonightCollectionManager.FindCollection</c>).
-        /// Retourne null si introuvable.
+        /// exact, comme <c>AiTonightCollectionManager.FindCollection</c> ;
+        /// <paramref name="publicOnly"/> exige en plus
+        /// <c>Playlist.IsPublic</c> — le discrimineur public/privé in-process,
+        /// l'entité n'exposant pas de champ owner). Retourne null si
+        /// introuvable.
         /// </summary>
-        internal static Playlist FindPlaylist(ILibraryManager library)
+        internal static Playlist FindPlaylist(ILibraryManager library, string name, bool publicOnly)
         {
             try
             {
                 var q = new InternalItemsQuery
                 {
                     IncludeItemTypes = new[] { "Playlist" },
-                    Name = PlaylistName,
+                    Name = name,
                     EnableTotalRecordCount = false
                 };
                 var items = library.GetItemList(q) ?? Array.Empty<BaseItem>();
                 // GetItemList(Name=…) est censé filtrer par nom, mais on
                 // vérifie la correspondance exacte par sécurité (casse).
-                return items.OfType<Playlist>().FirstOrDefault(
-                    p => string.Equals(p.Name, PlaylistName, StringComparison.OrdinalIgnoreCase));
+                return items.OfType<Playlist>().FirstOrDefault(p =>
+                    p != null && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)
+                    && (!publicOnly || p.IsPublic));
             }
             catch (Exception)
             {

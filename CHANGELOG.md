@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.16.0] — 2026-09-12
+
+### Added — Playlists « AI Tonight » conformes aux droits (privée par usager + publique foyer à intersection parentale)
+
+- **Constat validé empiriquement (Emby 4.10)** : le contrôle parental est
+  **listing-only** — la limite (`MaxParentalRating`) et les tags
+  (`BlockedTags`) filtrent les listings de l'usager, mais la **lecture** d'un
+  item visible (y compris depuis une playlist publique) n'est PAS bloquée
+  (`PlaybackInfo` 200, stream 200 sous token du compte restreint, item
+  CA-14A au-dessus d'une limite CA-PG). L'ancienne playlist publique unique
+  était donc un contourne-ment : le contenu rempli par le run d'un usager
+  sans limite restait lisible par un compte restreint.
+- **Playlist privée par usager** (`AiTonightPlaylistManager.EnsureUserAsync`) :
+  « **AI Tonight · {usager}** », `IsPublic=false` (invisible des autres
+  comptes — défaut d'une playlist Emby sans MakePublic, validé 2026-09-12).
+  Chaque run rafraîchit la playlist **du run** avec SES recos (déjà filtrées
+  par sa policy dans `ValidateAndFilter`), plus un filet parental sur les
+  feuilles résolues (`FilterParental`). Un usager ne peut plus vider ni
+  reconstruire la playlist d'un autre (la course de remplissage disparaît —
+  un run 0-reco ne vide plus la playlist de tous).
+- **Playlist publique foyer** (`EnsurePublicAsync`) : « **AI Tonight** »
+  (`IsPublic=true`), reconstruite uniquement par les runs de l'usager
+  « Tonight » de la config, avec **intersection parentale** — un item du
+  watch bucket est écarté si un seul usager actif porte une règle qui
+  l'interdit (verdict `PermissionGate.IsParentallyAllowed`, compteur au
+  journal). Aucun membre acceptable = playlist absente (jamais recréée vide).
+- **Le nom est le discrimineur in-process** : « AI Tonight » (publique) vs
+  « AI Tonight · {usager} » (privées) — l'entité `Playlist` n'expose pas de
+  champ owner et la vue `?UserId=`+clé admin est incohérente pour les
+  playlists (validé). Le chat (`playlist_add`/`playlist_remove`) vise la
+  publique foyer.
+- **Audit aligné** (`SystemAuditTool`, volet sécurité) : le check des surfaces
+  couvre la publique ET les privées (propriétaire déduit du nom), avec le
+  **verdict parental complet** du gate (limite, tags noirs/blancs, non cotés,
+  tags de série — l'ancien check ne voyait que `MaxParentalRating`) et un
+  libellé honnête : « il peut les LIRE depuis la playlist » (l'ancien texte
+  « ne peut pas la lire » était faux pour le cas cote).
+- **Nettoyage 3 h** (`AiTonightCleanupTask`) : détruit la publique et toutes
+  les privées (« AI Tonight* »).
+
 ## [1.13.15.0] — 2026-09-12
 
 ### Added — Contrôle parental dans « Watch Tonight »

@@ -483,25 +483,50 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight collection : {0}", ex.Message); }
             }
 
-            // Surfaces « personnelles » (playlist + favoris éphémères) : opt-in,
-            // mêmes ids du watch bucket, pour l'usager « Tonight » de la config.
+            // Surfaces playlist (v1.13.16.0) : PRIVÉE par usager + PUBLIQUE
+            // foyer à intersection parentale. L'usager « Tonight » de la
+            // config n'est requis que pour la publique et les favoris.
             User tonightUser = null;
             if (cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
             {
                 tonightUser = ResolveTonightUser(_users, cfg);
                 if (tonightUser == null)
-                    _logger?.Warn("[LLM_AI] Tonight surfaces personnelles : aucun usager résolu (TonightUserName={0}) — ignorées.",
+                    _logger?.Warn("[LLM_AI] Tonight surfaces : aucun usager « Tonight » résolu (TonightUserName={0}) — playlist publique et favoris ignorées.",
                         cfg.TonightUserName);
             }
 
-            if (cfg.TonightPlaylistEnabled && watchBucketIds != null && tonightUser != null)
+            if (cfg.TonightPlaylistEnabled && watchBucketIds != null)
             {
+                // a) Playlist PRIVÉE du run (« AI Tonight · {usager} ») :
+                //    chaque usager a la sienne, remplie avec les recos de SON
+                //    run (déjà filtrées par sa policy parentale dans
+                //    ValidateAndFilter). Un run ne touche plus jamais la
+                //    playlist d'un autre usager — la course du remplissage
+                //    (un run 0-reco vidait la playlist de tous) disparaît.
                 try
                 {
-                    await AiTonightPlaylistManager.EnsureAsync(_playlists, _library, _logger, watchBucketIds, tonightUser, _host, ct)
+                    await AiTonightPlaylistManager.EnsureUserAsync(_playlists, _library, _logger, watchBucketIds, user, _host, ct)
                         .ConfigureAwait(false);
                 }
-                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist : {0}", ex.Message); }
+                catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist privée : {0}", ex.Message); }
+
+                // b) Playlist PUBLIQUE foyer (« AI Tonight ») : SEULEMENT le
+                //    run de l'usager « Tonight » ; contenu = intersection
+                //    parentale (ce que tout compte actif peut lire). Le
+                //    contrôle parental Emby étant listing-only (validé
+                //    2026-09-12 — un item de playlist visible est LISIBLE),
+                //    l'intersection est ce qui empêche la surface foyer
+                //    d'exposer du contenu interdit à un compte restreint.
+                if (tonightUser != null && user.Id == tonightUser.Id)
+                {
+                    try
+                    {
+                        await AiTonightPlaylistManager.EnsurePublicAsync(_playlists, _library, _logger,
+                                watchBucketIds, tonightUser, GetActiveRestrictedUsers(_users), _host, ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist publique : {0}", ex.Message); }
+                }
             }
 
             if (cfg.TonightFavoritesEnabled && watchBucketIds != null && tonightUser != null)
@@ -1011,6 +1036,28 @@ namespace LLM_AI
                     ?? all.FirstOrDefault();
             }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// Usagers ACTIFS portant au moins une règle parentale
+        /// (<see cref="PermissionGate.HasParentalRestrictions"/>) — la liste
+        /// d'intersection de la playlist publique foyer. Un usager
+        /// désactivé ne voit aucune surface : il n'entre pas dans
+        /// l'intersection. Best-effort : échec de listing = liste vide
+        /// (l'intersection se réduit au comportement sans filtre, le gate
+        /// des recos reste lui appliqué au run).
+        /// </summary>
+        internal static List<User> GetActiveRestrictedUsers(IUserManager users)
+        {
+            var list = new List<User>();
+            try
+            {
+                foreach (var u in users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                    if (u != null && u.Policy?.IsDisabled != true && PermissionGate.HasParentalRestrictions(u))
+                        list.Add(u);
+            }
+            catch { /* liste vide : intersection sans filtre */ }
+            return list;
         }
 
         /// <summary>

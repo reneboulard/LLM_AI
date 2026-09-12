@@ -510,6 +510,30 @@ dit au LLM en amont, imposé mécaniquement en aval) :
   n'héritent que des recos déjà validées — elles ne contiennent jamais d'item
   que la policy cache.
 
+#### Playlists « AI Tonight » conformes aux droits (v1.13.16.0)
+
+Le contrôle parental Emby est **listing-only** (validé empiriquement sur
+4.10 : limite et tags filtrent les listings, mais la lecture d'un item visible
+— y compris depuis une playlist — n'est PAS bloquée). La playlist publique
+unique était donc un **contourne-ment** : un item au-dessus de la limite d'un
+compte restreint, rempli par le run d'un usager sans limite, y restait lisible
+par ce compte. Deux surfaces remplacent l'ancienne playlist unique :
+
+- **Playlist privée par usager** (« AI Tonight · {usager} », `IsPublic=false`)
+  : chaque run rafraîchit la playlist du run avec SES recos (déjà filtrées par
+  sa policy) — plus de course de remplissage entre comptes.
+- **Playlist publique foyer** (« AI Tonight », `IsPublic=true`) : remplie
+  uniquement par les runs de l'usager « Tonight », avec **intersection
+  parentale** — un item est écarté si un seul usager actif porte une règle qui
+  l'interdit (même verdict que le gate des recos). La surface foyer ne peut
+  plus exposer ce qu'un compte ne peut pas déjà lire.
+- **Audit aligné (volet sécurité de `system_audit`)** : le check des surfaces
+  couvre publique + privées, avec le verdict parental COMPLET du gate (limite,
+  tags noirs/blancs, non cotés, tags de série — l'ancien check ne voyait que
+  la limite) et un libellé honnête : « il peut les LIRE depuis la playlist ».
+- Modèle de visibilité des playlists Emby documenté dans
+  [Surfaces natives](#playlists-ai-tonight-privée-par-usager--publique-foyer-watch-bucket).
+
 ### Surfaces natives (bibliothèque .strm, genre, collection)
 
 Trois leviers **opt-in** (défaut `false`) qui exposent les recos directement dans
@@ -578,12 +602,14 @@ rapport de santé du serveur. Indépendant de la recommandation (run agent dédi
   renvoient une erreur et le LLM se contente de les **recommander** dans le rapport.
   Double contrôle : le prompt d'audit demande de toute façon au LLM de ne JAMAIS agir
   sans demande explicite — ce flag n'ouvre que la *capacité*, pas l'autonomie.
-- **Surfaces foyer (v1.13.13.0)** — le volet sécurité de l'audit vérifie aussi la
-  cohérence d'accès des surfaces du plugin : playlist publique **« AI Tonight »**
-  (items hors des bibliothèques partagées avec l'usager, ou au-dessus de sa limite
-  parentale → ⚠️) et bibliothèque **.strm** (accès sans droit d'enregistrement → ⚠️,
-  droit sans accès → ℹ️). L'admin décide ensuite « qui a accès à quoi » dans le
-  dashboard ; le plugin ne modifie jamais les comptes.
+- **Surfaces foyer (v1.13.13.0, verdicts complets v1.13.16.0)** — le volet
+  sécurité de l'audit vérifie aussi la cohérence d'accès des surfaces du
+  plugin : playlists **« AI Tonight »** (publique foyer ET privées par usager —
+  items hors des bibliothèques partagées avec l'usager, ou ne passant pas son
+  contrôle parental complet → ⚠️, avec le libellé « il peut les LIRE depuis
+  la playlist ») et bibliothèque **.strm** (accès sans droit d'enregistrement
+  → ⚠️, droit sans accès → ℹ️). L'admin décide ensuite « qui a accès à quoi »
+  dans le dashboard ; le plugin ne modifie jamais les comptes.
 - **Hygiène des cotes (v1.13.14.0)** — l'action `ratings_check` de l'audit compare
   les cotes (`OfficialRating`) des films/séries et de l'EPG à la table parentale
   intégrée du serveur : des cotes non reconnues rendent la limite parentale
@@ -1031,18 +1057,36 @@ la parcourt comme n'importe quelle collection dans n'importe quel client.
   du genre (les deux peuvent cohabiter). Vérifié : `CreateCollection(ParentId=0)`
   ressort dans la liste des Collections.
 
-### Playlist « AI Tonight » (watch bucket)
+### Playlists « AI Tonight » : privée par usager + publique foyer (watch bucket)
 
-`AiTonightPlaylistManager` maintient une **playlist jouable** `AI Tonight`
-(option `TonightPlaylistEnabled`) : détruite puis **recréée à chaque run frais**
-de « À regarder ce soir » — la liste exacte des recommandations du jour, sans
-accumulation — pour un enchaînement direct depuis n'importe quel client Emby
-(miroir de la collection, même nettoyage de 3 h).
+`AiTonightPlaylistManager` maintient **deux familles de playlists jouables**
+(option `TonightPlaylistEnabled`), détruites puis **recréées à chaque run
+frais** de « À regarder ce soir » — la liste exacte des recommandations du
+jour, sans accumulation — pour un enchaînement direct depuis n'importe quel
+client Emby (miroir de la collection, même nettoyage de 3 h) :
+
+- **Privée par usager** (v1.13.16.0) : « **AI Tonight · {usager}** »,
+  `IsPublic=false` (invisible des autres comptes — défaut d'une playlist Emby
+  créée sans MakePublic). Chaque run rafraîchit la playlist **du run** avec
+  SES recos (déjà filtrées par sa policy parentale — v1.13.15.0) : un usager
+  ne peut plus vider ni reconstruire la playlist d'un autre (la course de
+  remplissage de l'ancien modèle unique disparaît).
+- **Publique foyer** : « **AI Tonight** » (`IsPublic=true`, visible de tous —
+  TV salon, invités), reconstruite **uniquement par les runs de l'usager
+  « Tonight »** de la config, avec l'**intersection parentale** : un item du
+  watch bucket est écarté si **un seul** usager actif porte une règle
+  parentale qui l'interdit (même verdict que le gate des recos,
+  `PermissionGate.IsParentallyAllowed`). Pourquoi : le contrôle parental Emby
+  est **listing-only** (validé 2026-09-12 — un item visible dans une playlist
+  est **lisible** par un compte restreint, la lecture n'est pas bloquée) ;
+  l'intersection rend la surface foyer incapable d'exposer ce qu'un compte ne
+  peut pas déjà voir. Le chat (`playlist_add`/`playlist_remove`) vise la
+  publique foyer.
 
 - **Une feuille jouable par reco** : une reco **série ou saison** n'est jamais
   ajoutée telle quelle (Emby développe une série ajoutée à une playlist en
   TOUS ses épisodes — vérifié : un id série → 52 entrées) mais résolue en **un
-  épisode « next up » non vu** pour l'usager Tonight ; les films/épisodes
+  épisode « next up » non vu** pour l'usager du run ; les films/épisodes
   passent tels quels.
 - **Repli next up (v1.13.10.1)** : sur ce build Emby, `GetNextUp` retourne
   **vide pour une série jamais commencée** — le repli prend le **premier
@@ -1053,6 +1097,12 @@ accumulation — pour un enchaînement direct depuis n'importe quel client Emby
   — le reset passe par destruction + recréation ; le `playlist_remove` du chat
   signale honnêtement l'inopérance (les items tracés du tour
   restent retirables via l'interface Emby).
+- **Modèle de visibilité Emby (validé 2026-09-12)** : playlist créée par un
+  usager = **privée** (le propriétaire seul la voit), `POST /Items/{id}/
+  MakePublic` = visible de tous, admin = voit tout ; la vue `?UserId=` + clé
+  admin est **incohérente pour les playlists** — toute vérification passe par
+  des tokens réels. Le nom (« AI Tonight » vs « AI Tonight · {usager} ») est
+  le discrimineur in-process (l'entité Playlist n'expose pas de champ owner).
 
 ### Nettoyage (tâche `AiTonightCleanupTask`)
 
@@ -1061,10 +1111,12 @@ Tâche planifiée **quotidienne 03:00**, **toujours active** (non gatingée) :
 1. retire le tag `AI Tonight` de tous les items (+ l'ancien genre hérité du même
    nom, migration v1.13.3) via `AiTagger.RemoveAllAsync` ;
 2. **vide** la collection `AI Tonight` (coquille conservée, re-remplie au prochain
-   run frais) — best-effort.
+   run frais) — best-effort ;
+3. **détruit** les playlists `AI Tonight` (publique foyer et privées par
+   usager, v1.13.16.0) — best-effort.
 
-Les runs « ce soir » suivants réajoutent le tag / re-remplissent la collection sur
-les recos toujours pertinentes.
+Les runs « ce soir » suivants réajoutent le tag / re-remplissent la collection /
+recréent les playlists sur les recos toujours pertinentes.
 
 ---
 

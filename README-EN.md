@@ -492,6 +492,30 @@ enforce mechanically downstream):
   only inherit already-validated recos — they never contain an item the policy
   hides.
 
+#### Rights-compliant "AI Tonight" playlists (v1.13.16.0)
+
+Emby parental control is **listing-only** (validated empirically on 4.10: the
+limit and tags filter listings, but playback of a visible item — including from
+a playlist — is NOT blocked). The single public playlist was therefore a
+**bypass**: an item above a restricted account's limit, filled by the run of an
+unrestricted user, remained playable by that account. Two surfaces replace the
+old single playlist:
+
+- **Private per-user playlist** ("AI Tonight · {user}", `IsPublic=false`):
+  every run refreshes that run's playlist with ITS OWN recos (already filtered
+  by its policy) — no more fill race between accounts.
+- **Public household playlist** ("AI Tonight", `IsPublic=true`): filled only by
+  the runs of the configured "Tonight" user, with **parental intersection** —
+  an item is dropped if a single active user carries a rule that forbids it
+  (same verdict as the recos gate). The household surface can no longer expose
+  what an account can't already watch.
+- **Audit aligned (security part of `system_audit`)**: the surfaces check covers
+  public + private playlists, with the gate's FULL parental verdict (limit,
+  tag block/allow lists, unrated, series tags — the old check only saw the
+  limit) and honest wording: "they can PLAY it from the playlist".
+- Emby's playlist visibility model is documented in
+  [Native recommendation surfaces](#ai-tonight-playlists-private-per-user--public-household-watch-bucket).
+
 ### Native surfaces (.strm library, genre, collection)
 
 Three **opt-in** levers (default `false`) that expose recos directly in Emby
@@ -556,12 +580,15 @@ tool). See [Server health audit](#server-health-audit).
   the LLM only **recommends** them in the report. Double control: the audit prompt also
   instructs the LLM never to act without an explicit request — this flag only opens the
   *capability*, not autonomy.
-- **Household surfaces (v1.13.13.0)** — the security part of the audit also checks
-  access coherence across the plugin's surfaces: the public **"AI Tonight"**
-  playlist (items outside the libraries shared with a user, or above their parental
-  limit → ⚠️) and the **.strm** library (access without the record right → ⚠️,
-  right without access → ℹ️). The admin then decides "who gets access to what" in
-  the dashboard; the plugin never modifies accounts.
+- **Household surfaces (v1.13.13.0, full verdicts v1.13.16.0)** — the security part
+  of the audit also checks access coherence across the plugin's surfaces: the
+  **"AI Tonight"** playlists (public household AND private per-user — items outside
+  the libraries shared with a user, or failing their full parental verdict → ⚠️,
+  honest wording: a restricted user can PLAY such an item from the playlist; the
+  private playlist's fix is re-running "Watch Tonight" under that account) and the
+  **.strm** library (access without the record right → ⚠️, right without access →
+  ℹ️). The admin then decides "who gets access to what" in the dashboard; the
+  plugin never modifies accounts.
 - **Rating hygiene (v1.13.14.0)** — the audit's `ratings_check` action compares
   movie/series and EPG ratings (`OfficialRating`) against the server's built-in
   parental rating table: unrecognized ratings make the parental limit **blind**
@@ -1007,13 +1034,31 @@ browses it like any collection in any client.
   the tag (both can coexist). Verified: `CreateCollection(ParentId=0)` shows up
   in the Collections list.
 
-### "AI Tonight" playlist (watch bucket)
+### "AI Tonight" playlists: private per-user + public household (watch bucket)
 
-`AiTonightPlaylistManager` maintains a **playable** `AI Tonight` **playlist**
-(option `TonightPlaylistEnabled`): destroyed then **recreated on every fresh**
+`AiTonightPlaylistManager` maintains **two families of playable playlists**
+(option `TonightPlaylistEnabled`), destroyed then **recreated on every fresh**
 "Tonight" run — exactly the day's recommendations, no accumulation — for
 direct sequential playback from any Emby client (mirror of the collection,
-same 3 a.m. cleanup).
+same 3 a.m. cleanup):
+
+- **Private per-user** (v1.13.16.0): "**AI Tonight · {user}**", `IsPublic=false`
+  (invisible to other accounts — the default of an Emby playlist created
+  without MakePublic). Each run refreshes **that run's** playlist with ITS
+  recos (already filtered by its parental policy — v1.13.15.0): a user can no
+  longer empty or rebuild another user's playlist (the single-playlist fill
+  race is gone).
+- **Public household**: "**AI Tonight**" (`IsPublic=true`, visible to
+  everyone — living-room TV, guests), rebuilt **only by the runs of the
+  configured "Tonight" user**, with the **parental intersection**: a watch
+  bucket item is dropped if a **single** active user carries a parental rule
+  that forbids it (same verdict as the recos gate,
+  `PermissionGate.IsParentallyAllowed`). Why: Emby parental control is
+  **listing-only** (validated 2026-09-12 — an item visible in a playlist is
+  **playable** by a restricted account, playback is not blocked); the
+  intersection makes the household surface unable to expose what an account
+  can't already watch. The chat (`playlist_add`/`playlist_remove`) targets
+  the public household playlist.
 
 - **One playable leaf per reco**: a **series/season** reco is never added as-is
   (Emby expands it into ALL its episodes — verified: one series id → 52
@@ -1028,6 +1073,12 @@ same 3 a.m. cleanup).
 - **Hygiene (v1.13.2)**: on this Emby build, `RemoveFromPlaylist` is a no-op —
   the reset goes through destroy + recreate; the chat's `playlist_remove`
   honestly reports the no-op (traced items remain removable from the Emby UI).
+- **Emby visibility model (validated 2026-09-12)**: a playlist created by a
+  user = **private** (owner only), `POST /Items/{id}/MakePublic` = visible to
+  all, admin = sees everything; the `?UserId=` + admin-key view is
+  **inconsistent for playlists** — any verification goes through real tokens.
+  The name ("AI Tonight" vs "AI Tonight · {user}") is the in-process
+  discriminator (the `Playlist` entity exposes no owner field).
 
 ### Cleanup (`AiTonightCleanupTask`)
 
@@ -1036,10 +1087,12 @@ same 3 a.m. cleanup).
 1. removes the `AI Tonight` tag from all items (plus the legacy genre of the same
    name, v1.13.3 migration) via `AiTagger.RemoveAllAsync`;
 2. **empties** the `AI Tonight` collection (shell kept, refilled on the next fresh
-   run) — best-effort.
+   run) — best-effort;
+3. **destroys** the `AI Tonight` playlists (public household and private
+   per-user, v1.13.16.0) — best-effort.
 
-Subsequent tonight runs re-add the tag / refill the collection on still-relevant
-recos.
+Subsequent tonight runs re-add the tag / refill the collection / recreate the
+playlists on still-relevant recos.
 
 ---
 

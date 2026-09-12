@@ -18,6 +18,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Logging;
@@ -1422,14 +1423,17 @@ namespace LLM_AI
                     "Optionnel : Dashboard → Réseau → « Filtre d'adresses externes » en mode whitelist.");
             }
 
-            // ---- Surfaces plugin : cohérence d'accès (v1.13.13.0) --------
-            // La playlist « AI Tonight » est PUBLIQUE (surface foyer) et la
-            // bibliothèque .strm expose les cartes d'enregistrement. Un usager
-            // peut donc voir ces surfaces sans avoir accès aux bibliothèques
-            // qui portent leur contenu (il voit la reco — titre, poster —
-            // mais ne peut pas la lire), ou accéder aux cartes .strm sans
-            // porter le droit d'enregistrement (règle v1.13.11.0). On
-            // signale ces décalages à l'admin — le dashboard reste maître
+            // ---- Surfaces plugin : cohérence d'accès (v1.13.13.0,
+            //      playlists per-usager + verdicts complets v1.13.16.0) ---
+            // Les playlists « AI Tonight » (publique foyer + privées par
+            // usager) et la bibliothèque .strm exposent les cartes
+            // d'enregistrement. Un usager peut donc voir ces surfaces sans
+            // avoir accès aux bibliothèques qui portent leur contenu (il
+            // voit la reco — titre, poster — hébergée ailleurs), ou accéder
+            // aux cartes .strm sans porter le droit d'enregistrement (règle
+            // v1.13.11.0). Le contrôle parental Emby étant LISTING-ONLY,
+            // un item visible dans une playlist est LISIBLE — l'audit
+            // signale ces décalages à l'admin ; le dashboard reste maître
             // des accès, le plugin ne modifie jamais les comptes.
             int surfacesFindings = findings.Count;
             bool playlistChecked = false, strmChecked = false;
@@ -1453,61 +1457,111 @@ namespace LLM_AI
                     _logger?.Warn("[LLM_AI] system_audit security_check surfaces (usagers) : {0}", ex.Message);
                 }
 
-                // --- A. Playlist « AI Tonight » ---------------------------
-                var members = new List<BaseItem>();
+                // --- A. Playlists « AI Tonight » (publique + privées) ------
+                // v1.13.16.0 : la playlist PUBLIQUE foyer (« AI Tonight »)
+                // coexiste avec les playlists PRIVÉES par usager
+                // (« AI Tonight · {usager} », remplie par les runs de chacun).
+                // Le contrôle parental Emby est LISTING-ONLY (validé
+                // 2026-09-12 : un item visible dans une playlist est LISIBLE
+                // par le compte — ni la limite ni les tags ne bloquent la
+                // lecture). L'audit vérifie donc ce que chaque surface expose
+                // contre les droits de chaque compte concerné, avec le VERDICT
+                // COMPLET du gate (PermissionGate.IsParentallyAllowed — limite
+                // de cote, tags noirs/blancs, non cotés, tags de série), le
+                // même code de décision que les recos de « Watch Tonight ».
+                var pluginPlaylists = new List<(Playlist pl, User owner)>();
                 try
                 {
-                    var playlist = AiTonightPlaylistManager.FindPlaylist(_library);
-                    if (playlist != null)
-                        foreach (var it in playlist.GetItemList(new InternalItemsQuery
+                    foreach (var p in _library.GetItemList(new InternalItemsQuery
+                    {
+                        IncludeItemTypes = new[] { "Playlist" },
+                        EnableTotalRecordCount = false
+                    }) ?? Array.Empty<BaseItem>())
+                    {
+                        var pl = p as Playlist;
+                        if (pl == null || string.IsNullOrWhiteSpace(pl.Name)) continue;
+                        if (string.Equals(pl.Name, AiTonightPlaylistManager.PlaylistName, StringComparison.OrdinalIgnoreCase))
+                            pluginPlaylists.Add((pl, null));   // publique foyer
+                        else if (pl.Name.StartsWith(AiTonightPlaylistManager.PlaylistName + " · ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            string suffix = pl.Name.Substring(AiTonightPlaylistManager.PlaylistName.Length + 3).Trim();
+                            User owner = null;
+                            try { owner = _users.GetUserByName(suffix); } catch { }
+                            owner = owner ?? activeUsers.FirstOrDefault(u =>
+                                string.Equals(u.Name, suffix, StringComparison.OrdinalIgnoreCase));
+                            pluginPlaylists.Add((pl, owner));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit security_check surfaces (playlists) : {0}", ex.Message);
+                    Add("info", "Playlists « AI Tonight » non vérifiables",
+                        "Listing des playlists impossible : " + ex.Message, null);
+                }
+
+                foreach (var entry in pluginPlaylists)
+                {
+                    var members = new List<BaseItem>();
+                    try
+                    {
+                        foreach (var it in entry.pl.GetItemList(new InternalItemsQuery
                         {
                             EnableTotalRecordCount = false
                         }) ?? Array.Empty<BaseItem>())
                             if (it != null) members.Add(it);
-                }
-                catch (Exception ex)
-                {
-                    _logger?.Warn("[LLM_AI] system_audit security_check surfaces (playlist) : {0}", ex.Message);
-                    Add("info", "Playlist « AI Tonight » non vérifiable",
-                        "Lecture de la playlist impossible : " + ex.Message, null);
-                }
-
-                if (members.Count > 0)
-                {
-                    playlistChecked = true;
-                    foreach (var u in activeUsers)
+                    }
+                    catch (Exception ex)
                     {
+                        _logger?.Warn("[LLM_AI] system_audit security_check surfaces (playlist) : {0}", ex.Message);
+                        continue;
+                    }
+                    if (members.Count == 0) continue;
+                    playlistChecked = true;
+
+                    bool isPublic = entry.owner == null;
+                    string surface = isPublic
+                        ? "Playlist publique « " + entry.pl.Name + " »"
+                        : "Playlist privée « " + entry.pl.Name + " »";
+                    // Usagers concernés : le propriétaire pour une privée,
+                    // tous les actifs pour la publique (surface foyer).
+                    var usersToCheck = isPublic
+                        ? activeUsers
+                        : (entry.owner != null ? new List<User> { entry.owner } : new List<User>());
+
+                    foreach (var u in usersToCheck)
+                    {
+                        if (u == null) continue;
+
                         // Mismatch bibliothèque : même mécanique que le gate des
                         // recos (v1.13.12.0) — les items de la playlist doivent
                         // rester dans les bibliothèques accessibles à l'usager.
-                        if (PermissionGate.HasUnrestrictedFolders(u)) continue;
-                        var accessible = PermissionGate.FilterAccessible(u, _library, _logger, members);
-                        if (accessible == null) continue;   // fail-open : résolution échouée
-                        int hidden = members.Count - accessible.Count;
-                        if (hidden > 0)
-                            Add("avertissement", "Playlist « AI Tonight » : items hors des bibliothèques accessibles à " + (u.Name ?? "?"),
-                                hidden + " item(s) sur " + members.Count + " sont hébergés dans des bibliothèques non partagées avec ce compte — il voit la reco dans la playlist publique mais ne peut pas la lire.",
-                                "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → « Accès aux médias » : donner la bibliothèque concernée, ou retirer l'item du watch bucket (page Recommandations).");
-
-                        // Limite parentale : contenu visible dans la playlist
-                        // publique au-dessus de la limite du compte.
-                        // (GetInheritedParentalRatingValue hérite de la fiche
-                        // parentale calculée par le serveur — jamais nulle
-                        // seule : les deux null = contenu non coté, fail-open.)
-                        int? parental = u.Policy?.MaxParentalRating;
-                        if (parental.HasValue)
+                        if (!PermissionGate.HasUnrestrictedFolders(u))
                         {
-                            int over = members.Count(m =>
+                            var accessible = PermissionGate.FilterAccessible(u, _library, _logger, members);
+                            if (accessible != null)   // null = fail-open : résolution échouée
                             {
-                                int? rating = m.GetInheritedParentalRatingValue()
-                                    ?? m.GetParentalRatingValue();
-                                return rating.HasValue && rating.Value > parental.Value;
-                            });
-                            if (over > 0)
-                                Add("avertissement", "Playlist « AI Tonight » : contenu au-dessus de la limite parentale de " + (u.Name ?? "?"),
-                                    over + " item(s) sur " + members.Count + " dépassent sa limite parentale (" + parental.Value + ") — visibles dans la playlist publique.",
-                                    "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → contrôle parental : ajuster la limite, ou retirer l'item du watch bucket (page Recommandations).");
+                                int hidden = members.Count - accessible.Count;
+                                if (hidden > 0)
+                                    Add("avertissement", surface + " : items hors des bibliothèques accessibles à " + (u.Name ?? "?"),
+                                        hidden + " item(s) sur " + members.Count + " sont hébergés dans des bibliothèques non partagées avec ce compte — il voit l'item dans la playlist alors que sa bibliothèque ne lui est pas partagée.",
+                                        "Dashboard → Utilisateurs → " + (u.Name ?? "?") + " → « Accès aux médias » : donner la bibliothèque concernée, ou retirer l'item du watch bucket (page Recommandations).");
+                            }
                         }
+
+                        // Verdict parental COMPLET (v1.13.16.0) : remplace
+                        // l'ancien check « MaxParentalRating seul » — le
+                        // contrôle parental Emby ne bloque PAS la lecture
+                        // depuis une playlist (validé 2026-09-12), donc un
+                        // item interdit visible y est LISIBLE.
+                        int blocked = members.Count(m =>
+                            PermissionGate.IsParentallyAllowed(u, m) != PermissionGate.ParentalVerdict.Allowed);
+                        if (blocked > 0)
+                            Add("avertissement", surface + " : contenu au-dessus du contrôle parental de " + (u.Name ?? "?"),
+                                blocked + " item(s) sur " + members.Count + " ne passent pas le contrôle parental de ce compte (limite de cote, tags ou non cotés bloqués) — il peut les LIRE depuis la playlist, le contrôle parental Emby ne bloque pas la lecture.",
+                                isPublic
+                                    ? "La playlist publique est reconstruite à l'intersection parentale par le prochain run « Watch Tonight » de l'usager « Tonight » — ou ajuster la policy du compte (Dashboard → Utilisateurs → contrôle parental)."
+                                    : "La playlist privée a été remplie avant un changement de policy — relancer « Watch Tonight » sous ce compte la reconstruit filtrée, ou ajuster la policy.");
                     }
                 }
 
@@ -1558,12 +1612,12 @@ namespace LLM_AI
             if (!playlistChecked && !strmChecked)
             {
                 Add("info", "Surfaces plugin absentes ou vides",
-                    "Playlist « AI Tonight » absente ou vide, et bibliothèque .strm non configurée — rien à vérifier pour l'instant (les surfaces apparaissent à la prochaine génération de recommandations).", null);
+                    "Aucune playlist « AI Tonight » remplie (publique ou privée), et bibliothèque .strm non configurée — rien à vérifier pour l'instant (les surfaces apparaissent à la prochaine génération de recommandations).", null);
             }
             else if (findings.Count == surfacesFindings)
             {
                 Add("ok", "Surfaces plugin : accès cohérents",
-                    "Playlist « AI Tonight » et bibliothèque .strm" + (string.IsNullOrWhiteSpace(strmName) ? " (non configurée)" : " (« " + strmName + " »)") +
+                    "Playlists « AI Tonight » et bibliothèque .strm" + (string.IsNullOrWhiteSpace(strmName) ? " (non configurée)" : " (« " + strmName + " »)") +
                     " : aucun décalage entre les surfaces visibles et les droits des usagers.", null);
             }
 
