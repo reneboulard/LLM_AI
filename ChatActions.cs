@@ -232,8 +232,8 @@ namespace LLM_AI
                 new TagTonightTool(cfg, sessionId, library, logger),
                 new CollectionAddTool(cfg, sessionId, collections, library, host, logger),
                 new CollectionRemoveTool(cfg, sessionId, collections, library, logger),
-                new PlaylistAddTool(cfg, sessionId, playlists, library, users, host, logger),
-                new PlaylistRemoveTool(cfg, sessionId, playlists, library, logger),
+                new PlaylistAddTool(cfg, sessionId, playlists, library, adminUser, host, logger),
+                new PlaylistRemoveTool(cfg, sessionId, playlists, library, adminUser, logger),
             };
             if (cfg != null && cfg.ChatTonightRunEnabled)
                 tools.Add(new RunTonightTool(cfg, sessionId, adminUser, users, json, library, liveTv, host, logger));
@@ -747,21 +747,23 @@ namespace LLM_AI
             private readonly string _sessionId;
             private readonly IPlaylistManager _playlists;
             private readonly ILibraryManager _library;
-            private readonly IUserManager _users;
+            private readonly User _adminUser;
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
             public PlaylistAddTool(PluginConfiguration cfg, string sessionId,
                 IPlaylistManager playlists, ILibraryManager library,
-                IUserManager users, IServerApplicationHost host, ILogger logger)
+                User adminUser, IServerApplicationHost host, ILogger logger)
             {
                 _cfg = cfg; _sessionId = sessionId; _playlists = playlists;
-                _library = library; _users = users; _host = host; _logger = logger;
+                _library = library; _adminUser = adminUser; _host = host; _logger = logger;
             }
 
             public string Name => "playlist_add";
             public string Description =>
-                "Ajoute des items à la playlist « AI Tonight » (additif — ne touche pas aux entrées existantes). " +
+                "Ajoute des items à la playlist privée du compte admin (« AI Tonight · {admin} », v1.13.18.0 — " +
+                "la playlist publique foyer « AI Tonight » reste remplie uniquement par le run « Watch Tonight » " +
+                "avec intersection parentale). Additif — ne touche pas aux entrées existantes. " +
                 "Ne l'appeler qu'APRÈS confirmation explicite de l'admin. 1 à 10 ids.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
@@ -790,20 +792,20 @@ namespace LLM_AI
                     if (verdict != BudgetVerdict.Ok)
                         return BudgetRefusal(_sessionId, verdict, _cfg);
 
-                    User owner = TonightService.ResolveTonightUser(_users, _cfg);
-                    if (owner == null && _users != null)
-                    {
-                        var all = _users.GetUserList(new UserQuery()) ?? Array.Empty<User>();
-                        owner = all.FirstOrDefault(u => u?.Policy?.IsAdministrator ?? false) ?? all.FirstOrDefault();
-                    }
-                    if (owner == null)
+                    // v1.13.18.0 : cible = playlist PRIVÉE du compte admin
+                    // (le chat est admin-only). Un item ajouté au chat n'a pas
+                    // traversé l'intersection parentale du run « Tonight » —
+                    // le poser dans la privée de l'admin referme le
+                    // contournement de la publique foyer.
+                    if (_adminUser == null)
                     {
                         Refund(_sessionId, norm.Count);
-                        return Json(new { status = "refused", detail = "aucun usager Emby résolvable pour la playlist." });
+                        return Json(new { status = "refused", detail = "aucun usager admin résolvable pour la playlist." });
                     }
+                    string targetName = AiTonightPlaylistManager.UserPlaylistName(_adminUser);
 
                     var addedIds = await AiTonightPlaylistManager.AddItemsAsync(
-                        _playlists, _library, _logger, norm, owner, _host, ct).ConfigureAwait(false);
+                        _playlists, _library, _logger, norm, _adminUser, _host, ct).ConfigureAwait(false);
                     int added = addedIds.Count;
                     if (added <= 0)
                     {
@@ -817,11 +819,11 @@ namespace LLM_AI
                     if (added < norm.Count) Refund(_sessionId, norm.Count - added);
 
                     _logger?.Info("[LLM_AI] Chat action : {0} item(s) ajouté(s) à la playlist « {1} ».",
-                        added, AiTonightPlaylistManager.PlaylistName);
+                        added, targetName);
                     await ToastActionAsync(_sessionId, "Chat : " + added + " item(s) ajouté(s) à la playlist « "
-                        + AiTonightPlaylistManager.PlaylistName + " »", _logger).ConfigureAwait(false);
+                        + targetName + " »", _logger).ConfigureAwait(false);
                     return Json(new { status = "ok", detail = added + " item(s) ajouté(s) à la playlist « "
-                        + AiTonightPlaylistManager.PlaylistName + " »." });
+                        + targetName + " » (privée, compte admin)." });
                 }
                 catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
                 catch (Exception ex)
@@ -838,18 +840,20 @@ namespace LLM_AI
             private readonly string _sessionId;
             private readonly IPlaylistManager _playlists;
             private readonly ILibraryManager _library;
+            private readonly User _adminUser;
             private readonly ILogger _logger;
 
             public PlaylistRemoveTool(PluginConfiguration cfg, string sessionId,
-                IPlaylistManager playlists, ILibraryManager library, ILogger logger)
+                IPlaylistManager playlists, ILibraryManager library, User adminUser, ILogger logger)
             {
                 _cfg = cfg; _sessionId = sessionId; _playlists = playlists;
-                _library = library; _logger = logger;
+                _library = library; _adminUser = adminUser; _logger = logger;
             }
 
             public string Name => "playlist_remove";
             public string Description =>
-                "Retire des items de la playlist « AI Tonight » — SEULEMENT des items que vous avez ajoutés " +
+                "Retire des items de la playlist privée du compte admin (« AI Tonight · {admin} », v1.13.18.0 — " +
+                "symétrique de playlist_add) — SEULEMENT des items que vous avez ajoutés " +
                 "vous-même dans cette conversation (les InternalId items sont les ids d'entrée de la playlist). " +
                 "Toute autre demande est refusée.";
             public string ArgumentsSchema =>
@@ -881,7 +885,7 @@ namespace LLM_AI
                     // disparus du listing comptent (0 sur ce build), le reste
                     // est remboursé et reste traçable.
                     var removedIds = await AiTonightPlaylistManager.RemoveItemsAsync(
-                        _playlists, _library, _logger, eligible, ct).ConfigureAwait(false);
+                        _playlists, _library, _logger, eligible, _adminUser, ct).ConfigureAwait(false);
                     var removed = removedIds.Select(i => i.ToString(CultureInfo.InvariantCulture)).ToList();
                     if (removed.Count < eligible.Count) Refund(_sessionId, eligible.Count - removed.Count);
 
@@ -898,11 +902,14 @@ namespace LLM_AI
                                 + "Ne réessayez pas — le prochain run Tonight recrée la playlist de toute façon." });
                     }
 
+                    string targetName = _adminUser != null
+                        ? AiTonightPlaylistManager.UserPlaylistName(_adminUser)
+                        : AiTonightPlaylistManager.PlaylistName;
                     _logger?.Info("[LLM_AI] Chat action : {0} entrée(s) retirée(s) de la playlist « {1} ».",
-                        removed.Count, AiTonightPlaylistManager.PlaylistName);
+                        removed.Count, targetName);
                     await ToastActionAsync(_sessionId, "Chat : " + removed.Count + " item(s) retiré(s) de la playlist « "
-                        + AiTonightPlaylistManager.PlaylistName + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = removed.Count + " item(s) retiré(s) de la playlist." });
+                        + targetName + " »", _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = removed.Count + " item(s) retiré(s) de la playlist privée du compte admin." });
                 }
                 catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
                 catch (Exception ex)

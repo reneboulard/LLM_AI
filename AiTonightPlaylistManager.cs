@@ -234,16 +234,19 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Ajoute des items à la playlist PUBLIQUE foyer
-        /// <see cref="PlaylistName"/> SANS reset (additif pur) — le chat est
-        /// une surface foyer : il vise « AI Tonight » (publique), jamais la
-        /// playlist privée d'un usager. Contrairement à
-        /// <see cref="EnsurePublicAsync"/> qui remplace tout le contenu.
+        /// Ajoute des items à la playlist PRIVÉE du compte demandeur
+        /// (« <see cref="PlaylistName"/> · {usager} », cf.
+        /// <see cref="UserPlaylistName"/>) SANS reset (additif pur).
+        /// <b>v1.13.18.0</b> : le chat (surface admin) n'ajoute PLUS dans la
+        /// publique foyer — un item ajouté au chat n'a pas traversé
+        /// l'intersection parentale du run « Tonight » ; le poser dans la
+        /// playlist privée de l'admin referme ce contournement (la publique
+        /// reste remplie exclusivement par <see cref="EnsurePublicAsync"/>).
         /// Hygiène (v1.13.2) : les ids sont d'abord normalisés en
         /// <b>feuilles</b> via <see cref="ResolveLeafItems"/> (série/saison →
         /// épisode next up), puis <b>dédupliqués</b> contre les entrées
         /// courantes (un item déjà présent n'est pas re-ajouté). Crée la
-        /// playlist (mêmes options : publique, <paramref name="user"/>
+        /// playlist privée (IsPublic=false, <paramref name="user"/>
         /// propriétaire) si absente ; sinon <c>AddToPlaylist</c> sur la
         /// coquille existante. Retourne les ids <b>réellement ajoutés</b>
         /// (vérifiés par re-listing des entrées après l'appel). Best-effort :
@@ -254,13 +257,14 @@ namespace LLM_AI
             IPlaylistManager playlists, ILibraryManager library, ILogger logger,
             IEnumerable<string> itemIds, User user, IServerApplicationHost host, CancellationToken ct)
         {
-            if (playlists == null || library == null || itemIds == null)
+            if (playlists == null || library == null || itemIds == null || user == null)
                 return new List<long>();
 
+            string name = UserPlaylistName(user);
             var freshLongIds = ResolveLeafIds(library, host, itemIds, user, logger, ct);
             if (freshLongIds.Count == 0) return new List<long>();
 
-            Playlist playlist = FindPlaylist(library, PlaylistName, true);
+            Playlist playlist = FindPlaylist(library, name, false);
             if (playlist != null)
             {
                 // Dédup : ne soumettre que ce qui n'est PAS déjà une entrée
@@ -269,7 +273,7 @@ namespace LLM_AI
                 freshLongIds = freshLongIds.Where(id => !existing.Contains(id)).ToList();
                 if (freshLongIds.Count == 0)
                 {
-                    logger?.Info("[LLM_AI] Playlist « {0} » : ajout (chat) — tous les items déjà présents.", PlaylistName);
+                    logger?.Info("[LLM_AI] Playlist « {0} » : ajout (chat) — tous les items déjà présents.", name);
                     return new List<long>();
                 }
             }
@@ -281,55 +285,58 @@ namespace LLM_AI
                 {
                     var request = new PlaylistCreationRequest
                     {
-                        Name = PlaylistName,
+                        Name = name,
                         ItemIdList = arr,
                         MediaType = "Video",
-                        IsPublic = true,
+                        IsPublic = false,   // privée — visible du seul compte demandeur
                         User = user
                     };
                     var result = await playlists.CreatePlaylist(request).ConfigureAwait(false);
-                    logger?.Info("[LLM_AI] Playlist « {0} » : créée (chat, id={1}) avec {2} item(s).",
-                        PlaylistName, result?.Id, result?.ItemAddedCount ?? arr.Length);
+                    logger?.Info("[LLM_AI] Playlist « {0} » : créée (chat, id={1}, privée) avec {2} item(s).",
+                        name, result?.Id, result?.ItemAddedCount ?? arr.Length);
                 }
                 else
                 {
                     await playlists.AddToPlaylist(playlist, arr, false, user, ct).ConfigureAwait(false);
-                    logger?.Info("[LLM_AI] Playlist « {0} » : {1} item(s) ajouté(s) (chat).", PlaylistName, arr.Length);
+                    logger?.Info("[LLM_AI] Playlist « {0} » : {1} item(s) ajouté(s) (chat).", name, arr.Length);
                 }
 
                 // Comptage honnête : re-listing des entrées après l'appel
                 // (un id non appliqué par Emby ne sera pas compté).
-                playlist = FindPlaylist(library, PlaylistName, true) ?? playlist;
+                playlist = FindPlaylist(library, name, false) ?? playlist;
                 var after = new HashSet<long>(GetEntryIds(library, playlist));
                 return arr.Where(id => after.Contains(id)).ToList();
             }
             catch (Exception ex)
             {
-                logger?.Warn("[LLM_AI] Playlist « {0} » : échec ajout (chat) : {1}", PlaylistName, ex.Message);
+                logger?.Warn("[LLM_AI] Playlist « {0} » : échec ajout (chat) : {1}", name, ex.Message);
                 return new List<long>();
             }
         }
 
         /// <summary>
-        /// Retire des items de la playlist <see cref="PlaylistName"/> —
-        /// <b>par InternalId d'item</b> : les ids demandés sont vérifiés
-        /// contre le listing des entrées courantes et SEULS les ids présents
-        /// dans ce listing sont passés à <c>RemoveFromPlaylist</c>. Le
-        /// résultat est <b>vérifié par re-listing</b> après l'appel :
-        /// <c>RemoveFromPlaylist</c> est INOPÉRANT sur ce build Emby
-        /// (4.9.5.0 — cf. remarque de classe), le retour ne compte donc que
-        /// les ids réellement disparus du listing (0 sur ce build). Retourne
-        /// la liste des ids (normalisés) réellement retirés. Best-effort, ne
-        /// lève jamais. Utilisé par la couche d'action du chat.
+        /// Retire des items de la playlist PRIVÉE du compte demandeur
+        /// (cf. <see cref="UserPlaylistName"/>, v1.13.18.0 — symétrie avec
+        /// <see cref="AddItemsAsync"/>) — <b>par InternalId d'item</b> : les
+        /// ids demandés sont vérifiés contre le listing des entrées courantes
+        /// et SEULS les ids présents dans ce listing sont passés à
+        /// <c>RemoveFromPlaylist</c>. Le résultat est <b>vérifié par
+        /// re-listing</b> après l'appel : <c>RemoveFromPlaylist</c> est
+        /// INOPÉRANT sur ce build Emby (4.9.5.0 — cf. remarque de classe), le
+        /// retour ne compte donc que les ids réellement disparus du listing
+        /// (0 sur ce build). Retourne la liste des ids (normalisés) réellement
+        /// retirés. Best-effort, ne lève jamais. Utilisé par la couche d'action
+        /// du chat.
         /// </summary>
         internal static async Task<List<long>> RemoveItemsAsync(
             IPlaylistManager playlists, ILibraryManager library, ILogger logger,
-            IEnumerable<string> itemIds, CancellationToken ct)
+            IEnumerable<string> itemIds, User user, CancellationToken ct)
         {
-            if (playlists == null || library == null || itemIds == null)
+            if (playlists == null || library == null || itemIds == null || user == null)
                 return new List<long>();
 
-            Playlist playlist = FindPlaylist(library, PlaylistName, true);
+            string name = UserPlaylistName(user);
+            Playlist playlist = FindPlaylist(library, name, false);
             if (playlist == null) return new List<long>();
 
             long[] entryIds = GetEntryIds(library, playlist);
@@ -358,12 +365,12 @@ namespace LLM_AI
                 var after = new HashSet<long>(GetEntryIds(library, playlist));
                 var removed = wanted.Where(id => !after.Contains(id)).ToList();
                 logger?.Info("[LLM_AI] Playlist « {0} » : {1}/{2} entrée(s) réellement retirée(s) (chat).",
-                    PlaylistName, removed.Count, wanted.Count);
+                    name, removed.Count, wanted.Count);
                 return removed;
             }
             catch (Exception ex)
             {
-                logger?.Warn("[LLM_AI] Playlist « {0} » : échec RemoveFromPlaylist (chat) : {1}", PlaylistName, ex.Message);
+                logger?.Warn("[LLM_AI] Playlist « {0} » : échec RemoveFromPlaylist (chat) : {1}", name, ex.Message);
                 return new List<long>();
             }
         }

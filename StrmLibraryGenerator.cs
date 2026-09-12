@@ -715,6 +715,23 @@ namespace LLM_AI
                 sb.Append("  <genre>priority:").Append(XmlEsc(r.Priority.Trim())).Append("</genre>\n");
             if (!string.IsNullOrWhiteSpace(r.Kind))
                 sb.Append("  <genre>kind:").Append(XmlEsc(r.Kind.Trim())).Append("</genre>\n");
+            // Classification du programme EPG source → <mpaa> (v1.13.18.0) :
+            // sans cote, la carte est « non cotée » et la limite parentale
+            // n'a AUCUNE prise (visibles des comptes restreints tant que
+            // BlockUnratedItems ne liste pas le type — constaté 2026-09-12).
+            // On écrit la cote du programme normalisée par le Classification
+            // Mapper (brut EPG « 14+ » → « CA-14A », convention du serveur,
+            // même pipeline que le gate EPG) — la bibliothèque .strm devient
+            // filtrée NATIVEMENT par le contrôle parental dans les listings.
+            // Best-effort : programme résolu sans cote → pas d'élément (la
+            // carte reste NR) ; erreur → carte sans cote, jamais de levée.
+            try
+            {
+                string cardRating = ClassificationMap.Normalize(TryGetEpgProgram(r)?.OfficialRating);
+                if (!string.IsNullOrWhiteSpace(cardRating))
+                    sb.Append("  <mpaa>").Append(XmlEsc(cardRating)).Append("</mpaa>\n");
+            }
+            catch { /* best-effort : carte NR */ }
             // <premiered> = date de DIFFUSION du programme à enregistrer ;
             // <year> = année de PRODUCTION (champ ProductionYear d'Emby) : la
             // reco enrichie de façon déterministe (EPG matché / bibliothèque),

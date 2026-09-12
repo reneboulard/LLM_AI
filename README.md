@@ -725,7 +725,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService`, `TonightLoginService` et le tool chat `run_tonight_run` (directives de session éphémères + origin chat, v1.13). |
 | `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
-| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB (retry sans suffixe « on <chaîne> » si le titre complet n'a pas de match). Repli poster : **copie l'affiche Primary du programme EPG** si elle est un fichier local (cache disque Emby) ; une URL distante est demandée à **l'endpoint image d'Emby** (l'hôte distant de l'affiche n'est jamais contacté) — poster par défaut embarqué posé à la place. Raison loguée à chaque garde. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB). |
+| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB (retry sans suffixe « on <chaîne> » si le titre complet n'a pas de match). Repli poster : **copie l'affiche Primary du programme EPG** si elle est un fichier local (cache disque Emby) ; une URL distante est demandée à **l'endpoint image d'Emby** (l'hôte distant de l'affiche n'est jamais contacté) — poster par défaut embarqué posé à la place. Raison loguée à chaque garde. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB) et la **classification `<mpaa>`** (cote EPG normalisée par le Classification Mapper — filtrage parental natif des listings, v1.13.18.0). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique, notifie par toast + fait supprimer la carte par Emby en cas de succès (v1.12), puis stream `recording_activated.mp4`. Gated par `StrmSecret` + **gate de permission asynchrone** (v1.13.11.0 : lecteur identifié via sa session sans `EnableLiveTvManagement` → timers de cette activation annulés + toast dédié). |
 | `ActivateFeedback.cs` | `ActivateFeedback` (statique) | Retour visuel des cartes .strm (v1.12) : toast Emby à la session qui lit la carte (session retrouvée par chemin .strm, `DisplayMessage`), suppression de la carte PAR EMBY (`FindByPath` → `DeleteItem`, différée ~60 s, succès seulement), cache anti-doublon (TTL 5 min) pour les GET multiples d'une même lecture. |
 | `PermissionGate.cs` | `PermissionGate` (statique) | Gate de droits usager (v1.13.11.0) : résolution de l'usager (token de la requête ou session de lecture) et lecture de sa policy Emby **à chaud** (jamais en cache, pas de comptes propres au plugin). `CanRecordLive` = `EnableLiveTvManagement` ; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Filtrage des candidats bibliothèque par accès médiathèque (`FilterAccessible`, v1.13.12.0) et par contrôle parental (`FilterParental`/`IsParentallyAllowed`/`IsEpgAllowed` — limite `MaxParentalRating`, `BlockUnratedItems`, tags noirs/blancs, v1.13.15.0). Annulation ciblée des timers créés par une activation (`CancelCreatedTimers` — seulement les ids absents de la capture préexistante). |
@@ -1013,7 +1013,16 @@ Le `.nfo` de chaque carte contient :
   programme nécessaire ;
 - les **External IDs** `<tmdbid>` / `<imdbid>` / `<tvdbid>` quand ils sont disponibles
   (récupérés via `append_to_response=external_ids` de TMDB) → Emby génère les **liens
-  profonds** TMDB / IMDb / TVDB sur la fiche de la carte.
+  profonds** TMDB / IMDb / TVDB sur la fiche de la carte ;
+- la **classification `<mpaa>` (v1.13.18.0)** : la cote du programme EPG source,
+  normalisée par le Classification Mapper (« 14+ » → « CA-14A », même pipeline que
+  le gate EPG). Sans elle, la carte est « non cotée » et la limite parentale n'a
+  aucune prise (cartes visibles des comptes restreints tant que
+  `BlockUnratedItems` ne liste pas le type — constaté 2026-09-12) ; avec elle, la
+  bibliothèque .strm est **filtrée nativement** dans les listings, comme les
+  autres bibliothèques. Best-effort : programme sans cote → pas d'élément (la
+  carte reste NR) ; les cartes existantes reçoivent leur cote au prochain run
+  qui les réécrit.
 
 Lire une carte déclenche l'endpoint **`GET /Plugins/LLMAI/Activate?programId=&kind=&card=&t=`** :
 1. `AutoProgrammer.ProgramOneAsync` crée le timer d'enregistrement (une reco
@@ -1065,9 +1074,14 @@ la parcourt comme n'importe quelle collection dans n'importe quel client.
   déplacés ; lire un membre joue le vrai item.
 - **Agrège des items inter-bibliothèques** (enregistrements + films/séries
   possédés), ce qu'un filtre par genre ne permet pas aussi directement.
-- Peuplée sur les runs frais (reconcile remove-all-then-add-all), **indépendante**
-  du genre (les deux peuvent cohabiter). Vérifié : `CreateCollection(ParentId=0)`
-  ressort dans la liste des Collections.
+- **En cumul (v1.13.18.0)** : chaque run **AJOUTE** ses recommandations (dédup) —
+  il ne remplace plus le contenu du run précédent (plus de course de remplissage
+  entre comptes, symétrique du correctif playlist v1.13.16.0). Le mur du foyer
+  s'accumule sur la journée ; le **nettoyage 3 h** le remet à zéro (coquille
+  conservée). Sûr : Emby filtre nativement le listing du BoxSet par le contrôle
+  parental de chaque compte (validé 2026-09-12). Indépendante du tag (les deux
+  peuvent cohabiter). Vérifié : `CreateCollection(ParentId=0)` ressort dans la
+  liste des Collections.
 
 ### Playlists « AI Tonight » : privée par usager + publique foyer (watch bucket)
 
@@ -1092,8 +1106,11 @@ client Emby (miroir de la collection, même nettoyage de 3 h) :
   est **listing-only** (validé 2026-09-12 — un item visible dans une playlist
   est **lisible** par un compte restreint, la lecture n'est pas bloquée) ;
   l'intersection rend la surface foyer incapable d'exposer ce qu'un compte ne
-  peut pas déjà voir. Le chat (`playlist_add`/`playlist_remove`) vise la
-  publique foyer.
+  peut pas déjà voir. Le chat (`playlist_add`/`playlist_remove`, v1.13.18.0)
+  vise la **playlist privée du compte admin** — un item ajouté au chat n'a
+  pas traversé l'intersection du run « Tonight » ; la poser dans la privée
+  de l'admin referme ce contournement, la publique reste remplie
+  exclusivement par le run « Tonight ».
 
 - **Une feuille jouable par reco** : une reco **série ou saison** n'est jamais
   ajoutée telle quelle (Emby développe une série ajoutée à une playlist en

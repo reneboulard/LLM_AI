@@ -700,7 +700,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | **Per-user, on-demand** HTTP endpoint `GET /Plugins/LLMAI/Tonight`. Thin HTTP layer: resolves the user then delegates to `TonightService`. |
 | `TonightService.cs` | `TonightService` (internal) | **Shared generation** for "Watch tonight": taste profile, unwatched recordings, library reserve, binge-ready series (opt-in, `BingeNotified` anti-spam gate), LLM run, enrichment, watched-guard (marks already-watched reruns `watched=true` — per-user `BuildWatchedIndex`), **per-user cache** (static, shared by endpoint + login). Used by `TonightApiService`, `TonightLoginService` and the chat tool `run_tonight_run` (ephemeral session directives + chat origin, v1.13). |
 | `AutoProgrammer.cs` | `AutoProgrammer` (internal) | Auto-programming: creates the Emby timers (SeriesTimer / single Timer) for the **record bucket** — recos to record not owned / not already scheduled / outside drop list. Server-side port of the "Schedule" logic from `recommendations.js`. `ProgramOneAsync(Reco, …)` (returns `OneOutcome`) shared with the Activate endpoint. |
-| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (internal) | `.strm` library: writes a `.strm`+`.nfo`+poster card per record-bucket reco, `.llmai_reco` cleanup, TMDB poster download (retries with the "on <channel>" suffix stripped when the full title has no match). Poster fallback: **copies the EPG program's Primary image** when it is a local file (Emby disk cache); a remote URL is requested from **Emby's image endpoint** (the image's remote host is never contacted) — the embedded default poster is applied instead. Each guard's reason is logged. The `.nfo` `<plot>` starts with the **native EPG overview** (original language) then the enrichment in the user's language; adds **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` when available (TMDB/IMDb/TVDB deep links). |
+| `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (internal) | `.strm` library: writes a `.strm`+`.nfo`+poster card per record-bucket reco, `.llmai_reco` cleanup, TMDB poster download (retries with the "on <channel>" suffix stripped when the full title has no match). Poster fallback: **copies the EPG program's Primary image** when it is a local file (Emby disk cache); a remote URL is requested from **Emby's image endpoint** (the image's remote host is never contacted) — the embedded default poster is applied instead. Each guard's reason is logged. The `.nfo` `<plot>` starts with the **native EPG overview** (original language) then the enrichment in the user's language; adds **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` when available (TMDB/IMDb/TVDB deep links) and the **`<mpaa>` classification** (EPG rating normalized through the Classification Mapper — natively parentally-filtered listings, v1.13.18.0). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | `GET /Plugins/LLMAI/Activate` endpoint (`[Unauthenticated]` DTO): programs a single reco, notifies by toast + has Emby delete the card on success (v1.12), then streams `recording_activated.mp4`. Gated by `StrmSecret` + **asynchronous permission gate** (v1.13.11.0: reader identified via session without `EnableLiveTvManagement` → timers of this activation cancelled + dedicated toast). |
 | `ActivateFeedback.cs` | `ActivateFeedback` (static) | .strm card feedback (v1.12): Emby toast to the session playing the card (session found by .strm path, `DisplayMessage`), card deletion THROUGH EMBY (`FindByPath` → `DeleteItem`, delayed ~60 s, success only), duplicate-suppression cache (5-min TTL) for the multiple GETs of a single playback. |
 | `PermissionGate.cs` | `PermissionGate` (static) | User permission gate (v1.13.11.0): resolves the user (request token or playing session) and reads their Emby policy **live** (never cached, no plugin-owned accounts). `CanRecordLive` = `EnableLiveTvManagement`; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Library-candidate filtering by media library access (`FilterAccessible`, v1.13.12.0) and by parental control (`FilterParental`/`IsParentallyAllowed`/`IsEpgAllowed` — `MaxParentalRating` limit, `BlockUnratedItems`, tag block/allow lists, v1.13.15.0). Targeted cancellation of timers created by an activation (`CancelCreatedTimers` — only ids missing from the pre-existing capture). |
@@ -992,7 +992,15 @@ Each card's `.nfo` contains:
   language;
 - the **External IDs** `<tmdbid>` / `<imdbid>` / `<tvdbid>` when available (fetched via
   TMDB's `append_to_response=external_ids`) → Emby generates the TMDB / IMDb / TVDB
-  **deep links** on the card's detail page.
+  **deep links** on the card's detail page;
+- the **classification `<mpaa>` (v1.13.18.0)**: the EPG program's rating,
+  normalized through the Classification Mapper ("14+" → "CA-14A", same pipeline
+  as the EPG gate). Without it, a card is "unrated" and the parental limit has
+  no grip (cards visible to restricted accounts unless `BlockUnratedItems`
+  lists the type — observed 2026-09-12); with it, the .strm library listing is
+  **natively parentally filtered** like every other library. Best-effort:
+  no program rating → no element (the card stays NR); existing cards get
+  their rating on the next run that rewrites them.
 
 Playing a card triggers **`GET /Plugins/LLMAI/Activate?programId=&kind=&card=&t=`**:
 1. `AutoProgrammer.ProgramOneAsync` creates the recording timer (a single reco),
@@ -1041,9 +1049,14 @@ browses it like any collection in any client.
   playing a member plays the real item.
 - **Aggregates cross-library items** (recordings + owned movies/series), which a
   tag filter can't do as directly.
-- Populated on fresh runs (reconcile remove-all-then-add-all), **independent** of
-  the tag (both can coexist). Verified: `CreateCollection(ParentId=0)` shows up
-  in the Collections list.
+- **Cumulative (v1.13.18.0)**: every run **adds** its recommendations (dedup) —
+  it no longer replaces the previous run's content (no more fill race between
+  accounts, mirroring the playlist fix in v1.13.16.0). The household wall
+  accumulates over the day; the **3 a.m. cleanup** resets it (shell kept).
+  Safe: Emby natively filters the BoxSet's member listing by each account's
+  parental control (validated 2026-09-12). Independent of the tag (both can
+  coexist). Verified: `CreateCollection(ParentId=0)` shows up in the
+  Collections list.
 
 ### "AI Tonight" playlists: private per-user + public household (watch bucket)
 
@@ -1068,8 +1081,11 @@ same 3 a.m. cleanup):
   **listing-only** (validated 2026-09-12 — an item visible in a playlist is
   **playable** by a restricted account, playback is not blocked); the
   intersection makes the household surface unable to expose what an account
-  can't already watch. The chat (`playlist_add`/`playlist_remove`) targets
-  the public household playlist.
+  can't already watch. The chat (`playlist_add`/`playlist_remove`,
+  v1.13.18.0) targets the **admin account's private playlist** — a
+  chat-added item never went through the "Tonight" run's intersection;
+  placing it in the admin's private playlist closes that bypass, and the
+  public household playlist stays filled exclusively by the "Tonight" run.
 
 - **One playable leaf per reco**: a **series/season** reco is never added as-is
   (Emby expands it into ALL its episodes — verified: one series id → 52

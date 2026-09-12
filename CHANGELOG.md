@@ -10,6 +10,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.18.0] — 2026-09-12
+
+### Changed — Surfaces foyer : tous les chemins de remplissage fermés
+
+Suite à la revue des surfaces (« y a-t-il des trous restants ? ») :
+
+- **Collection « AI Tonight » en cumul** (`AiTonightCollectionManager.EnsureAsync`) :
+  chaque run **AJOUTE** ses recommandations (dédup), il ne remplace plus le
+  contenu du run précédent — plus de course de remplissage entre comptes
+  (symétrique du correctif playlist v1.13.16.0). Le mur du foyer s'accumule
+  sur la journée ; la remise à zéro est quotidienne, par la tâche de nettoyage
+  3 h (déjà en place). Sûr : Emby filtre nativement le listing du BoxSet par
+  le contrôle parental de chaque compte (validé 2026-09-12).
+- **Chat `playlist_add` / `playlist_remove` → playlist privée du compte admin**
+  (`AiTonightPlaylistManager.AddItemsAsync`/`RemoveItemsAsync`) : un item
+  ajouté au chat n'a pas traversé l'intersection parentale du run « Tonight »
+  — le poser dans la publique foyer rouvrait le contournement fermé en
+  v1.13.16.0. Cible désormais : « AI Tonight · {admin} » (privée, créée au
+  besoin, IsPublic=false). La publique foyer redevient remplie **exclusi-
+  vement** par le run « Watch Tonight » avec intersection.
+- **Classification des cartes .strm** (`StrmLibraryGenerator.BuildNfo`) : le
+  .nfo ne portait AUCUNE cote — chaque carte était « non cotée », la limite
+  parentale n'avait aucune prise (constat 2026-09-12 : cartes visibles par un
+  compte restreint tant que `BlockUnratedItems` ne liste pas le type). Le
+  .nfo écrit désormais `<mpaa>` = cote du programme EPG source **normalisée
+  par le Classification Mapper** (« 14+ » → « CA-14A », même pipeline que le
+  gate EPG) → la bibliothèque .strm devient **filtrée nativement** dans les
+  listings, comme les autres bibliothèques. Best-effort (carte NR si le
+  programme n'a pas de cote) ; les cartes existantes reçoivent leur cote au
+  prochain run qui les réécrit.
+
+### Décisions assumées (non changées)
+
+- Le **tag** « AI Tonight » vit dans les bibliothèques réelles : accès
+  bibliothèque + filtrage parental natif du listing s'appliquent — rien à
+  faire. Les items **non cotés** (NR) restent visibles tant que
+  `BlockUnratedItems` ne liste pas leur type (comportement Emby natif).
+- L'**activation** d'une carte .strm n'est gated que par le droit
+  d'enregistrement, pas par le parental (décision) : une carte n'active
+  qu'un **enregistrement**, pas un visionnement — l'enregistrement résultant
+  vit dans la bibliothèque Recordings, où le filtrage natif s'applique à la
+  vue. Pire cas : un enregistrement activé par un compte qui ne pourra pas le
+  regarder.
+
 ## [1.13.17.0] — 2026-09-12
 
 ### Added — Audit : volet contrôle parental complété (collection + règles de tags)

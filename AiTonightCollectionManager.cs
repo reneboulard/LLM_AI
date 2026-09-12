@@ -75,14 +75,19 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Garantit que la collection <see cref="CollectionName"/> existe et
-        /// contient exactement les items Emby dont l'id (chaîne, cf.
-        /// <see cref="ItemIdResolver"/>) figure dans
-        /// <paramref name="itemGuidIds"/>. Crée la collection (avec ses
-        /// membres initiaux) si elle n'existe pas ; sinon rapproche l'appartenance
-        /// par « tout retirer puis tout réajouter ». Best-effort : un id non
-        /// résolvable, un item introuvable ou un échec d'API collection sont
-        /// logués et n'interrompent pas le reste — la collection reste exploitable.
+        /// Garantit que la collection <see cref="CollectionName"/> contient les
+        /// items Emby dont l'id (chaîne, cf. <see cref="ItemIdResolver"/>) figure
+        /// dans <paramref name="itemGuidIds"/>. <b>Cumul (v1.13.18.0)</b> : la
+        /// collection est le mur du foyer du jour — chaque run <b>AJOUTE</b> ses
+        /// recommandations (dédup), il ne remplace plus le contenu du run
+        /// précédent (plus de course de remplissage entre comptes, cf. playlist
+        /// v1.13.16.0) ; la remise à zéro est quotidienne, par la tâche de
+        /// nettoyage 3 h (coquille conservée). Emby filtre nativement le listing
+        /// du BoxSet par le contrôle parental de chaque compte (validé
+        /// 2026-09-12), le cumul multi-comptes est donc sûr à l'affichage.
+        /// Best-effort : un id non résolvable, un item introuvable ou un échec
+        /// d'API collection sont logués et n'interrompent pas le reste — la
+        /// collection reste exploitable.
         /// </summary>
         internal static async Task EnsureAsync(
             ICollectionManager collections, ILibraryManager library, ILogger logger,
@@ -112,11 +117,11 @@ namespace LLM_AI
 
             if (freshLongIds.Count == 0)
             {
-                // Aucun membre à mettre : on ne crée pas une collection vide.
-                // Si une collection existe déjà, on la vide (rapprochement vers
-                // zéro) pour ne pas laisser d'anciens membres.
-                logger?.Info("[LLM_AI] Collection « {0} » : aucun membre à mettre ({1} ignoré(s)) — vide si existante.", CollectionName, skipped);
-                await ClearAsync(collections, library, logger, ct).ConfigureAwait(false);
+                // Aucun membre à ajouter (run 0-reco) : en cumul, on NE VIDE PAS
+                // la collection — le run d'un compte ne doit pas effacer le
+                // cumul du jour des autres (la remise à zéro est le travail de
+                // la tâche de nettoyage 3 h).
+                logger?.Info("[LLM_AI] Collection « {0} » : rien à ajouter ({1} ignoré(s)) — cumul conservé, reset à 3 h.", CollectionName, skipped);
                 return;
             }
 
@@ -164,9 +169,10 @@ namespace LLM_AI
                 return;
             }
 
-            // 3b) Rapprochement : retirer tous les membres courants puis
-            //     réajouter les frais. Évite une logique de diff (volume faible).
-            //     RemoveFromCollection n'efface que le lien, jamais l'item.
+            // 3b) CUMUL (v1.13.18.0) : ajout des membres manquants SEULEMENT —
+            //     le contenu du run précédent est conservé (mur du foyer du
+            //     jour, remis à zéro à 3 h par la tâche de nettoyage).
+            //     RemoveFromCollection n'est plus appelé ici.
             //
             //     Auto-réparation : si la collection existe d'une version
             //     antérieure (créée sans IsLocked), on la verrouille rétro-
@@ -187,18 +193,16 @@ namespace LLM_AI
             try
             {
                 long[] current = GetCurrentMemberIds(library, boxSet);
-                if (current.Length > 0)
+                var existing = new HashSet<long>(current);
+                long[] missing = freshArr.Where(id => !existing.Contains(id)).ToArray();
+                if (missing.Length == 0)
                 {
-                    collections.RemoveFromCollection(boxSet, current);
-                    logger?.Info("[LLM_AI] Collection « {0} » : {1} ancien(s) membre(s) retiré(s).", CollectionName, current.Length);
+                    logger?.Info("[LLM_AI] Collection « {0} » : cumul — tous les {1} item(s) déjà présent(s).", CollectionName, freshArr.Length);
+                    return;
                 }
-            }
-            catch (Exception ex) { logger?.Warn("[LLM_AI] Collection « {0} » : échec retrait anciens membres : {1}", CollectionName, ex.Message); }
-
-            try
-            {
-                await collections.AddToCollection(boxSet.InternalId, freshArr).ConfigureAwait(false);
-                logger?.Info("[LLM_AI] Collection « {0} » : {1} membre(s) (ré)ajouté(s).", CollectionName, freshArr.Length);
+                await collections.AddToCollection(boxSet.InternalId, missing).ConfigureAwait(false);
+                logger?.Info("[LLM_AI] Collection « {0} » : cumul — {1} membre(s) ajouté(s) ({2} déjà présents).",
+                    CollectionName, missing.Length, freshArr.Length - missing.Length);
             }
             catch (Exception ex) { logger?.Warn("[LLM_AI] Collection « {0} » : échec AddToCollection : {1}", CollectionName, ex.Message); }
         }
