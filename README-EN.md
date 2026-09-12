@@ -118,12 +118,12 @@ itself.
 
 | I want to… | Check (config) | What it creates in Emby |
 |---|---|---|
-| **Chain tonight's watch session** | "AI Tonight" playlist | Playable playlist, rebuilt on each run |
-| **Group / browse freely** | "AI Tonight" collection | Navigable BoxSet |
+| **Chain tonight's watch session** | "AI Tonight" playlist | Private per-user playlist ("AI Tonight · {me}") + public household playlist with parental intersection |
+| **Group / browse freely** | "AI Tonight" collection | Navigable BoxSet, cumulative for the day (3 a.m. reset) |
 | **Find recos by a filter** | "AI Tonight" tag | Emby tag (the "Tags" filter) |
 | **Heart-mark the recos** | "AI Tonight" favorites | Favorites of the chosen user |
 | **Record automatically** what isn't owned | Auto timers (DVR) | Emby recording timers |
-| **Record with one click, on demand** | .strm library "AI Suggestions" | Playable .strm cards |
+| **Record with one click, on demand** | .strm library "AI Suggestions" | Playable .strm cards (program rating in `<mpaa>` — native parental filtering) |
 | **Be told what to delete** when the disk is full | "AI Delete" tag | Emby tag (no auto deletion) |
 
 Per-option details in the
@@ -705,7 +705,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ActivateFeedback.cs` | `ActivateFeedback` (static) | .strm card feedback (v1.12): Emby toast to the session playing the card (session found by .strm path, `DisplayMessage`), card deletion THROUGH EMBY (`FindByPath` → `DeleteItem`, delayed ~60 s, success only), duplicate-suppression cache (5-min TTL) for the multiple GETs of a single playback. |
 | `PermissionGate.cs` | `PermissionGate` (static) | User permission gate (v1.13.11.0): resolves the user (request token or playing session) and reads their Emby policy **live** (never cached, no plugin-owned accounts). `CanRecordLive` = `EnableLiveTvManagement`; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Library-candidate filtering by media library access (`FilterAccessible`, v1.13.12.0) and by parental control (`FilterParental`/`IsParentallyAllowed`/`IsEpgAllowed` — `MaxParentalRating` limit, `BlockUnratedItems`, tag block/allow lists, v1.13.15.0). Targeted cancellation of timers created by an activation (`CancelCreatedTimers` — only ids missing from the pre-existing capture). |
 | `AiTagger.cs` | `AiTagger` (static) | `AI Tonight` / `AI Delete` tag tagging: `AddAsync` / `RemoveAllAsync` via `UpdateToRepository` (also removes the legacy genre of the same name — v1.13.3 migration). |
-| `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
+| `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (static) | `AI Tonight` collection: `EnsureAsync` (find-or-create BoxSet, **additive cumulation v1.13.18.0** — adds missing items with dedup, a zero-reco run is a no-op, daily reset by the 3 a.m. task) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Daily 03:00 cleanup: removes the `AI Tonight` tag (+ legacy genre, migration) + empties the collection (always active). Also hosts the daily disk probe ("AI Delete" tag pass, opt-in). |
 | `RecordingDiskManager.cs` | `RecordingDiskManager` (static) | Recordings-disk threshold: path/volume resolution, "below threshold" gate (fail-open), "AI Delete" tagging pass (clear-first, watched only, oldest first, ×1.2 target) + notification. |
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Weekly analysis (Sunday 04:00, opt-in `RecoFeedbackEnabled`) of the feedback loop: correlates the reco/rejection log with actual watch history (C# + `IUserDataManager`), has the LLM (`RunSynthesisAsync`, tool-less) produce a per-user directive persisted in `PromptDirectives`. See [Feedback loop](#recommendation-feedback-loop). |
@@ -1550,9 +1550,11 @@ the Tonight run — reusing the existing primitives, under strict limits
   `create_card` (single .strm card, ephemeral by construction — the
   `.llmai_reco` marker makes Emby clean it at the next scheduled generation),
   `tag_ai_tonight` (tag, v1.13.3), `collection_add`/`collection_remove`,
-  `playlist_add`/`playlist_remove` (**additive** primitives — unlike
-  `EnsureAsync` which reconciles the whole content; removal only accepts items
-  the chat added itself in the conversation) and `run_tonight_run` (opt-in).
+  `playlist_add`/`playlist_remove` (additive primitives that target the
+  **admin account's private** playlist "AI Tonight · {admin}", v1.13.18.0 —
+  never the public household playlist, filled only by the Tonight run;
+  removal only accepts items the chat added itself in the conversation) and
+  `run_tonight_run` (opt-in).
 - **`run_tonight_run(directives?)`** (`ChatTonightRunEnabled`, default false):
   triggers the Tonight run on the exact code path of the scheduled task and
   login. **Ephemeral** session directives (≤ 500 chars, valid for that run
