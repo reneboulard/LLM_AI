@@ -10,6 +10,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.15.0] — 2026-09-12
+
+### Added — Contrôle parental dans « Watch Tonight »
+
+- **Principe** : les candidats des recos « Watch Tonight » respectent la
+  section « Contrôle parental » de la policy de l'usager demandeur (pattern
+  v1.13.12.0 : contrainte dite au LLM en amont, filtrage mécanique en aval) —
+  un usager limité ne reçoit plus de reco qu'Emby cacherait dans son UI.
+- **Nouvelle couche parentale de `PermissionGate`** (lecture de policy à
+  chaud, no-op si aucune règle, fail-open par item illisible) :
+  - **Bibliothèque** (réserve + binge + recos `recording`/`library`) : cote
+    héritée native (`GetInheritedParentalRatingValue`) vs `MaxParentalRating` ;
+    item sans cote ou « NR » → règle `BlockUnratedItems` du type (Movie,
+    Series…) ; cote présente mais hors table serveur (pas de score natif) →
+    **jamais bloquée** (pas de décision forcée — l'audit `ratings_check`
+    signale ces cotes). Pour un épisode, les tags de la série porteuse sont
+    consultés.
+  - **EPG** : cote textuelle du programme normalisée par le plugin
+    Classification Mapper (si installé) puis par la table parentale du
+    serveur ; non reconnue → conservée et comptée à part (native-blind).
+  - **Tags** : les deux modes de la page Contrôle parental — liste noire
+    (`BlockedTags` + tag porté → écarté) et liste blanche
+    (`IsTagBlockingModeInclusive` + « exclure tous sauf le tag »), avec les
+    deux sous-modes `AllowTagOrRating` (le tag autorisé contourne ou non la
+    limite de cote).
+- **Points d'insertion** : réserve bibliothèque et pool binge (avant
+  présentation au LLM) ; `ValidateAndFilter` (toutes les jambes : live,
+  recording, library, live-but-owned via `library_id`) avec compteur dédié
+  dans le journal de validation.
+- **Note « trop restrictif »** : policy parentale active et moins de recos que
+  le minimum demandé → le champ `Warning` de la réponse Tonight explique
+  pourquoi à l'usager (le cas dégénéré « liste blanche stricte » peut ne rien
+  laisser de recommandable — validé empiriquement 2026-09-12 : 3782 films → 1,
+  guide EPG → 0) au lieu d'une liste courte muette.
+
 ## [1.13.14.0] — 2026-09-11
 
 ### Added — Audit : hygiène des cotes (`ratings_check`)

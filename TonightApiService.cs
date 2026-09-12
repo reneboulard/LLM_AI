@@ -111,6 +111,11 @@ namespace LLM_AI
             /// <summary>Droit TV en direct de l'usager (policy
             /// EnableLiveTvAccess, fail-closed).</summary>
             public bool CanLiveTv { get; set; }
+            /// <summary>Note non fatale (v1.13.15.0) : policy parentale
+            /// restrictive (limite de cote / tags / liste blanche) et moins de
+            /// recos que le minimum — affichée à l'usager pour expliquer une
+            /// liste courte. Null si aucune note.</summary>
+            public string Warning { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -154,7 +159,8 @@ namespace LLM_AI
                     ViaChat = cached.Value.ViaChat,
                     ChatDirectives = cached.Value.ChatDirectives,
                     CanRecord = PermissionGate.CanRecordLive(user),
-                    CanLiveTv = PermissionGate.CanWatchLive(user)
+                    CanLiveTv = PermissionGate.CanWatchLive(user),
+                    Warning = cached.Value.Warning
                 };
 
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
@@ -171,7 +177,8 @@ namespace LLM_AI
                 ViaChat = res.ViaChat,
                 ChatDirectives = res.ChatDirectives,
                 CanRecord = PermissionGate.CanRecordLive(user),
-                CanLiveTv = PermissionGate.CanWatchLive(user)
+                CanLiveTv = PermissionGate.CanWatchLive(user),
+                Warning = res.Warning
             };
         }
 

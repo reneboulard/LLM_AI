@@ -134,6 +134,12 @@ namespace LLM_AI
             /// <summary>Directives de session du run chat (éphémères —
             /// badge informatif). Vide pour un run normal.</summary>
             public string ChatDirectives;
+            /// <summary>Note non fatale (v1.13.15.0) : policy parentale du
+            /// compte restrictive (limite de cote / liste blanche de tags /
+            /// BlockUnratedItems) et moins de recos que le minimum demandé —
+            /// l'usager reçoit une explication au lieu d'une liste vide sans
+            /// comprendre. Null si aucune note.</summary>
+            public string Warning;
         }
 
         // Gate anti-spam « prêt à dévorer » en attente de persistance :
@@ -156,6 +162,8 @@ namespace LLM_AI
             /// <summary>Origin « chat » (badge) — cf. TonightResult.ViaChat.</summary>
             public bool ViaChat;
             public string ChatDirectives;
+            /// <summary>Note parentale — cf. TonightResult.Warning.</summary>
+            public string Warning;
         }
 
         private static readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
@@ -197,7 +205,8 @@ namespace LLM_AI
                         Date = e.Date,
                         FromCache = true,
                         ViaChat = e.ViaChat,
-                        ChatDirectives = e.ChatDirectives
+                        ChatDirectives = e.ChatDirectives,
+                        Warning = e.Warning
                     };
             }
             return null;
@@ -347,6 +356,15 @@ namespace LLM_AI
                     + "(source=\"library\") — aucune reco source=\"live\".";
             }
 
+            // Gate parental (v1.13.15.0) : si l'usager porte une limite
+            // MaxParentalRating, des tags bloqués/autorisés ou
+            // BlockUnratedItems, dit-le au LLM EN AMONT (pattern canLive :
+            // le dire, puis l'imposer mécaniquement dans ValidateAndFilter).
+            // Null si aucune règle parentale — aucun bloc injecté.
+            string parentalPrompt = PermissionGate.DescribeForPrompt(user);
+            if (parentalPrompt != null)
+                prompt += parentalPrompt;
+
             // 4) Run agent (boucle de tool-calling) — même logique que la tâche
             //    planifiée : backends, outils, enrichissement (match titres →
             //    id/channel_id/rating/image_url) gérés par LlmRunner.
@@ -391,11 +409,29 @@ namespace LLM_AI
             // déjà vues (gardées, mais sans actions obsolètes côté UI).
             // Fail-open : une erreur de requête transitoire ne vide jamais les
             // recos.
-            payload = ValidateAndFilter(payload, watchedIdx, ct, canLive);
+            payload = ValidateAndFilter(payload, watchedIdx, ct, canLive, user);
             if (string.IsNullOrWhiteSpace(payload))
             {
                 if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
                 return new TonightResult { Error = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés)." };
+            }
+
+            // Note « contrôle parental restrictif » (v1.13.15.0) : si la policy
+            // parentale du compte est active et que la validation a laissé moins
+            // de recos que le minimum demandé au LLM, l'usager reçoit une
+            // EXPLICATION (TonightResult.Warning) au lieu d'une liste courte
+            // sans comprendre — le cas dégénéré « liste blanche de tags » ne
+            // peut littéralement rien recommander de visible (validé 2026-09-12 :
+            // 3782 films → 1, guide EPG → 0).
+            string warning = null;
+            if (PermissionGate.HasParentalRestrictions(user))
+            {
+                int recCount = AutoProgrammer.ParseRecommendations(payload)
+                    .Count(r => !string.IsNullOrWhiteSpace(r.Title));
+                if (recCount < minRec)
+                    warning = $"Contrôle parental : {recCount} recommandation(s) seulement (minimum demandé : {minRec}). "
+                        + "La policy de ce compte (limite de cote, tags ou liste blanche de tags) limite le contenu visible — "
+                        + "Emby cachera au compte tout ce qui est recommandé au-delà.";
             }
 
             // Surface native des recos du watch bucket sur un run FRAIS (pas sur
@@ -490,7 +526,8 @@ namespace LLM_AI
                         Date = date,
                         ExpiresAt = DateTimeOffset.UtcNow.AddHours(cacheHours),
                         ViaChat = fromChat,
-                        ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null
+                        ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null,
+                        Warning = warning
                     };
                 }
             }
@@ -598,7 +635,8 @@ namespace LLM_AI
                 Date = date,
                 FromCache = false,
                 ViaChat = fromChat,
-                ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null
+                ChatDirectives = fromChat ? (sessionDirectives ?? "").Trim() : null,
+                Warning = warning
             };
         }
 
@@ -645,7 +683,7 @@ namespace LLM_AI
         /// logique fail-open existante est inchangée.</para>
         /// </summary>
         private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct,
-            bool canLive = true)
+            bool canLive = true, User user = null)
         {
             if (string.IsNullOrWhiteSpace(payload)) return payload;
 
@@ -744,18 +782,31 @@ namespace LLM_AI
                         obj["id"] = resolved.InternalId.ToString();
                 }
 
-                // Lookup bibliothèque (batché) pour source="recording"/"library".
+                // Lookup bibliothèque (batché) pour source="recording"/"library"
+                // ET les recos live enrichies d'un library_id (le contenu
+                // réellement watchable est l'item bibliothèque — le verdict
+                // parental porte sur LUI).
                 var libIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var node in arr)
                 {
                     if (!(node is JsonObject obj)) continue;
                     string src = ObjStr(obj, "source");
-                    if (!string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(src, "library", StringComparison.OrdinalIgnoreCase)) continue;
-                    string id = ObjStr(obj, "id");
-                    if (!string.IsNullOrEmpty(id)) libIds.Add(id);
+                    if (string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(src, "library", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string id = ObjStr(obj, "id");
+                        if (!string.IsNullOrEmpty(id)) libIds.Add(id);
+                    }
+                    else if (string.Equals(src, "live", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string libId = ObjStr(obj, "library_id");
+                        if (!string.IsNullOrEmpty(libId)) libIds.Add(libId);
+                    }
                 }
                 var libFound = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // Items réellement chargés (verdict parental : cote, tags) —
+                // vide en fail-open (verdict parental alors sauté).
+                var libById = new Dictionary<string, BaseItem>(StringComparer.OrdinalIgnoreCase);
                 if (libIds.Count > 0)
                 {
                     // Les id des recos recording/library sont des InternalId
@@ -776,7 +827,12 @@ namespace LLM_AI
                             };
                             var items = _library.GetItemList(lq) ?? Array.Empty<BaseItem>();
                             foreach (var it in items)
-                                if (it != null) libFound.Add(it.InternalId.ToString());
+                            {
+                                if (it == null) continue;
+                                string key = it.InternalId.ToString();
+                                libFound.Add(key);
+                                libById[key] = it;
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -786,7 +842,15 @@ namespace LLM_AI
                     }
                 }
 
-                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0, liveNotPermitted = 0;
+                // Gate parental (v1.13.15.0) : verdicts par reco (cote, tags,
+                // BlockUnratedItems) — la policy est lue une fois par run ;
+                // l'ILocalizationManager (cotes EPG textuelles) est résolu une
+                // seule fois. Fail-open : policy illisible → aucun drop.
+                var loc = _host?.TryResolve<MediaBrowser.Model.Globalization.ILocalizationManager>();
+                bool parentalActive = PermissionGate.HasParentalRestrictions(user);
+
+                int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0, liveNotPermitted = 0,
+                    parentalDropped = 0, epgUnrecognized = 0;
                 for (int i = arr.Count - 1; i >= 0; i--)
                 {
                     if (!(arr[i] is JsonObject obj)) { kept++; continue; }
@@ -805,10 +869,35 @@ namespace LLM_AI
                             // (EPG indispo → recos live conservées).
                             if (!canLive && string.IsNullOrWhiteSpace(ObjStr(obj, "library_id")))
                             { arr.RemoveAt(i); dropped++; liveNotPermitted++; continue; }
+                            // Live-but-owned conservé via library_id : le contenu
+                            // watchable est l'item bibliothèque → verdict parental
+                            // sur LUI (le programme EPG n'est pas regardable).
+                            if (parentalActive && !string.IsNullOrWhiteSpace(ObjStr(obj, "library_id"))
+                                && libById.TryGetValue(ObjStr(obj, "library_id"), out var ownedItem))
+                            {
+                                var v = PermissionGate.IsParentallyAllowed(user, ownedItem);
+                                if (v != PermissionGate.ParentalVerdict.Allowed)
+                                { arr.RemoveAt(i); dropped++; parentalDropped++; continue; }
+                            }
                             kept++; continue;
                         }
                         if (epg.TryGetValue(id ?? "", out var p))
                         {
+                            // Gate parental (v1.13.15.0) : verdict du programme
+                            // EPG (cote textuelle via mapper/table serveur,
+                            // tags du programme). Cote non reconnue → conservé
+                            // (native-blind, compté à part). Fail-open :
+                            // policy illisible → aucune drop parentale.
+                            if (parentalActive && p != null)
+                            {
+                                var v = PermissionGate.IsEpgAllowed(user, loc, p.OfficialRating,
+                                    p.Tags ?? Array.Empty<string>(), out bool unrec);
+                                if (unrec) epgUnrecognized++;
+                                if (v == PermissionGate.ParentalVerdict.BlockedRating
+                                    || v == PermissionGate.ParentalVerdict.BlockedTag
+                                    || v == PermissionGate.ParentalVerdict.BlockedUnrated)
+                                { arr.RemoveAt(i); dropped++; parentalDropped++; continue; }
+                            }
                             // Watched-guard : rediffusion d'un épisode/film déjà
                             // visionné par l'usager → MARQUÉ, pas droppé (le
                             // marquage ne retire pas la reco de la sélection :
@@ -831,7 +920,20 @@ namespace LLM_AI
                     else if (string.Equals(src, "recording", StringComparison.OrdinalIgnoreCase)
                           || string.Equals(src, "library", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (libFound.Contains(id ?? "")) kept++;
+                        if (libFound.Contains(id ?? ""))
+                        {
+                            // Gate parental (v1.13.15.0) : verdict de l'item
+                            // bibliothèque (cote héritée, tags item/série,
+                            // BlockUnratedItems). Item non chargé (fail-open
+                            // du lookup) → verdict parental sauté.
+                            if (parentalActive && libById.TryGetValue(id ?? "", out var item))
+                            {
+                                var v = PermissionGate.IsParentallyAllowed(user, item);
+                                if (v != PermissionGate.ParentalVerdict.Allowed)
+                                { arr.RemoveAt(i); dropped++; parentalDropped++; continue; }
+                            }
+                            kept++;
+                        }
                         else { arr.RemoveAt(i); dropped++; libMissing++; }
                     }
                     else
@@ -840,8 +942,8 @@ namespace LLM_AI
                     }
                 }
 
-                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}, live sans droit TV : {4}), rediffusions déjà visionnées marquées : {5}.",
-                    kept, dropped, epgExpired, libMissing, liveNotPermitted, watchedMarked);
+                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}, live sans droit TV : {4}, contrôle parental : {5}), rediffusions déjà visionnées marquées : {6}, cotes EPG non reconnues conservées : {7}.",
+                    kept, dropped, epgExpired, libMissing, liveNotPermitted, parentalDropped, watchedMarked, epgUnrecognized);
 
                 return arr.ToJsonString();
             }
@@ -1321,6 +1423,13 @@ namespace LLM_AI
                 var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
                 if (accessible != null) items = accessible.ToArray();
 
+                // Gate parental (v1.13.15.0) : la réserve ne présente au LLM
+                // que des items que la policy parentale laisse visibles
+                // (MaxParentalRating / BlockUnratedItems / tags) — no-op si
+                // aucune règle.
+                var parentallyOk = PermissionGate.FilterParental(user, items, _logger);
+                items = parentallyOk.ToArray();
+
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var lines = new List<string>();
                 foreach (var it in items)
@@ -1450,6 +1559,13 @@ namespace LLM_AI
                 // (EnableAllFolders/EnabledFolders) — no-op si non restrictif.
                 var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
                 if (accessible != null) items = accessible.ToArray();
+
+                // Gate parental (v1.13.15.0) : épisodes filtrés par la policy
+                // parentale (cote héritée de la série, tags série/épisode,
+                // BlockUnratedItems) avant l'agrégation par série — no-op si
+                // aucune règle.
+                var parentallyOk = PermissionGate.FilterParental(user, items, _logger);
+                items = parentallyOk.ToArray();
 
                 var series = new Dictionary<string, BingeSeries>(StringComparer.Ordinal);
                 foreach (var it in items)

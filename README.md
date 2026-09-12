@@ -478,6 +478,38 @@ chaud, jamais en cache) :
 - La suppression de médias n'a aucun impact : le plugin ne supprime jamais de
   médias.
 
+#### Contrôle parental dans « Watch Tonight » (v1.13.15.0)
+
+Les candidats des recos « Watch Tonight » respectent désormais la section
+**Contrôle parental** de la policy de l'usager demandeur (pattern v1.13.12.0 :
+dit au LLM en amont, imposé mécaniquement en aval) :
+
+- **Limite parentale** (`MaxParentalRating`) : la réserve bibliothèque, les
+  séries « prêtes à dévorer » et les recos `recording`/`library` sont filtrées
+  sur la cote héritée native de l'item ; les recos EPG sont vérifiées sur la
+  cote textuelle du programme, normalisée d'abord par le plugin Classification
+  Mapper (si installé) puis par la table parentale du serveur — la même liste
+  que le menu de limite du dashboard.
+- **Non coté** (`BlockUnratedItems`) : un item sans cote (ou marqué NR) est
+  écarté seulement si son type figure dans la liste de la policy — comme Emby
+  natif. Les cotes non reconnues par la table serveur (pas de score natif)
+  ne sont **jamais** bloquées (pas de décision forcée) : conservées et
+  comptées à part dans le journal — l'audit `ratings_check` signale ce désordre.
+- **Tags** (« Exclure le tag » / « Exclure tous sauf le tag ») : les deux
+  modes de la page Contrôle parental sont impliqués — liste noire
+  (`BlockedTags`, un tag porté → écarté) et liste blanche
+  (`IsTagBlockingModeInclusive`, seul un tag listé est visible), cette
+  dernière avec les deux sous-modes `AllowTagOrRating` (tag autorisé contourne
+  ou non la limite). Pour un épisode, les tags de la série porteuse sont
+  consultés. Cas dégénéré assumé : une liste blanche stricte peut ne rien
+  laisser de recommandable — le run produit alors moins de recos **avec une
+  explication affichée à l'usager** (`Warning` de la réponse Tonight) au lieu
+  d'une liste courte muette.
+- Le filtrage parental est **no-op** pour un usager sans règle, fail-open par
+  item illisible, et les surfaces natives (tag/collection/playlist/favoris)
+  n'héritent que des recos déjà validées — elles ne contiennent jamais d'item
+  que la policy cache.
+
 ### Surfaces natives (bibliothèque .strm, genre, collection)
 
 Trois leviers **opt-in** (défaut `false`) qui exposent les recos directement dans
@@ -658,7 +690,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `StrmLibraryGenerator.cs` | `StrmLibraryGenerator` (interne) | Bibliothèque `.strm` : écrit une carte `.strm`+`.nfo`+poster par reco du record bucket, nettoyage `.llmai_reco`, téléchargement poster TMDB (retry sans suffixe « on <chaîne> » si le titre complet n'a pas de match). Repli poster : **copie l'affiche Primary du programme EPG** si elle est un fichier local (cache disque Emby) ; une URL distante est demandée à **l'endpoint image d'Emby** (l'hôte distant de l'affiche n'est jamais contacté) — poster par défaut embarqué posé à la place. Raison loguée à chaque garde. Le `<plot>` du `.nfo` commence par le **synopsis EPG natif** (langue d'origine) puis l'enrichissement dans la langue de l'usager ; ajoute les **External IDs** `<tmdbid>`/`<imdbid>`/`<tvdbid>` quand disponibles (liens profonds TMDB/IMDb/TVDB). |
 | `ActivateApiService.cs` | `ActivateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Activate` (DTO `[Unauthenticated]`) : programme une reco unique, notifie par toast + fait supprimer la carte par Emby en cas de succès (v1.12), puis stream `recording_activated.mp4`. Gated par `StrmSecret` + **gate de permission asynchrone** (v1.13.11.0 : lecteur identifié via sa session sans `EnableLiveTvManagement` → timers de cette activation annulés + toast dédié). |
 | `ActivateFeedback.cs` | `ActivateFeedback` (statique) | Retour visuel des cartes .strm (v1.12) : toast Emby à la session qui lit la carte (session retrouvée par chemin .strm, `DisplayMessage`), suppression de la carte PAR EMBY (`FindByPath` → `DeleteItem`, différée ~60 s, succès seulement), cache anti-doublon (TTL 5 min) pour les GET multiples d'une même lecture. |
-| `PermissionGate.cs` | `PermissionGate` (statique) | Gate de droits usager (v1.13.11.0) : résolution de l'usager (token de la requête ou session de lecture) et lecture de sa policy Emby **à chaud** (jamais en cache, pas de comptes propres au plugin). `CanRecordLive` = `EnableLiveTvManagement` ; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Filtrage des candidats bibliothèque par accès médiathèque (`FilterAccessible`, v1.13.12.0). Annulation ciblée des timers créés par une activation (`CancelCreatedTimers` — seulement les ids absents de la capture préexistante). |
+| `PermissionGate.cs` | `PermissionGate` (statique) | Gate de droits usager (v1.13.11.0) : résolution de l'usager (token de la requête ou session de lecture) et lecture de sa policy Emby **à chaud** (jamais en cache, pas de comptes propres au plugin). `CanRecordLive` = `EnableLiveTvManagement` ; `CanWatchLive` = `EnableLiveTvAccess` (v1.13.12.0). Filtrage des candidats bibliothèque par accès médiathèque (`FilterAccessible`, v1.13.12.0) et par contrôle parental (`FilterParental`/`IsParentallyAllowed`/`IsEpgAllowed` — limite `MaxParentalRating`, `BlockUnratedItems`, tags noirs/blancs, v1.13.15.0). Annulation ciblée des timers créés par une activation (`CancelCreatedTimers` — seulement les ids absents de la capture préexistante). |
 | `AiTagger.cs` | `AiTagger` (statique) | Étiquetage **tags** `AI Tonight` / `AI Delete` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository` (retire aussi le genre hérité du même nom — migration v1.13.3). |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, reconcile) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le tag `AI Tonight` (+ genre hérité, migration) + vide la collection (toujours actif). Porte aussi la sonde disque quotidienne (passe tag « AI Delete », opt-in). |
