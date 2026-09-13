@@ -906,6 +906,30 @@ namespace LLM_AI
         /// </summary>
         public bool OrphanSearXngEnabled { get; set; } = true;
 
+        /// <summary>
+        /// Active l'étape <b>S0</b> : recherche native Emby
+        /// (<c>IProviderManager.GetRemoteSearchResults</c> — le moteur du
+        /// dialogue « Identifier ») comme premier tri des orphelins, avant la
+        /// recherche TMDB multilingue S1. Candidats soumis à la porte
+        /// d'acceptation commune (titre + année + juge synopsis). Défaut
+        /// <c>true</c> ; inopérant sans clé TMDB (les fiches détaillées
+        /// proviennent toujours de TMDB).
+        /// </summary>
+        public bool OrphanEmbyFirstPass { get; set; } = true;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : validation à la fin de
+        /// chaque enregistrement (<see cref="RecordingWatcher"/>) : la vérité EPG
+        /// (titre/synopsis/année du programme du guide) est figée à la fin de la
+        /// diffusion, l'id posé par les providers automatiques d'Emby est audité
+        /// par le juge synopsis (match → verrous + tag identifié ; mismatch →
+        /// retrait des ids + reprise du pipeline d'identification), et les
+        /// enregistrements non identifiés passent immédiatement dans le même
+        /// pipeline. Vérifiée à chaque événement (activable sans redémarrage).
+        /// Mutant des métadonnées d'enregistrements — d'où l'opt-in.
+        /// </summary>
+        public bool OrphanValidateOnRecordingEnd { get; set; } = false;
+
         // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Indépendant de la recommandation : un run agent dédié interroge

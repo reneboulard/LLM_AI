@@ -86,14 +86,28 @@ namespace LLM_AI
             auditPrompt:
                 "Audite la santé de ce serveur Emby. Appelle system_audit avec les actions " +
                 "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
-                "transcode, gpu_transcode, security_check (validation de sécurité : mots de passe " +
+                "transcode, gpu_transcode, metadata_health (santé de l'identification des " +
+                "métadonnées : items validés par le plugin, à réviser (needs-review — candidats " +
+                "rejetés, action humaine possible) et introuvables (not-found — titre absent " +
+                "de toutes les banques, état terminal informatif, PAS une alerte) ; rapporte " +
+                "le recoupement dvr_scope et son taux de couverture ; CADRAGE : la bibliothèque " +
+                "régulière est identifiée nativement par Emby et HORS PÉRIMÈTRE du plugin — le " +
+                "thermomètre actionnable est dvr_scope, ne génère JAMAIS d'avertissement sur la " +
+                "couverture globale ni sur les items non audités de la bibliothèque régulière ; " +
+                "les needs-review hors DVR sont des résidus attendus de la passe orphelins, pas " +
+                "des urgences), security_check (validation de sécurité : mots de passe " +
                 "des comptes — admins surtout —, accès distant/HTTPS, UPnP, en-têtes proxy ; " +
                 "reprends ses constats gravés et leurs correctifs tels quels), list_logs (et " +
                 "inspect_log si un journal semble pertinent). Croise les constats : redémarrage en " +
                 "attente (HasPendingRestart), mise à jour disponible, tâche planifiée en échec, " +
                 "disque faible, transcodage avec CPU élevé ou logiciel (software) au lieu de " +
                 "matériel (hardware), sessions inactives/stalées, scan de bibliothèque en cours, " +
-                "maintenance. Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
+                "maintenance. Le rapport inclut une section « Santé des métadonnées » : constats " +
+                "uniquement dans plugin_can_intervene et plugin_has_acted (couverture DVR, " +
+                "orphan_queue, items à réviser — cite seulement les exemples DVR — ; les " +
+                "introuvables sont INFORMATIFS : état terminal, aucune action recommandée) ; " +
+                "plugin_out_of_scope est du CONTEXTE (bibliothèque régulière, aucune alerte). " +
+                "Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
                 "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions recommandées ». " +
                 "La sonde UPnP (action upnp_check) figure TOUJOURS dans les constats : aucun mapping " +
                 "trouvé = constat ✅ explicite (« UPnP désactivé / aucun mapping routeur »), mapping " +
@@ -144,12 +158,26 @@ namespace LLM_AI
             auditPrompt:
                 "Audit the health of this Emby server. Call system_audit with the actions " +
                 "server_info, host_metrics, disk_storage, active_sessions, scheduled_tasks, " +
-                "transcode, gpu_transcode, security_check (security validation: account passwords " +
+                "transcode, gpu_transcode, metadata_health (metadata identification health: " +
+                "items validated by the plugin, to review (needs-review — candidates were found " +
+                "but rejected, human action possible) and not found (not-found — title absent " +
+                "from every metadata bank, terminal informational state, NOT a warning); report " +
+                "the dvr_scope breakdown and its coverage rate; FRAMING: " +
+                "the regular (non-DVR) library is identified natively by Emby and OUT OF the " +
+                "plugin's scope — the actionable thermometer is dvr_scope, NEVER raise warnings " +
+                "about global coverage or unaudited regular-library items; regular-library " +
+                "needs-review items are expected residuals of the orphan pass, not urgent), " +
+                "security_check (security validation: account passwords " +
                 "— admins above all —, remote access/HTTPS, UPnP, proxy headers; copy its graded " +
                 "findings and fixes verbatim), list_logs (and inspect_log if a log looks relevant). " +
                 "Cross-check findings: pending restart (HasPendingRestart), available update, failed " +
                 "scheduled task, low disk, transcoding with high CPU or software instead of hardware, " +
-                "idle/stale sessions, library scan in progress, maintenance. Produce a concise " +
+                "idle/stale sessions, library scan in progress, maintenance. The report includes a " +
+                "« Metadata health » section: findings ONLY from plugin_can_intervene and " +
+                "plugin_has_acted (DVR coverage, orphan_queue, items to review — cite only the DVR " +
+                "examples —; not-found items are INFORMATIONAL: terminal state, no recommended " +
+                "action); plugin_out_of_scope is CONTEXT (regular library, no warnings). " +
+                "Produce a concise " +
                 "Markdown REPORT: a list of findings tagged by severity (🔴 critical / ⚠️ warning / " +
                 "✅ ok) + a « Recommended actions » section. The UPnP probe (upnp_check action) " +
                 "ALWAYS appears in the findings: no mapping found = explicit ✅ finding (\"UPnP " +

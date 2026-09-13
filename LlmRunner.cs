@@ -715,9 +715,22 @@ namespace LLM_AI
         internal static string SanitizeReport(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
-            string s = Regex.Replace(text, @"\\(?:rightarrow|to)\b", "→");
+            // Normalisation des fins de ligne + retrait des CR isolés : un
+            // LaTeX « \rightarrow » qui passe par un décodage JSON d'un petit
+            // modèle est dégradé en « \r » (retour chariot) + « ightarrow » —
+            // le backslash a disparu, le CR isolé n'est qu'un déchet (vu en
+            // production dans un rapport d'audit : « $ ightarrow$ »). On le
+            // retire AVANT les mappings, sinon aucun ne reconnaît le fragment.
+            string s = text.Replace("\r\n", "\n").Replace("\r", "");
+            s = Regex.Replace(s, @"\\(?:longrightarrow|Longrightarrow)\b", "→");
+            s = Regex.Replace(s, @"\\(?:rightarrow|to)\b", "→");
             s = Regex.Replace(s, @"\\Rightarrow\b", "⇒");
             s = Regex.Replace(s, @"\\leftarrow\b", "←");
+            // Fragment corrompu (backslash décodé) : « $ ightarrow$ » /
+            // « $ightarrow$ » / « $\rightarrow$ » restant → « → ». Le motif
+            // est borné au segment math ($...$ sans autre contenu) pour
+            // éviter tout faux positif sur un montant en dollars.
+            s = Regex.Replace(s, @"\$\s*(?:\\)?[a-zA-Z]*ightarrow\s*\$", "→");
             s = Regex.Replace(s, @"\$\s*(→|⇒|←)\s*\$", "$1");
             s = Regex.Replace(s, @"<br\s*/?>", "\n");
             s = Regex.Replace(s, @"</?(?:code|strong|b|em|i)>", "");

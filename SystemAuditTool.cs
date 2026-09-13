@@ -88,6 +88,10 @@ namespace LLM_AI
             "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
             "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
             "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type), " +
+            "metadata_health (santé de l'identification : comptes des tags llmai-identified / " +
+            "llmai-needs-review du plugin — items validés vs non trouvés avec exemples —, des items " +
+            "identifiés par Emby mais JAMAIS audités par le plugin, et des orphelins sans id ni tag ; " +
+            "décomposition Movie/Series, épisodes exclus — leurs métadonnées dérivent de la série), " +
             "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
             "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
             "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
@@ -95,7 +99,7 @@ namespace LLM_AI
             "stop_session, trigger_task, send_message.";
 
         public string ArgumentsSchema => @"{
-  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | ratings_check | stop_session | trigger_task | send_message"",
+  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | metadata_health | ratings_check | stop_session | trigger_task | send_message"",
   ""limit"": ""(active_sessions / list_logs) nombre max de résultats (défaut 50)"",
   ""include_hidden"": ""(scheduled_tasks) true pour inclure les tâches cachées (défaut false)"",
   ""top_n"": ""(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)"",
@@ -179,6 +183,7 @@ namespace LLM_AI
                     case "processes":         result = Processes(args); break;
                     case "library_stats":    result = LibraryStats(); break;
                     case "missing_metadata": result = MissingMetadata(args); break;
+                    case "metadata_health":  result = MetadataHealth(); break;
                     case "ratings_check":    result = RatingsCheck(); break;
                     case "stop_session":      result = await StopSessionAsync(args, ct).ConfigureAwait(false); break;
                     case "trigger_task":      result = TriggerTask(args); break;
@@ -1053,6 +1058,227 @@ namespace LLM_AI
                 missing_genres = new { count = missingGenres, pct = Math.Round(missingGenres * pct, 1) },
                 examples_missing_overview = examples
             }, s_json);
+        }
+
+        /// <summary>
+        /// Santé de l'identification (action <c>metadata_health</c>, lecture
+        /// seule) : agrège les marqueurs posés par la chaîne
+        /// d'identification du plugin (tags <c>llmai-identified</c> /
+        /// <c>llmai-needs-review</c> — <see cref="OrphanIdentifyTask"/>) et
+        /// l'état du reste de la bibliothèque Movie/Series :
+        /// <list type="bullet">
+        /// <item><b>validated</b> / <b>not_found_to_review</b> : comptes
+        /// EXACTS par requête indexée sur le tag (<c>TotalRecordCount</c>,
+        /// pattern <see cref="CountByType"/>), décomposition par type,
+        /// exemples de noms pour les needs-review (révision manuelle).</item>
+        /// <item><b>identified_never_audited</b> : items avec ids provider
+        /// mais sans tag du plugin — identifiés par Emby natif, jamais
+        /// passés par le juge (pré-v1.13.19 ou hors DVR) ; le thermomètre
+        /// de couverture de la validation.</item>
+        /// <item><b>unidentified_no_ids</b> : ni id ni tag — orphelins
+        /// jamais traités.</item>
+        /// </list>
+        /// Les deux dernières catégories exigent un balayage en mémoire
+        /// (cap 5 000, drapeau d'échantillon comme <c>missing_metadata</c>
+        /// — <see cref="InternalItemsQuery"/> n'a pas de filtre inversé «
+        /// sans tag »). Épisodes exclus : leurs métadonnées dérivent de la
+        /// série. Fail-open : JSON d'erreur, jamais une exception.
+        /// </summary>
+        private string MetadataHealth()
+        {
+            const int sampleLimit = 5000;
+
+            // 1) Marqueurs du plugin — comptes exacts (requête indexée).
+            string tagOk = OrphanIdentifyTask.TagIdentified;
+            string tagReview = OrphanIdentifyTask.TagNeedsReview;
+            string tagNotFound = OrphanIdentifyTask.TagNotFound;
+            int identified = CountByTag(tagOk);
+            int needsReview = CountByTag(tagReview);
+            int notFoundTotal = CountByTag(tagNotFound);
+
+            var reviewByType = new Dictionary<string, int>();
+            foreach (var t in new[] { "Movie", "Series" })
+                reviewByType[t] = CountByTag(tagReview, t);
+
+            // 2) Balayage Movie/Series — couverture de la validation (cap),
+            //    recoupée sur le domaine DVR (dossier d'enregistrements —
+            //    là où le plugin agit ; le reste de la bibliothèque est
+            //    identifié par Emby natif et n'est pas son périmètre).
+            string dvrRoot = null;
+            try { RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out dvrRoot); }
+            catch { /* null : recoupement DVR absent */ }
+
+            int scanned = 0, idsNoTag = 0, noIdsNoTag = 0;
+            bool capped = false;
+            var untaggedExamples = new List<string>();
+            var orphanExamples = new List<string>();
+            int dvrItems = 0, dvrValidated = 0, dvrReview = 0, dvrNotFound = 0, dvrNeverAudited = 0, dvrNoIds = 0;
+            var dvrExamples = new List<string>();
+            var dvrReviewExamples = new List<string>();
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    Limit = sampleLimit,
+                    EnableTotalRecordCount = true
+                };
+                var res = _library.GetItemsResult(q);
+                if (res != null)
+                {
+                    var sample = res.Items ?? Array.Empty<BaseItem>();
+                    scanned = sample.Length;
+                    capped = scanned >= sampleLimit && res.TotalRecordCount > scanned;
+                    foreach (var i in sample)
+                    {
+                        if (i == null) continue;
+                        var tags = i.Tags ?? Array.Empty<string>();
+                        bool taggedOk = Array.IndexOf(tags, tagOk) >= 0;
+                        bool taggedReview = Array.IndexOf(tags, tagReview) >= 0;
+                        bool taggedNotFound = Array.IndexOf(tags, tagNotFound) >= 0;
+                        bool isDvr = !string.IsNullOrEmpty(dvrRoot)
+                            && !string.IsNullOrEmpty(i.Path)
+                            && i.Path.StartsWith(dvrRoot, StringComparison.OrdinalIgnoreCase);
+                        if (isDvr)
+                        {
+                            dvrItems++;
+                            if (taggedOk) dvrValidated++;
+                            else if (taggedReview)
+                            {
+                                dvrReview++;
+                                if (dvrReviewExamples.Count < 5) dvrReviewExamples.Add(i.Name);
+                            }
+                            else if (taggedNotFound)
+                            {
+                                dvrNotFound++;
+                            }
+                            else
+                            {
+                                bool hasIds = OrphanResolver.HasItemProviderId(i, "tmdb")
+                                    || OrphanResolver.HasItemProviderId(i, "tvdb")
+                                    || OrphanResolver.HasItemProviderId(i, "imdb");
+                                if (hasIds) dvrNeverAudited++;
+                                else dvrNoIds++;
+                                if (dvrExamples.Count < 10) dvrExamples.Add(i.Name);
+                            }
+                        }
+                        // Tagué = déjà traité par le plugin : sorti des compteurs
+                        // de bibliothèque (notamment orphan_queue — un item
+                        // introuvable est terminal, pas en file d'attente).
+                        if (taggedOk || taggedReview || taggedNotFound) continue;
+                        bool idsNoTagItem = OrphanResolver.HasItemProviderId(i, "tmdb")
+                            || OrphanResolver.HasItemProviderId(i, "tvdb")
+                            || OrphanResolver.HasItemProviderId(i, "imdb");
+                        if (idsNoTagItem)
+                        {
+                            idsNoTag++;
+                            if (untaggedExamples.Count < 10) untaggedExamples.Add(i.Name);
+                        }
+                        else
+                        {
+                            noIdsNoTag++;
+                            if (orphanExamples.Count < 8) orphanExamples.Add(i.Name);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit metadata_health (balayage) : {0}", ex.Message);
+            }
+
+            // Sortie organisée selon le modèle d'intervention du plugin :
+            // constats possibles UNIQUEMENT dans plugin_can_intervene /
+            // plugin_has_acted ; plugin_out_of_scope est du contexte
+            // (bibliothèque régulière identifiée nativement par Emby —
+            // jamais un constat). Le cadrage est structurel : même sans
+            // relire le prompt, le LLM ne peut pas mélanger les périmètres.
+            double dvrPct = dvrItems > 0 ? 100.0 / dvrItems : 0;
+            return JsonSerializer.Serialize(new
+            {
+                plugin_can_intervene = new
+                {
+                    dvr_scope = new
+                    {
+                        items = dvrItems,
+                        validated = dvrValidated,
+                        to_review = dvrReview,
+                        not_found = dvrNotFound,
+                        never_audited = dvrNeverAudited,
+                        no_ids = dvrNoIds,
+                        validation_coverage_pct = Math.Round(dvrValidated * dvrPct, 1),
+                        examples_pending = dvrExamples
+                    },
+                    orphan_queue = new
+                    {
+                        count = noIdsNoTag,
+                        examples = orphanExamples,
+                        note = "traités par la passe quotidienne 04 h"
+                    }
+                },
+                plugin_has_acted = new
+                {
+                    validated = new
+                    {
+                        total = identified,
+                        dvr = dvrValidated,
+                        regular_library = identified - dvrValidated,
+                        tag = tagOk
+                    },
+                    needs_review = new
+                    {
+                        total = needsReview,
+                        dvr = dvrReview,
+                        regular_library = needsReview - dvrReview,
+                        dvr_examples = dvrReview > 0 ? dvrReviewExamples : new List<string>(),
+                        by_type = reviewByType,
+                        tag = tagReview,
+                        note = "candidats trouvés mais rejetés — action humaine possible (retry nocturne si activé)"
+                    },
+                    not_found = new
+                    {
+                        total = notFoundTotal,
+                        dvr = dvrNotFound,
+                        regular_library = notFoundTotal - dvrNotFound,
+                        tag = tagNotFound,
+                        note = "titre absent de TOUTES les banques (S0/S1/S2/S3 sans aucun candidat) — état TERMINAL : rien à réviser, la fiche EPG est conservée ; réactivable en retirant le tag"
+                    }
+                },
+                plugin_out_of_scope = new
+                {
+                    regular_library_identified_native = new
+                    {
+                        count = idsNoTag - dvrNeverAudited,
+                        note = "hors périmètre du plugin — identifiées nativement par Emby, contexte seulement (aucune alerte)",
+                        sample = untaggedExamples
+                    },
+                    scanned_movie_series = scanned,
+                    sample_cap_reached = capped,
+                    note = "la bibliothèque régulière est le domaine d'Emby natif"
+                }
+            }, s_json);
+        }
+
+        /// <summary>Compte EXACT des items portant un tag (requête indexée
+        /// sur <see cref="InternalItemsQuery.Tags"/> — <c>TotalRecordCount</c>,
+        /// pattern <see cref="CountByType"/>), éventuellement borné à un type.</summary>
+        private int CountByTag(string tag, string embyType = null)
+        {
+            if (string.IsNullOrEmpty(tag)) return 0;
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    Tags = new[] { tag },
+                    Recursive = true,
+                    Limit = 1,
+                    EnableTotalRecordCount = true
+                };
+                if (embyType != null) q.IncludeItemTypes = new[] { embyType };
+                return _library.GetItemsResult(q)?.TotalRecordCount ?? 0;
+            }
+            catch { return 0; }
         }
 
         /// <summary>
@@ -2271,6 +2497,7 @@ namespace LLM_AI
             SectionSync("gpu_transcode", () => GpuTranscode());
             SectionSync("library_stats", () => LibraryStats());
             SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
+            SectionSync("metadata_health", () => MetadataHealth());
             SectionSync("ratings_check", () => RatingsCheck());
             SectionSync("security_check", () => SecurityCheck());
             await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);

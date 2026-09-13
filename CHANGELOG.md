@@ -10,6 +10,261 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.20.1] — 2026-09-13
+
+### Fixed (FR)
+- **Faux positif de la voie par id S2 — corroboration exigée sans synopsis.**
+  Un id TMDB/IMDb proposé par le LLM (S2) tombait sur une fiche réelle mais
+  sans rapport (junk fiche : ni synopsis, ni année, ni pays) et était accepté
+  quand la vérité EPG n'avait pas de synopsis comparable : la branche
+  « pas de synopsis → acceptation sur année (+titre) » ne vérifiait RIEN dans
+  ce cas — pas de titre (voie par id), pas d'année des deux côtés. Cas réel :
+  une série québécoise validée vers une fiche TMDB sans aucun rapport. La
+  porte exige maintenant, sur les voies par id sans synopsis comparable, une
+  corroboration : titre lexicale (EPG nettoyé vs titre TMDB, inclusion
+  acceptée) OU années présentes des deux côtés (compatibilité déjà passée) ;
+  sinon rejet explicite en log (« preuve insuffisante »). Les voies par titre
+  (S0, S2-titre) et S3 (ids IMDb issus du web, provenance réelle) sont
+  inchangées.
+
+### Fixed (EN)
+- **S2 id-path false positive — corroboration now required without synopsis.**
+  A TMDB/IMDb id proposed by the LLM (S2) could land on a real but unrelated
+  fiche (junk fiche: no synopsis, no year, no country) and was accepted when
+  the EPG truth had no synopsis to compare: the "no synopsis → accept on year
+  (+title)" branch checked NOTHING in that case — no title check (id-based
+  path), no year on both sides. Real case: a French-Canadian series validated
+  against an unrelated TMDB fiche. The gate now requires, on id-based paths
+  without a comparable synopsis, a corroboration: lexical title (cleaned EPG
+  vs TMDB title, containment accepted) OR years present on both sides
+  (compatibility already enforced); otherwise explicit log rejection
+  ("insufficient evidence"). Title-based paths (S0, S2-title) and S3 (IMDb ids
+  from web results, real provenance) are unchanged.
+
+## [1.13.20.0] — 2026-09-13
+
+### Added (FR)
+- **Troisième tag `llmai-not-found` — échecs d'identification distingués par
+  nature.** Le tag `llmai-needs-review` confondait deux échecs différents :
+  des candidats trouvés puis rejetés par la porte (une action humaine reste
+  possible) et un titre absent de TOUTES les banques (aucune action possible).
+  Le pipeline trace désormais si au moins un candidat a été « surface » à
+  S0/S1/S2/S3 : aucun → `llmai-not-found`, état terminal (gelé pour la passe
+  nocturne — plus aucun appel ; réactivable en retirant le tag) ; candidats
+  rejetés → `llmai-needs-review` (retry nocturne inchangé). Un item
+  `needs-review` retraité bascule automatiquement vers le bon tag (migration
+  gratuite du parc existant). La sonde `metadata_health` rapporte `not_found`
+  comme compartiment distinct de `plugin_has_acted` (informatif, jamais une
+  alerte) et le sort de la file orphelins ; prompts FR/EN mis à jour.
+  Motivation : un titre québécois confirmé absent de TMDB/TVDB/IMDb était
+  re-tenté chaque nuit pour rien et apparaissait comme « à réviser » dans
+  l'audit.
+
+### Added (EN)
+- **Third tag `llmai-not-found` — identification failures distinguished by
+  nature.** `llmai-needs-review` conflated two different failures: candidates
+  found then rejected by the gate (human action remains possible) and a title
+  absent from EVERY bank (no possible action). The pipeline now traces whether
+  at least one candidate was surfaced at S0/S1/S2/S3: none → `llmai-not-found`,
+  terminal state (frozen for the nightly pass — no more calls; re-activable by
+  removing the tag); rejected candidates → `llmai-needs-review` (nightly retry
+  unchanged). A re-processed `needs-review` item automatically switches to the
+  right tag (free migration of the existing pool). The `metadata_health` probe
+  reports `not_found` as a separate `plugin_has_acted` bucket (informational,
+  never a warning) and excludes it from the orphan queue; FR/EN prompts
+  updated. Motivation: a Quebec title confirmed absent from TMDB/TVDB/IMDb was
+  retried nightly for nothing and showed up as "to review" in the audit.
+
+## [1.13.19.9] — 2026-09-13
+
+### Fixed (FR)
+- **Filet LaTeX renforcé dans les rapports LLM.** Un `\rightarrow` du modèle
+  qui passe par un décodage JSON est dégradé en retour chariot + « ightarrow »
+  (backslash avalé) — le filet existant ne reconnaissait pas le fragment et le
+  rapport affichait « $ ightarrow$ ». Le nettoyeur retire d'abord les CR
+  isolés, couvre les variantes longues (`\longrightarrow`, `\Longrightarrow`)
+  et convertit le fragment corrompu borné au segment math `$…$` en « → » (pas
+  de faux positif sur un montant en dollars).
+
+### Fixed (EN)
+- **Hardened LaTeX guard in LLM reports.** A model's `\rightarrow` that goes
+  through a JSON decode degrades into a carriage return + "ightarrow"
+  (swallowed backslash) — the existing guard missed the fragment and the
+  report displayed « $ ightarrow$ ». The sanitizer now strips bare CRs first,
+  covers the long variants (`\longrightarrow`, `\Longrightarrow`) and converts
+  the corrupted fragment, bounded to the `$…$` math segment, into « → » (no
+  false positive on dollar amounts).
+
+## [1.13.19.8] — 2026-09-13
+
+### Fixed (FR)
+- **Bouton « Réinitialiser » des prompts : réponse périmée après un déploy.**
+  Le fetch vers `/Plugins/LLMAI/DefaultPrompts` était mis en cache pour toute
+  la session du tableau de bord (SPA — config.js ne se recharge qu'au plein
+  rechargement du navigateur). Après un déploiement d'une nouvelle version, un
+  clic sur « Réinitialiser » réutilisait la réponse de l'ANCIEN DLL encore en
+  mémoire au premier fetch : le prompt par défaut affiché (puis enregistré)
+  était l'ancien. Le cache est supprimé — chaque clic refait un fetch frais.
+
+### Fixed (EN)
+- **Prompt « Réinitialiser » button: stale response after a deploy.** The
+  fetch to `/Plugins/LLMAI/DefaultPrompts` was cached for the whole dashboard
+  session (SPA — config.js only reloads on a full browser refresh). After
+  deploying a new version, clicking « Reset » reused the response served by
+  the OLD in-process DLL from the first fetch: the default prompt shown (and
+  then saved) was the outdated one. The cache is removed — every click now
+  fetches fresh.
+
+## [1.13.19.7] — 2026-09-13
+
+### Added — Audit : sonde « santé des métadonnées » réorganisée selon le modèle d'intervention
+
+- La sortie de `metadata_health` est réorganisée en **trois compartiments**
+  structurels : `plugin_can_intervene` (domaine DVR `dvr_scope` + file
+  d'orphelins `orphan_queue` — traités par la passe 04 h),
+  `plugin_has_acted` (items taggés — validées et à valider **découpés**
+  DVR / bibliothèque régulière, exemples dédiés aux DVR) et
+  `plugin_out_of_scope` (bibliothèque régulière identifiée nativement par
+  Emby — **contexte seulement**, jamais un constat). Le cadrage du rapport
+  devient structurel : même sans relire le prompt, le LLM ne peut plus
+  mélanger les périmètres. Complète le cadrage du prompt (1.13.19.6) : les
+  deux garde-fous ensemble. Prompts d'audit FR/EN (défauts + prompt installé)
+  mis à jour.
+
+---
+
+## [1.13.19.6] — 2026-09-13
+
+### Fixed — Audit : cadrage de la sonde « santé des métadonnées »
+
+- Le rapport d'audit générait des **fausses alertes** : la couverture globale
+  (1,4 %) et les items « jamais audités » mélangent la bibliothèque régulière
+  — identifiée nativement par Emby à partir de noms de fichiers corrects, donc
+  **hors périmètre du plugin** — avec le domaine DVR. Le prompt d'audit (FR +
+  EN, défaut et prompt installé) porte désormais le cadrage : le thermomètre
+  actionnable est le recoupement `dvr_scope` ; jamais d'avertissement sur la
+  couverture globale ni sur les items non audités de la bibliothèque
+  régulière ; les needs-review hors DVR sont des résidus attendus de la passe
+  orphelins, pas des urgences.
+
+---
+
+## [1.13.19.5] — 2026-09-13
+
+### Fixed — Audit : la sonde « santé des métadonnées » atteinte par l'agent
+
+- L'audit en **mode agent** (`single`) laissait le LLM choisir les actions
+  selon la liste de son prompt d'audit — qui ne mentionnait pas
+  `metadata_health` (ajoutée à l'outil au 1.13.19.3, le LLM ne l'appelait donc
+  jamais). Le prompt d'audit par défaut (FR + EN) intègre désormais l'action
+  et directive explicite : section « Santé des métadonnées » du rapport avec
+  items à valider (exemples) et couverture DVR (`dvr_scope`).
+- Le prompt installé dans la configuration existante prime sur le défaut —
+  à mettre à jour via le bouton « Réinitialiser » de la page de configuration
+  (ou modification manuelle de `LLM_AI.xml`).
+
+---
+
+## [1.13.19.4] — 2026-09-13
+
+### Added — Audit : santé des métadonnées recoupée sur le domaine DVR
+
+- La sonde `metadata_health` recoupe désormais ses métriques sur le **domaine
+  DVR** (items sous le dossier d'enregistrements, résolu via
+  `RecordingDiskManager`) : items du domaine, validés, à valider, jamais
+  audités, sans id — et un **taux de couverture DVR**. La bibliothèque
+  régulière (identifiée nativement par Emby, hors périmètre du plugin) reste
+  visible dans les métriques globales, mais le thermomètre actionnable est
+  désormais le recoupement DVR.
+
+---
+
+## [1.13.19.3] — 2026-09-13
+
+### Added — Audit : santé des métadonnées
+
+- **Nouvelle action `metadata_health`** dans l'outil `system_audit` (lecture
+  seule) : comptes des marqueurs de la chaîne d'identification —
+  **validées** (tag `llmai-identified`), **non trouvées / à valider** (tag
+  `llmai-needs-review`, avec exemples de noms pour la révision manuelle),
+  **identifiées par Emby mais jamais auditées** par le plugin (ids présents,
+  sans tag — le thermomètre de couverture, inclut les items pré-v1.13.19 et
+  les bibliothèques hors DVR) et **sans identification** (ni id ni tag).
+  Décomposition Movie/Series ; épisodes exclus (leurs métadonnées dérivent
+  de la série). Comptes exacts par requête indexée sur le tag ; balayage
+  borné (cap 5 000, drapeau d'échantillon comme `missing_metadata`) pour les
+  catégories sans filtre inversé. La sonde est ajoutée au digest
+  déterministe (section « metadata_health ») et le rapport affiche le taux
+  de couverture de la validation.
+
+---
+
+## [1.13.19.2] — 2026-09-13
+
+### Fixed — Validation à la source : épisodes de séries
+
+- **Enregistrements de séries numérotées** (S01E02) : ils importent comme
+  **épisodes**, type absent du filtre du watcher — l'entrée était abandonnée
+  sans audit après 15 essais. Le watcher reconnaît maintenant les épisodes :
+  leurs métadonnées dérivant de l'identification de **leur série** (les
+  providers remplissent l'épisode à partir de l'id de la série), l'épisode est
+  déclaré **couvert par l'audit de sa série** (résolue via `Episode.Series`,
+  repli `GetItemById(SeriesId)`) et son entrée est gelée — la vérité EPG de
+  l'épisode reste dans le store jusqu'à la rétention (7 j) pour la révision
+  manuelle, sans re-traitement. Les films et fiches de série restent audités
+  normalement.
+
+---
+
+## [1.13.19.1] — 2026-09-13
+
+### Fixed
+
+- **Page de configuration** : le lien « Documentation complète » affichait la clé brute `cfg.docs.link` en anglais — la clé était dupliquée dans le dictionnaire FR (valeur FR puis valeur EN, le doublon gagnant) et absente du dictionnaire EN. Valeur FR rétablie dans `fr`, clé ajoutée dans `en`.
+
+---
+
+## [1.13.19.0] — 2026-09-13
+
+### Added — Contrôle à la source : validation des enregistrements à la fin de la diffusion
+
+Les providers automatiques d'Emby identifient un enregistrement DVR dès l'import.
+En cas de mauvais match, un id **faux** est écrit **et** le synopsis EPG (source
+de vérité) est écrasé — l'item n'est plus orphelin et échappe à la passe
+nocturne, le faux positif est invisible. Nouveau contrôle :
+
+- **`RecordingWatcher`** (`IServerEntryPoint`, pattern PlaybackWatcher) : branché
+  sur `ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`. À la fin de
+  chaque enregistrement, la **vérité EPG** (titre/synopsis/année du programme du
+  guide) est figée dans `recording_validate.json` (store fail-open, pattern
+  EpgSnapshotStore, rétention 7 j) **avant** que l'identification n'ait pu
+  écraser le synopsis ; une boucle d'arrière-plan audite ensuite l'item
+  (~3 min après l'import, pour laisser Emby finir). Opt-in
+  `OrphanValidateOnRecordingEnd` (défaut false, vérifié à chaque événement —
+  activable sans redémarrage).
+- **Audit de l'id d'Emby** : le juge sémantique compare le synopsis EPG figé au
+  synopsis TMDB de l'id posé par Emby — **match** → verrous + tag
+  `llmai-identified` (l'identification est validée) ; **mismatch** → ids
+  retirés, retour à l'état EPG, reprise immédiate du pipeline S1→S2→S3 ;
+  juge indisponible ou sans synopsis comparable → on ne touche pas (prudence).
+  Dry-run respecté (aucune écriture, logs).
+- **Étape S0 — premier tri natif Emby** : `OrphanEmbyFirstPass` (défaut true) —
+  les orphelins passent d'abord par la recherche native Emby
+  (`IProviderManager.GetRemoteSearchResults`, le moteur du dialogue
+  « Identifier », clés du serveur), chaque candidat passant la porte de
+  conformité (titre + année + juge synopsis) avant application ; les rejetés
+  poursuivent S1→S2→S3.
+- **Refactor** : la logique de résolution par item est extraite dans
+  `OrphanResolver` (une seule chaîne : audit → S0 → S1 → S2 → S3), partagée par
+  la tâche 04 h et le watcher ; `OrphanIdentifyTask` conserve la numérisation,
+  l'idempotence par tags et le dry-run.
+
+### Changed — page de configuration
+
+- Deux nouvelles cases dans la section « Identification des enregistrements
+  orphelins » : S0 (premier tri natif Emby) et la validation à la fin de
+  l'enregistrement (opt-in). Textes FR/EN.
+
 ## [1.13.18.0] — 2026-09-12
 
 ### Changed — Surfaces foyer : tous les chemins de remplissage fermés

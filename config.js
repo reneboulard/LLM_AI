@@ -449,21 +449,19 @@ define(["loading"], function (loading) {
     //  Bouton « Réinitialiser » des prompts/directives
     // ----------------------------------------------------------------
 
-    // Prompts par défaut (langue configurée) — GET /Plugins/LLMAI/DefaultPrompts,
-    // mis en cache après le premier fetch (les 4 boutons partagent la même
-    // réponse). En cas d'échec on invalide le cache pour permettre un retry.
-    var _defaultsPromise = null;
+    // Prompts par défaut (langue configurée) — GET /Plugins/LLMAI/DefaultPrompts.
+    // PAS de cache : le tableau de bord Emby est une SPA — config.js survit aux
+    // redémarrages du serveur (déploiement d'une nouvelle version), et une
+    // réponse mise en cache servirait l'ANCIEN prompt après un déploy au lieu
+    // du nouveau (vu en production : « Réinitialiser » a réinstallé le prompt
+    // d'avant la mise à jour). Le fetch n'a lieu qu'au clic, un aller-retour
+    // par clic est négligeable.
     function fetchDefaultPrompts() {
-        if (_defaultsPromise) return _defaultsPromise;
-        _defaultsPromise = ApiClient.ajax({
+        return ApiClient.ajax({
             url: ApiClient.getUrl("Plugins/LLMAI/DefaultPrompts"),
             type: "GET",
             dataType: "json"
-        }).then(null, function (err) {
-            _defaultsPromise = null;
-            throw err;
         });
-        return _defaultsPromise;
     }
 
     function wireResetPromptButtons(view) {
@@ -753,6 +751,8 @@ define(["loading"], function (loading) {
         view.querySelector("#chkOrphanIdentifyDryRun").checked = !!cfg.OrphanIdentifyDryRun;
         view.querySelector("#chkOrphanSearXngEnabled").checked = cfg.OrphanSearXngEnabled !== false;
         view.querySelector("#chkOrphanRetryNeedsReview").checked = !!cfg.OrphanRetryNeedsReview;
+        view.querySelector("#chkOrphanEmbyFirstPass").checked = cfg.OrphanEmbyFirstPass !== false;
+        view.querySelector("#chkOrphanValidateOnRecordingEnd").checked = !!cfg.OrphanValidateOnRecordingEnd;
         // Audit santé — Lecture seule par défaut, remédiation opt-in.
         view.querySelector("#chkAuditEnabled").checked = cfg.AuditEnabled !== false;
         view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
@@ -866,6 +866,8 @@ define(["loading"], function (loading) {
             OrphanIdentifyDryRun: view.querySelector("#chkOrphanIdentifyDryRun").checked,
             OrphanSearXngEnabled: view.querySelector("#chkOrphanSearXngEnabled").checked,
             OrphanRetryNeedsReview: view.querySelector("#chkOrphanRetryNeedsReview").checked,
+            OrphanEmbyFirstPass: view.querySelector("#chkOrphanEmbyFirstPass").checked,
+            OrphanValidateOnRecordingEnd: view.querySelector("#chkOrphanValidateOnRecordingEnd").checked,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),

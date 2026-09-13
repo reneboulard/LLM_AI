@@ -27,7 +27,6 @@ define([], function () {
             // -- Page de configuration : titres / descriptions / labels ----
             "cfg.title": "LLM AI — Configuration",
             "cfg.docs.link": "📖 Documentation complète (GitHub — nouvel onglet)",
-            "cfg.docs.link": "📖 Full documentation (GitHub — opens in a new tab)",
             "cfg.backends.h": "Serveurs LLM (repli par priorité)",
             "cfg.backends.desc": "Ajoutez un ou plusieurs serveurs Ollama. Chaque LLM a une <b>priorité</b> (1 = la plus haute, essayée en premier) et un drapeau <b>activé</b>. Si un serveur est indisponible, la tâche bascule automatiquement sur le prochain LLM activé selon la priorité.",
             "cfg.backends.add": "+ Ajouter un LLM",
@@ -176,6 +175,10 @@ define([], function () {
             "cfg.orphan.searxng.desc": "Si cochée, après S1/S2 la tâche interroge <b>SearXNG</b> (cf. URL ci-dessus), extrait les ids <b>IMDb</b> des résultats, valide via TMDB + juge de synopsis. Résout les titres québécois paraphrasés qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg » → film « Seberg » 2019). Inopérant si ni SearXNG ni clé Ollama ne sont configurés.",
             "cfg.orphan.retry": "Retraiter les besoins-revues (retry)",
             "cfg.orphan.retry.desc": "Si cochée, les orphelins marqués <b>needs-review</b> sont retraités (au lieu d'être sautés) — pour y repasser S3 une fois SearXNG configuré. En cas de résolution, le tag devient <b>identified</b>. Les déjà-identifiés restent sautés.",
+            "cfg.orphan.firstpass": "Étape S0 : premier tri natif Emby (moteur « Identifier »)",
+            "cfg.orphan.firstpass.desc": "Si cochée, les orphelins passent d'abord par la <b>recherche native Emby</b> (le même moteur que le dialogue « Identifier » : TMDB/TVDB configurés côté serveur, clés du serveur) avant la recherche TMDB multilingue S1. Chaque candidat passe la porte de conformité : titre + année + juge de synopsis — un mauvais match natif est rejeté et la chaîne S1→S2→S3 se poursuit. Désactivée si la clé TMDB est absente.",
+            "cfg.orphan.validate": "Valider les métadonnées à la fin de chaque enregistrement",
+            "cfg.orphan.validate.desc": "Si cochée, à la fin de chaque enregistrement DVR le plugin <b>fige la vérité EPG</b> (titre/synopsis/année du programme du guide) puis audite l'identification posée par les providers automatiques d'Emby : <b>juge de synopsis</b> — match → verrous + tag identifié ; <b>mismatch</b> → ids retirés, retour à l'état EPG et reprise immédiate du pipeline S1→S2→S3. Les enregistrements non identifiés passent immédiatement. Sinon, la passe nocturne 04 h reste le seul filet. <b>Opt-in</b> : activeable sans redémarrage ; respecte le dry-run.",
 
             // -- Audit santé (endpoint à la demande, agent system_audit) ---
             "cfg.audit.h": "Audit santé du serveur",
@@ -337,6 +340,7 @@ define([], function () {
 
         en: {
             "cfg.title": "LLM AI — Configuration",
+            "cfg.docs.link": "📖 Full documentation (GitHub — opens in a new tab)",
             "cfg.backends.h": "LLM servers (priority fallback)",
             "cfg.backends.desc": "Add one or more Ollama servers. Each LLM has a <b>priority</b> (1 = highest, tried first) and an <b>enabled</b> flag. If a server is unavailable, the task automatically falls back to the next enabled LLM by priority.",
             "cfg.backends.add": "+ Add an LLM",
@@ -484,6 +488,10 @@ define([], function () {
             "cfg.orphan.searxng.desc": "When checked, after S1/S2 the task queries <b>SearXNG</b> (see URL above), extracts <b>IMDb</b> ids from the results, and validates them through TMDB + synopsis judge. Resolves paraphrased Quebec titles no catalog knows (e.g. \"L'histoire de Jean Seberg\" → film \"Seberg\" 2019). No-op if neither SearXNG nor an Ollama key is configured.",
             "cfg.orphan.retry": "Re-process needs-review items (retry)",
             "cfg.orphan.retry.desc": "When checked, orphans tagged <b>needs-review</b> are reprocessed (instead of skipped) — to run S3 on them once SearXNG is configured. On success the tag becomes <b>identified</b>. Already-identified items stay skipped.",
+            "cfg.orphan.firstpass": "S0 stage: native Emby first pass (\"Identify\" engine)",
+            "cfg.orphan.firstpass.desc": "When checked, orphans go through the <b>native Emby search</b> first (the same engine as the \"Identify\" dialog: server-side TMDB/TVDB with the server keys) before the S1 multi-language TMDB search. Every candidate passes the acceptance gate: title + year + synopsis judge — a bad native match is rejected and the S1→S2→S3 chain continues. Disabled when the TMDB key is missing.",
+            "cfg.orphan.validate": "Validate metadata when each recording finishes",
+            "cfg.orphan.validate.desc": "When checked, at the end of every DVR recording the plugin <b>freezes the EPG truth</b> (guide program title/synopsis/year) then audits the identification written by Emby's automatic providers: <b>synopsis judge</b> — match → locks + identified tag; <b>mismatch</b> → ids removed, back to the EPG state, and the S1→S2→S3 pipeline resumes immediately. Unidentified recordings go through immediately. Otherwise the nightly 4 AM pass stays the only safety net. <b>Opt-in</b>: can be enabled without restart; honors the dry-run.",
 
             "cfg.audit.h": "Server health audit",
             "cfg.audit.desc": "Launches an LLM agent that queries the <b>system_audit</b> tool (sessions, scheduled tasks, transcoding, disks, logs, host metrics) and produces a Markdown health report: severity-tagged findings + recommended actions. The <b>last successful report</b> is persisted and displayed by default when the page loads (reading it costs no LLM; a new audit overwrites it). Admin-only. <b>Remediation</b> (stop a session, trigger a task, notify a user) is disabled by default.",

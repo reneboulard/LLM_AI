@@ -644,6 +644,22 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
 - `OrphanRetryNeedsReview` (bool, default `false`) — when checked, re-processes
   `llmai-needs-review` items (instead of skipping them) to run S3 on them; on success
   the tag becomes `llmai-identified`. Already-identified items stay skipped.
+- `OrphanEmbyFirstPass` (bool, default `true`) — enables the **S0** stage: a first
+  pass through the **native Emby search** (the "Identify" dialog engine, using the
+  server's TMDB/TVDB keys) before the S1 multi-language TMDB search. Every candidate
+  passes the same acceptance gate (title + year + **synopsis judge**); a bad native
+  match is rejected and the S1→S2→S3 chain continues.
+- `OrphanValidateOnRecordingEnd` (bool, **default `false` — explicit opt-in**) — enables
+  **validation when each recording finishes** (`RecordingWatcher`, hooked on
+  `RecordingEnded`/`ItemAdded`): the plugin freezes the **EPG truth** (guide program
+  title/synopsis/year) before Emby's automatic identification can overwrite the
+  synopsis, then audits the id Emby wrote with the synopsis judge — **match** → locks +
+  identified tag; **mismatch** → ids removed, back to the EPG state, and the
+  identification pipeline resumes immediately. Unidentified recordings go through
+  immediately. Can be enabled without restart; honors the dry-run. The nightly 4 AM
+  pass remains the safety net. Limits: recordings already falsely identified before
+  enabling are only recoverable if the EPG truth is still available (guide window or
+  existing snapshot).
 
 ### AI genre translation (GenreCleaner)
 
@@ -720,7 +736,9 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (internal static) | **Chat editing contexts** (v1.13.8, port of the llm_core "contexts" pattern): five dropdown modes (one per editable prompt). `BuildBlock` injects at EVERY turn: the mode's editing guide (prompt role, invariants, drafting conventions), the prompt's CURRENT text re-read from config (read-modify-write source of truth) and the server-resolved target language. Also carries the `CommonRules` (```text delivery channel, read-modify-write, drafting conventions, languages, saving, exclusive mode) appended at the end of the block. The page list and `context_id` validation both derive from the `All` registry (one entry = one mode). See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (internal static) | Pending-modification store (`chat_pending.json`, 10-min expiry, one per conversation, per user). `TakePagePending` (collects the diff card for the turn), `PeekPagePending` (peeks without consuming — nudge net), `Consume` (approval: removes the action if it exists, has not expired, belongs to this user AND session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Chat tool `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`): `list`/`get` (read the five fields) and `set` — **two-phase**: validates (field whitelist, 8000-char cap, non-empty text, field = active mode) then serializes the proposal into `ChatPromptStore`; the write happens only on the "Approve" click (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, deterministic C#) — the LLM has NO direct write path. Divergence warning (lexical overlap < 25 %) carried by the diff card. See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series) → S1 (title cleanup + multi-language TMDB search) → S2 (LLM-proposed id validated via TMDB `/find`) → S3 (SearXNG web search → IMDb id, same acceptance gate), writes ids+Overview+Genres+poster if empty, **locks `Name`**, tags `llmai-identified`/`llmai-needs-review`, retry needs-review, dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB) → S2 (LLM) → S3 (SearXNG), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis), non-destructive apply + add-only locks, poster via `SaveImage`. |
+| `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation when each DVR recording finishes (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle without restart): freezes the **EPG truth** into `recording_validate.json` (`RecordingValidateStore`, EpgSnapshotStore pattern) **before** Emby's identification can overwrite the synopsis, background loop (~3 min after import) → `OrphanResolver` with the truth; dry-run honored, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default poster (`default_poster.jpg`, embedded resource) on the `AI Tonight` collection (BoxSet) and the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
@@ -1266,7 +1284,12 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
      that exists but points to a same-titled film from a different era (e.g. "Le
      guérisseur" 1953 vs 2017) is **rejected**, and the search continues. Mirrors the
      user's manual method (compare synopsis + date). Skipped when the EPG has no
-     synopsis (falls back to year + title). The verdict + reasoning are logged.
+     comparable synopsis — but on **id-based** paths, the no-synopsis branch then
+     requires a **corroboration**: lexical title (cleaned EPG vs TMDB title, containment
+     accepted) **or** years present on both sides; otherwise an explicit rejection
+     ("insufficient evidence"). Without this guard, a hallucinated id landing on a real
+     but unrelated fiche (empty fiche: no synopsis, no year) was accepted on the id
+     alone. The verdict + reasoning are logged.
 3. **S3 — web search (SearXNG) → IMDb id** (if S1 and S2 fail, and
    `OrphanSearXngEnabled`). The task queries the self-hosted **[SearXNG](https://docs.searxng.org/)** instance
    (`SearXngUrl` field, already used by the LLM's `web_search` tool; Ollama cloud
@@ -1293,15 +1316,25 @@ When a candidate is validated (and not in dry-run), `OrphanIdentifyTask`:
   user's manual practice;
 - adds the **`llmai-identified`** tag and persists (`UpdateToRepository`).
 
-Orphans that no stage can resolve are tagged **`llmai-needs-review`** (to recheck by
-hand) — no id is written.
+Pipeline failures are distinguished by their nature (v1.13.20.0):
+
+- **candidates seen but rejected** (a bank lists the title, the gate refuses it) →
+  tag **`llmai-needs-review`** (to recheck by hand — a human action remains possible);
+- **no candidate seen in any bank** (S0/S1/S2/S3 with no result at all) → tag
+  **`llmai-not-found`** — **terminal** state: nothing to review, the EPG card is the
+  best available metadata. Frozen for the nightly pass (no more calls); re-activable
+  by removing the tag (Emby metadata editor) if a bank adds the title later.
+
+In both cases no id is written; a re-processed `needs-review` item switches
+automatically to the right tag.
 
 ### Idempotency & dry-run
 
 Items already tagged `llmai-identified` are **skipped** on the next pass (tag-based
 idempotency). With **`OrphanRetryNeedsReview`**, `llmai-needs-review` items are
 **re-processed** (instead of skipped) — to run S3 on them once SearXNG is configured; on
-success the `needs-review` tag is **replaced** with `identified`. With
+success the `needs-review` tag is **replaced** with `identified`. Items tagged
+`llmai-not-found` are **always skipped** (terminal state). With
 **`OrphanIdentifyDryRun`**, the task writes nothing: it logs each orphan + the proposed
 resolution (S1/S2/S3) and a summary (resolved / needs-review / skipped / errors) — to
 validate resolution quality before switching to application. Best-effort: a failing item

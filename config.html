@@ -967,6 +967,32 @@
                             devient <b>identified</b>. Les déjà-identifiés restent sautés.
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanEmbyFirstPass" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.firstpass">Étape S0 : premier tri natif Emby (moteur « Identifier »)</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.firstpass.desc">
+                            Si cochée, les orphelins passent d'abord par la <b>recherche native Emby</b>
+                            (le même moteur que le dialogue « Identifier » : TMDB/TVDB configurés côté serveur,
+                            clés du serveur) avant la recherche TMDB multilingue S1. Chaque candidat passe la
+                            porte de conformité : titre + année + juge de synopsis — un mauvais match natif est
+                            rejeté et la chaîne S1→S2→S3 se poursuit. Désactivée si la clé TMDB est absente.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanValidateOnRecordingEnd" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.validate">Valider les métadonnées à la fin de chaque enregistrement</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.validate.desc">
+                            Si cochée, à la fin de chaque enregistrement DVR le plugin <b>fige la vérité EPG</b>
+                            (titre/synopsis/année du programme du guide) puis audite l'identification posée par
+                            les providers automatiques d'Emby : <b>juge de synopsis</b> — match → verrous + tag
+                            identifié ; <b>mismatch</b> → ids retirés, retour à l'état EPG et reprise immédiate
+                            du pipeline S1→S2→S3. Les enregistrements non identifiés passent immédiatement.
+                            Sinon, la passe nocturne 04 h reste le seul filet. <b>Opt-in</b> : activeable sans
+                            redémarrage ; respecte le dry-run ci-dessus.
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.desc">
                             Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches
