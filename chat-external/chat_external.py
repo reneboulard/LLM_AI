@@ -476,6 +476,10 @@ PAGE_HTML = r"""<!doctype html>
     background: var(--accent2); border-color: var(--accent2); color: #fff;
   }
   .weblink { color: var(--muted); text-decoration: none; font-size: 12px; }
+  .speakbtn {
+    display: block; margin-top: 6px; padding: 2px 8px; font-size: 12px; opacity: .55;
+  }
+  .speakbtn:hover { opacity: 1; }
   form { display: flex; gap: 8px; padding: 12px 16px;
          background: var(--panel); border-top: 1px solid var(--border); }
   form input {
@@ -598,10 +602,74 @@ function addBubble(role, text, isErr) {
   var div = document.createElement("div");
   div.className = "msg " + (role === "user" ? "user" : "bot" + (isErr ? " err" : ""));
   if (role === "user") { div.textContent = text; }
-  else { div.innerHTML = renderMd(text || ""); }
+  else {
+    div.innerHTML = renderMd(text || "");
+    // 🔊 lecture à voix haute (speechSynthesis — marche aussi hors HTTPS ;
+    // seul le contenu texte est lu, les boutons de projection sont écartés)
+    if (!isErr && text && window.speechSynthesis) {
+      var sb = document.createElement("button");
+      sb.className = "speakbtn"; sb.textContent = "🔊";
+      sb.title = "Lire à voix haute";
+      sb.addEventListener("click", function () { speakText(text, sb); });
+      div.appendChild(sb);
+    }
+  }
   $("msgs").appendChild(div);
   scrollDown();
   return div;
+}
+
+// -- lecture à voix haute (Web Speech Synthesis) ------------------------------
+var speakingBtn = null;
+function stopSpeak() {
+  try { window.speechSynthesis.cancel(); } catch (e) {}
+  if (speakingBtn) { speakingBtn.textContent = "🔊"; speakingBtn = null; }
+}
+// Markdown → texte oral : les liens [Titre](url) ne gardent que « Titre »,
+// les blocs de code et URL restantes sont écartés (pas de charabia lu).
+function cleanSpeech(src) {
+  return src
+    .replace(/```[a-z]*[\s\S]*?```/g, " ")
+    .replace(SHOW_RE, function (_, title) { return title; })
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?;:)])/g, "$1$2")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/^#+\s*/gm, " ")
+    .replace(/^[-*•]\s*/gm, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, " ")
+    .trim();
+}
+// Chrome coupe les énoncés très longs : lecture par tranches de phrases.
+function chunkSpeech(text, maxLen) {
+  var parts = [], cur = "";
+  (text.match(/[^.!?;\n]+[.!?;]*\s*/g) || [text]).forEach(function (s) {
+    if (cur.length + s.length > maxLen && cur) { parts.push(cur.trim()); cur = ""; }
+    cur += s;
+  });
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
+}
+function speakText(raw, btn) {
+  if (!window.speechSynthesis) return;
+  if (speakingBtn === btn) { stopSpeak(); return; }
+  stopSpeak();
+  var text = cleanSpeech(raw);
+  if (!text) { toast("⚠️ Rien à lire dans cette réponse.", true); return; }
+  speakingBtn = btn;
+  btn.textContent = "⏹";
+  var parts = chunkSpeech(text, 180), i = 0;
+  function next() {
+    if (speakingBtn !== btn) return;            // annulé entre-temps
+    if (i >= parts.length) { stopSpeak(); return; }
+    var u = new SpeechSynthesisUtterance(parts[i++]);
+    u.lang = "fr-FR"; u.rate = 1.0; u.pitch = 1.0;
+    u.onend = next;
+    u.onerror = function () { stopSpeak(); };
+    window.speechSynthesis.speak(u);
+  }
+  next();
 }
 
 // -- API ---------------------------------------------------------------------
@@ -675,6 +743,7 @@ function send(ev) {
   var text = $("in").value.trim();
   if (!text) return false;
   busy = true;
+  stopSpeak();
   $("sbtn").disabled = true;
   $("in").value = "";
   addBubble("user", text);
