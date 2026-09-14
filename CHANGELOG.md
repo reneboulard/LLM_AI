@@ -28,6 +28,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   cap 30", plus window and genre-census lines that said "epg_tonight" on
   the raw view.
 
+### Fixed — app compagnon (FR)
+- **Liens « ↗ fiche web » sur l'adresse Emby vue du navigateur.** Les
+  liens étaient construits depuis `emby_url` (le loopback, obligatoire
+  pour la gate du plugin) : corrects seulement quand on chatte depuis le
+  serveur lui-même. Nouveau champ `emby_public_url` dans `config.json`
+  (ex. `http://192.168.1.20:8096`) — l'URL d'Emby telle que le navigateur
+  de l'usager doit l'atteindre — utilisée pour ces liens ; vide = repli
+  sur `emby_url`. La gate reste sur `emby_url`, inchangée. Le démarrage
+  affiche les deux valeurs et rappelle le champ quand `emby_public_url`
+  est vide.
+
+### Fixed — companion app (EN)
+- **"↗ fiche web" deep links use the Emby URL as seen from the browser.**
+  Links were built from `emby_url` (the loopback, required by the plugin
+  gate) — correct only when chatting from the server machine itself. New
+  `emby_public_url` field in `config.json` (e.g. `http://192.168.1.20:8096`)
+  — the Emby URL the user's browser must reach — used for these links;
+  empty falls back to `emby_url`. The gate still uses `emby_url`,
+  unchanged. Startup prints both values and hints at the field when
+  `emby_public_url` is empty.
+
 ---
 
 ## [1.13.21.6] — 2026-09-14

@@ -51,7 +51,8 @@ Ouvrez ensuite `http://<machine-emby>:8070/` depuis un navigateur du foyer
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `emby_url` | `http://localhost:8096` | URL Emby — **doit rester le loopback** de la machine Emby |
+| `emby_url` | `http://localhost:8096` | URL Emby — **doit rester le loopback** de la machine Emby (gate du plugin) |
+| `emby_public_url` | (vide) | URL Emby **vue par le navigateur de l'usager** — sert aux liens « ↗ fiche web » quand on chatte depuis un autre appareil que le serveur (ex. `http://192.168.1.20:8096`) ; vide = repli sur `emby_url` |
 | `listen_host` | `0.0.0.0` | `0.0.0.0` = LAN ; `127.0.0.1` si vous ne discutez que depuis le serveur |
 | `listen_port` | `8070` | Port de la page de chat |
 | `secret` | (généré) | Même valeur que « Chat externe → Secret partagé » dans Emby |
@@ -61,6 +62,22 @@ Ouvrez ensuite `http://<machine-emby>:8070/` depuis un navigateur du foyer
 
 Pour révoquer l'accès : changez le secret **des deux côtés** (Emby +
 `config.json`), ou désactivez le chat externe dans Emby.
+
+## Lecture à voix haute 🔊
+
+- Chaque réponse a un bouton **🔊** pour la faire lire par la synthèse
+  vocale du navigateur (fonctionne aussi hors HTTPS — seule la **dictée**
+  exige un contexte sécurisé).
+- Le bouton **🔊 Auto** (en-tête) active la lecture automatique de chaque
+  réponse ; l'état est mémorisé par navigateur.
+- **Mode réponse parlée** : quand l'auto-lecture est active, l'app signale
+  le canal de livraison au plugin à chaque envoi (`Tts` dans la requête
+  `ChatExternal`) ; le LLM formule alors sa réponse pour l'ORAL — phrases
+  courtes, heures en toutes lettres, pas de listes/tableaux/URL — tout en
+  gardant les titres exacts (les boutons de projection restent rendus).
+  Basculer 🔊 en cours de conversation alterne proprement les deux
+  formulations (le signal est par tour). Côté serveur, chaque tour parlé
+  journalise « Canal de livraison : synthèse vocale ».
 
 ## HTTPS : trois façons de se connecter sans warning
 
