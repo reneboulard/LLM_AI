@@ -779,6 +779,12 @@ define(["loading"], function (loading) {
         view.querySelector("#txtExternalChatSecret").value = cfg.ExternalChatSecret || "";
         view.querySelector("#txtExternalChatUsers").value = Array.isArray(cfg.ExternalChatUsers)
             ? cfg.ExternalChatUsers.join("\n") : (cfg.ExternalChatUsers || "");
+        // Anti-spam (v1.13.21.2) : 0 = illimité est légitime — parseInt puis
+        // borné, jamais `|| défaut` (qui avalerait le 0).
+        var ecm = parseInt(cfg.ExternalChatMaxPerMinute, 10);
+        view.querySelector("#numExternalChatPerMinute").value = isNaN(ecm) ? 5 : Math.max(0, ecm);
+        var ecd = parseInt(cfg.ExternalChatMaxPerDay, 10);
+        view.querySelector("#numExternalChatPerDay").value = isNaN(ecd) ? 150 : Math.max(0, ecd);
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -900,7 +906,13 @@ define(["loading"], function (loading) {
             ExternalChatEnabled: view.querySelector("#chkExternalChatEnabled").checked,
             ExternalChatSecret: (view.querySelector("#txtExternalChatSecret").value || "").trim(),
             ExternalChatUsers: (view.querySelector("#txtExternalChatUsers").value || "")
-                .split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean)
+                .split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean),
+            ExternalChatMaxPerMinute: (function (v) {
+                var n = parseInt(v, 10); return isNaN(n) ? 5 : Math.max(0, Math.min(60, n));
+            })(view.querySelector("#numExternalChatPerMinute").value),
+            ExternalChatMaxPerDay: (function (v) {
+                var n = parseInt(v, 10); return isNaN(n) ? 150 : Math.max(0, Math.min(2000, n));
+            })(view.querySelector("#numExternalChatPerDay").value)
         };
     }
 

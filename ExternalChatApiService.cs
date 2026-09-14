@@ -62,6 +62,11 @@ namespace LLM_AI
     /// <item><b>Session bornée</b> : la navigation ne cible que la session
     ///   active DONT l'usager est celui de la requête — un usager listé ne
     ///   peut ni agir sur la session d'un autre ni lui montrer un contenu.</item>
+    /// <item><b>Anti-spam</b> (v1.13.21.2) : fenêtres glissantes par usager
+    ///   (tours/minute + tours/24 h, <see cref="PluginConfiguration.ExternalChatMaxPerMinute"/>/
+    ///   <see cref="PluginConfiguration.ExternalChatMaxPerDay"/>, 0 = illimité),
+    ///   un tour LLM à la fois par usager (<see cref="ChatRateLimiter"/>) et
+    ///   anti-rafale de la projection. En mémoire, reset au restart Emby.</item>
     /// </list>
     /// Service ServiceStack découvert par scanning d'assembly, hérite
     /// <see cref="BaseApiService"/> ; calqué sur <see cref="ChatApiService"/>
@@ -230,6 +235,26 @@ namespace LLM_AI
                 return new ChatExternalResponse { Enabled = true, Error =
                     "Message trop long (" + MaxMessageChars + " caractères maximum)." };
 
+            // Anti-spam (v1.13.21.2) : fenêtres glissantes PAR USAGER RÉSOLU
+            // (pas d'IP : tout arrive du loopback de l'app compagnon), puis
+            // verrou « un tour LLM à la fois ». Un tour refusé n'est pas
+            // compté ; le compteur est en mémoire (reset au restart Emby).
+            if (!ChatRateLimiter.TryConsumeTurn(user.Name,
+                    cfg.ExternalChatMaxPerMinute, cfg.ExternalChatMaxPerDay,
+                    out string rateError))
+            {
+                Logger.Info("[LLM_AI] [CHAT-EXT] Tour refusé (rate limit) — usager {0} : {1}",
+                    user.Name, rateError);
+                return new ChatExternalResponse { Enabled = true, Error = rateError };
+            }
+            if (!ChatRateLimiter.TryBeginTurnLock(user.Name, out IDisposable turnRelease))
+            {
+                Logger.Info("[LLM_AI] [CHAT-EXT] Tour refusé (réponse en cours) — usager {0}.",
+                    user.Name);
+                return new ChatExternalResponse { Enabled = true, Error =
+                    "Une réponse est déjà en cours pour cet usager — patientez un instant." };
+            }
+
             string userId = user.Id.ToString();
 
             // Historique re-posté par l'app → messages LLM (défense en
@@ -293,6 +318,12 @@ namespace LLM_AI
                     user.Name);
                 throw;
             }
+            finally
+            {
+                // Le verrou de tour est libéré dans tous les cas (réponse,
+                // annulation client, délai backend dépassé).
+                turnRelease.Dispose();
+            }
 
             // Journalise le tour (succès seulement — même règle que le chat
             // admin : un tour raté n'est pas rejoué).
@@ -340,6 +371,16 @@ namespace LLM_AI
             var user = ResolveAllowedUser(cfg, req?.User);
             if (user == null)
                 return new ExternalShowResponse { Error = "Usager non autorisé pour le chat externe." };
+
+            // Anti-rafale de la projection (v1.13.21.2) : fenêtre glissante
+            // fixe généreuse (30/min/usager) — la projection ne coûte pas de
+            // LLM, on ne vise que l'abus du client.
+            if (!ChatRateLimiter.TryConsumeShow(user.Name, out string showRateError))
+            {
+                Logger.Info("[LLM_AI] [CHAT-EXT] Show refusé (rate limit) — usager {0} : {1}",
+                    user.Name, showRateError);
+                return new ExternalShowResponse { Error = showRateError };
+            }
 
             // Item : forme REST (InternalId long) ou Guid hérité — résolution
             // tolérante commune (ItemIdResolver).

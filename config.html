@@ -1224,6 +1224,27 @@
                             </div>
                         </div>
 
+                        <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numExternalChatPerMinute"
+                                       label="Anti-spam (tours/minute)"
+                                       data-i18n-label="cfg.extchat.perMinute"
+                                       min="0" max="60" />
+                                <div class="fieldDescription" data-i18n-html="cfg.extchat.perMinute.desc">
+                                    Max de tours de chat par usager et par minute (fenêtre glissante) — chaque tour déclenche un appel LLM. 0 = illimité. Défaut 5.
+                                </div>
+                            </div>
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numExternalChatPerDay"
+                                       label="Quota (tours/24 h)"
+                                       data-i18n-label="cfg.extchat.perDay"
+                                       min="0" max="2000" />
+                                <div class="fieldDescription" data-i18n-html="cfg.extchat.perDay.desc">
+                                    Max de tours de chat par usager sur 24 h (fenêtre glissante). 0 = illimité. Défaut 150 (compteur en mémoire : un redémarrage d'Emby le remet à zéro).
+                                </div>
+                            </div>
+                        </div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

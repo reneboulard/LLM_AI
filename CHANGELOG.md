@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.2] — 2026-09-14
+
+### Added (FR)
+- **Anti-spam / rate limiting du chat externe.** L'app compagnon est une
+  entrée usagers dans Emby et chaque tour déclenche un appel LLM (possiblement
+  cloud payant) — un usager trop bavard, un enfant impatient ou une boucle
+  déréglée pouvait épuiser le budget sans garde. Par usager résolu (clé = nom,
+  pas d'IP : tout arrive du loopback de l'app compagnon) :
+  - **Fenêtres glissantes** sur les tours de chat — 5/minute et 150/24 h par
+    défaut, **configurables** dans la section « Chat externe »
+    (`ExternalChatMaxPerMinute` / `ExternalChatMaxPerDay`, `0` = illimité) ;
+    un tour refusé n'est pas compté, le refus porte l'attente calculée
+    (« patientez X s ») et s'affiche dans la bulle d'erreur de l'app ;
+  - **Un tour LLM à la fois par usager** — le 2ᵉ message pendant une
+    réponse en cours reçoit un refus immédiat (pas de double appel, pas de
+    tour consommé) ;
+  - **Anti-rafale de la projection** (`Show`) : fenêtre fixe généreuse
+    (30/min/usager) sans config — la projection ne coûte pas de LLM.
+  Limiteur en mémoire (`ChatRateLimiter`, pattern lock +
+  `ConcurrentDictionary` d'ActivateFeedback) : le compteur est remis à zéro
+  par un redémarrage d'Emby (voulu — pas de persistance d'un compteur de
+  chat). Le chat admin reste sans limite (auth admin Emby).
+
+### Added (EN)
+- **Anti-spam / rate limiting for the external chat.** The companion app is a
+  user-facing entry into Emby and every turn triggers an LLM call (possibly
+  paid cloud) — a chatty user, an impatient child or a runaway loop could
+  drain the budget unchecked. Per resolved user (key = name, not IP: all
+  requests arrive from the companion app's loopback): sliding windows on
+  chat turns — 5/minute and 150/24 h by default, **configurable** in the
+  "Chat externe" section (`ExternalChatMaxPerMinute` / `ExternalChatMaxPerDay`,
+  `0` = unlimited); a refused turn is not counted and carries the computed
+  wait ("patientez X s"), displayed in the app's error bubble. **One LLM turn
+  at a time per user** — a second message while a reply is in flight is
+  refused immediately (no double call, no turn consumed). **Projection
+  burst-guard** (`Show`): generous fixed window (30/min/user), no config.
+  In-memory limiter (`ChatRateLimiter`): an Emby restart resets the counters
+  (by design). The admin chat remains unlimited (Emby admin auth).
+
+---
+
 ## [1.13.21.1] — 2026-09-14
 
 ### Fixed (FR)

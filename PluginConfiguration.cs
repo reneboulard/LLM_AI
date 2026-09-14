@@ -1115,5 +1115,22 @@ namespace LLM_AI
         /// <c>/Plugins/LLMAI/Chat</c>). Vide = aucun usager autorisé.
         /// </summary>
         public List<string> ExternalChatUsers { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Nombre max de tours de chat externe PAR MINUTE (fenêtre glissante
+        /// de 60 s) par usager listé — anti-spam, l'app compagnon étant une
+        /// entrée usagers dans Emby et chaque tour déclenchant un appel LLM
+        /// (possiblement cloud payant). <c>0</c> = illimité (déconseillé).
+        /// Défaut 5. Voir <see cref="ChatRateLimiter"/>.
+        /// </summary>
+        public int ExternalChatMaxPerMinute { get; set; } = 5;
+
+        /// <summary>
+        /// Nombre max de tours de chat externe PAR 24 HEURES (fenêtre
+        /// glissante) par usager listé. <c>0</c> = illimité. Défaut 150.
+        /// Compteur en mémoire : un redémarrage d'Emby remet les compteurs
+        /// à zéro. Voir <see cref="ChatRateLimiter"/>.
+        /// </summary>
+        public int ExternalChatMaxPerDay { get; set; } = 150;
     }
 }
