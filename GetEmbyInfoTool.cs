@@ -39,14 +39,16 @@ namespace LLM_AI
         public string Description =>
             "Interroge la bibliothèque Emby et l'EPG (lecture seule). Retourne du JSON minimal. " +
             "Actions : summary, library, global_search, item_details, item_persons, person, " +
-            "find, genre_stats, epg_series, epg_movies, epg_tonight, scheduled, planning. " +
+            "find, genre_stats, epg_series, epg_movies, epg_tonight, epg_now, scheduled, planning. " +
             "find = recherche unifiée bibliothèque+EPG (voie recommandée pour les questions génériques). " +
-            "epg_tonight = ce qui passe à la TV ce soir, PROGRAMMES EN COURS INCLUS — c'est le tool " +
-            "à appeler pour « qu'est-ce qui passe maintenant/présentement ».";
+            "epg_tonight = liste CURATÉE pour les recommandations (filtre tes préférences genres/chaînes). " +
+            "epg_now = vue informative BRUTE de l'EPG du jour (programmes en cours inclus, champ is_onair) " +
+            "SANS ces filtres de préférence — appelle-le pour « qu'est-ce qui passe présentement » quand " +
+            "tu veux aussi le contenu hors de tes genres favoris ; ordre chronologique.";
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
-  ""action"": ""summary | library | global_search | item_details | item_persons | person | find | genre_stats | epg_series | epg_movies | epg_tonight | scheduled"",
+  ""action"": ""summary | library | global_search | item_details | item_persons | person | find | genre_stats | epg_series | epg_movies | epg_tonight | epg_now | scheduled"",
   ""type"": ""(library) movie | series | episode | audio | album | book — filtre IncludeItemTypes"",
   ""query"": ""(global_search/find) terme de recherche"",
   ""name"": ""(person) nom de personne à chercher"",
@@ -65,7 +67,7 @@ namespace LLM_AI
   ""premieres_only"": ""(epg_series) true pour ne garder que les S01E01 (nouvelles séries). Exclut kids/news sauf si les flags correspondants sont activés en config ; exclut documentary (sauf exclude_genres) et les séries de la biblio"",
   ""new_seasons"": ""(epg_series) true pour le mode « séries absentes » d'emby-absent-series.sh : garde les nouvelles saisons de séries déjà possédées (is_new_season=true), n'exclut que les timers, conserve les kids"",
   ""exclude_genres"": ""(epg_series / epg_movies / epg_tonight) genres à exclure. Défaut epg_series premieres_only: [""documentary"", ""news""] ; sinon []"",
-  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence ; epg_tonight jusqu'à 40) ; tu peux demander moins"",
+  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence ; epg_tonight jusqu'à 40, epg_now jusqu'à 40 — défaut 30) ; tu peux demander moins"",
   ""offset"": ""(library/find) indice de pagination (défaut 0)""
 }";
 
@@ -171,6 +173,7 @@ namespace LLM_AI
                     case "epg_series":
                     case "epg_movies":
                     case "epg_tonight":
+                    case "epg_now":
                         {
                             // Gate droit TV en direct (run per-usager) : résultat
                             // vide ET légitime, pas une erreur — le LLM réoriente
@@ -186,6 +189,8 @@ namespace LLM_AI
                                 result = EpgSeries(args);
                             else if (action.Equals("epg_movies", StringComparison.OrdinalIgnoreCase))
                                 result = EpgMovies(args);
+                            else if (action.Equals("epg_now", StringComparison.OrdinalIgnoreCase))
+                                result = EpgTonight(args, uncurated: true);
                             else
                                 result = EpgTonight(args);
                             break;
@@ -1341,9 +1346,11 @@ namespace LLM_AI
         /// pertinence (chat externe : répartition sur toute la fenêtre, cf.
         /// le code de sélection).
         /// </summary>
-        private string EpgTonight(JsonElement args)
+        private string EpgTonight(JsonElement args, bool uncurated = false)
         {
-            var excludeGenres = NormGenreSet(OptStringArray(args, "exclude_genres") ?? Array.Empty<string>());
+            var excludeGenres = NormGenreSet(uncurated
+                ? Array.Empty<string>()
+                : (OptStringArray(args, "exclude_genres") ?? Array.Empty<string>()));
 
             var cfg = Plugin.Instance?.Configuration;
             int maxBatch = Math.Max(1, cfg?.MaxTonightBatch ?? 10);
@@ -1352,8 +1359,11 @@ namespace LLM_AI
             // vécu 2026-09-14 06:52 : 10 programmes tous entre « maintenant »
             // et +3 h, le modèle concluait « l'EPG s'arrête à 10 h ». Avec un
             // limit explicite élevé il peut couvrir toute la fenêtre.
-            int hardCap = ParentalUser != null ? Math.Max(maxBatch, 40) : maxBatch;
-            int limit = Math.Min(OptInt(args, "limit", maxBatch), hardCap);
+            int hardCap = uncurated
+                ? 40
+                : (ParentalUser != null ? Math.Max(maxBatch, 40) : maxBatch);
+            // epg_now (uncurated) : vue informative BRUTE, défaut généreux.
+            int limit = Math.Min(OptInt(args, "limit", uncurated ? 30 : maxBatch), hardCap);
             const int POOL = 300;
 
             // Fenêtre temporelle « ce soir » (HH:mm, heure locale). Défaut :
@@ -1433,8 +1443,11 @@ namespace LLM_AI
 
             var genreMap = BuildGenreMap(q);
 
-            // Drop list persistante : retire ces titres de la liste envoyée au LLM.
-            var excluded = DroppedTitlesSet();
+            // Drop list persistante : retire ces titres de la liste envoyée au
+            // LLM. epg_now (vue informative) : bypass — pas une reco.
+            var excluded = uncurated
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : DroppedTitlesSet();
             // Timers : non exclus, mais marqués is_scheduled (recommandable en direct).
             var scheduled = TimerNamesOnly();
 
@@ -1472,6 +1485,14 @@ namespace LLM_AI
                 var key = Norm(title);
                 var genres = GenreFor(p, genreMap);
                 if (!EpgAllowed(p)) continue;   // chat externe : policy parentale EPG
+                if (uncurated)
+                {
+                    // epg_now : AUCUNE curation de préférence (whitelist
+                    // genres/chaînes, flags, exclusion de genres) — le filtre
+                    // PARENTAL ci-dessus reste appliqué.
+                    kept.Add((p, genres, scheduled.Contains(key)));
+                    continue;
+                }
                 if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p))) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
@@ -1510,7 +1531,13 @@ namespace LLM_AI
             // global validé runtime.
             List<(BaseItemDto p, string[] genres, bool isScheduled)> picked;
             var ordered = kept.OrderBy(x => x.p.StartDate ?? DateTimeOffset.MaxValue).ToList();
-            if (ParentalUser == null || ordered.Count <= limit)
+            if (uncurated)
+            {
+                // epg_now : ordre chronologique strict, aucun pré-tri par
+                // pertinence (c'est une liste d'information, pas une reco).
+                picked = ordered.Take(limit).ToList();
+            }
+            else if (ParentalUser == null || ordered.Count <= limit)
             {
                 picked = ordered
                     .OrderByDescending(t => RelevanceScore(t.p, t.genres, wl))
@@ -1533,10 +1560,16 @@ namespace LLM_AI
             }
 
             var results = new List<object>();
+            var nowLocal = DateTimeOffset.Now;
             foreach (var t in picked)
             {
                 var p = t.p;
                 var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                // À l'antenne maintenant : commencé ET pas encore terminé —
+                // utile à l'LLM pour « présentement ».
+                var sd = p.StartDate ?? nowLocal;
+                var ed = p.EndDate ?? sd;
+                bool onAir = sd <= nowLocal && ed > nowLocal;
                 results.Add(new
                 {
                     title,
@@ -1558,7 +1591,8 @@ namespace LLM_AI
                     episode_title = p.EpisodeTitle,
                     is_series = p.IsSeries == true,
                     is_movie = p.IsMovie == true,
-                    is_scheduled = t.isScheduled
+                    is_scheduled = t.isScheduled,
+                    is_onair = onAir
                 });
             }
             // Recensement des genres émis au LLM (POST-mapping GenreCleaner) :
@@ -1573,7 +1607,9 @@ namespace LLM_AI
             _logger?.Info("[LLM_AI] epg_tonight : {0} genre(s) émis au LLM (pool de {1}) : {2}",
                 emittedGenres.Count, kept.Count,
                 string.Join(", ", emittedGenres.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
-            _logger?.Info("[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
+            _logger?.Info(uncurated
+                    ? "[LLM_AI] epg_now : {0} programme(s) retenu(s) sur un pool de {1} (aucune curation de préférence — parental appliqué, plafond {2})."
+                    : "[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
                 kept.Count, results.Count, wlFiltered, limit);
 
             // Capture mémoire réflexive (Phase A) : le menu émis au LLM est

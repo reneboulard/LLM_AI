@@ -596,8 +596,10 @@ namespace LLM_AI
                 "outils (champs start/end) sont déjà convertis en heure locale du serveur — cite-les tels quels. " +
                 "Ne déduis JAMAIS l'heure actuelle des dates de la mémoire de conversation ni des " +
                 "horodatages internes : ils peuvent être en UTC.\n" +
-                "Pour « qu'est-ce qui passe maintenant/présentement », appelle epg_tonight : les " +
-                "programmes en cours y figurent (fin après maintenant).\n";
+                "Pour « qu'est-ce qui passe maintenant/présentement » : epg_now est la vue " +
+                "informative brute (tout ce qui est à l'antenne, champ is_onair — les programmes " +
+                "en cours y figurent, même hors de tes genres favoris) ; epg_tonight reste la " +
+                "liste curatée pour les recommandations.\n";
         }
 
         /// <summary>

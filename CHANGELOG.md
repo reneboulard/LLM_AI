@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.4] — 2026-09-14
+
+### Added (FR)
+- **Action `epg_now` — vue EPG informative non curatée.** `epg_tonight` reste
+  la liste curatée des recommandations (filtres de préférence : whitelist
+  genres/chaînes, exclusions, liste d'exclusion) — le design est conservé
+  tel quel. Le chat gagne en plus `epg_now` : vue BRUTE de l'EPG du jour
+  (programmes en cours inclus, nouveau champ `is_onair`), ordre
+  chronologique, SANS les filtres de préférence — le LLM peut ainsi répondre
+  honnêtement à « qu'est-ce qui passe présentement » quand l'antenne diffuse
+  du contenu hors des genres favoris (vécu 2026-09-14 : à 09:28, tout ce qui
+  passait était du News/enfants, rejeté par la whitelist — le LLM répondait
+  « rien présentement » alors que l'antenne était pleine). Le filtre
+  PARENTAL reste appliqué sur `epg_now` (règle « ne jamais montrer au chat
+  ce que play_item refuserait »). Plafond 40, défaut 30. Le bloc HEURE
+  ACTUELLE du chat pointe maintenant « présentement » vers `epg_now`.
+
+### Added (EN)
+- **`epg_now` action — uncurated informational EPG view.** `epg_tonight`
+  remains the curated recommendation list (genre/channel whitelists,
+  exclusions, drop list) — design unchanged. The chat additionally gets
+  `epg_now`: a RAW view of today's EPG (currently-airing programs included,
+  new `is_onair` field), chronological order, WITHOUT the preference
+  filters — so the LLM can answer "what's on right now" honestly even when
+  the antenna is showing content outside the favourite genres (observed
+  2026-09-14: at 09:28 everything on air was news/kids content, rejected by
+  the whitelist — the LLM answered "nothing right now" while the antenna
+  was full). The PARENTAL filter still applies on `epg_now`. Hard cap 40,
+  default 30. The chat time anchor block now points "présentement"
+  questions to `epg_now`.
+
+---
+
 ## [1.13.21.3] — 2026-09-14
 
 ### Fixed (FR)
