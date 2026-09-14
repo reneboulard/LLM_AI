@@ -59,6 +59,14 @@ def default_config():
         # URL Emby — DOIT être le loopback de la machine qui fait tourner
         # ce script ET Emby (gate du plugin : loopback, sans X-Forwarded-For).
         "emby_url": "http://localhost:8096",
+        # URL Emby vue par le NAVIGATEUR de l'usager — sert uniquement à
+        # construire les liens « ↗ fiche web » (l'usager est en général sur
+        # un autre appareil que le serveur : localhost ne marcherait pas).
+        # Vide = repli sur emby_url (bon uniquement si on chat depuis le
+        # serveur lui-même). Exemple : "http://192.168.1.20:8096".
+        # La gate du plugin n'utilise PAS cette valeur (emby_url reste le
+        # loopback) ; elle ne fait que s'afficher dans le navigateur.
+        "emby_public_url": "",
         # Port d'écoute de la page de chat (0.0.0.0 = LAN ; mettez 127.0.0.1
         # si vous ne discutez que depuis le serveur lui-même).
         "listen_host": "0.0.0.0",
@@ -848,7 +856,7 @@ $("p").addEventListener("keydown", function (ev) {
 // -- démarrage ----------------------------------------------------------------
 (function boot() {
   // URL Emby absolue pour « ↗ fiche web » : fournie par le serveur via la
-  // balise meta ci-dessous (emby_url de config.json).
+  // balise meta ci-dessous (emby_public_url, repli emby_url — config.json).
   var meta = document.querySelector('meta[name="emby-base"]');
   if (meta) serverBase = meta.getAttribute("content");
   setupVoice();
@@ -871,7 +879,7 @@ $("p").addEventListener("keydown", function (ev) {
 # URL Emby injectée dans la page (pour le lien « ↗ fiche web »).
 PAGE_HTML = PAGE_HTML.replace(
     "</head>",
-    '<meta name="emby-base" content="%s"></head>' % CFG["emby_url"].rstrip("/"))
+    '<meta name="emby-base" content="%s"></head>' % (CFG.get("emby_public_url") or CFG["emby_url"]).rstrip("/"))
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +911,13 @@ def main():
     print("Chat externe LLM AI — app compagnon")
     print("  Page de chat : %s://<cette-machine>:%d/  (écoute : %s)"
           % (scheme, port, shown))
-    print("  Emby         : %s" % CFG["emby_url"])
+    print("  Emby (gate)  : %s" % CFG["emby_url"])
+    if CFG.get("emby_public_url"):
+        print("  Emby (liens) : %s" % CFG["emby_public_url"])
+    else:
+        print("  Liens fiche web : emby_url (localhost) — mettez emby_public_url")
+        print("  dans config.json si les usagers ouvrent le chat depuis un autre")
+        print("  appareil que le serveur.")
     print("  Config       : %s" % CONFIG_PATH)
     print("  Ctrl+C pour arrêter.")
     print("=" * 72)
