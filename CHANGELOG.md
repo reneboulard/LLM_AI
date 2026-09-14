@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.3] — 2026-09-14
+
+### Fixed (FR)
+- **Anti-spam : les fenêtres Show et chat sont séparées.** Le garde-fou
+  anti-rafale de la projection (`Show`, 30/min) écrivait dans le même store
+  que les tours de chat : une rafale de projections consommait les plafonds
+  du chat (5/min et quota 24 h) — vécu au test (2026-09-14) : 30 demandes
+  Show automatisées puis le premier message de chat refusé
+  (« patientez 60 s ») avant tout tour de chat. Les deux fenêtres vivent
+  maintenant dans des stores distincts (le prune couvre les deux) ;
+  harnais enrichi de tests d'interaction.
+
+### Fixed (EN)
+- **Anti-spam: Show and chat windows are now separate.** The projection
+  burst-guard (`Show`, 30/min) wrote into the same store as chat turns: a
+  burst of projection requests consumed the chat limits (5/min and 24 h
+  quota) — observed during testing (2026-09-14): 30 automated Show requests,
+  then the first chat message refused ("patientez 60 s") before any chat
+  turn. The two windows now live in distinct stores (pruning covers both);
+  harness extended with interaction tests.
+
+---
+
 ## [1.13.21.2] — 2026-09-14
 
 ### Added (FR)

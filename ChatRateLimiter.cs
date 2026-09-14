@@ -41,7 +41,13 @@ namespace LLM_AI
 
         // clé = nom d'usager → horodatages (DateTimeOffset.UtcNow.Ticks) des
         // tours acceptés ; trié ascendant (append-only, prune en tête).
+        // DEUX stores SÉPARÉS : les demandes Show ne comptent pas dans les
+        // fenêtres des tours de chat (et réciproquement) — une rafale de
+        // projections ne doit pas bloquer le chat.
         private static readonly ConcurrentDictionary<string, List<long>> s_turns
+            = new ConcurrentDictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
+
+        private static readonly ConcurrentDictionary<string, List<long>> s_shows
             = new ConcurrentDictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
 
         // Verrou de concurrence : un tour LLM en vol par usager.
@@ -143,14 +149,15 @@ namespace LLM_AI
         /// <summary>Fenêtre glissante fixe (30/min/usager) pour la projection.</summary>
         public static bool TryConsumeShow(string user, out string error)
         {
-            return TryConsumeWindow(user, MaxShowPerMinute,
+            return TryConsumeWindow(s_shows, user, MaxShowPerMinute,
                 "Trop de demandes de projection — patientez {0} s.", out error);
         }
 
         /// <summary>Fenêtre glissante unique à plafond fixe (pattern commun
-        /// de TryConsumeTurn/TryConsumeShow pour l'attente calculée).</summary>
-        private static bool TryConsumeWindow(string user, int max, string errorFormat,
-            out string error)
+        /// de TryConsumeTurn/TryConsumeShow pour l'attente calculée).
+        /// <paramref name="store"/> isole la fenêtre (tours ≠ projections).</summary>
+        private static bool TryConsumeWindow(ConcurrentDictionary<string, List<long>> store,
+            string user, int max, string errorFormat, out string error)
         {
             error = null;
             if (string.IsNullOrWhiteSpace(user))
@@ -165,7 +172,7 @@ namespace LLM_AI
             {
                 PruneLocked(now);
 
-                var window = s_turns.GetOrAdd(user, _ => new List<long>());
+                var window = store.GetOrAdd(user, _ => new List<long>());
                 Count(window, cutoff, long.MaxValue, out int cnt, out _);
                 if (cnt >= max)
                 {
@@ -221,16 +228,23 @@ namespace LLM_AI
         private static void PruneLocked(DateTimeOffset now)
         {
             long dayCutoff = now.UtcTicks - DayTicks;
-            foreach (var kv in s_turns)
+            PruneStore(s_turns, dayCutoff);
+            PruneStore(s_shows, dayCutoff);
+            // Les s_inflight restent (les SemaphoreSlim y vivent leur cycle
+            // normal) — leur dictionnaire ne grossit qu'avec les noms
+            // d'usagers listés, borné par la liste blanche.
+        }
+
+        private static void PruneStore(ConcurrentDictionary<string, List<long>> store,
+            long dayCutoff)
+        {
+            foreach (var kv in store)
             {
                 var w = kv.Value;
                 w.RemoveAll(t => t <= dayCutoff);
                 if (w.Count == 0)
-                    s_turns.TryRemove(kv.Key, out _);
+                    store.TryRemove(kv.Key, out _);
             }
-            // Les s_inflight restent (les SemaphoreSlim y vivent leur cycle
-            // normal) — leur dictionnaire ne grossit qu'avec les noms
-            // d'usagers listés, borné par la liste blanche.
         }
     }
 }
