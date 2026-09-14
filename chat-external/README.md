@@ -99,16 +99,16 @@ Trois variantes, de la plus simple à la plus autonome :
      (`https://chat.votredomaine.tld:8070`) — un **wildcard**
      (`*.votredomaine.tld`) se réutilise tel quel ;
    - le nom doit résoudre vers l'IP LAN du serveur : un
-     enregistrement local du DNS du foyer suffit (ex. *Host Override*
-     pfSense/Unbound, fichier `hosts` des appareils) — rien de public,
+     enregistrement local du DNS du foyer suffit (ex. zone locale du
+     pare-feu/routeur, fichier `hosts` des appareils) — rien de public,
      aucun port ouvert ;
    - si le certificat du host se renouvelle (90 j pour Let's Encrypt),
      rafraîchissez la copie (cron ou hook post-renewal), sinon l'app
      servira un certificat expiré.
 
 2. **Certificat Let's Encrypt dédié** (challenge DNS-01, ex. paquet ACME
-   de pfSense) pour `chat.votredomaine.tld` — renouvellement automatique
-   directement sur la machine de l'app, même résolution locale.
+   du pare-feu du foyer) pour `chat.votredomaine.tld` — renouvellement
+   automatique directement sur la machine de l'app, même résolution locale.
 
 3. **Auto-signé** (défaut de cette doc) : fonctionne partout mais le
    navigateur affiche un avertissement à accepter une fois. Génération :
