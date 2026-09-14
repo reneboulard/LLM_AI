@@ -1454,7 +1454,9 @@ namespace LLM_AI
             var wl = LoadWhitelists();
             if (cfg?.DebugVerbose ?? false)
             {
-                _logger?.Info("[LLM_AI] epg_tonight fenêtre {0:o} → {1:o} ; whitelists: channels={2} genres={3}",
+                _logger?.Info(uncurated
+                    ? "[LLM_AI] epg_now fenêtre {0:o} → {1:o} ; AUCUNE whitelist de préférence (vue informative brute)."
+                    : "[LLM_AI] epg_tonight fenêtre {0:o} → {1:o} ; whitelists: channels={2} genres={3}",
                     minStart, maxStart, wl.Channels?.Count ?? 0, wl.Genres?.Count ?? 0);
             }
 
@@ -1604,13 +1606,17 @@ namespace LLM_AI
             foreach (var t in kept)
                 foreach (var g in GenreCleanerMap.MapGenres(t.genres, SeriesCtx(t.p)))
                     emittedGenres.Add(g);
-            _logger?.Info("[LLM_AI] epg_tonight : {0} genre(s) émis au LLM (pool de {1}) : {2}",
+            _logger?.Info(uncurated
+                    ? "[LLM_AI] epg_now : {0} genre(s) émis au LLM (pool de {1}) : {2}"
+                    : "[LLM_AI] epg_tonight : {0} genre(s) émis au LLM (pool de {1}) : {2}",
                 emittedGenres.Count, kept.Count,
                 string.Join(", ", emittedGenres.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
-            _logger?.Info(uncurated
-                    ? "[LLM_AI] epg_now : {0} programme(s) retenu(s) sur un pool de {1} (aucune curation de préférence — parental appliqué, plafond {2})."
-                    : "[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
-                kept.Count, results.Count, wlFiltered, limit);
+            if (uncurated)
+                _logger?.Info("[LLM_AI] epg_now : pool de {0} → {1} retenu(s) (aucune curation de préférence — parental appliqué, plafond {2}).",
+                    kept.Count, results.Count, limit);
+            else
+                _logger?.Info("[LLM_AI] epg_tonight : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
+                    kept.Count, results.Count, wlFiltered, limit);
 
             // Capture mémoire réflexive (Phase A) : le menu émis au LLM est
             // joint au run courant (runId posé par TonightService) — permet

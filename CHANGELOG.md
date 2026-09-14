@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.7] — 2026-09-14
+
+### Fixed (FR)
+- **Journal `epg_now` lisible.** La ligne de log de la vue brute affichait
+  ses valeurs décalées (« 107 retenu(s) sur un pool de 30 … plafond 0 » —
+  le pool comme retenu et le compteur de rejets de la whitelist, toujours
+  0 pour cette vue, comme plafond). Corrections : « epg_now : pool de 107
+  → 30 retenu(s) … plafond 30 », plus étiquettes de fenêtre et de
+  recensement de genres qui disaient « epg_tonight » sur la vue brute.
+
+### Fixed (EN)
+- **Readable `epg_now` log.** The uncurated view's log line printed
+  shifted values ("107 retained out of a pool of 30 … cap 0" — the pool
+  counted as retained, and the whitelist-rejection counter, always 0 for
+  this view, as the cap). Fixed: "epg_now: pool of 107 → 30 retained …
+  cap 30", plus window and genre-census lines that said "epg_tonight" on
+  the raw view.
+
+---
+
 ## [1.13.21.6] — 2026-09-14
 
 ### Added (FR)
