@@ -62,6 +62,50 @@ Ouvrez ensuite `http://<machine-emby>:8070/` depuis un navigateur du foyer
 Pour révoquer l'accès : changez le secret **des deux côtés** (Emby +
 `config.json`), ou désactivez le chat externe dans Emby.
 
+## HTTPS : trois façons de se connecter sans warning
+
+La dictée vocale 🎤 exige un **contexte sécurisé** (HTTPS ou localhost).
+Trois variantes, de la plus simple à la plus autonome :
+
+1. **Copier un certificat existant du host** (le plus simple) — si le
+   serveur (ou votre pare-feu/routeur) a déjà un certificat valide
+   (Let's Encrypt…), copiez le certificat **fullchain** (feuille +
+   intermédiaires) et la clé sur la machine de l'app, puis pointez
+   `ssl_cert`/`ssl_key` dessus :
+
+   ```json
+   "ssl_cert": "/chemin/vers/fullchain.pem",
+   "ssl_key":  "/chemin/vers/privkey.pem"
+   ```
+
+   - Le nom dans l'URL doit être couvert par le certificat
+     (`https://chat.votredomaine.tld:8070`) — un **wildcard**
+     (`*.votredomaine.tld`) se réutilise tel quel ;
+   - le nom doit résoudre vers l'IP LAN du serveur : un
+     enregistrement local du DNS du foyer suffit (ex. *Host Override*
+     pfSense/Unbound, fichier `hosts` des appareils) — rien de public,
+     aucun port ouvert ;
+   - si le certificat du host se renouvelle (90 j pour Let's Encrypt),
+     rafraîchissez la copie (cron ou hook post-renewal), sinon l'app
+     servira un certificat expiré.
+
+2. **Certificat Let's Encrypt dédié** (challenge DNS-01, ex. paquet ACME
+   de pfSense) pour `chat.votredomaine.tld` — renouvellement automatique
+   directement sur la machine de l'app, même résolution locale.
+
+3. **Auto-signé** (défaut de cette doc) : fonctionne partout mais le
+   navigateur affiche un avertissement à accepter une fois. Génération :
+
+   ```bash
+   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+     -keyout chat.key -out chat.crt \
+     -subj "/CN=chat-local" \
+     -addext "subjectAltName=IP:192.168.x.x,DNS:chat-local"
+   ```
+
+   (remplacez `192.168.x.x` par l'IP LAN du serveur ; mettez les deux
+   fichiers dans `ssl_key`/`ssl_cert`).
+
 ## Sécurité
 
 - L'appel vers Emby est **toujours direct** (aucun proxy HTTP n'est
