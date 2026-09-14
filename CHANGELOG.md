@@ -57,8 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   transcription envoyée automatiquement. La Web Speech API exige un
   **contexte sécurisé** : le bouton est masqué hors HTTPS/localhost
   (`window.isSecureContext`) et l'app gagne un **mode HTTPS optionnel**
-  (`ssl_cert`/`ssl_key`, TLS natif du script — auto-signé accepté et
-  documenté) ; validé live : la dictée est silencieusement bloquée par
+  (`ssl_cert`/`ssl_key`, TLS natif du script) ; guide « HTTPS sans
+  warning » documenté (réutilisation d'un certificat existant du host,
+  Let's Encrypt DNS-01, ou auto-signé avec SAN) avec exemple d'unité
+  systemd ; validé live : la dictée est silencieusement bloquée par
   Chrome sur `http://<ip-LAN>`.
 - **Nudge projection** : le workflow du chat externe apprend à l'agent que
   ses liens profonds sont rendus en bouton de projection par l'app et qu'il
@@ -135,7 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sent automatically. The Web Speech API requires a **secure context**:
   the button is hidden outside HTTPS/localhost (`window.isSecureContext`)
   and the app gained an **optional HTTPS mode** (`ssl_cert`/`ssl_key`,
-  native TLS in the script — self-signed accepted and documented); live
+  native TLS in the script); a "warning-free HTTPS" guide is documented
+  (reusing an existing host certificate, Let's Encrypt DNS-01, or
+  self-signed with SAN) with a sample systemd unit; live
   validated: Chrome silently blocks the mic on `http://<LAN-IP>`.
 - **Projection nudge**: the external chat workflow teaches the agent that
   its deep links are rendered as projection buttons by the app and that it

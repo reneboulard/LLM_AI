@@ -106,6 +106,42 @@ Trois variantes, de la plus simple à la plus autonome :
    (remplacez `192.168.x.x` par l'IP LAN du serveur ; mettez les deux
    fichiers dans `ssl_key`/`ssl_cert`).
 
+## Lancer l'app comme service systemd
+
+Pour que le chat survive aux redémarrages et se relance seul après un
+crash, une petite unité systemd suffit (Linux avec systemd) :
+
+```ini
+# /etc/systemd/system/llmai-chat.service
+[Unit]
+Description=LLM AI — chat externe (app compagnon Emby)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/chat-external/chat_external.py
+WorkingDirectory=/opt/chat-external
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+(adaptez les deux chemins à l'endroit où vous avez mis le script et son
+`config.json` ; l'usager du service doit pouvoir lire la clé SSL.)
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now llmai-chat.service
+journalctl -u llmai-chat -f        # suivre les logs
+```
+
+Le service démarre tout seul au boot de la machine et relit
+`config.json` à chaque (re)démarrage — changer le certificat ou le
+secret se résume à un `systemctl restart llmai-chat`.
+
 ## Sécurité
 
 - L'appel vers Emby est **toujours direct** (aucun proxy HTTP n'est
@@ -115,8 +151,10 @@ Trois variantes, de la plus simple à la plus autonome :
 - Le secret partagé ne quitte jamais le script et la page.
 - Les administrateurs Emby sont **toujours refusés** sur le chat externe
   (leur chat dédié reste la page de configuration du plugin).
-- La page est servie en HTTP simple — comme Emby lui-même sur le LAN. Pour
-  un accès hors du foyer, placez l'app derrière votre propre reverse proxy
-  HTTPS ; seuls les appels de l'app **vers** Emby doivent rester directs.
+- La page peut être servie en HTTPS (voir la section HTTPS ci-dessus —
+  recommandé, et requis pour la dictée hors localhost) ou en HTTP simple,
+  comme Emby lui-même sur le LAN. Pour un accès hors du foyer, placez
+  l'app derrière votre propre reverse proxy HTTPS ; seuls les appels de
+  l'app **vers** Emby doivent rester directs.
 - Lecture seule côté plugin : une fuite du secret ne donne aucune capacité
   d'écriture sur le serveur.
