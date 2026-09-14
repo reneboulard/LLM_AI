@@ -65,7 +65,7 @@ namespace LLM_AI
   ""premieres_only"": ""(epg_series) true pour ne garder que les S01E01 (nouvelles séries). Exclut kids/news sauf si les flags correspondants sont activés en config ; exclut documentary (sauf exclude_genres) et les séries de la biblio"",
   ""new_seasons"": ""(epg_series) true pour le mode « séries absentes » d'emby-absent-series.sh : garde les nouvelles saisons de séries déjà possédées (is_new_season=true), n'exclut que les timers, conserve les kids"",
   ""exclude_genres"": ""(epg_series / epg_movies / epg_tonight) genres à exclure. Défaut epg_series premieres_only: [""documentary"", ""news""] ; sinon []"",
-  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence) ; tu peux demander moins"",
+  ""limit"": ""nombre max de résultats retournés. epg_* : plafond dur côté serveur (défaut config MaxSeriesBatch/MaxMovieBatch/MaxTonightBatch, après pré-tri par pertinence ; epg_tonight jusqu'à 40) ; tu peux demander moins"",
   ""offset"": ""(library/find) indice de pagination (défaut 0)""
 }";
 
@@ -1338,7 +1338,8 @@ namespace LLM_AI
         /// <c>is_movie</c>/<c>is_scheduled</c> pour que l'LLM positionne
         /// <c>kind</c> et que l'UI sache si un timer existe. Plafond
         /// <see cref="PluginConfiguration.MaxTonightBatch"/> après pré-tri par
-        /// pertinence.
+        /// pertinence (chat externe : répartition sur toute la fenêtre, cf.
+        /// le code de sélection).
         /// </summary>
         private string EpgTonight(JsonElement args)
         {
@@ -1346,7 +1347,13 @@ namespace LLM_AI
 
             var cfg = Plugin.Instance?.Configuration;
             int maxBatch = Math.Max(1, cfg?.MaxTonightBatch ?? 10);
-            int limit = Math.Min(OptInt(args, "limit", maxBatch), maxBatch);
+            // Chat externe : le LLM peut demander davantage que le batch
+            // Tonight (plafond dur tool, indépendant de MaxTonightBatch) —
+            // vécu 2026-09-14 06:52 : 10 programmes tous entre « maintenant »
+            // et +3 h, le modèle concluait « l'EPG s'arrête à 10 h ». Avec un
+            // limit explicite élevé il peut couvrir toute la fenêtre.
+            int hardCap = ParentalUser != null ? Math.Max(maxBatch, 40) : maxBatch;
+            int limit = Math.Min(OptInt(args, "limit", maxBatch), hardCap);
             const int POOL = 300;
 
             // Fenêtre temporelle « ce soir » (HH:mm, heure locale). Défaut :
@@ -1492,12 +1499,38 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] epg_tonight flags rejetés={0}, échantillons : {1}",
                     flagRejected, string.Join(" | ", flagSamples));
 
-            // Pré-tri par pertinence, cap, puis re-tri chronologique.
-            var picked = kept
-                .OrderByDescending(t => RelevanceScore(t.p, t.genres, wl))
-                .Take(limit)
-                .OrderBy(t => t.p.StartDate ?? DateTimeOffset.MaxValue)
-                .ToList();
+            // Pré-tri et cap. Chat externe (ParentalUser) : RÉPARTITION sur
+            // TOUTE la fenêtre — programmes triés chronologiquement puis
+            // découpés en « limit » tranches de même effectif, on retient le
+            // meilleur par pertinence DANS CHAQUE tranche, re-tri chrono.
+            // Vécu 2026-09-14 : le pré-tri global laissait le cap absorber
+            // uniquement le début de la fenêtre (10 programmes entre
+            // maintenant et +3 h) — le modèle ne voyait rien au-delà. Les
+            // autres chemins (run Tonight, chat admin) gardent le pré-tri
+            // global validé runtime.
+            List<(BaseItemDto p, string[] genres, bool isScheduled)> picked;
+            var ordered = kept.OrderBy(x => x.p.StartDate ?? DateTimeOffset.MaxValue).ToList();
+            if (ParentalUser == null || ordered.Count <= limit)
+            {
+                picked = ordered
+                    .OrderByDescending(t => RelevanceScore(t.p, t.genres, wl))
+                    .Take(limit)
+                    .OrderBy(t => t.p.StartDate ?? DateTimeOffset.MaxValue)
+                    .ToList();
+            }
+            else
+            {
+                picked = new List<(BaseItemDto, string[], bool)>(limit);
+                int n = ordered.Count;
+                for (int i = 0; i < limit; i++)
+                {
+                    int from = i * n / limit;
+                    int to = Math.Max(from + 1, (i + 1) * n / limit); // exclusive
+                    var slice = ordered.Skip(from).Take(to - from);
+                    picked.Add(slice.OrderByDescending(t => RelevanceScore(t.p, t.genres, wl)).First());
+                }
+                picked = picked.OrderBy(t => t.p.StartDate ?? DateTimeOffset.MaxValue).ToList();
+            }
 
             var results = new List<object>();
             foreach (var t in picked)

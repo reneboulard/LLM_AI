@@ -779,9 +779,83 @@ namespace LLM_AI
         /// </summary>
         private static string ExtractJsonArray(string s)
         {
+            // Priorité à un groupe équilibré contenant « tool » (appel
+            // d'outils) ; à défaut, premier groupe équilibré (tableau de
+            // recommandations). Vécu 2026-09-14 : réponse MIXTE texte +
+            // tableau d'appels (« Je lance la lecture… » + client_command)
+            // où le lien markdown [Titre](url) forme déjà un [ … ] équilibré
+            // sans « tool » — le scan du premier groupe seul renvoyait le
+            // titre du lien, l'appel n'était jamais exécuté et le JSON brut
+            // partait dans le chat. On scrute donc TOUS les groupes.
+            string firstBalanced = null;
             int start = s.IndexOf('[');
-            if (start < 0) return null;
+            while (start >= 0)
+            {
+                var group = ScanBalancedArray(s, start, out int endExclusive);
+                if (group != null)
+                {
+                    if (firstBalanced == null) firstBalanced = group;
+                    if (group.IndexOf("\"tool\"", StringComparison.Ordinal) >= 0)
+                        return group;                    // appel d'outils → prioritaire
+                    start = s.IndexOf('[', endExclusive);
+                }
+                else if (endExclusive < s.Length)
+                {
+                    start = s.IndexOf('[', endExclusive); // groupe déséquilibré → suivant
+                }
+                else
+                {
+                    break;                                // écoulement en fin de chaîne
+                }
+            }
+            if (firstBalanced != null) return firstBalanced;
 
+            // Tronqué : on referme ce qui reste ouvert (réparation tolérante,
+            // même sémantique que l'original — scan depuis le premier « [ »,
+            // fermeture orpheline = abandon). Ne s'applique qu'aux tableaux
+            // évoquant un appel d'outil.
+            int open = s.IndexOf('[');
+            if (open < 0) return null;
+            var fragment = s.Substring(open);
+            if (fragment.IndexOf("\"tool\"", StringComparison.Ordinal) < 0) return null;
+            var stack2 = new Stack<char>();
+            bool inStr2 = false, esc2 = false;
+            for (int i = 0; i < fragment.Length; i++)
+            {
+                char c = fragment[i];
+                if (inStr2)
+                {
+                    if (esc2) esc2 = false;
+                    else if (c == '\\') esc2 = true;
+                    else if (c == '"') inStr2 = false;
+                    continue;
+                }
+                if (c == '"') { inStr2 = true; continue; }
+                if (c == '[') stack2.Push(']');
+                else if (c == '{') stack2.Push('}');
+                else if (c == ']' || c == '}')
+                {
+                    // Fermeture orpheline ou inadéquation : abandon (comme avant).
+                    if (stack2.Count == 0 || stack2.Pop() != c) return null;
+                }
+            }
+            if (stack2.Count == 0) return null;
+            var sb2 = new StringBuilder(fragment);
+            while (stack2.Count > 0) sb2.Append(stack2.Pop());
+            return sb2.ToString();
+        }
+
+        /// <summary>
+        /// Scanne le groupe de crochets ouvert en <paramref name="start"/> :
+        /// retourne la sous-chaîne si un <c>[ … ]</c> équilibré est trouvé,
+        /// sinon null (fermeture orpheline, inadéquation, ou fin de chaîne).
+        /// <paramref name="endExclusive"/> est l'index où poursuivre la
+        /// recherche d'un groupe suivant (fin du groupe, ou position de la
+        /// fermeture fautive ; longueur de <paramref name="s"/> si le scan a
+        /// épuisé la chaîne).
+        /// </summary>
+        private static string ScanBalancedArray(string s, int start, out int endExclusive)
+        {
             var stack = new Stack<char>();
             bool inStr = false;
             bool esc = false;
@@ -800,21 +874,15 @@ namespace LLM_AI
                 else if (c == '{') stack.Push('}');
                 else if (c == ']' || c == '}')
                 {
-                    if (stack.Count == 0) return null;          // fermeture orpheline → abandon
-                    if (stack.Pop() != c) return null;          // inadéquation → abandon
-                    if (stack.Count == 0)                       // tableau équilibré
+                    endExclusive = i + 1;
+                    if (stack.Count == 0) return null;      // fermeture orpheline
+                    if (stack.Pop() != c) return null;      // inadéquation
+                    if (stack.Count == 0)                   // tableau équilibré
                         return s.Substring(start, i - start + 1);
                 }
             }
-
-            // Tronqué : on referme ce qui reste ouvert (réparation tolérante).
-            // Ne s'applique qu'aux tableaux évoquant un appel d'outil.
-            if (stack.Count == 0) return null;
-            var fragment = s.Substring(start);
-            if (fragment.IndexOf("\"tool\"", StringComparison.Ordinal) < 0) return null;
-            var sb2 = new StringBuilder(fragment);
-            while (stack.Count > 0) sb2.Append(stack.Pop());
-            return sb2.ToString();
+            endExclusive = s.Length;
+            return null;                                    // tronqué (fin de chaîne)
         }
 
         // --- helpers JSON (échappement pour réinjection manuelle) ---------

@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.1] — 2026-09-14
+
+### Fixed (FR)
+- **Chat : appel d'outil noyé dans du texte désormais exécuté.** Les modèles
+  (gemma4:31b) mélangent parfois texte et tableau d'appels d'outils dans la
+  même réponse ; quand la phrase citait un titre ([1,2,3... Géant](…)), le
+  lien markdown formait déjà un `[…]` équilibré sans clé `tool` — l'extracteur
+  le prenait pour le tableau d'appels, la réponse partait telle quelle et le
+  JSON brut s'affichait dans le chat (vécu 2026-09-14 06:54 : play_item
+  « promis » quatre fois, jamais exécuté). `ExtractJsonArray` scrute
+  maintenant TOUS les groupes `[…]` équilibrés et priorise celui qui porte
+  `tool` ; le premier groupe reste le repli (tableau de recommandations).
+- **Chat externe : l'EPG est visible sur toute la fenêtre.** `epg_tonight`
+  plafonnait à `MaxTonightBatch` (10) après pré-tri par pertinence — le
+  matin, les 10 programmes retenus couvraient à peine 3 h et le modèle
+  concluait « l'EPG s'arrête à 10 h ». Sur le chemin chat externe :
+  sélection RÉPARTIE sur toute la fenêtre (tranches chronologiques de même
+  effectif, meilleur par pertinence dans chaque tranche, re-tri chrono) et
+  plafond élargi à 40 quand le LLM demande un `limit` explicite. Le run
+  Tonight et le chat admin gardent le pré-tri global validé runtime.
+
+### Fixed (EN)
+- **Chat: tool call embedded in prose is now executed.** Models (gemma4:31b)
+  sometimes mix text and a tool-call array in one message — when the sentence
+  quoted a title ([1,2,3... Géant](…)), the markdown link already formed a
+  balanced `[…]` without a `tool` key; the extractor took it for the call
+  array, the reply went out as-is and raw JSON leaked into the chat (seen
+  2026-09-14 06:54: play_item "promised" four times, never executed).
+  `ExtractJsonArray` now scans ALL balanced `[…]` groups and prefers the one
+  carrying `tool`; the first group remains the fallback (recommendations).
+- **External chat: the EPG is now visible across the whole window.**
+  `epg_tonight` capped at `MaxTonightBatch` (10) after a relevance pre-sort —
+  in the morning the 10 kept programs barely covered 3 h and the model
+  concluded "the EPG stops at 10 AM". On the external-chat path: selection is
+  now SPREAD across the window (equal-count chronological slices, best by
+  relevance within each slice, chronological re-sort) and the ceiling widens
+  to 40 when the LLM passes an explicit `limit`. The Tonight run and the
+  admin chat keep the runtime-validated global pre-sort.
+
+---
+
 ## [1.13.21.0] — 2026-09-13
 
 ### Added (FR)
