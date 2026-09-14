@@ -26,3 +26,6 @@ asset_version.js
 *.swp
 *.swo
 *~
+
+## Companion app runtime config (contains generated secrets)
+chat-external/config.json

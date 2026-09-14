@@ -1071,5 +1071,49 @@ namespace LLM_AI
         /// font que de la lecture.
         /// </summary>
         public bool ChatPromptsEnabled { get; set; } = false;
+
+        // ------------------------------------------------------------------
+        //  Chat externe (v1.13.21) : app compagnon (script Python autonome
+        //  fourni dans chat-external/, sur le même hôte)
+        //  → POST /Plugins/LLMAI/ChatExternal + POST /Plugins/LLMAI/Show.
+        //  Gates : opt-in, secret partagé comparé à temps constant, requête
+        //  loopback uniquement SANS X-Forwarded-For, usager Emby résolu par
+        //  son nom ET présent dans la liste d'autorisation (jamais admin).
+        //  Lecture seule : aucun tool d'action, aucun system_audit, aucun
+        //  plugin_prompts. Tout item vu par le LLM ou projeté sur un client
+        //  passe la policy parentale de l'usager résolu
+        //  (<see cref="PermissionGate"/>). La navigation (Show) ne cible que
+        //  la session active DE CET USAGER.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : active les
+        /// endpoints externes <c>POST /Plugins/LLMAI/ChatExternal</c> (tour de
+        /// chat pour l'app compagnon) et <c>POST /Plugins/LLMAI/Show</c>
+        /// (navigation d'un client Emby vers la fiche d'un item). Désactivé,
+        /// les deux endpoints répondent une erreur sans aucun traitement.
+        /// </summary>
+        public bool ExternalChatEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Secret partagé du chat externe : envoyé par l'app compagnon dans
+        /// le champ <c>Token</c>, comparé <c>ConstantTimeEquals</c> (aucune
+        /// fuite de timing). Secret DÉDIÉ — distinct de
+        /// <see cref="StrmSecret"/> : un secret par canal, révocable sans
+        /// toucher l'autre. Vide = chat externe inopérant même si
+        /// <see cref="ExternalChatEnabled"/> est vrai (fail-closed).
+        /// </summary>
+        public string ExternalChatSecret { get; set; } = "";
+
+        /// <summary>
+        /// Liste blanche des usagers Emby autorisés à parler au chat externe
+        /// (nom d'usager exact, comparaison insensible à la casse). L'app
+        /// compagnon authentifie son usager puis envoie son nom d'usager
+        /// Emby (mêmes noms dans les deux apps) ; un nom absent de cette
+        /// liste est rejeté. Les administrateurs sont TOUJOURS rejetés sur
+        /// ce chemin, même listés (le chat admin reste
+        /// <c>/Plugins/LLMAI/Chat</c>). Vide = aucun usager autorisé.
+        /// </summary>
+        public List<string> ExternalChatUsers { get; set; } = new List<string>();
     }
 }

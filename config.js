@@ -773,6 +773,12 @@ define(["loading"], function (loading) {
         // Édition de prompts par le chat (v1.13.8, opt-in) : tool
         // plugin_prompts avec approbation deux phases.
         view.querySelector("#chkChatPrompts").checked = !!cfg.ChatPromptsEnabled;
+        // Chat externe (v1.13.21) : app compagnon — opt-in, secret dédié,
+        // liste blanche d'usagers Emby.
+        view.querySelector("#chkExternalChatEnabled").checked = !!cfg.ExternalChatEnabled;
+        view.querySelector("#txtExternalChatSecret").value = cfg.ExternalChatSecret || "";
+        view.querySelector("#txtExternalChatUsers").value = Array.isArray(cfg.ExternalChatUsers)
+            ? cfg.ExternalChatUsers.join("\n") : (cfg.ExternalChatUsers || "");
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -888,7 +894,13 @@ define(["loading"], function (loading) {
             ChatActionConversationCap: parseInt(view.querySelector("#numChatActionCap").value, 10) || 30,
             ChatTonightRunEnabled: view.querySelector("#chkChatTonightRun").checked,
             // Édition de prompts par le chat (v1.13.8, opt-in).
-            ChatPromptsEnabled: view.querySelector("#chkChatPrompts").checked
+            ChatPromptsEnabled: view.querySelector("#chkChatPrompts").checked,
+            // Chat externe (v1.13.21) — secret édité ici (l'admin peut le
+            // remplacer ; vide = chat externe inopérant même activé).
+            ExternalChatEnabled: view.querySelector("#chkExternalChatEnabled").checked,
+            ExternalChatSecret: (view.querySelector("#txtExternalChatSecret").value || "").trim(),
+            ExternalChatUsers: (view.querySelector("#txtExternalChatUsers").value || "")
+                .split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean)
         };
     }
 
@@ -927,6 +939,20 @@ define(["loading"], function (loading) {
                             " — " + esc(i18n.t("cfg.update.hint"));
                         banner.style.display = "flex";
                     }, function () { /* silencieux : pas de bandeau */ });
+
+            // Secret du chat externe : générer un jeton aléatoire (32 hex)
+            // dans le champ — l'admin le copie ensuite dans la config de
+            // l'app compagnon (chat-external/config.json).
+            var extSecretBtn = view.querySelector("#btnExternalChatSecretGen");
+            if (extSecretBtn) {
+                extSecretBtn.addEventListener("click", function () {
+                    var buf = new Uint8Array(16);
+                    (window.crypto || window.msCrypto).getRandomValues(buf);
+                    var hex = "";
+                    for (var i = 0; i < buf.length; i++) hex += (buf[i] + 0x100).toString(16).slice(1);
+                    view.querySelector("#txtExternalChatSecret").value = hex;
+                });
+            }
 
             // Ajouter un backend.
             var addBtn = view.querySelector("#btnAddBackend");

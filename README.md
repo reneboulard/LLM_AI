@@ -711,6 +711,22 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   au clic « Approuver » de l'admin sur la carte de diff. Les contextes d'édition (modes
   déroulants) restent en lecture sans ce flag. Voir
   [Édition des prompts par le chat](#édition-des-prompts-par-le-chat).
+- `ExternalChatEnabled` (bool, défaut `false` — opt-in) — **chat externe pour une app
+  compagnon** (script Python autonome fourni dans [`chat-external/`](chat-external/),
+  sur le même hôte, derrière son propre login) : `POST
+  /Plugins/LLMAI/ChatExternal` (tour de chat pour un usager Emby résolu) et `POST
+  /Plugins/LLMAI/Show` (projection de la fiche d'un item sur le client Emby actif de
+  cet usager — commande `DisplayContent`, repli toast). Gates : requête **loopback
+  uniquement sans X-Forwarded-For** (l'app compagnon appelle Emby directement), secret dédié
+  `ExternalChatSecret` (comparaison à temps constant, généré/copié depuis la page de
+  config), liste blanche `ExternalChatUsers` (noms d'usagers Emby — les administrateurs
+  sont toujours refusés). Lecture seule (aucun tool d'action, aucun audit) ; tout
+  contenu est filtré par la **policy parentale de l'usager résolu** et la navigation ne
+  cible que SA session. La mémoire de conversation réutilise `chat_memory.json` (clé =
+  usager résolu). L'app embarque aussi le tool **`client_command`** (commandes non
+  destructives sur le client actif de l'usager : projection, lecture/pause/arrêt,
+  volume) et sa page offre une **dictée vocale 🎤** (Chrome/Edge — HTTPS requis hors
+  localhost). Voir [`chat-external/README.md`](chat-external/README.md).
 
 ### Mémoire réflexive (expérimental)
 

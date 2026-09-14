@@ -100,6 +100,22 @@ namespace LLM_AI
         public User RunUser { get; set; }
 
         /// <summary>
+        /// Usager du filtre parental bibliothèque (facultatif, v1.13.21).
+        /// Posé par le chat externe seulement : quand renseigné, les actions
+        /// qui projettent des items de bibliothèque au LLM sont filtrées par
+        /// la policy parentale de CET usager
+        /// (<see cref="PermissionGate.FilterParental"/> pour
+        /// <c>library</c>/<c>global_search</c>, verdict refusé pour
+        /// <c>item_details</c> qui ne renvoie alors rien), la liste des
+        /// usagers de <c>summary</c> ne dévoile que l'usager du run, et le
+        /// chemin disque n'est plus projeté dans <c>item_details</c>. Null
+        /// (tâche planifiée, chat admin) → comportement global inchangé.
+        /// Distinct de <see cref="RunUser"/> pour ne PAS changer le
+        /// comportement des runs reco existants qui portent déjà un usager.
+        /// </summary>
+        public User ParentalUser { get; set; }
+
+        /// <summary>
         /// L'EPG est-il consultable pour ce run ? Raison du résultat vide quand
         /// non (note renvoyée au LLM), null si consultable.
         /// </summary>
@@ -108,6 +124,23 @@ namespace LLM_AI
             if (RunUser != null && !PermissionGate.CanWatchLive(RunUser))
                 return "EPG indisponible : la TV en direct n'est pas accessible pour cet usager";
             return null;
+        }
+
+        /// <summary>
+        /// Filtre parental EPG du chat externe (v1.13.21) : <c>true</c> si
+        /// aucun <see cref="ParentalUser"/> (no-op) ou si le programme porte
+        /// une cote autorisée pour CET usager
+        /// (<see cref="PermissionGate.IsEpgAllowed"/>, même verdict que Watch
+        /// Tonight phase 2). Appliqué aux actions epg_* et à la jambe EPG de
+        /// <c>find</c> — un programme au-dessus de la cote de l'usager
+        /// n'est jamais projeté (titre ni synopsis).
+        /// </summary>
+        private bool EpgAllowed(BaseItemDto p)
+        {
+            if (ParentalUser == null || p == null) return true;
+            var loc = _host?.TryResolve<MediaBrowser.Model.Globalization.ILocalizationManager>();
+            return PermissionGate.IsEpgAllowed(ParentalUser, loc, p.OfficialRating,
+                p.Tags ?? Array.Empty<string>(), out _) == PermissionGate.ParentalVerdict.Allowed;
         }
 
         /// <summary>URL publique Emby pour construire les image_url.</summary>
@@ -182,7 +215,9 @@ namespace LLM_AI
             int episodes  = Count("Episode");
             int albums    = Count("MusicAlbum");
             int songs     = Count("Audio");
-            var userNames = _users.GetUserList(new UserQuery())
+            var userNames = ParentalUser != null
+                ? new[] { ParentalUser.Name }   // chat externe : ne dévoile que l'usager du run
+                : _users.GetUserList(new UserQuery())
                                   .Select(u => u.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray();
 
             var result = new
@@ -221,6 +256,11 @@ namespace LLM_AI
             if (minRating.HasValue)             query.MinCommunityRating = minRating.Value;
 
             var items = _library.GetItemList(query) ?? Array.Empty<BaseItem>();
+            if (ParentalUser != null)
+            {
+                var filtered = PermissionGate.FilterParental(ParentalUser, items, _logger);
+                items = filtered.ToArray();
+            }
             items = SortItems(items, sortBy);
             var page = items.Skip(offset).Take(Math.Max(1, limit));
 
@@ -258,6 +298,8 @@ namespace LLM_AI
                 q.IncludeItemTypes = types.Select(MapType).Distinct().ToArray();
 
             var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
+            if (ParentalUser != null)
+                items = PermissionGate.FilterParental(ParentalUser, items, _logger).ToArray();
 
             var proj = items.Select(i => new
             {
@@ -284,6 +326,12 @@ namespace LLM_AI
             if (item == null)
                 return Err($"item introuvable : {idStr}");
 
+            // Chat externe : la policy parentale de l'usager jugé est la loi —
+            // un item refusé ne révèle RIEN (ni détail ni raison de cote).
+            if (ParentalUser != null &&
+                PermissionGate.IsParentallyAllowed(ParentalUser, item) != PermissionGate.ParentalVerdict.Allowed)
+                return Err($"item indisponible pour cet usager : {item.Name ?? idStr}");
+
             var result = new
             {
                 id = item.InternalId.ToString(),
@@ -294,7 +342,9 @@ namespace LLM_AI
                 genres = item.Genres,
                 overview = item.Overview,
                 official_rating = item.OfficialRating,
-                path = item.Path,
+                // Chat externe : le chemin disque n'est pas projeté à un
+                // client non-admin (le chat admin en reste pourvu, lui).
+                path = ParentalUser != null ? null : item.Path,
                 date_created = item.DateCreated,
                 image_url = ImageUrl(item.InternalId)
             };
@@ -358,6 +408,14 @@ namespace LLM_AI
 
         private string Scheduled()
         {
+            // Chat externe : les timers DVR sont un inventaire du foyer (usager
+            // admin) — pas projetés du tout à un usager externe.
+            if (ParentalUser != null)
+                return JsonSerializer.Serialize(new
+                {
+                    note = "Programmation DVR indisponible pour cet usager externe"
+                }, s_json);
+
             // Series timers (enregistrements récurrents) + single timers programmés.
             var st = _liveTv.GetSeriesTimers(new SeriesTimerQuery());
             var seriesTimers = st?.Items ?? Array.Empty<SeriesTimerInfoDto>();
@@ -506,6 +564,9 @@ namespace LLM_AI
                     {
                         if (!MatchesGenres(it.Genres, genreSet, LibSeriesCtx(it))) continue;
                         if (!MatchesClassification(it.OfficialRating, classification)) continue;
+                        if (ParentalUser != null &&
+                            PermissionGate.IsParentallyAllowed(ParentalUser, it) != PermissionGate.ParentalVerdict.Allowed)
+                            continue;   // chat externe : policy parentale de l'usager résolu
                         libMatches.Add(ToFindResult(it, user));
                     }
                 }
@@ -516,6 +577,9 @@ namespace LLM_AI
                     {
                         if (!MatchesGenres(it.Genres, genreSet, LibSeriesCtx(it))) continue;
                         if (!MatchesClassification(it.OfficialRating, classification)) continue;
+                        if (ParentalUser != null &&
+                            PermissionGate.IsParentallyAllowed(ParentalUser, it) != PermissionGate.ParentalVerdict.Allowed)
+                            continue;   // chat externe : policy parentale de l'usager résolu
                         libMatches.Add(ToFindResult(it, user));
                     }
                 }
@@ -573,6 +637,7 @@ namespace LLM_AI
                     var p = kv.Value;
                     var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
                     var genres = GenreFor(p, genreMap);
+                    if (!EpgAllowed(p)) continue;   // chat externe : policy parentale EPG
                     if (!MatchesGenres(genres, genreSet, SeriesCtx(p))) continue;
                     if (!MatchesClassification(p.OfficialRating, classification)) continue;
                     if (st != null
@@ -1000,6 +1065,7 @@ namespace LLM_AI
                 var key = Norm(title);
                 if (excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;              // dédupliquer par série (unique_by)
+                if (!EpgAllowed(p)) continue;              // chat externe : policy parentale EPG
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
                 if (IsExcludedGenre(genres, excludeGenres, series: true)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
@@ -1151,6 +1217,7 @@ namespace LLM_AI
                 var key = Norm(title);
                 if (excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;
+                if (!EpgAllowed(p)) continue;              // chat externe : policy parentale EPG
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
                 if (IsExcludedGenre(genres, excludeGenres, series: false)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
@@ -1379,6 +1446,7 @@ namespace LLM_AI
                 var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
                 var key = Norm(title);
                 var genres = GenreFor(p, genreMap);
+                if (!EpgAllowed(p)) continue;   // chat externe : policy parentale EPG
                 if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p))) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {

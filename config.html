@@ -1181,6 +1181,49 @@
                             sans ce flag.
                         </div>
 
+                        <div class="sectionTitleTextButton" style="margin-top:1.4em;">Chat externe — app compagnon</div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.extchat.desc">
+                            Pour une <b>app compagnon</b> (script Python autonome fourni, sur le
+                            même serveur, derrière son
+                            propre login) : <code>POST /Plugins/LLMAI/ChatExternal</code> discute avec
+                            l'agent pour un usager Emby résolu, <code>POST /Plugins/LLMAI/Show</code>
+                            projette la fiche d'un item sur le client Emby actif de cet usager.
+                            Lecture seule (aucun tool d'action, aucun audit) ; <b>tout contenu est
+                            filtré par la policy parentale de l'usager</b> et la navigation ne cible
+                            que SA session. Gates : requête <b>loopback uniquement, sans
+                            X-Forwarded-For</b> (l'app appelle Emby directement), secret dédié
+                            (comparaison à temps constant), liste d'usagers — les administrateurs
+                            sont toujours refusés sur ce chemin.
+                        </div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkExternalChatEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.extchat.enabled">Activer le chat externe (app compagnon, loopback + secret)</span>
+                        </label>
+                        <div style="display:flex;gap:1em;flex-wrap:wrap;align-items:flex-start;">
+                            <div style="flex:1 1 260px;">
+                                <input is="emby-input" type="text" id="txtExternalChatSecret"
+                                       label="Secret partagé (copié dans la config de l'app compagnon)"
+                                       data-i18n-label="cfg.extchat.secret"
+                                       autocomplete="off" spellcheck="false" />
+                                <div class="fieldDescription" data-i18n-html="cfg.extchat.secret.desc">
+                                    Secret DÉDIÉ (distinct du secret .strm). Génère-le ici puis copie-le
+                                    dans la config de l'app compagnon ; changer les deux côtés pour révoquer.
+                                </div>
+                                <button is="emby-button" type="button" class="raised button-cancel" id="btnExternalChatSecretGen" style="margin-top:0.4em;">Générer</button>
+                            </div>
+                            <div style="flex:1 1 260px;">
+                                <div class="inputContainer">
+                                <textarea is="emby-textarea" id="txtExternalChatUsers" rows="4"
+                                          label="Usagers autorisés (un nom d'usager Emby par ligne)"
+                                          data-i18n-label="cfg.extchat.users"></textarea>
+                                <div class="fieldDescription" data-i18n-html="cfg.extchat.users.desc">
+                                    Mêmes noms que dans l'app compagnon. Un usager non listé est rejeté ;
+                                    un administrateur est TOUJOURS rejeté (chat admin = /Plugins/LLMAI/Chat).
+                                </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

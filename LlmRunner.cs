@@ -634,7 +634,9 @@ namespace LLM_AI
             string conversationMemory = null,
             List<ILlmTool> extraTools = null,
             string extraWorkflow = null,
-            string contextBlock = null)
+            string contextBlock = null,
+            User toolUser = null,
+            bool includeAuditTools = true)
         {
             try
             {
@@ -672,8 +674,21 @@ namespace LLM_AI
                 // Tous les outils existants : recommandation + audit santé +
                 // (couche d'action du chat, v1.13 : tools construits par
                 // ChatActions et injectés par l'endpoint — budget géré là-bas).
-                var tools = BuildTools(cfg);
-                tools.AddRange(BuildAuditTools(cfg, sessions, tasks, notifications));
+                // v1.13.21 : chat externe — <paramref name="toolUser"/> porte
+                // l'usager résolu (get_emby_info filtre parentalement ses
+                // vues bibliothèque), et <paramref name="includeAuditTools"/>
+                // est false (aucun system_audit sur ce chemin).
+                var tools = BuildTools(cfg, toolUser);
+                var extTool = toolUser != null && tools.Count > 0
+                    ? (tools[0] as GetEmbyInfoTool) : null;
+                if (extTool != null) extTool.ParentalUser = toolUser;
+                // v1.13.21 : commandes client non destructives — UNIQUEMENT
+                // sur le chemin chat externe (toolUser), allowlist stricte,
+                // session bornée à l'usager résolu (ClientCommandTool).
+                if (toolUser != null)
+                    tools.Add(new ClientCommandTool(sessions, _library, toolUser, _logger));
+                if (includeAuditTools)
+                    tools.AddRange(BuildAuditTools(cfg, sessions, tasks, notifications));
                 if (extraTools != null && extraTools.Count > 0)
                     tools.AddRange(extraTools);
 

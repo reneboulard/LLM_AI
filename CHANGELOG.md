@@ -10,6 +10,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.0] — 2026-09-13
+
+### Added (FR)
+- **Chat externe pour app compagnon** — deux endpoints opt-in
+  `POST /Plugins/LLMAI/ChatExternal` (tour de chat pour l'app compagnon)
+  et `POST /Plugins/LLMAI/Show` (navigation : le client Emby actif de
+  l'usager affiche la fiche d'un item, commande `DisplayContent` avec repli
+  toast `DisplayMessage` — validé live 2026-09-13 sur « Emby for Android »).
+  Scénario : l'app compagnon du foyer (script Python autonome fourni dans
+  `chat-external/`, aucun serveur web à installer), derrière son propre
+  login sur le même serveur, fait dialoguer ses usagers avec l'agent et
+  navigue leur client.
+- **Sécurité, en couches** : requête **loopback uniquement sans
+  X-Forwarded-For** (l'app compagnon appelle Emby directement — toute requête passée
+  par le reverse proxy est rejetée même si elle arrive du loopback), secret
+  dédié comparé à temps constant, liste blanche d'usagers Emby résolus par
+  leur nom, **administrateurs toujours refusés**. Lecture seule stricte :
+  aucun tool d'action, aucun `system_audit`, aucun `plugin_prompts`.
+- **Filtrage parental de bout en bout** : le chat externe porte l'usager
+  résolu — `get_emby_info` filtre parentalement bibliothèque et EPG
+  (verdicts `IsParentallyAllowed` / `IsEpgAllowed`, nouveaux
+  `ParentalUser`/`EpgAllowed` dans le tool), `item_details` refuse un item
+  non autorisé sans rien révéler, la liste des usagers de `summary` ne
+  dévoile que l'usager du run, le chemin disque n'est plus projeté, et la
+  navigation `Show` refuse (fail-closed) un item au-dessus de la cote de
+  l'usager. La session ciblée est **toujours celle de l'usager de la
+  requête** — un usager listé ne peut agir ni sur la session d'un autre ni
+  lui montrer un contenu.
+- **Mémoire de conversation partagée** : le chat externe réutilise
+  `chat_memory.json` (clé = usager résolu) ; le résumeur de condensation
+  est extrait dans `ChatSummarizer` (un seul mécanisme pour les deux
+  surfaces, signaux de goût inclus).
+- **Tool `client_command`** (validé live 2026-09-13) : le chat externe peut
+  piloter le **client Emby actif de l'usager** — commandes NON destructives
+  sur allowlist stricte : `display_item`, `play_item`, `go_home`, `pause`,
+  `unpause`, `stop`, `set_volume` (0-100), `mute`, `unmute`. Toute
+  commande hors liste est rejetée fail-closed avant tout effet ; exclusions
+  permanentes : `SendKey`, `TakeScreenshot`, `Restart`/`Shutdown`/
+  `Identify`, `Seek`. La session ciblée est **toujours celle de l'usager
+  de la requête** (jamais l'appareil d'un autre) ; `display_item`/
+  `play_item` passent la policy parentale (fail-closed). Le tool n'existe
+  que sur le chemin chat externe — jamais dans le chat admin.
+- **Dictée vocale 🎤 dans la page de chat** (app compagnon) :
+  reconnaissance native Chrome/Edge (`webkitSpeechRecognition`, fr-FR),
+  transcription envoyée automatiquement. La Web Speech API exige un
+  **contexte sécurisé** : le bouton est masqué hors HTTPS/localhost
+  (`window.isSecureContext`) et l'app gagne un **mode HTTPS optionnel**
+  (`ssl_cert`/`ssl_key`, TLS natif du script — auto-signé accepté et
+  documenté) ; validé live : la dictée est silencieusement bloquée par
+  Chrome sur `http://<ip-LAN>`.
+- **Nudge projection** : le workflow du chat externe apprend à l'agent que
+  ses liens profonds sont rendus en bouton de projection par l'app et qu'il
+  dispose lui-même de `client_command` — validé par incident live : avant
+  le bloc, l'agent répondait « je ne peux rien afficher » à « mets Julie à
+  l'écran » (correct fail-safe, mais mauvaise UX).
+
+### Fixed (FR)
+- **Boutons de projection muets** : la regex de rendu des liens profonds
+  côté page omettait le `!` du shebang Emby (`#/item` vs `#!/item`) — les
+  titres cités par l'agent n'obtenaient aucun bouton 📺. Corrigé et testé.
+
+### Added (EN)
+- **External chat for a companion app** — two opt-in endpoints:
+  `POST /Plugins/LLMAI/ChatExternal` (one chat turn for the companion app)
+  and `POST /Plugins/LLMAI/Show` (navigation: the user's active Emby client
+  displays an item's detail page, `DisplayContent` command with
+  `DisplayMessage` toast fallback — validated live 2026-09-13 on
+  "Emby for Android"). Scenario: the companion app (standalone Python script
+  shipped in `chat-external/`, no web server to install), behind its own
+  login on the same server, lets its users talk to the agent and navigates
+  their client.
+- **Layered security**: **loopback-only requests without X-Forwarded-For**
+  (the companion app calls Emby directly — any request through the reverse proxy is
+  refused even if it arrives from loopback), a dedicated constant-time
+  compared secret, an Emby user allowlist resolved by name,
+  **administrators always refused**. Strict read-only: no action tools, no
+  `system_audit`, no `plugin_prompts`.
+- **End-to-end parental filtering**: the external chat carries the resolved
+  user — `get_emby_info` filters library and EPG by their parental policy
+  (`IsParentallyAllowed`/`IsEpgAllowed` verdicts, new
+  `ParentalUser`/`EpgAllowed` in the tool), `item_details` refuses a
+  forbidden item without revealing anything, `summary` only reveals the
+  run's user, disk paths are no longer projected, and the `Show` navigation
+  refuses (fail-closed) any item above the user's rating. The targeted
+  session is **always the requesting user's own** — a listed user can
+  neither act on someone else's session nor show them restricted content.
+- **Shared conversation memory**: the external chat reuses
+  `chat_memory.json` (key = resolved user); the lazy summarizer is
+  extracted into `ChatSummarizer` (one mechanism for both surfaces, taste
+  signals included).
+- **`client_command` tool** (validated live 2026-09-13): the external chat
+  can drive the **user's active Emby client** — NON-destructive commands on
+  a strict allowlist: `display_item`, `play_item`, `go_home`, `pause`,
+  `unpause`, `stop`, `set_volume` (0-100), `mute`, `unmute`. Any command
+  outside the list is refused fail-closed before any effect; permanent
+  exclusions: `SendKey`, `TakeScreenshot`, `Restart`/`Shutdown`/`Identify`,
+  `Seek`. The targeted session is **always the requesting user's own**
+  (never someone else's device); `display_item`/`play_item` go through the
+  user's parental policy (fail-closed). The tool exists only on the
+  external chat path — never in the admin chat.
+- **Voice dictation 🎤 in the chat page** (companion app): native
+  Chrome/Edge recognition (`webkitSpeechRecognition`, fr-FR), transcript
+  sent automatically. The Web Speech API requires a **secure context**:
+  the button is hidden outside HTTPS/localhost (`window.isSecureContext`)
+  and the app gained an **optional HTTPS mode** (`ssl_cert`/`ssl_key`,
+  native TLS in the script — self-signed accepted and documented); live
+  validated: Chrome silently blocks the mic on `http://<LAN-IP>`.
+- **Projection nudge**: the external chat workflow teaches the agent that
+  its deep links are rendered as projection buttons by the app and that it
+  has `client_command` itself — validated by a live incident: before the
+  block, the agent answered "I can't display anything" to "put Julie on
+  screen" (correct fail-safe, but poor UX).
+
+### Fixed (EN)
+- **Silent projection buttons**: the page-side deep-link rendering regex
+  omitted the `!` of the Emby shebang (`#/item` vs `#!/item`) — titles
+  cited by the agent got no 📺 button. Fixed and tested.
+
+---
+
 ## [1.13.20.1] — 2026-09-13
 
 ### Fixed (FR)

@@ -687,6 +687,22 @@ modify another plugin's config). Full details:
   Writing is **two-phase**: serialized proposal, then applied when the admin clicks
   "Approve" on the diff card. The editing contexts (dropdown modes) stay read-only
   without this flag. See [Prompt editing from the chat](#prompt-editing-from-the-chat).
+- `ExternalChatEnabled` (bool, default `false` — opt-in) — **external chat for a
+  companion app** (standalone Python script shipped in
+  [`chat-external/`](chat-external/), on the same host, behind its own login): `POST
+  /Plugins/LLMAI/ChatExternal` (one chat turn for a resolved Emby user) and `POST
+  /Plugins/LLMAI/Show` (projects an item's detail page on that user's active Emby
+  client — `DisplayContent` command, toast fallback). Gates: **loopback-only requests
+  without X-Forwarded-For** (the companion app calls Emby directly), dedicated secret
+  `ExternalChatSecret` (constant-time compare, generated/copied from the config page),
+  user allowlist `ExternalChatUsers` (Emby usernames — administrators are always
+  refused). Read-only (no action tools, no audit); all content is filtered by the
+  resolved user's **parental policy** and navigation only targets THEIR session.
+  Conversation memory reuses `chat_memory.json` (key = resolved user). The app also
+  ships the **`client_command`** tool (non-destructive commands on the user's active
+  client: projection, play/pause/stop, volume) and its page offers **voice dictation
+  🎤** (Chrome/Edge — HTTPS required outside localhost). See
+  [`chat-external/README.md`](chat-external/README.md).
 
 ### Reflective memory (experimental)
 
