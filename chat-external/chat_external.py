@@ -196,13 +196,14 @@ def emby_authenticate(username, password):
     return name.strip(), None
 
 
-def plugin_chat(user, message, history, session):
+def plugin_chat(user, message, history, session, tts=False):
     return emby_post("/Plugins/LLMAI/ChatExternal", {
         "Token": CFG["secret"],
         "User": user,
         "Message": message,
         "History": history,
         "Session": session or "",
+        "Tts": bool(tts),
     })
 
 
@@ -377,8 +378,11 @@ class Handler(BaseHTTPRequestHandler):
                 if role in ("user", "assistant") and isinstance(content, str) and content.strip():
                     history.append({"role": role, "content": content[:2000]})
         session = body.get("session") or ""
+        # Lecture automatique active côté page ? → le plugin formule la
+        # réponse pour la synthèse vocale (bloc « canal de livraison »).
+        tts = bool(body.get("tts"))
 
-        status, resp = plugin_chat(user, message, history, session)
+        status, resp = plugin_chat(user, message, history, session, tts)
         if status == 0:
             return self.send_json({"error": "Emby injoignable (%s)."
                                    % resp.get("__network__", "?")}, 502)
@@ -768,7 +772,8 @@ function send(ev) {
   $("in").value = "";
   addBubble("user", text);
   var outgoing = chatHistory.concat([{ role: "user", content: text }]);
-  api("/api/chat", { message: text, history: chatHistory, session: session },
+  api("/api/chat", { message: text, history: chatHistory, session: session,
+      tts: autoTts },
       function (d) {
         busy = false;
         $("sbtn").disabled = false;

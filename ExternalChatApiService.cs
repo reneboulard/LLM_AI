@@ -125,6 +125,28 @@ namespace LLM_AI
             "client_command fait la projection. Si aucun client Emby de " +
             "l'usager n'est actif, signale-le simplement.";
 
+        /// <summary>Bloc de workflow INJECTÉ EN PLUS de
+        /// <see cref="ExternalWorkflowBlock"/> UNIQUEMENT quand l'app
+        /// compagnon signale que la synthèse vocale (lecture automatique
+        /// 🔊 du navigateur) est active pour ce tour : la réponse sera
+        /// LUE À VOIX HAUTE, pas seulement affichée. La formulation doit
+        /// alors se prêter à l'oral ; les titres restent exacts (les
+        /// boutons de projection sont toujours rendus, seule la voix lit
+        /// le texte).</summary>
+        internal const string ExternalTtsBlock =
+            "\n### CANAL DE LIVRAISON : SYNTHÈSE VOCALE (CHAT EXTERNE)\n" +
+            "La lecture automatique est active : cette réponse sera lue à " +
+            "voix haute à l'usager, en plus d'être affichée. Formule-la " +
+            "pour l'ORAL : phrases courtes et naturelles, comme si tu " +
+            "parlais ; dis les heures en toutes lettres (« à midi et " +
+            "trente », « à 13 h » se dit « à treize heures ») ; PAS de " +
+            "listes à puces, pas de tableaux, pas de blocs de code, pas " +
+            "d'URL brutes, pas de balise Markdown visible. Garde les " +
+            "TITRES EXACTS (les liens fiche restent rendus en boutons de " +
+            "projection, seule la voix lit le texte) ; un lien fiche reste " +
+            "utile même si tu nommes le titre à l'oral. Reste bref : une " +
+            "réponse parlée trop longue fatigue.";
+
         // ------------------------------------------------------------------
         //  DTO requête / réponse — ChatExternal
         // ------------------------------------------------------------------
@@ -149,6 +171,10 @@ namespace LLM_AI
         /// <c>Message</c> : nouveau message. <c>History</c> : tours
         /// précédents (stateless). <c>Session</c> : id de session de mémoire
         /// de conversation (retourné puis rejoué ; vide = nouvelle).
+        /// <c>Tts</c> : la lecture automatique (synthèse vocale du navigateur)
+        /// est active côté app — la réponse sera lue à voix haute ; injecte
+        /// le bloc de formulation orale (<see cref="ExternalTtsBlock"/>) pour
+        /// ce tour. Optionnel (défaut false : formulation écran inchangée).
         /// </summary>
         [Route("/Plugins/LLMAI/ChatExternal", "POST")]
         [Unauthenticated]
@@ -159,6 +185,7 @@ namespace LLM_AI
             public string Message { get; set; }
             public List<ExtChatTurn> History { get; set; }
             public string Session { get; set; }
+            public bool Tts { get; set; }
         }
 
         /// <summary>Réponse du chat externe. <c>Reply</c> : réponse Markdown
@@ -295,12 +322,19 @@ namespace LLM_AI
             // ParentalUser qui l'impose mécaniquement de toute façon).
             var parentalNote = PermissionGate.DescribeForPrompt(user) ?? "";
 
+            // Canal de livraison : l'app signale-t-elle que la lecture
+            // automatique (synthèse vocale) est active ? Si oui, un bloc
+            // de formulation ORALE s'ajoute au bloc de projection (par
+            // tour — la bascule 🔊 est par tour, pas par session).
+            string extraWorkflow = ExternalWorkflowBlock + (req.Tts
+                ? ExternalTtsBlock : string.Empty);
+
             string reply;
             try
             {
                 reply = await runner.RunChatAsync(cfg, "CHAT-EXT", history, message,
                     _sessions, _tasks, _notifications, ct, memoryBlock,
-                    null, ExternalWorkflowBlock, parentalNote, user, false).ConfigureAwait(false);
+                    null, extraWorkflow, parentalNote, user, false).ConfigureAwait(false);
             }
             // Même sémantique que le chat admin : annulation DÉPASSANT la
             // requête (timeout backend LLM) → JSON propre ; déconnexion du

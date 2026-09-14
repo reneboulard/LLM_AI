@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.5] — 2026-09-14
+
+### Added (FR)
+- **Mode « réponse parlée » pour le chat externe.** Quand la lecture
+  automatique 🔊 est active dans l'app compagnon, celle-ci signale désormais
+  le canal de livraison au plugin (`Tts` dans la requête `ChatExternal`, par
+  tour) : le LLM reçoit un bloc de formulation ORALE — phrases courtes et
+  naturelles, heures dites en toutes lettres, pas de listes/tableaux/blocs
+  de code/URL brutes — tout en gardant les titres exacts (les boutons de
+  projection restent rendus à l'écran ; seule la voix lit le texte). Sans
+  la bascule, la formulation écran est inchangée. Le signal est émis par
+  tour (l'app passe `tts: autoTts`), donc la réponse suit l'état réel de la
+  bascule au moment de l'envoi — basculer en cours de conversation alterne
+  proprement les deux formulations.
+
+### Added (EN)
+- **Spoken-reply mode for the external chat.** When auto read-aloud 🔊 is on
+  in the companion app, the app now tells the plugin the delivery channel
+  (`Tts` field in the `ChatExternal` request, per turn): the LLM receives an
+  ORAL-formulation block — short natural sentences, hours spoken in words,
+  no bullet lists/tables/code blocks/raw URLs — while keeping exact titles
+  (the projection buttons are still rendered on screen; only the voice reads
+  the text). With the toggle off, the on-screen formulation is unchanged.
+  The signal is sent per turn (the app passes `tts: autoTts`), so the reply
+  follows the actual toggle state when sending — toggling mid-conversation
+  cleanly alternates both formulations.
+
+---
+
 ## [1.13.21.4] — 2026-09-14
 
 ### Added (FR)
