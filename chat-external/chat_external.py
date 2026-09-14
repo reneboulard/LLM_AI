@@ -446,6 +446,7 @@ PAGE_HTML = r"""<!doctype html>
   button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent2); border-color: var(--accent2); color: #fff; }
   button.primary:disabled { opacity: .5; cursor: default; }
+  button.active { border-color: var(--accent); background: var(--accent2); color: #fff; }
   #login {
     margin: auto; background: var(--panel); border: 1px solid var(--border);
     border-radius: 10px; padding: 28px; width: min(340px, 90vw);
@@ -511,6 +512,7 @@ PAGE_HTML = r"""<!doctype html>
   <header>
     <h1>🤖 Chat Emby</h1>
     <span class="user" id="who"></span>
+    <button id="autotts" onclick="toggleAutoTts()" title="Lecture automatique des réponses">🔊 Auto</button>
     <button onclick="newSession()">➕ Nouvelle</button>
     <button onclick="logout()">Quitter</button>
   </header>
@@ -608,7 +610,7 @@ function addBubble(role, text, isErr) {
     // seul le contenu texte est lu, les boutons de projection sont écartés)
     if (!isErr && text && window.speechSynthesis) {
       var sb = document.createElement("button");
-      sb.className = "speakbtn"; sb.textContent = "🔊";
+      sb.className = "speakbtn"; sb.textContent = "🔊"; sb.dataset.label = "🔊";
       sb.title = "Lire à voix haute";
       sb.addEventListener("click", function () { speakText(text, sb); });
       div.appendChild(sb);
@@ -621,9 +623,25 @@ function addBubble(role, text, isErr) {
 
 // -- lecture à voix haute (Web Speech Synthesis) ------------------------------
 var speakingBtn = null;
+var autoTts = false;
 function stopSpeak() {
   try { window.speechSynthesis.cancel(); } catch (e) {}
-  if (speakingBtn) { speakingBtn.textContent = "🔊"; speakingBtn = null; }
+  if (speakingBtn) {
+    speakingBtn.textContent = speakingBtn.dataset.label || "🔊";
+    speakingBtn = null;
+  }
+}
+function ttsKey() { return storageKey() + "_tts"; }
+function updateAutoTtsBtn() {
+  $("autotts").className = autoTts ? "active" : "";
+}
+function toggleAutoTts() {
+  // Pendant une lecture auto en cours : un clic = arrêt (et pas re-démarrage).
+  if (speakingBtn === $("autotts")) { stopSpeak(); return; }
+  autoTts = !autoTts;
+  try { localStorage.setItem(ttsKey(), autoTts ? "1" : "0"); } catch (e) {}
+  updateAutoTtsBtn();
+  toast(autoTts ? "🔊 Lecture automatique activée." : "Lecture automatique désactivée.");
 }
 // Markdown → texte oral : les liens [Titre](url) ne gardent que « Titre »,
 // les blocs de code et URL restantes sont écartés (pas de charabia lu).
@@ -709,6 +727,8 @@ function enterChat(name) {
   $("login").style.display = "none";
   $("chat").style.display = "flex";
   $("who").textContent = user;
+  try { autoTts = localStorage.getItem(ttsKey()) === "1"; } catch (e) {}
+  updateAutoTtsBtn();
   restore();
   $("msgs").innerHTML = "";
   chatHistory.forEach(function (t) { addBubble(t.role, t.content); });
@@ -759,6 +779,7 @@ function send(ev) {
           session = d.session || session;
           persist();
           addBubble("assistant", d.reply || "(réponse vide)");
+          if (autoTts) { speakText(d.reply || "", $("autotts")); }
         }
         scrollDown();
         $("in").focus();
