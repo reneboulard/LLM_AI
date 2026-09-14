@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.6] — 2026-09-14
+
+### Added (FR)
+- **Traçabilité du mode réponse parlée.** Chaque tour reçu avec `Tts`
+  actif journalise « Canal de livraison : synthèse vocale (bloc de
+  formulation orale injecté) — usager X » : la validation de la fonction
+  se fait désormais dans les journaux Emby, pas seulement au
+  comportement de la réponse (le contenu des prompts n'est pas logué).
+
+### Added (EN)
+- **Spoken-reply mode trace.** Each turn received with `Tts` on logs
+  "Delivery channel: speech synthesis (oral formulation block
+  injected) — user X": the feature can now be verified in the Emby
+  logs, not only by the shape of the reply (prompt contents are not
+  logged).
+
+---
+
 ## [1.13.21.5] — 2026-09-14
 
 ### Added (FR)

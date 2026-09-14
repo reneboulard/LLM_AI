@@ -328,6 +328,9 @@ namespace LLM_AI
             // tour — la bascule 🔊 est par tour, pas par session).
             string extraWorkflow = ExternalWorkflowBlock + (req.Tts
                 ? ExternalTtsBlock : string.Empty);
+            if (req.Tts)
+                Logger.Info("[LLM_AI] [CHAT-EXT] Canal de livraison : synthèse vocale (bloc de formulation orale injecté) — usager {0}.",
+                    user.Name);
 
             string reply;
             try
