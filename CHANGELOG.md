@@ -70,6 +70,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Boutons de projection muets** : la regex de rendu des liens profonds
   côté page omettait le `!` du shebang Emby (`#/item` vs `#!/item`) — les
   titres cités par l'agent n'obtenaient aucun bouton 📺. Corrigé et testé.
+- **Le LLM n'avait aucune conscience de l'heure** (validé par incident
+  live) : aucun ancrage temporel dans le prompt — l'agent déduisait
+  « maintenant » des horaires EPG servis en UTC et se croyait plusieurs
+  heures plus tard (à « diffuse ce programme » il répondait « non
+  disponible », programme déclaré déjà passé ; à « quelle heure est-il »
+  il donnait l'heure UTC). Double correctif : un bloc « HEURE ACTUELLE »
+  (heure locale du serveur + décalage UTC, recalculé à chaque tour, seule
+  source fiable pour « maintenant ») injecté dans le workflow du chat, et
+  les horaires EPG (`start`/`end` de tous les tools) convertis en heure
+  locale au moment de la projection.
+- **« Qu'est-ce qui passe présentement ? » — programmes en cours
+  invisibles** : la fenêtre `epg_tonight` (défaut : maintenant → 23:59)
+  filtrait par `StartDate >= maintenant` — tout programme DÉJÀ EN COURS
+  (commencé à 20 h, il est 21 h 45) était exclu de la liste, l'agent ne
+  savait pas ce qui passe à l'écran au moment de la question. La fenêtre
+  passe en sémantique de **chevauchement** (fin après le début de fenêtre
+  ET début avant la fin), appliquée en C# sur les deux chemins (ce build
+  d'Emby ignore la fenêtre SQL) ; `HasAired=false` écarte toujours les
+  programmes terminés. La description du tool dit maintenant explicitement
+  que `epg_tonight` inclut les programmes en cours.
 
 ### Added (EN)
 - **External chat for a companion app** — two opt-in endpoints:
@@ -127,6 +147,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Silent projection buttons**: the page-side deep-link rendering regex
   omitted the `!` of the Emby shebang (`#/item` vs `#!/item`) — titles
   cited by the agent got no 📺 button. Fixed and tested.
+- **The LLM had no awareness of the current time** (validated by a live
+  incident): no time anchor in the prompt — the agent inferred "now" from
+  EPG times served in UTC and believed itself several hours later (asked
+  to broadcast a program it answered "not available", the program declared
+  already over; asked the time it answered in UTC). Two-part fix: an
+  "HEURE ACTUELLE" block (server local time + UTC offset, recomputed every
+  turn, the only trusted source for "now") injected into the chat
+  workflow, and EPG times (`start`/`end` of every tool) converted to local
+  time at projection.
+- **"What's on right now?" — in-progress programs were invisible**: the
+  `epg_tonight` window (default: now → 23:59) filtered by
+  `StartDate >= now` — any program ALREADY ON AIR (started at 8 PM, it is
+  9:45 PM) was excluded from the list, so the agent could not tell what
+  was playing at question time. The window now uses **overlap** semantics
+  (ends after the window start AND starts before the window end), applied
+  in C# on both paths (this Emby build ignores the SQL window);
+  `HasAired=false` still removes finished programs. The tool description
+  now states explicitly that `epg_tonight` includes in-progress programs.
 
 ---
 

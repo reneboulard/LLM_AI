@@ -571,6 +571,36 @@ namespace LLM_AI
             "explique comment la réaliser dans l'UI Emby.";
 
         /// <summary>
+        /// Bloc « HEURE ACTUELLE » du chat (v1.13.21.1) : le LLM n'a AUCUN
+        /// accès à l'horloge (aucun tool « heure ») — sans ancre, il déduisait
+        /// « maintenant » des horaires EPG servis en UTC et se croyait
+        /// plusieurs heures plus tard qu'il ne l'est (incident live : « il
+        /// est 5 h plus tard », programme déclaré terminé alors qu'il n'avait
+        /// pas commencé, donc « non disponible »). Recalculé à CHAQUE tour
+        /// (RunChatAsync est appelé par tour) — jamais mis en cache : une
+        /// conversation qui traverse minuit ou une veille longue doit rester
+        /// juste. L'heure est donnée en heure locale du serveur (celle de
+        /// l'usager du foyer) avec son décalage UTC explicite.
+        /// </summary>
+        private static string BuildTimeBlock()
+        {
+            var now = DateTimeOffset.Now;
+            var local = TimeZoneInfo.Local;
+            var offset = now.Offset.ToString(@"hh\:mm", System.Globalization.CultureInfo.InvariantCulture);
+            var sign = now.Offset >= TimeSpan.Zero ? "+" : "−";
+            return "\n### HEURE ACTUELLE\n" +
+                "Il est actuellement le " +
+                now.ToString("yyyy-MM-dd 'à' HH:mm", System.Globalization.CultureInfo.InvariantCulture) +
+                " (heure locale du serveur, fuseau " + local.Id + ", UTC" + sign + offset + ").\n" +
+                "C'est ta SEULE source fiable pour « maintenant » : les horaires EPG renvoyés par les " +
+                "outils (champs start/end) sont déjà convertis en heure locale du serveur — cite-les tels quels. " +
+                "Ne déduis JAMAIS l'heure actuelle des dates de la mémoire de conversation ni des " +
+                "horodatages internes : ils peuvent être en UTC.\n" +
+                "Pour « qu'est-ce qui passe maintenant/présentement », appelle epg_tonight : les " +
+                "programmes en cours y figurent (fin après maintenant).\n";
+        }
+
+        /// <summary>
         /// Bloc « liens profonds » du chat (v1.13.9.12) : quand le LLM cite un
         /// item dont un outil a fourni l'id, il le rend cliquable vers la fiche
         /// web d'Emby (même origine — la page chat est servie par Emby lui-même,
@@ -662,7 +692,8 @@ namespace LLM_AI
                 // (guide d'édition + texte courant du prompt + langue
                 // cible) est réinjecté à CHAQUE tour — changer de contexte
                 // n'exige jamais de réinitialiser la conversation.
-                string workflow = CHAT_WORKFLOW + await BuildDeepLinkBlockAsync().ConfigureAwait(false)
+                string workflow = CHAT_WORKFLOW + BuildTimeBlock()
+                    + await BuildDeepLinkBlockAsync().ConfigureAwait(false)
                     + (contextBlock ?? "")
                     + MemoryCard.BuildInjectionBlock(cfg)
                     + (conversationMemory ?? "")

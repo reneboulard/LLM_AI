@@ -40,7 +40,9 @@ namespace LLM_AI
             "Interroge la bibliothèque Emby et l'EPG (lecture seule). Retourne du JSON minimal. " +
             "Actions : summary, library, global_search, item_details, item_persons, person, " +
             "find, genre_stats, epg_series, epg_movies, epg_tonight, scheduled, planning. " +
-            "find = recherche unifiée bibliothèque+EPG (voie recommandée pour les questions génériques).";
+            "find = recherche unifiée bibliothèque+EPG (voie recommandée pour les questions génériques). " +
+            "epg_tonight = ce qui passe à la TV ce soir, PROGRAMMES EN COURS INCLUS — c'est le tool " +
+            "à appeler pour « qu'est-ce qui passe maintenant/présentement ».";
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
@@ -431,7 +433,7 @@ namespace LLM_AI
             {
                 name = !string.IsNullOrEmpty(d.ProgramInfo?.SeriesName) ? d.ProgramInfo.SeriesName : d.ProgramInfo?.Name,
                 channel = d.ProgramInfo?.ChannelName,
-                start = d.ProgramInfo?.StartDate,
+                start = Local(d.ProgramInfo?.StartDate),
                 status = d.Status.ToString(),
                 is_series = d.ProgramInfo?.IsSeries
             });
@@ -702,8 +704,8 @@ namespace LLM_AI
                         overview = Truncate(p.Overview, 200),
                         channel = p.ChannelName,
                         channel_number = p.ChannelNumber,
-                        start = p.StartDate,
-                        end = p.EndDate,
+                        start = Local(p.StartDate),
+                        end = Local(p.EndDate),
                         season = p.ParentIndexNumber,
                         episode = p.IndexNumber,
                         owned = r.Owned
@@ -1125,8 +1127,8 @@ namespace LLM_AI
                     genres = GenreCleanerMap.MapGenres(t.genres, true),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
-                    start = p.StartDate,
-                    end = p.EndDate,
+                    start = Local(p.StartDate),
+                    end = Local(p.EndDate),
                     rating = p.CommunityRating,
                     year = p.ProductionYear,
                     season = p.ParentIndexNumber,
@@ -1267,8 +1269,8 @@ namespace LLM_AI
                     genres = GenreCleanerMap.MapGenres(t.genres, false),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
-                    start = p.StartDate,
-                    end = p.EndDate,
+                    start = Local(p.StartDate),
+                    end = Local(p.EndDate),
                     rating = p.CommunityRating,
                     year = p.ProductionYear
                 });
@@ -1312,8 +1314,10 @@ namespace LLM_AI
         /// Programmes de l'EPG pour « ce soir » : fenêtre temporelle bornée par
         /// <see cref="PluginConfiguration.TonightWindowStart"/> /
         /// <see cref="PluginConfiguration.TonightWindowEnd"/> (défaut : maintenant
-        /// → 23:59), tous types confondus (séries ET films, pas de filtre
-        /// IsSeries/IsMovie), <c>HasAired=false</c>. Contrairement à
+        /// → 23:59), en sémantique de CHEVAUCHEMENT — un programme déjà EN COURS
+        /// est inclus (sa fin déborde dans la fenêtre), v1.13.21.1. Tous types
+        /// confondus (séries ET films, pas de filtre IsSeries/IsMovie),
+        /// <c>HasAired=false</c>. Contrairement à
         /// <see cref="EpgSeries"/>/<see cref="EpgMovies"/> :
         /// <list type="bullet">
         /// <item>la bibliothèque n'est PAS exclue (un film qu'on possède mais qui
@@ -1377,10 +1381,20 @@ namespace LLM_AI
             foreach (var f in LoadFlags(series: false))
                 flags.Add(f);
 
+            // Sémantique de CHEVAUCHEMENT (v1.13.21.1) : un programme « ce soir »
+            // est un programme qui TERMINE après le début de fenêtre et COMMENCE
+            // avant la fin — pas un programme qui commence dans la fenêtre.
+            // Vécu 2026-09-13 : MinStartDate = « maintenant » excluait tout
+            // programme DÉJÀ EN COURS (commencé à 20 h, il est 21 h 45) — le
+            // LLM ne savait pas ce qui passe à l'écran au moment de la
+            // question. HasAired=false écarte déjà les programmes terminés ;
+            // on ne borne donc QUE le début de diffusion par la fin de
+            // fenêtre (pas de MinStartDate), et le filtre de chevauchement se
+            // fait en C# SUR LES DEUX CHEMINS (voir ci-dessous) — ce build
+            // ignore ou casse la fenêtre SQL, le filtre C# fait foi.
             var q = new InternalItemsQuery
             {
                 HasAired = false,
-                MinStartDate = minStart,
                 MaxStartDate = maxStart,
                 Limit = POOL
             };
@@ -1392,19 +1406,23 @@ namespace LLM_AI
                 // 0 programme alors que l'EPG en contient (vérifié en base :
                 // MediaItems Type=27, StartDate en secondes unix, ~200 programmes
                 // par soirée). On relance SANS fenêtre (à venir uniquement, sans
-                // limite) puis on filtre par StartDate en C# et on plafonne au
-                // POOL (les programmes les plus tôt de la soirée) — même sémantique
-                // que la requête fenêtrée quand elle fonctionne.
+                // limite) — le filtre de chevauchement + plafond POOL se font
+                // plus bas, uniformément pour les deux chemins.
                 var fq = new InternalItemsQuery { HasAired = false };
-                var pool = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
-                programs = pool
-                    .Where(p => p.StartDate.HasValue && p.StartDate >= minStart && p.StartDate <= maxStart)
-                    .OrderBy(p => p.StartDate)
-                    .Take(POOL)
-                    .ToArray();
-                _logger?.Info("[LLM_AI] epg_tonight : fenêtre SQL 0 résultat → fallback mémoire {0} programme(s) dans la fenêtre (pool brut {1}).",
-                    programs.Length, pool.Length);
+                programs = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
+                _logger?.Info("[LLM_AI] epg_tonight : fenêtre SQL 0 résultat → fallback mémoire (pool brut {0}).",
+                    programs.Length);
             }
+            // Chevauchement [début de fenêtre, fin de fenêtre] : fin >= début de
+            // fenêtre ET début <= fin de fenêtre (EndDate absent → repli
+            // StartDate). Un programme déjà en cours (fini après « maintenant »)
+            // passe ; un programme terminé est déjà écarté par HasAired=false.
+            programs = programs
+                .Where(p => p.StartDate.HasValue && p.StartDate <= maxStart
+                            && (p.EndDate ?? p.StartDate) >= minStart)
+                .OrderBy(p => p.StartDate)
+                .Take(POOL)
+                .ToArray();
 
             var genreMap = BuildGenreMap(q);
 
@@ -1498,8 +1516,8 @@ namespace LLM_AI
                     genres = GenreCleanerMap.MapGenres(t.genres, SeriesCtx(p)),
                     channel = p.ChannelName,
                     channel_number = p.ChannelNumber,
-                    start = p.StartDate,
-                    end = p.EndDate,
+                    start = Local(p.StartDate),
+                    end = Local(p.EndDate),
                     rating = p.CommunityRating,
                     year = p.ProductionYear,
                     season = p.ParentIndexNumber,
@@ -2119,6 +2137,18 @@ namespace LLM_AI
 
         private static string Truncate(string s, int max) =>
             string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
+
+        /// <summary>
+        /// Conversion d'un horaire EPG en heure locale du serveur, AU MOMENT
+        /// de la projection (v1.13.21.1). Emby sert les StartDate/EndDate en
+        /// UTC : telles quelles, les valeurs projetées au LLM lisaient
+        /// « Z » et l'agent les prenait pour l'heure locale — il se croyait
+        /// plusieurs heures plus tard qu'il ne l'est (incident live : « il
+        /// est 5 h plus tard », programme déclaré terminé alors qu'il
+        /// n'avait pas commencé). Le filtre de fenêtre (epg_tonight) est
+        /// déjà correct côté DateTimeOffset ; seul l'affichage change.
+        /// </summary>
+        private static DateTimeOffset? Local(DateTimeOffset? t) => t?.ToLocalTime();
 
         // --- Lecture optionnelle des arguments JSON -----------------------
 
