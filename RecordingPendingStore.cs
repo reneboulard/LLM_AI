@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Threading;
+using System.Globalization;
 
 namespace LLM_AI
 {
@@ -97,9 +98,11 @@ namespace LLM_AI
         /// précédente) et génère le code. Refus si l'usager est verrouillé.
         /// <paramref name="pin"/> est remis à l'APPELANT INTERNE (endpoint)
         /// seul — il ne doit jamais rejoindre le texte du LLM.
+        /// <paramref name="langKey"/> : langue de l'usager pour les libellés.
         /// </summary>
         public static bool TryReserve(string user, string programId, string title,
-            string kind, int postPaddingMin, out string pin, out string error)
+            string kind, int postPaddingMin, out string pin, out string error,
+            string langKey = null)
         {
             pin = null;
             lock (s_gate)
@@ -108,7 +111,7 @@ namespace LLM_AI
                 long until;
                 if (s_locks.TryGetValue(user, out until) && until > DateTime.UtcNow.Ticks)
                 {
-                    error = LockedMessage(user, until);
+                    error = LockedMessage(user, until, langKey);
                     return false;
                 }
                 pin = GeneratePin();
@@ -203,8 +206,12 @@ namespace LLM_AI
         /// expirée → code (temps constant). Code erroné → compteur
         /// d'essais ; à 3, la fiche est détruite et le verrou posé.
         /// Code correct → fiche RETIRÉE (consommée une fois) et remise.
+        /// <paramref name="langKey"/> : langue de l'usager pour les libellés
+        /// (erreurs ET notice anti-menteur — la notice est affichée par
+        /// l'app compagnon, elle doit parler la langue de l'usager).
         /// </summary>
-        public static bool TryConfirm(string user, string pin, out Pending pending, out string error)
+        public static bool TryConfirm(string user, string pin, out Pending pending,
+            out string error, string langKey = null)
         {
             pending = null;
             lock (s_gate)
@@ -213,7 +220,7 @@ namespace LLM_AI
                 long until;
                 if (s_locks.TryGetValue(user, out until) && until > now)
                 {
-                    error = LockedMessage(user, until);
+                    error = LockedMessage(user, until, langKey);
                     SetNoticeLocked(user, error);
                     return false;
                 }
@@ -222,8 +229,8 @@ namespace LLM_AI
                 if (!s_pendings.TryGetValue(user, out p) || p.ExpiresUtc <= now)
                 {
                     if (p != null) s_pendings.TryRemove(user, out p); // expiré : mort
-                    error = "Aucun enregistrement en attente (ou code expiré) — demandez-le de nouveau.";
-                    SetNoticeLocked(user, "⚠️ Aucun code en attente (ou expiré) — AUCUN enregistrement créé.");
+                    error = I18n.S("rec.pending.none", langKey);
+                    SetNoticeLocked(user, I18n.S("rec.notice.none", langKey));
                     return false;
                 }
 
@@ -235,14 +242,17 @@ namespace LLM_AI
                         s_pendings.TryRemove(user, out p);   // fiche détruite
                         long lockUntil = now + TimeSpan.FromMinutes(LockoutMinutes).Ticks;
                         s_locks[user] = lockUntil;
-                        error = LockedMessage(user, lockUntil);
-                        SetNoticeLocked(user, "⚠️ 3 codes erronés — outil verrouillé, AUCUN enregistrement créé.");
+                        error = LockedMessage(user, lockUntil, langKey);
+                        SetNoticeLocked(user, I18n.S("rec.notice.locked", langKey));
                         return false;
                     }
-                    error = "Code incorrect (" + p.FailedAttempts + "/" + MaxFailedAttempts
-                        + ") — demandez-le à l'usager ; ne devinez, n'inventez et ne réessayez pas d'autres codes.";
-                    SetNoticeLocked(user, "⚠️ Code incorrect (" + p.FailedAttempts + "/" + MaxFailedAttempts
-                        + ") — AUCUN enregistrement créé.");
+                    error = string.Format(CultureInfo.CurrentUICulture,
+                        I18n.S("rec.notice.wrong", langKey), p.FailedAttempts, MaxFailedAttempts)
+                        + " " + (langKey == I18n.Fr
+                            ? "Demandez-le à l'usager ; ne devinez, n'inventez et ne réessayez pas d'autres codes."
+                            : "Ask the user for it; never guess, invent or try other codes.");
+                    SetNoticeLocked(user, string.Format(CultureInfo.CurrentUICulture,
+                        I18n.S("rec.notice.wrong", langKey), p.FailedAttempts, MaxFailedAttempts));
                     return false;
                 }
 
@@ -299,7 +309,8 @@ namespace LLM_AI
 
         /// <summary>Créations de timers dans la fenêtre glissante 24 h de
         /// l'usager. <paramref name="maxPerDay"/> &lt;= 0 = illimité.</summary>
-        public static bool TryConsumeCreation(string user, int maxPerDay, out string error)
+        public static bool TryConsumeCreation(string user, int maxPerDay, out string error,
+            string langKey = null)
         {
             lock (s_gate)
             {
@@ -314,7 +325,8 @@ namespace LLM_AI
                 List<long> list;
                 if (s_created.TryGetValue(user, out list) && list.Count >= maxPerDay)
                 {
-                    error = "Limite de " + maxPerDay + " enregistrement(s) par jour atteinte pour cet usager.";
+                    error = string.Format(CultureInfo.CurrentUICulture,
+                        I18n.S("rec.quota", langKey), maxPerDay);
                     return false;
                 }
                 RegisterCreation(user, now);
@@ -412,12 +424,12 @@ namespace LLM_AI
             list.Add(now);
         }
 
-        private static string LockedMessage(string user, long lockUntilTicks)
+        private static string LockedMessage(string user, long lockUntilTicks, string langKey)
         {
             int minutes = Math.Max(1,
                 (int)Math.Ceiling((lockUntilTicks - DateTime.UtcNow.Ticks) / 600_000_000.0));
-            return "Trop d'essais de code erronés — outil d'enregistrement verrouillé pour "
-                + user + " pendant " + minutes + " minute(s).";
+            return string.Format(CultureInfo.CurrentUICulture,
+                I18n.S("rec.locked", langKey), user, minutes);
         }
 
         /// <summary>Comparaison à temps constant (aucune fuite de timing) —

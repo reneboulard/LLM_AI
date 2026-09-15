@@ -409,6 +409,10 @@ class Handler(BaseHTTPRequestHandler):
             # page l'affiche dans un encadré distinct, même si le modèle
             # embellit sa réponse. Jamais lu par le TTS.
             "notice": resp.get("Notice"),
+            # ⏳ Contenu du bucket affiché AVEC le code : ce que l'usager voit
+            # à l'écran EST la réservation déposée par l'endpoint (aucune
+            # supposition sur le contenu du bucket). Jamais lu par le TTS.
+            "confirm_pending": resp.get("ConfirmPending"),
         })
 
     def handle_show(self, body):
@@ -525,6 +529,15 @@ PAGE_HTML = r"""<!doctype html>
     background: var(--panel2); border: 1px dashed var(--accent);
     border-radius: 8px; font-size: 18px; font-weight: 700;
     letter-spacing: 4px; color: var(--text);
+  }
+  /* ⏳ Contenu du bucket (joint au DTO avec le code) : ligne descriptive de
+     la réservation affichée AVEC le code — ce que l'usager voit à l'écran
+     EST ce que le serveur a déposé. Normal, sous la ligne du code. */
+  .pendingline {
+    display: block; margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--accent);
+    font-size: 13px; font-weight: 400; letter-spacing: 0; line-height: 1.5;
+    color: var(--text);
   }
   /* ⚠️ Notice VÉRIDIQUE du serveur (refus de confirmation) : encadré
      distinct, visible même si le modèle embellit sa réponse. */
@@ -833,6 +846,16 @@ function send(ev) {
             chip.className = "confirmcode";
             chip.textContent = "🔑 Code de confirmation : " + d.confirm_code;
             bubble.appendChild(chip);
+            // ⏳ Contenu du bucket affiché AVEC le code : ce que l'usager
+            // voit à l'écran EST la réservation déposée par le serveur
+            // (titre, série|film, expiration) — aucune supposition sur ce
+            // que le bucket contient. Canal hors bande, jamais lu par le TTS.
+            if (d.confirm_pending) {
+              var pend = document.createElement("div");
+              pend.className = "pendingline";
+              pend.textContent = d.confirm_pending;
+              chip.appendChild(pend);
+            }
           }
           // ⚠️ Notice VÉRIDIQUE (refus de confirmation) — canal déterministe
           // du serveur : affichée TELLE QUELLE, même si le texte du LLM dit

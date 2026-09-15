@@ -262,6 +262,15 @@ namespace LLM_AI
             /// encadré distinct, même si le modèle embellit sa réponse.
             /// Consommée une fois. Null si le tour n'a rien à signaler.</summary>
             public string Notice { get; set; }
+
+            /// <summary>Contenu du bucket affiché AVEC le code (v1.13.24,
+            /// fermeture de la dernière hypothèse de confiance) : ligne
+            /// « ⏳ À confirmer : « titre » (série | film) — expire à HH:mm »
+            /// résolue dans la langue de l'usager (<see cref="I18n"/>). Ce que
+            /// l'usager voit à l'écran EST ce que l'endpoint a déposé — plus
+            /// aucune supposition sur le contenu du bucket. Null si rien en
+            /// attente.</summary>
+            public string ConfirmPending { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -487,8 +496,35 @@ namespace LLM_AI
                 ConfirmCode = RecordingPendingStore.GetFreshCode(user.Name, turnStartTicks),
                 // Notice anti-menteur (hors bande) : le refus de confirmation
                 // s'affiche à l'écran, indépendamment du texte du modèle.
-                Notice = RecordingPendingStore.GetFreshNotice(user.Name, turnStartTicks)
+                Notice = RecordingPendingStore.GetFreshNotice(user.Name, turnStartTicks),
+                // Contenu du bucket affiché AVEC le code (fermeture de la
+                // dernière hypothèse de confiance) : la ligne ci-dessous
+                // décrit CE QUE L'ENDPOINT A DÉPOSÉ dans le bucket, résolu
+                // dans la langue de l'usager — ce que l'usager voit à l'écran
+                // EST la réservation, aucune supposition. Null si rien en
+                // attente (jamais re-servi d'un vieux pending : purge au
+                // passage par DescribePending).
+                ConfirmPending = PendingLine(cfg, ApplicationHost,
+                    RecordingPendingStore.DescribePending(user.Name))
             };
+        }
+
+        /// <summary>Ligne de contenu du bucket (« ⏳ À confirmer : … »),
+        /// résolue dans la langue de l'usager (cascade <see cref="I18n"/>) —
+        /// jointe au DTO à chaque tour où une réservation est en attente,
+        /// SANS le code (il reste dans le store ; le canal du code reste
+        /// <c>ConfirmCode</c>).</summary>
+        private static string PendingLine(PluginConfiguration cfg,
+            IServerApplicationHost host, RecordingPendingStore.PendingView p)
+        {
+            if (p == null) return null;
+            string lang = I18n.ResolveMetaLangKey(cfg, host) ?? I18n.Fr;
+            string kindLabel = string.Equals(p.Kind, "series", StringComparison.OrdinalIgnoreCase)
+                ? I18n.S("rec.kind.series", lang) : I18n.S("rec.kind.movie", lang);
+            string expires = new DateTime(p.ExpiresUtc, DateTimeKind.Utc)
+                .ToLocalTime().ToString("HH:mm", CultureInfo.CurrentUICulture);
+            return string.Format(CultureInfo.CurrentUICulture,
+                I18n.S("rec.pendingline", lang), p.Title, kindLabel, expires);
         }
 
         /// <summary>Usager listé (nom exact, insensible à la casse) —

@@ -249,6 +249,27 @@ namespace LLM_AI
                     ["activate.toast.failed"] = "Échec de l'enregistrement : {0}",
                     ["activate.toast.diskgate"] = "Disque d'enregistrements plein — programmation suspendue : {0}",
                     ["activate.toast.unauthorized"] = "Enregistrement non autorisé pour ce compte : {0}",
+                    // --- Enregistrements à la voix (chat externe, v1.13.23) ---
+                    // Circuit human-in-the-loop à PIN : notices + toasts +
+                    // lignes d'état. Le code lui-même ne passe JAMAIS ici
+                    // (canal hors bande).
+                    ["rec.toast.pending"] = "🤖 À confirmer : « {0} » (code affiché dans l'app)",
+                    ["rec.toast.created"] = "🤖 Enregistrement prévu : « {0} »",
+                    ["rec.locked"] = "Trop d'essais de code erronés — outil d'enregistrement verrouillé pour {0} pendant {1} minute(s).",
+                    ["rec.notice.none"] = "⚠️ Aucun code en attente (ou expiré) — AUCUN enregistrement créé.",
+                    ["rec.notice.locked"] = "⚠️ 3 codes erronés — outil verrouillé, AUCUN enregistrement créé.",
+                    ["rec.notice.wrong"] = "⚠️ Code incorrect ({0}/{1}) — AUCUN enregistrement créé.",
+                    ["rec.pending.none"] = "Aucun enregistrement en attente (ou code expiré) — demandez-le de nouveau.",
+                    ["rec.quota"] = "Limite de {0} enregistrement(s) par jour atteinte pour cet usager.",
+                    ["rec.quota.notice"] = "⚠️ Quota du jour atteint — AUCUN enregistrement créé.",
+                    ["rec.failed"] = "⚠️ Enregistrement non programmé — AUCUN enregistrement créé. Re-demandez l'enregistrement (un nouveau code s'affichera).",
+                    ["rec.ok"] = "✅ Enregistrement programmé : « {0} ».",
+                    ["rec.pendingline"] = "⏳ À confirmer : « {0} » ({1}) — code affiché à l'écran, expire à {2}.",
+                    ["rec.kind.series"] = "série",
+                    ["rec.kind.movie"] = "film",
+                    ["rec.status.none"] = "Aucun enregistrement en attente de confirmation (réservation en attente ≠ enregistrement créé).",
+                    ["rec.status.locked"] = "Outil d'enregistrement verrouillé (trop de codes erronés) — réessayez dans {0} minute(s). Rapporte-le tel quel ; ne suggère pas d'autres essais.",
+                    ["rec.status.pendingnote"] = "Réservation EN ATTENTE du code (≠ enregistrement créé) : le code s'affiche à l'écran de l'app ; l'usager doit le fournir dans son message, jamais toi.",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -285,6 +306,27 @@ namespace LLM_AI
                     ["activate.toast.failed"] = "Recording failed: {0}",
                     ["activate.toast.diskgate"] = "Recordings disk full — scheduling suspended: {0}",
                     ["activate.toast.unauthorized"] = "Recording not allowed for this account: {0}",
+                    // --- Voice recordings (external chat, v1.13.23) ---
+                    // PIN human-in-the-loop circuit: notices + toasts + state
+                    // lines. The PIN itself NEVER goes through here
+                    // (out-of-band channel).
+                    ["rec.toast.pending"] = "🤖 To confirm: \"{0}\" (code shown in the app)",
+                    ["rec.toast.created"] = "🤖 Recording scheduled: \"{0}\"",
+                    ["rec.locked"] = "Too many wrong codes — the recording tool is locked for {0} for {1} minute(s).",
+                    ["rec.notice.none"] = "⚠️ No pending code (or expired) — NO recording created.",
+                    ["rec.notice.locked"] = "⚠️ 3 wrong codes — tool locked, NO recording created.",
+                    ["rec.notice.wrong"] = "⚠️ Wrong code ({0}/{1}) — NO recording created.",
+                    ["rec.pending.none"] = "No recording awaiting confirmation (or code expired) — ask for it again.",
+                    ["rec.quota"] = "Per-day limit of {0} recording(s) reached for this user.",
+                    ["rec.quota.notice"] = "⚠️ Daily quota reached — NO recording created.",
+                    ["rec.failed"] = "⚠️ Recording not scheduled — NO recording created. Ask for the recording again (a new code will appear).",
+                    ["rec.ok"] = "✅ Recording scheduled: \"{0}\".",
+                    ["rec.pendingline"] = "⏳ Awaiting confirmation: \"{0}\" ({1}) — code shown on screen, expires at {2}.",
+                    ["rec.kind.series"] = "series",
+                    ["rec.kind.movie"] = "movie",
+                    ["rec.status.none"] = "No recording awaiting confirmation (a pending reservation is not a created recording).",
+                    ["rec.status.locked"] = "The recording tool is locked (too many wrong codes) — try again in {0} minute(s). Report it as-is; do not suggest further attempts.",
+                    ["rec.status.pendingnote"] = "Reservation AWAITING the code (not a created recording): the code is shown on the app's screen; the user must provide it in their message, never you.",
                     ["task.category"] = "LLM AI",
                 },
             };

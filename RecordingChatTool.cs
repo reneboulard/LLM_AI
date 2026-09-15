@@ -170,13 +170,15 @@ namespace LLM_AI
 
             string pin, error;
             if (!RecordingPendingStore.TryReserve(_user.Name, programId,
-                    title, kind, postPadding, out pin, out error))
+                    title, kind, postPadding, out pin, out error, LangKey()))
                 return Json(new { error });   // verrou (message prêt à rapporter)
 
             // Toast à l'écran du client : toute la famille voit la demande.
             string mode = string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
                 ? "tous les nouveaux épisodes" : "à l'heure prévue";
-            await ToastAsync(_sessions, _user, "🤖 À confirmer : « " + title + " » (code affiché dans l'app)", ct).ConfigureAwait(false);
+            await ToastAsync(_sessions, _user, string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                I18n.S("rec.toast.pending", LangKey()), title), ct).ConfigureAwait(false);
 
             _logger.Info("[LLM_AI] [CHAT-EXT] record_program record — usager {0}, « {1} » (programId={2}, tampon={3} min).",
                 _user.Name, title, programId, postPadding);
@@ -211,7 +213,7 @@ namespace LLM_AI
 
             RecordingPendingStore.Pending pending;
             string error;
-            if (!RecordingPendingStore.TryConfirm(_user.Name, pin.Trim(), out pending, out error))
+            if (!RecordingPendingStore.TryConfirm(_user.Name, pin.Trim(), out pending, out error, LangKey()))
             {
                 // Trace de chaque refus (audit des « petits menteurs » : la
                 // trace prouve qu'AUCUN enregistrement n'a été créé à ce tour).
@@ -229,10 +231,11 @@ namespace LLM_AI
 
             // Quota dur réservé AVANT l'effet (remboursé si la création échoue).
             if (!RecordingPendingStore.TryConsumeCreation(_user.Name,
-                    _cfg.ExternalChatRecordingMaxPerDay, out error))
+                    _cfg.ExternalChatRecordingMaxPerDay, out error, LangKey()))
             {
                 // Le pending est consommé (code usagé) : re-réserver est nécessaire.
-                RecordingPendingStore.SetTurnNotice(_user.Name, "⚠️ Quota du jour atteint — AUCUN enregistrement créé.");
+                RecordingPendingStore.SetTurnNotice(_user.Name,
+                    I18n.S("rec.quota.notice", LangKey()));
                 return Json(new { error });
             }
 
@@ -253,13 +256,16 @@ namespace LLM_AI
             if (outcome != AutoProgrammer.OneOutcome.Created)
             {
                 RecordingPendingStore.RefundCreation(_user.Name);  // pas un effet réel
+                // Notice hors bande : affichée à l'écran de l'app — langue de l'usager.
                 RecordingPendingStore.SetTurnNotice(_user.Name,
-                    "⚠️ Enregistrement non programmé — AUCUN enregistrement créé.");
+                    I18n.S("rec.failed", LangKey()));
                 return Json(new { error = "Enregistrement non programmé (" + outcome + "). "
                     + "Rapportez le motif honnêtement et proposez de re-demander l'enregistrement." });
             }
 
-            await ToastAsync(_sessions, _user, "🤖 Enregistrement prévu : « " + pending.Title + " »", ct).ConfigureAwait(false);
+            await ToastAsync(_sessions, _user, string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                I18n.S("rec.toast.created", LangKey()), pending.Title), ct).ConfigureAwait(false);
             _logger.Info("[LLM_AI] [CHAT-EXT] record_program confirm — usager {0}, timer créé pour « {1} ».",
                 _user.Name, pending.Title);
             return Json(new { ok = true, command = "confirm",
@@ -304,9 +310,13 @@ namespace LLM_AI
 
             var tool = new RecordingChatTool(cfg, user, liveTv, library, host, sessions, logger);
 
+            // Libellés du circuit dans la langue de l'usager (les réponses
+            // composées ci-dessous vont DIRECTEMENT à l'écran de l'app).
+            string lang = I18n.ResolveMetaLangKey(cfg, host) ?? I18n.Fr;
+
             RecordingPendingStore.Pending pending;
             string error;
-            if (!RecordingPendingStore.TryConfirm(user.Name, pin, out pending, out error))
+            if (!RecordingPendingStore.TryConfirm(user.Name, pin, out pending, out error, lang))
             {
                 // Le store a posé sa notice VÉRIDIQUE (compteur d'essais,
                 // verrou, expiration) — elle EST la réponse, indépendamment
@@ -318,11 +328,11 @@ namespace LLM_AI
             }
 
             if (!RecordingPendingStore.TryConsumeCreation(user.Name,
-                    cfg.ExternalChatRecordingMaxPerDay, out error))
+                    cfg.ExternalChatRecordingMaxPerDay, out error, lang))
             {
-                RecordingPendingStore.SetTurnNotice(user.Name,
-                    "⚠️ Quota du jour atteint — AUCUN enregistrement créé.");
-                return "⚠️ Quota du jour atteint — AUCUN enregistrement créé.";
+                string quotaNotice = I18n.S("rec.quota.notice", lang);
+                RecordingPendingStore.SetTurnNotice(user.Name, quotaNotice);
+                return quotaNotice;
             }
 
             var programIds = new HashSet<string>();
@@ -343,15 +353,18 @@ namespace LLM_AI
                 RecordingPendingStore.RefundCreation(user.Name);   // pas un effet réel
                 logger.Info("[LLM_AI] [CHAT-EXT] record_program confirm intercepté (échec {0}) — usager {1}, « {2} ».",
                     outcome, user.Name, pending.Title);
-                return "⚠️ Enregistrement non programmé — AUCUN enregistrement créé. "
-                    + "Re-demandez l'enregistrement (un nouveau code s'affichera).";
+                return I18n.S("rec.failed", lang);
             }
 
-            await ToastAsync(sessions, user,
-                "🤖 Enregistrement prévu : « " + pending.Title + " »", ct).ConfigureAwait(false);
+            string createdToast = string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                I18n.S("rec.toast.created", lang), pending.Title);
+            await ToastAsync(sessions, user, createdToast, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [CHAT-EXT] record_program confirm intercepté — usager {0}, timer créé pour « {1} ».",
                 user.Name, pending.Title);
-            return "✅ Enregistrement programmé : « " + pending.Title + " ».";
+            return string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                I18n.S("rec.ok", lang), pending.Title);
         }
 
         /// <summary>Un UNIQUE code à 4 chiffres isolé dans un message court
@@ -369,23 +382,33 @@ namespace LLM_AI
             return matches.Count == 1 ? matches[0].Value : null;
         }
 
+        /// <summary>Langue de l'usager (libellés du circuit) — résolution
+        /// serveur : <c>ResponseLanguage</c> explicite, sinon langue d'affichage
+        /// Emby, sinon legacy, sinon anglais (cascade <see cref="I18n"/>).
+        /// Ne lève jamais.</summary>
+        private string LangKey()
+        {
+            try { return I18n.ResolveMetaLangKey(_cfg, _host) ?? I18n.Fr; }
+            catch { return I18n.Fr; }
+        }
+
         // ------------------------------------------------------------------
         //  status — lecture seule de l'état de la réservation (JAMAIS le code)
         // ------------------------------------------------------------------
 
         private string StatusAction()
         {
+            string lang = LangKey();
             int lockLeft = RecordingPendingStore.LockMinutesLeft(_user.Name);
             if (lockLeft > 0)
                 return Json(new { pending = false, verrouille = true,
-                    note = "Outil d'enregistrement verrouillé (trop de codes erronés) — réessayez dans "
-                        + lockLeft + " minute(s). Rapporte-le tel quel ; ne suggère pas d'autres essais." });
+                    note = string.Format(System.Globalization.CultureInfo.CurrentUICulture,
+                        I18n.S("rec.status.locked", lang), lockLeft) });
 
             var p = RecordingPendingStore.DescribePending(_user.Name);
             if (p == null)
                 return Json(new { pending = false,
-                    note = "Aucun enregistrement en attente de confirmation. (Ne confonds pas : " +
-                           "réservation en attente ≠ enregistrement créé.)" });
+                    note = I18n.S("rec.status.none", lang) });
 
             DateTime expires = new DateTime(p.ExpiresUtc, DateTimeKind.Utc).ToLocalTime();
             return Json(new {
@@ -396,8 +419,7 @@ namespace LLM_AI
                 code_envoye_ecran = true,
                 expire_a = expires.ToString("HH:mm"),
                 essais_ratees = p.FailedAttempts + "/" + RecordingPendingStore.MaxFailedAttempts,
-                note = "Réservation EN ATTENTE du code (≠ enregistrement créé) : le code s'affiche à " +
-                       "l'écran de l'app ; l'usager doit le fournir dans son message, jamais toi." });
+                note = I18n.S("rec.status.pendingnote", lang) });
         }
 
         // ------------------------------------------------------------------

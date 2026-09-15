@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.24.0] — 2026-09-15
+
+### Added (FR)
+- **Contenu du bucket affiché AVEC le code.** Fermeture de la dernière
+  hypothèse de confiance du circuit human-in-the-loop : à chaque tour où
+  une réservation est en attente, l'endpoint joint au DTO (hors bande, sans
+  le code) la ligne « ⏳ À confirmer : « titre » (série | film) — code
+  affiché à l'écran, expire à HH:mm ». Ce que l'usager voit à l'écran EST
+  la réservation déposée par le serveur — aucune supposition sur le contenu
+  du bucket (ni sur ce que le modèle raconte).
+- **Libellés du circuit dans la langue de l'usager.** Tous les textes
+  utilisateur du circuit d'enregistrement (notices d'encadré rouge, toasts
+  à l'écran, réponses composées par l'interception du serveur : code
+  erroné, verrou, quota, création ratée, confirmation réussie) sont
+  résolus par la cascade de localisation existante (`I18n`) :
+  `ResponseLanguage` explicite → langue d'affichage Emby → legacy → anglais.
+
+### Added (EN)
+- **Bucket content shown alongside the code.** Closes the last trust
+  assumption of the human-in-the-loop circuit: on every turn with a
+  pending reservation, the endpoint attaches the line "⏳ Awaiting
+  confirmation: "title" (series | movie) — code shown on screen, expires
+  at HH:mm" to the DTO (out-of-band, without the PIN). What the user sees
+  on screen IS the reservation the server deposited — no assumption about
+  the bucket content or the model's story.
+- **Circuit labels in the user's language.** All user-facing texts of the
+  recording circuit (red-box notices, on-screen toasts, replies composed
+  by the server-side interception: wrong code, lockout, quota, failed
+  creation, successful confirmation) resolve through the existing
+  `I18n` cascade: explicit `ResponseLanguage` → Emby display language →
+  legacy → English.
+
 ## [1.13.23.0] — 2026-09-15
 
 ### Added (FR)
