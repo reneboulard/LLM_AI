@@ -10,6 +10,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.21.8] — 2026-09-15
+
+### Added (FR)
+- **Documentation de l'app compagnon revue et doublée.**
+  [`chat-external/README.md`](chat-external/README.md) réécrit pour un
+  nouvel usager : conversation naturelle par la voix 🎤 🔊 mise en valeur,
+  mêmes identifiants qu'Emby (comptes avec mot de passe uniquement),
+  mêmes droits que la policy Emby (bibliothèques + contrôle parental),
+  anti-spam (5/min, 150/jour par défaut), démarrage automatique par OS
+  (systemd, Planificateur de tâches Windows, launchd macOS), HTTPS en
+  deux familles (TLS dans l'app ou TLS dans un reverse proxy),
+  « pire scénario » du LLM bridé documenté avec ses garde-fous, et
+  tableau FAQ/Dépannage.
+- **Doc anglaise** : [`chat-external/README-EN.md`](chat-external/README-EN.md),
+  miroir de la version française ; renvois croisés depuis les deux
+  README racine.
+- **App compagnon dans le paquet** : `package.sh` embarque désormais
+  `chat-external/` (script Python + ses deux README) dans le ZIP de
+  release.
+
+### Changed (FR)
+- **Langue de la voix = langue du navigateur.** La dictée 🎤 et la
+  synthèse 🔊 de l'app compagnon utilisent la langue configurée du
+  navigateur de l'usager (`navigator.language`, repli `fr-FR`) au lieu
+  d'un `fr-FR` forcé.
+
+### Added (EN)
+- **Companion-app documentation reworked and doubled.**
+  [`chat-external/README.md`](chat-external/README.md) rewritten for a
+  new user: natural voice conversation 🎤 🔊 up front, same credentials
+  as Emby (password-bearing accounts only), same rights as the user's
+  Emby policy (libraries + parental control), anti-spam (5/min, 150/day
+  defaults), per-OS autostart (systemd, Windows Task Scheduler,
+  launchd), HTTPS in two families (TLS in the app or TLS in a reverse
+  proxy), the throttled-LLM worst case documented with its safeguards,
+  and a troubleshooting FAQ table.
+- **English doc**: [`chat-external/README-EN.md`](chat-external/README-EN.md),
+  mirroring the French one; cross-references from both root READMEs.
+- **Companion app in the package**: `package.sh` now stages
+  `chat-external/` (Python script + its FR/EN docs) in the release ZIP.
+
+### Changed (EN)
+- **Voice language = browser language.** The companion app's speech-to-
+  text 🎤 and text-to-speech 🔊 now follow the user's browser language
+  (`navigator.language`, fallback `fr-FR`) instead of a hard-coded
+  `fr-FR`.
+
+---
+
 ## [1.13.21.7] — 2026-09-14
 
 ### Fixed (FR)

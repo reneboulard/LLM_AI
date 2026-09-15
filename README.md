@@ -726,7 +726,8 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   usager résolu). L'app embarque aussi le tool **`client_command`** (commandes non
   destructives sur le client actif de l'usager : projection, lecture/pause/arrêt,
   volume) et sa page offre une **dictée vocale 🎤** (Chrome/Edge — HTTPS requis hors
-  localhost). Voir [`chat-external/README.md`](chat-external/README.md).
+  localhost). Voir [`chat-external/README.md`](chat-external/README.md)
+  (version anglaise : [`chat-external/README-EN.md`](chat-external/README-EN.md)).
 
 ### Mémoire réflexive (expérimental)
 

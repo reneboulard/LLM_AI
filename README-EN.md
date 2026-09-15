@@ -702,7 +702,8 @@ modify another plugin's config). Full details:
   ships the **`client_command`** tool (non-destructive commands on the user's active
   client: projection, play/pause/stop, volume) and its page offers **voice dictation
   🎤** (Chrome/Edge — HTTPS required outside localhost). See
-  [`chat-external/README.md`](chat-external/README.md).
+  [`chat-external/README-EN.md`](chat-external/README-EN.md)
+  (French: [`chat-external/README.md`](chat-external/README.md)).
 
 ### Reflective memory (experimental)
 

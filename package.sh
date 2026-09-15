@@ -9,6 +9,7 @@
 #   - LLM_AI.dll                 (la DLL, toutes les ressources web embarquées)
 #   - install.sh                 (script d'installation pour l'utilisateur final)
 #   - README.md / README-EN.md (documentation FR/EN)
+#   - chat-external/             (app compagnon : script Python + sa doc FR/EN)
 #
 # La version est lue depuis <AssemblyVersion> dans LLM_AI.csproj.
 #
@@ -56,6 +57,10 @@ install -m 0644 README.md       "${STAGE}/README.md"
 install -m 0644 README-EN.md    "${STAGE}/README-EN.md"
 install -m 0644 LICENSE         "${STAGE}/LICENSE"
 install -m 0644 CHANGELOG.md    "${STAGE}/CHANGELOG.md"
+mkdir -p "${STAGE}/chat-external"
+install -m 0644 chat-external/chat_external.py "${STAGE}/chat-external/chat_external.py"
+install -m 0644 chat-external/README.md        "${STAGE}/chat-external/README.md"
+install -m 0644 chat-external/README-EN.md     "${STAGE}/chat-external/README-EN.md"
 
 # --- Zip ----------------------------------------------------------------
 ZIP="${DIST}/${PLUGIN_NAME}-${VERSION}.zip"

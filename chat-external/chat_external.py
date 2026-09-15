@@ -544,6 +544,12 @@ var user = "", session = "", chatHistory = [], busy = false;
 
 // -- utilitaires ------------------------------------------------------------
 function $(id) { return document.getElementById(id); }
+// Langue de la voix (dictée 🎤 + synthèse 🔊) : celle du navigateur de
+// l'usager (normalement alignée avec SA langue), repli fr-FR. Ex.
+// « fr-CA », « en-US » ; le navigateur ne reconnaît/parle que dans une
+// langue disponible sur l'appareil.
+var SPEECH_LANG = (navigator.languages && navigator.languages[0])
+                  || navigator.language || "fr-FR";
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;");
@@ -694,7 +700,7 @@ function speakText(raw, btn) {
     if (speakingBtn !== btn) return;            // annulé entre-temps
     if (i >= parts.length) { stopSpeak(); return; }
     var u = new SpeechSynthesisUtterance(parts[i++]);
-    u.lang = "fr-FR"; u.rate = 1.0; u.pitch = 1.0;
+    u.lang = SPEECH_LANG; u.rate = 1.0; u.pitch = 1.0;
     u.onend = next;
     u.onerror = function () { stopSpeak(); };
     window.speechSynthesis.speak(u);
@@ -819,7 +825,7 @@ function setupVoice() {
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { $("mic").style.display = "none"; return; }
   recog = new SR();
-  recog.lang = "fr-FR";
+  recog.lang = SPEECH_LANG;
   recog.interimResults = false;
   recog.maxAlternatives = 1;
   recog.onresult = function (ev) {
