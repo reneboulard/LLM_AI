@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.10.1 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.24.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -720,13 +720,25 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   uniquement sans X-Forwarded-For** (l'app compagnon appelle Emby directement), secret dédié
   `ExternalChatSecret` (comparaison à temps constant, généré/copié depuis la page de
   config), liste blanche `ExternalChatUsers` (noms d'usagers Emby — les administrateurs
-  sont toujours refusés). Lecture seule (aucun tool d'action, aucun audit) ; tout
+  sont toujours refusés). Lecture seule sur la médiathèque (aucun tool
+  d'action sur celle-ci, aucun audit) ; tout
   contenu est filtré par la **policy parentale de l'usager résolu** et la navigation ne
   cible que SA session. La mémoire de conversation réutilise `chat_memory.json` (clé =
   usager résolu). L'app embarque aussi le tool **`client_command`** (commandes non
   destructives sur le client actif de l'usager : projection, lecture/pause/arrêt,
-  volume) et sa page offre une **dictée vocale 🎤** (Chrome/Edge — HTTPS requis hors
-  localhost). Voir [`chat-external/README.md`](chat-external/README.md)
+  volume, état de lecture `playback_status` — position, durée restante, pistes
+  actives, sauts en avant/arrière `seek` — approximatifs, la position connue du
+  serveur a quelques secondes de retard, sous-titres on/off `set_subtitle_track` et
+  changement de piste sonore `set_audio_track` — off, langue ou n° de piste, toast
+  court uniquement après une bascule de piste réussie) et le tool
+  **`record_program`** (enregistrement DVR à la voix — réservation sans effet,
+  création du timer à la confirmation par le code à 4 chiffres généré serveur et
+  livré hors bande, verrou 15 min après 3 codes erronés, quota/jour compté à
+  l'effet seulement ; opt-in `ExternalChatRecordingsEnabled` + liste dédiée
+  `ExternalChatRecordingUsers` + quota `ExternalChatRecordingMaxPerDay`, défaut
+  3 ; la ligne « ⏳ À confirmer » du bucket est affichée avec le code dans la
+  langue de l'usager, v1.13.23–24). Sa page offre une **dictée vocale 🎤** (Chrome/Edge
+  — HTTPS requis hors localhost). Voir [`chat-external/README.md`](chat-external/README.md)
   (version anglaise : [`chat-external/README-EN.md`](chat-external/README-EN.md)).
 
 ### Mémoire réflexive (expérimental)
@@ -833,7 +845,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 
 | `Name` | Action(s) / Description |
 |---|---|
-| `get_emby_info` | **Interrogation Emby** — actions : `summary` (résumé bibliothèque), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (EPG séries à venir), `epg_movies` (EPG films à venir), `epg_tonight` (EPG dans la fenêtre « ce soir », `HasAired=false`, marque `is_scheduled`, déduplication par titre « meilleure diffusion » — l'inédit l'emporte sur la rediffusion), `scheduled` / `planning` (timers programmés), `find` (recherche unifiée bibliothèque + EPG — terme libre, types, personne, genres, **classification** normalisée, vus/favoris par usager, `source` `library|epg|both` avec dédup titre — la bibliothèque gagne). Applique whitelists, flags, drop list. |
+| `get_emby_info` | **Interrogation Emby** — actions : `summary` (résumé bibliothèque), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (EPG séries à venir), `epg_movies` (EPG films à venir), `epg_tonight` (EPG dans la fenêtre « ce soir », `HasAired=false`, marque `is_scheduled`, déduplication par titre « meilleure diffusion » — l'inédit l'emporte sur la rediffusion), `scheduled` / `planning` (timers programmés), `recordings` (enregistrements DVR **complétés** visibles à l'usager demandeur — droit natif requis, plus la liste dédiée du chat externe si l'appel vient de là ; v1.13.23), `find` (recherche unifiée bibliothèque + EPG — terme libre, types, personne, genres, **classification** normalisée, vus/favoris par usager, `source` `library|epg|both` avec dédup titre — la bibliothèque gagne). Applique whitelists, flags, drop list. |
 | `tmdb_lookup` | Recherche / détails TMDB (note, poster, résumé, casting) via `TmdbApiKey`. |
 | `tvdb_search` | Recherche TVDB (séries) via `TvdbApiKey`. |
 | `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |

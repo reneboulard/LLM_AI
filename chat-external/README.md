@@ -43,7 +43,13 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   `client_command`, agir sur le client Emby actif de l'usager — projeter la
   fiche, **lancer la lecture d'un titre**, mettre en pause / reprendre /
   arrêter, régler le **volume**, couper / rétablir le **son**, revenir à
-  l'**accueil**. Uniquement non destructeur, uniquement sur SON client ;
+  l'**accueil**, lire **l'état de lecture** (`playback_status` : position,
+  durée restante, pistes audio et sous-titres actives), **sauter en avant
+  ou en arrière dans la vidéo** (`seek` — jusqu'à ±30 min, borné au
+  programme en cours), **activer ou couper les sous-titres** et **changer
+  de piste sonore** (`set_subtitle_track` / `set_audio_track` — « off »,
+  langue 2-3 lettres ou n° de piste). Uniquement non destructeur,
+  uniquement sur SON client ;
 - **Contrôle du visionnement en cours** : pendant une lecture, l'agent peut
   aussi lire **où en est la lecture** (« où en sommes-nous ? » — position,
   durée restante, sous-titre et piste audio actives), **sauter dans le
@@ -60,7 +66,12 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   **confirmation humaine obligatoire à deux phases** :
   1. « enregistre ce programme » → l'agent **réserve** ; un **code à
      4 chiffres** s'affiche dans un encadré du chat (🔑) — le LLM ne le
-     connaît pas et ne peut pas se confirmer lui-même ;
+     connaît pas et ne peut pas se confirmer lui-même. Tant que la
+     réservation est en attente, l'encadré porte aussi le **contenu du
+     bucket** (« ⏳ À confirmer : « titre » (série|film) — expire à HH:mm »,
+     ligne composée par le serveur dans la langue de l'usager : ce que
+     l'usager voit à l'écran EST la réservation déposée — mais jamais lue
+     par la synthèse vocale) ;
   2. l'usager **tape le code** dans son message → seul ce code exact crée
      l'enregistrement (visible dans la DVR Emby, avec un toast à l'écran).
   Une réservation expire après **5 minutes** ; **3 codes erronés
@@ -78,7 +89,10 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   L'agent peut aussi répondre aux questions d'état via `status`
   (lecture seule : réservation en attente, heure d'expiration, essais
   ratés — **jamais le code, jamais le quota** ; une réservation en
-  attente n'est pas un enregistrement créé).
+  attente n'est pas un enregistrement créé), et lister les
+  enregistrements DVR **complétés** visibles à l'usager (sous-action
+  `recordings` de `get_emby_info` — droit natif + présence dans la
+  liste dédiée tous deux requis, v1.13.23).
 - **Dictée vocale 🎤** et **lecture à voix haute 🔊** — voir
   [Conversation par la voix](#conversation-par-la-voix-🎤-🔊) ;
 - **Anti-spam intégré côté plugin** : chaque usager est plafonné (5 tours
@@ -87,11 +101,13 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   saturé, même si la page est ouverte sur plusieurs appareils.
 
 Tout le contenu reste filtré par la **policy parentale** de l'usager côté
-plugin. Côté serveur, le chat est en **lecture seule** (aucun tool
-d'action sur la médiathèque, aucun audit) : les seules actions possibles
-sont piloter le **client Emby actif de l'usager** (projection de fiche,
-lecture / pause / volume) — jamais de modification du serveur, jamais
-rien sur un autre appareil.
+plugin. Côté serveur, le chat reste en **lecture seule** sur la
+médiathèque (aucun tool d'action sur celle-ci, aucun audit) : les seules
+actions possibles sont piloter le **client Emby actif de l'usager**
+(projection de fiche, lecture / pause / volume, sauts et pistes) et,
+**seulement si l'admin active l'opt-in**, programmer un enregistrement
+DVR — derrière sa confirmation à code (voir ci-dessus) — jamais de
+modification de la médiathèque, jamais rien sur un autre appareil.
 
 ## Installation
 
@@ -361,25 +377,32 @@ launchctl load ~/Library/LaunchAgents/llmai-chat.plist
   150/jour — réglables dans la section « Chat externe » de la page de
   configuration du plugin) contre le spam du LLM.
 - **Lecture seule côté plugin** : une fuite du secret ne donne aucune
-  capacité d'écriture sur le serveur — les seules actions possibles sont
-  de piloter le client Emby actif de l'usager (projection de fiche,
-  lecture / pause / volume).
+  capacité d'écriture sur la médiathèque — les seules actions possibles
+  sont de piloter le client Emby actif de l'usager (projection de fiche,
+  lecture / pause / volume, sauts et pistes) et, **seulement si l'admin
+  active l'opt-in enregistrements**, de programmer un timer DVR —
+  derrière la confirmation à code à deux phases (le code n'est jamais
+  visible du LLM ni de la page sans login).
 - **Le LLM est bridé, par conception.** Le pire scénario possible est
-  qu'il se trompe et **lance la mauvaise vidéo**, ou mette en pause au
-  mauvais moment — sur le client actif de l'usager qui parle, et rien
-  d'autre :
-  - **allowlist stricte** des commandes (`display_item`, `play_item`,
+  qu'il se trompe et **lance la mauvaise vidéo**, mette en pause au
+  mauvais moment ou **saute au mauvais endroit** — sur le client actif
+  de l'usager qui parle, et rien d'autre (les enregistrements restent
+  derrière la confirmation à code) :
+  - **allowlist stricte** des commandes (`playback_status`, `seek`,
+    `set_subtitle_track`, `set_audio_track`, `display_item`, `play_item`,
     `go_home`, `pause`, `unpause`, `stop`, `set_volume`, `mute`,
     `unmute`) — toute autre commande est rejetée **fail-closed** avant
     tout effet, et certains envois sont exclus **pour toujours**
     (`SendKey` : poids arbitraire, `TakeScreenshot` : intimité,
-    `Restart`/`Shutdown` : serveur, `Seek`) ;
+    `Restart`/`Shutdown`/`Identify` : serveur) ;
   - **session bornée** : seuls les appareils de l'usager connecté sont
     ciblables — jamais le client d'un autre usager, jamais le serveur ;
   - `display_item` et `play_item` passent la **policy parentale** de
     l'usager (fail-closed) ;
-  - **aucune écriture** sur le serveur : pas de modification de
-    médiathèque, pas de tool d'action, pas d'audit.
+  - **aucune écriture** sur la médiathèque : pas de modification
+    d'items, pas de tool d'action, pas d'audit. La seule écriture
+    possible est l'opt-in enregistrements (timer DVR), toujours derrière
+    la confirmation à code traitée par le serveur.
 - La page peut être servie en HTTPS (voir la section HTTPS ci-dessus —
   recommandé, et requis pour la dictée hors localhost) ou en HTTP simple,
   comme Emby lui-même sur le LAN.

@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.10.1 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.24.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -696,12 +696,24 @@ modify another plugin's config). Full details:
   without X-Forwarded-For** (the companion app calls Emby directly), dedicated secret
   `ExternalChatSecret` (constant-time compare, generated/copied from the config page),
   user allowlist `ExternalChatUsers` (Emby usernames — administrators are always
-  refused). Read-only (no action tools, no audit); all content is filtered by the
+  refused). Read-only over the media library (no action tools over it, no
+  audit); all content is filtered by the
   resolved user's **parental policy** and navigation only targets THEIR session.
   Conversation memory reuses `chat_memory.json` (key = resolved user). The app also
   ships the **`client_command`** tool (non-destructive commands on the user's active
-  client: projection, play/pause/stop, volume) and its page offers **voice dictation
-  🎤** (Chrome/Edge — HTTPS required outside localhost). See
+  client: projection, play/pause/stop, volume, playback status `playback_status` —
+  position, remaining time, active tracks, time skips `seek` — approximate, the
+  server-known position lags a few seconds, subtitle on/off `set_subtitle_track`
+  and audio track change `set_audio_track` — off, language, or track index; short
+  toast only after a successful track switch) and the **`record_program`** tool
+  (voice DVR recordings — reservation with no effect, timer created on PIN
+  confirmation with the 4-digit code generated server-side and delivered
+  out-of-band, 15-min lockout after 3 wrong codes, per-day quota counted at
+  effect only; opt-in `ExternalChatRecordingsEnabled` + dedicated list
+  `ExternalChatRecordingUsers` + quota `ExternalChatRecordingMaxPerDay`,
+  default 3; the "⏳ To confirm" bucket line is displayed with the code in
+  the user's language, v1.13.23–24). Its page offers **voice dictation 🎤** (Chrome/Edge —
+  HTTPS required outside localhost). See
   [`chat-external/README-EN.md`](chat-external/README-EN.md)
   (French: [`chat-external/README.md`](chat-external/README.md)).
 
@@ -808,7 +820,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 
 | `Name` | Action(s) / Description |
 |---|---|
-| `get_emby_info` | **Emby queries** — actions: `summary` (library summary), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (upcoming series EPG), `epg_movies` (upcoming movies EPG), `epg_tonight` (EPG within the "tonight" window, `HasAired=false`, marks `is_scheduled`, "best airing" per-title dedup — the premiere wins over the rerun), `scheduled` / `planning` (programmed timers), `find` (unified library + EPG search — free-text term, types, person, genres, **classification** normalized, per-user watched/favorites, `source` `library|epg|both` with title dedup — library wins). Applies whitelists, flags, drop list. |
+| `get_emby_info` | **Emby queries** — actions: `summary` (library summary), `library` (items), `global_search`, `item_details`, `item_persons`, `person`, `epg_series` (upcoming series EPG), `epg_movies` (upcoming movies EPG), `epg_tonight` (EPG within the "tonight" window, `HasAired=false`, marks `is_scheduled`, "best airing" per-title dedup — the premiere wins over the rerun), `scheduled` / `planning` (programmed timers), `recordings` (**completed** DVR recordings visible to the requesting user — native right required, plus the external-chat dedicated list when the call comes from there; v1.13.23), `find` (unified library + EPG search — free-text term, types, person, genres, **classification** normalized, per-user watched/favorites, `source` `library|epg|both` with title dedup — library wins). Applies whitelists, flags, drop list. |
 | `tmdb_lookup` | TMDB search / details (rating, poster, overview, cast) via `TmdbApiKey`. |
 | `tvdb_search` | TVDB search (series) via `TvdbApiKey`. |
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |

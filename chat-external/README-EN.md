@@ -60,7 +60,11 @@ nothing to compile, nothing to install with pip, no web server
   **mandatory two-phase human confirmation**:
   1. "record this program" → the agent **reserves** it; a **4-digit PIN**
      appears in a boxed chip in the chat (🔑) — the LLM never sees it and
-     cannot confirm itself;
+     cannot confirm itself. While the reservation is pending, the box
+     also carries the **bucket's content** ("⏳ To confirm: « title »
+     (series|movie) — expires at HH:mm", a line composed by the server in
+     the user's language: what the user sees on screen IS the reservation
+     the server deposited — but it is never read by text-to-speech);
   2. the user **types the PIN** into their message → only that exact PIN
      creates the recording (visible in the Emby DVR, with an on-screen
      toast).
@@ -78,7 +82,10 @@ nothing to compile, nothing to install with pip, no web server
   regardless of the model's text. The agent can also answer state
   questions via `status` (read-only: pending reservation, expiry time,
   failed attempts — **never the PIN, never the quota**; a pending
-  reservation is not a created recording).
+  reservation is not a created recording), and list the user's visible
+  **completed** DVR recordings (`recordings` sub-action of
+  `get_emby_info` — native right + presence in the dedicated list both
+  required, v1.13.23).
 - **Speech-to-text 🎤** and **text-to-speech 🔊** — see
   [Voice conversation](#voice-conversation-🎤-🔊);
 - **Built-in anti-spam on the plugin side**: each user is rate-limited
@@ -87,11 +94,13 @@ nothing to compile, nothing to install with pip, no web server
   saturated, even if the page is open on several devices.
 
 All content stays filtered by the user's **parental policy** on the
-plugin side. Server-side, the chat is **read-only** (no action tools over
-the media library, no audit): the only possible actions are driving the
-user's **active Emby client** (detail-page projection, play / pause /
-volume) — never any server modification, never anything on another
-device.
+plugin side. Server-side, the chat stays **read-only** over the media
+library (no action tools over it, no audit): the only possible actions
+are driving the user's **active Emby client** (detail-page projection,
+play / pause / volume, skips and tracks) and, **only if the admin turns
+on the recordings opt-in**, scheduling a DVR recording — behind its
+code confirmation (see above) — never any media-library modification,
+never anything on another device.
 
 ## Installation
 
@@ -351,25 +360,31 @@ launchctl load ~/Library/LaunchAgents/llmai-chat.plist
   turns/min, 150/day — adjustable in the "External chat" section of the
   plugin configuration page) against LLM spam.
 - **Read-only** on the plugin side: a leaked secret grants no write
-  capability on the server — the only possible actions are driving the
-  user's active Emby client (detail-page projection, play / pause /
-  volume).
+  capability over the media library — the only possible actions are
+  driving the user's active Emby client (detail-page projection, play /
+  pause / volume, skips and tracks) and, **only if the admin turns on
+  the recordings opt-in**, scheduling a DVR recording — behind the
+  two-phase code confirmation (the code is never visible to the LLM, nor
+  to the page without login).
 - **The LLM is throttled, by design.** The worst possible scenario is
-  that it makes a mistake and **starts the wrong video**, or pauses at
-  the wrong moment — on the active client of the user who is speaking,
-  and nothing else:
-  - **strict allowlist** of commands (`display_item`, `play_item`,
+  that it makes a mistake and **starts the wrong video**, pauses at the
+  wrong moment or **skips to the wrong spot** — on the active client of
+  the user who is speaking, and nothing else (recordings stay behind the
+  code confirmation):
+  - **strict allowlist** of commands (`playback_status`, `seek`,
+    `set_subtitle_track`, `set_audio_track`, `display_item`, `play_item`,
     `go_home`, `pause`, `unpause`, `stop`, `set_volume`, `mute`,
     `unmute`) — anything else is rejected **fail-closed** before any
     effect, and some sends are excluded **forever** (`SendKey`:
-    arbitrary keystrokes, `TakeScreenshot`: privacy, `Restart`/`Shutdown`:
-    server, `Seek`);
+    arbitrary keystrokes, `TakeScreenshot`: privacy,
+    `Restart`/`Shutdown`/`Identify`: server);
   - **bounded session**: only the signed-in user's own devices are
     targetable — never another user's client, never the server;
   - `display_item` and `play_item` pass the user's **parental policy**
     (fail-closed);
-  - **no server writes**: no media-library modification, no action
-    tools, no audit.
+  - **no media-library writes**: no item modification, no action
+    tools, no audit. The only possible write is the recordings opt-in
+    (DVR timer), always behind the server-side code confirmation.
 - The page can be served over HTTPS (see the HTTPS section above —
   recommended, and required for dictation off localhost) or plain HTTP,
   like Emby itself on the LAN.
