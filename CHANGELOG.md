@@ -10,6 +10,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.23.0] — 2026-09-15
+
+### Added (FR)
+- **Enregistrements à la voix (chat externe), human-in-the-loop à code.**
+  Nouvel outil `record_program`, construit UNIQUEMENT pour un usager qui
+  porte les trois portes cumulatives : opt-in dans la configuration,
+  nom listé dans la liste dédiée ET droit natif Emby d'enregistrer la TV
+  en direct (`EnableLiveTvManagement`).
+- **Deux phases obligatoires** — l'outil n'enregistre JAMAIS du premier
+  coup :
+  - `record` dépose une réservation dans un bucket serveur (aucun effet) ;
+    un code à 4 chiffres **généré côté serveur** s'affiche à l'écran de
+    l'app compagnon (brique visuelle distincte, jamais lue à voix haute) ;
+  - quand l'usager fournit ce code dans son message, l'agent appelle
+    `confirm` avec ce code **exact** — et seul ce code crée le timer.
+- **Confirmation interceptée par le serveur (anti-menteur).** Validé en
+  test live : un petit modèle peut ignorer le résultat d'un outil (se
+  dire « enregistré » après un refus, ou répondre sans même appeler
+  l'outil). La confirmation est donc traitée **directement par
+  l'endpoint** : quand une réservation existe et que le message contient
+  un code à 4 chiffres isolé, le serveur exécute la confirmation
+  (vérification du code, quota, création du timer) — le modèle n'a
+  **aucun rôle** dans la transaction et la réponse est composée côté
+  serveur, véridique par construction.
+- **Notice VÉRIDIQUE hors bande.** Chaque refus (code erroné avec
+  compteur d'essais, code expiré, verrou, quota, création ratée) est
+  joint à la réponse dans un champ dédié que le modèle ne peut ni voir
+  ni tordre — l'app compagnon l'affiche dans un **encadré distinct**
+  sous la réponse, même si le texte du modèle raconte autre chose.
+  Jamais lu par la synthèse vocale.
+- **Action `status` (lecture seule).** À toute question d'état, l'agent
+  consulte l'état réel de la réservation (attente, heure d'expiration,
+  essais ratés, verrou) — **sans jamais voir le code ni le quota** ;
+  une réservation en attente est toujours distinguée d'un enregistrement
+  créé.
+- **Le code n'est jamais visible du LLM** : il voyage du serveur à l'écran
+  de l'app par un champ dédié de la réponse, hors du texte de l'outil et
+  hors du texte lu par la synthèse vocale. L'humain est le seul canal.
+- **Verrou « log-in »** : 3 codes erronés pour un usager → réservation
+  détruite et outil verrouillé 15 minutes (réservation ET confirmation).
+  Un essai raté ne compte jamais le quota.
+- **Quota de créations par jour** (défaut 3, 0 = illimité), compté
+  uniquement quand un timer est réellement créé — une réservation
+  expirée ou refusée ne paie rien.
+- **Porte parentale EPG** : le programme passe le contrôle parental
+  fail-closed de la policy ; un refus ne révèle pas la raison.
+- **Toast à l'écran** « À confirmer » puis « Enregistrement prévu » au
+  client Emby actif de l'usager (silencieux si le client ne déclare pas
+  `DisplayMessage`).
+- **Sous-action `recordings` de `emby_info`** : les enregistrements DVR
+  complétés, visibles par cet usager (filtrés par sa policy), répondent à
+  « mon émission d'hier s'est-elle bien enregistrée ? » — l'agent peut
+  ensuite les lancer avec `play_item`.
+- **Page de configuration** : opt-in, liste d'usagers et quota
+  (section Chat externe).
+
+### Added (EN)
+- **Voice DVR recordings** (external chat), closed human-in-the-loop PIN:
+  the new `record_program` tool (built only for users with the opt-in,
+  the dedicated allowlist AND the native Emby Live-TV management right)
+  never records on the first call — `record` deposits a server-side
+  reservation and a server-generated 4-digit PIN is displayed on the
+  companion app's screen (never visible to the LLM, never spoken); the
+  user then provides that PIN in their message and `confirm` creates the
+  timer with the exact code.
+- **Server-side confirmation intercept (anti-lying).** Validated in live
+  testing: a small model may ignore a tool's refusal result (claim
+  success after a refusal, or answer without even calling the tool).
+  The confirmation is therefore handled **directly by the endpoint**:
+  when a reservation exists and the user's message carries an isolated
+  4-digit PIN, the server executes the confirmation itself (code check,
+  quota, timer creation) — the model plays **no role** in the
+  transaction and the reply is composed server-side, truthful by
+  construction.
+- **Truthful out-of-band notice.** Every refusal (wrong code with
+  attempt counter, expired code, lockout, quota, failed creation) is
+  attached to the response in a dedicated field the model can neither
+  see nor twist — the companion app displays it in a **distinct box**
+  under the reply, even when the model's text says otherwise. Never
+  spoken by TTS.
+- **`status` action (read-only).** For any state question, the agent
+  reads the reservation's real state (waiting, expiry time, failed
+  attempts, lockout) — **never the PIN nor the quota**; a pending
+  reservation is always distinguished from a created recording.
+- 3 wrong PINs = tool locked 15 minutes for that user (covers both
+  record and confirm); per-day creation quota (default 3, 0 = unlimited)
+  counted only when a timer is actually created; fail-closed EPG
+  parental gate. New `recordings` subaction of `emby_info` lists
+  completed DVR recordings visible to that user.
+
+---
+
+## [1.13.22.0] — 2026-09-15
+
+### Added (FR)
+- **Contrôle du visionnement à la voix (chat externe).** L'outil
+  `client_command` couvre désormais la lecture en cours sur le client
+  Emby actif de l'usager :
+  - `playback_status` — position, durée restante, pause, pistes audio et
+    sous-titres disponibles (avec langues) ;
+  - `seek` — avancer/reculer de N secondes (`offset_seconds`, ± 1800 max)
+    ou sauter à une position (`position_seconds`), clampé côté serveur au
+    programme en cours ;
+  - `set_subtitle_track` / `set_audio_track` — par langue (« fr » comme
+    « fre »), « off » (sous-titres seulement) ou numéro de piste.
+- **Toast à l'écran pour les bascules de piste** uniquement (court, après
+  succès, silencieux si le client ne déclare pas `DisplayMessage`) —
+  rien pour seek/pause/volume : l'image et l'OSD natif du client
+  constituent déjà le retour.
+- **Bloc de workflow « Contrôle du visionnement »** : l'agent sait
+  consulter `playback_status` avant un saut de temps et présenter les
+  sauts comme approximatifs (la position remontée a quelques secondes de
+  retard).
+
+### Notes (FR)
+- Validation live préalable (client Android Emby) : `PlaystateRequest.Seek`,
+  `SetSubtitleStreamIndex` (on et off) et la remontée en direct de la
+  position. Le seek du flux TV en direct n'est pas couvert.
+
+### Added (EN)
+- **Voice playback control** (external chat): `playback_status` (position,
+  remaining time, audio/subtitle tracks with languages), `seek` (relative
+  ±seconds or absolute, server-side clamped), `set_subtitle_track` /
+  `set_audio_track` (by language, "off", or track number); short on-screen
+  toast after track switches only.
+
+---
+
 ## [1.13.21.8] — 2026-09-15
 
 ### Added (FR)

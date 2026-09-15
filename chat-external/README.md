@@ -44,6 +44,41 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   fiche, **lancer la lecture d'un titre**, mettre en pause / reprendre /
   arrêter, régler le **volume**, couper / rétablir le **son**, revenir à
   l'**accueil**. Uniquement non destructeur, uniquement sur SON client ;
+- **Contrôle du visionnement en cours** : pendant une lecture, l'agent peut
+  aussi lire **où en est la lecture** (« où en sommes-nous ? » — position,
+  durée restante, sous-titre et piste audio actives), **sauter dans le
+  temps** (« avance de 30 secondes », « recule de 10 secondes », « reprends
+  au début ») et **basculer les pistes** (« mets les sous-titres en
+  français », « coupe les sous-titres », « passe en version originale »).
+  Les sauts sont **approximatifs** : la position connue du serveur a
+  quelques secondes de retard. Un **toast court** s'affiche à l'écran quand
+  une piste est basculée ; pour les sauts et la pause, l'écran lui-même
+  fait office de retour ;
+- **Enregistrements à la voix (opt-in)** : si l'admin active la fonction et
+  liste l'usager (en plus du droit natif Emby d'enregistrer la TV en
+  direct), l'agent peut programmer un enregistrement DVR — avec une
+  **confirmation humaine obligatoire à deux phases** :
+  1. « enregistre ce programme » → l'agent **réserve** ; un **code à
+     4 chiffres** s'affiche dans un encadré du chat (🔑) — le LLM ne le
+     connaît pas et ne peut pas se confirmer lui-même ;
+  2. l'usager **tape le code** dans son message → seul ce code exact crée
+     l'enregistrement (visible dans la DVR Emby, avec un toast à l'écran).
+  Une réservation expire après **5 minutes** ; **3 codes erronés
+  verrouillent l'outil 15 minutes** pour cet usager ; un quota de
+  **créations par jour** (défaut 3, réglable) est compté seulement quand
+  un enregistrement est réellement créé. Le contrôle parental de la
+  policy s'applique aussi au programme demandé.
+  **La confirmation est traitée par le serveur lui-même** : quand une
+  réservation existe et que le message contient un code à 4 chiffres,
+  l'endpoint intercepte et exécute la confirmation directement — le
+  modèle n'a aucun rôle dans cette transaction (il ne peut ni se
+  confirmer lui-même, ni présenter un refus comme un succès ; validé en
+  test). Un **refus s'affiche toujours** dans un encadré distinct
+  (compteur d'essais, verrou, quota) quel que soit le texte du modèle.
+  L'agent peut aussi répondre aux questions d'état via `status`
+  (lecture seule : réservation en attente, heure d'expiration, essais
+  ratés — **jamais le code, jamais le quota** ; une réservation en
+  attente n'est pas un enregistrement créé).
 - **Dictée vocale 🎤** et **lecture à voix haute 🔊** — voir
   [Conversation par la voix](#conversation-par-la-voix-🎤-🔊) ;
 - **Anti-spam intégré côté plugin** : chaque usager est plafonné (5 tours

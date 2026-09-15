@@ -45,6 +45,40 @@ nothing to compile, nothing to install with pip, no web server
   detail page, **start playback of a title**, pause / resume / stop, set
   the **volume**, mute / unmute, return **home**. Non-destructive only,
   and only on THEIR client;
+- **In-playback control**: during playback, the agent can also read **where
+  playback stands** ("where are we?" — position, remaining time, active
+  audio and subtitle tracks), **skip through time** ("skip forward 30
+  seconds", "go back 10 seconds", "start from the beginning") and **switch
+  tracks** ("turn subtitles on in French", "turn subtitles off", "switch to
+  original audio"). Skips are **approximate**: the position the server
+  knows lags a few seconds behind. A **short toast** appears on screen
+  when a track is switched; for skips and pause, the picture itself is
+  the feedback;
+- **Voice DVR recordings (opt-in)**: if the admin enables the feature and
+  lists the user (on top of the native Emby right to manage Live TV
+  recordings), the agent can schedule a DVR recording — with a
+  **mandatory two-phase human confirmation**:
+  1. "record this program" → the agent **reserves** it; a **4-digit PIN**
+     appears in a boxed chip in the chat (🔑) — the LLM never sees it and
+     cannot confirm itself;
+  2. the user **types the PIN** into their message → only that exact PIN
+     creates the recording (visible in the Emby DVR, with an on-screen
+     toast).
+  A reservation expires after **5 minutes**; **3 wrong PINs lock the tool
+  for 15 minutes** for that user; a **per-day creation quota**
+  (default 3, adjustable) is counted only when a recording is actually
+  created. The policy's parental control also applies to the requested
+  program.
+  **The confirmation is handled by the server itself**: when a
+  reservation exists and the message carries a 4-digit PIN, the endpoint
+  intercepts and executes the confirmation directly — the model plays no
+  role in that transaction (it can neither confirm itself, nor present a
+  refusal as a success; validated in live testing). A **refusal always
+  appears** in a distinct box (attempt counter, lockout, quota)
+  regardless of the model's text. The agent can also answer state
+  questions via `status` (read-only: pending reservation, expiry time,
+  failed attempts — **never the PIN, never the quota**; a pending
+  reservation is not a created recording).
 - **Speech-to-text 🎤** and **text-to-speech 🔊** — see
   [Voice conversation](#voice-conversation-🎤-🔊);
 - **Built-in anti-spam on the plugin side**: each user is rate-limited

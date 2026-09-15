@@ -399,6 +399,16 @@ class Handler(BaseHTTPRequestHandler):
             "reply": resp.get("Reply"),
             "session": resp.get("Session") or "",
             "error": resp.get("Error"),
+            # 🔑 Code de confirmation (enregistrements, human-in-the-loop) :
+            # canal HORS BANDE — le plugin ne le met JAMAIS dans Reply, il
+            # ne transite que par ce champ dédié (le LLM ne le voit pas) ;
+            # affiché à l'écran par la page, jamais lu par le TTS.
+            "confirm_code": resp.get("ConfirmCode"),
+            # ⚠️ Notice VÉRIDIQUE du tour (refus de confirmation) : jointe
+            # HORS BANDE par le plugin (ne passe jamais par le LLM) ; la
+            # page l'affiche dans un encadré distinct, même si le modèle
+            # embellit sa réponse. Jamais lu par le TTS.
+            "notice": resp.get("Notice"),
         })
 
     def handle_show(self, body):
@@ -508,6 +518,21 @@ PAGE_HTML = r"""<!doctype html>
     max-width: 90vw; z-index: 10;
   }
   #toast.err { border-color: var(--err); }
+  /* 🔑 Code de confirmation (enregistrements) — brique VISUELLE distincte :
+     grande, encadrée, jamais passée au TTS (le TTS ne lit que reply). */
+  .confirmcode {
+    display: inline-block; margin-top: 8px; padding: 10px 16px;
+    background: var(--panel2); border: 1px dashed var(--accent);
+    border-radius: 8px; font-size: 18px; font-weight: 700;
+    letter-spacing: 4px; color: var(--text);
+  }
+  /* ⚠️ Notice VÉRIDIQUE du serveur (refus de confirmation) : encadré
+     distinct, visible même si le modèle embellit sa réponse. */
+  .sysnotice {
+    display: block; margin-top: 8px; padding: 10px 14px;
+    background: var(--panel2); border: 1px solid var(--err);
+    border-radius: 8px; font-size: 14px; color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -797,7 +822,27 @@ function send(ev) {
           chatHistory = outgoing.concat([{ role: "assistant", content: d.reply || "" }]);
           session = d.session || session;
           persist();
-          addBubble("assistant", d.reply || "(réponse vide)");
+          var bubble = addBubble("assistant", d.reply || "(réponse vide)");
+          // 🔑 Code de confirmation (enregistrements, human-in-the-loop) :
+          // canal HORS BANDE — le code n'apparaît jamais dans le texte du
+          // LLM (il ne le connaît pas), il est affiché ICI et l'usager le
+          // fournit ensuite dans son message. Ne jamais le lire à voix
+          // haute automatiquement (le TTS ne lit que d.reply).
+          if (d.confirm_code) {
+            var chip = document.createElement("div");
+            chip.className = "confirmcode";
+            chip.textContent = "🔑 Code de confirmation : " + d.confirm_code;
+            bubble.appendChild(chip);
+          }
+          // ⚠️ Notice VÉRIDIQUE (refus de confirmation) — canal déterministe
+          // du serveur : affichée TELLE QUELLE, même si le texte du LLM dit
+          // autre chose. Jamais passée au TTS.
+          if (d.notice) {
+            var box = document.createElement("div");
+            box.className = "sysnotice";
+            box.textContent = d.notice;
+            bubble.appendChild(box);
+          }
           if (autoTts) { speakText(d.reply || "", $("autotts")); }
         }
         scrollDown();

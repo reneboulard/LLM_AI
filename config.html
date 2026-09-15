@@ -1245,6 +1245,45 @@
                             </div>
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkExternalChatRecordings" />
+                            <span class="checkboxLabel" data-i18n="cfg.extchat.rec.enabled">Enregistrements à la voix (human-in-the-loop à code, opt-in)</span>
+                        </label>
+                        <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.desc">
+                            Le tool <b>record_program</b> n'enregistre JAMAIS du premier coup :
+                            il dépose une réservation dans un bucket serveur et un code à 4
+                            chiffres généré côté serveur s'affiche à l'écran de l'app
+                            (le LLM ne le voit jamais) ; l'usager fournit ensuite ce code dans
+                            son message, et <b>seul le code exact</b> crée le timer. 3 codes
+                            erronés = outil verrouillé 15 min pour l'usager (réservation ET
+                            confirmation) ; quota de créations/jour compté à l'effet seulement ;
+                            porte parentale EPG fail-closed. Exige cumulativement : opt-in ici,
+                            usager listé ci-dessous ET droit natif Emby d'enregistrer la TV
+                            en direct. Les administrateurs restent sur le chemin chat admin.
+                        </div>
+                        <div class="inputContainer">
+                        <textarea is="emby-textarea" id="txtExternalChatRecordingUsers" rows="3"
+                                  label="Usagers autorisés à enregistrer (un nom d'usager Emby par ligne)"
+                                  data-i18n-label="cfg.extchat.rec.users"></textarea>
+                        <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.users.desc">
+                            Vide = personne (fail-closed). En plus du droit natif Emby
+                            (Gérer l'enregistrement TV) et de l'opt-in ci-dessus.
+                        </div>
+                        </div>
+                        <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numExternalChatRecordingMaxPerDay"
+                                       label="Quota (enregistrements créés/24 h)"
+                                       data-i18n-label="cfg.extchat.rec.perDay"
+                                       min="0" max="100" />
+                                <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.perDay.desc">
+                                    Max de timers CRÉÉS par usager sur 24 h (fenêtre glissante) —
+                                    comptés seulement quand le code est confirmé, jamais sur une
+                                    réservation expirée ou refusée. 0 = illimité. Défaut 3.
+                                </div>
+                            </div>
+                        </div>
+
                         <div>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer

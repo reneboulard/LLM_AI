@@ -123,7 +123,18 @@ namespace LLM_AI
             "appareil. N'affirme jamais que tu affiches toi-même la fiche via " +
             "un lien : le lien ouvre la fiche dans la page, le bouton ou " +
             "client_command fait la projection. Si aucun client Emby de " +
-            "l'usager n'est actif, signale-le simplement.";
+            "l'usager n'est actif, signale-le simplement." +
+            "\n### CONTRÔLE DU VISIONNEMENT (CHAT EXTERNE)\n" +
+            "L'outil client_command couvre aussi la lecture en cours : " +
+            "playback_status (position, durée restante, pistes disponibles), " +
+            "seek (avance/recule de N secondes, ou saute à N secondes / au " +
+            "début), set_subtitle_track / set_audio_track (langue, « off », " +
+            "ou numéro de piste). Consulte playback_status AVANT un saut de " +
+            "temps. La position connue du serveur a quelques secondes de " +
+            "retard : présente les sauts comme approximatifs, ne promets " +
+            "jamais une précision à la seconde. Un toast s'affiche à l'écran " +
+            "pour les bascules de piste : inutile de le répéter dans ta " +
+            "réponse.";
 
         /// <summary>Bloc de workflow INJECTÉ EN PLUS de
         /// <see cref="ExternalWorkflowBlock"/> UNIQUEMENT quand l'app
@@ -147,9 +158,44 @@ namespace LLM_AI
             "utile même si tu nommes le titre à l'oral. Reste bref : une " +
             "réponse parlée trop longue fatigue.";
 
-        // ------------------------------------------------------------------
-        //  DTO requête / réponse — ChatExternal
-        // ------------------------------------------------------------------
+        /// <summary>Bloc de workflow INJECTÉ UNIQUEMENT quand l'usager porte
+        /// les trois portes d'enregistrement (opt-in + liste + droit natif) :
+        /// le rituel human-in-the-loop à deux phases du tool
+        /// <c>record_program</c>. La règle maîtresse : le code est généré
+        /// côté serveur, affiché à l'écran de l'app, et JAMAIS transmis au
+        /// LLM — le modèle ne fait que le relais vers l'usager et le retour
+        /// exact.</summary>
+        internal const string ExternalRecordingBlock =
+            "\n### ENREGISTREMENTS À CONFIRMATION (CHAT EXTERNE)\n" +
+            "L'usager peut programmer des enregistrements TV en direct via " +
+            "l'outil record_program, à deux phases OBLIGATOIRES : " +
+            "(1) résous d'abord le programme avec find/epg (source=epg) — " +
+            "appelle record avec program_id, title et kind (movie|series, " +
+            "post_padding_minutes si l'usager demande une marge de fin) ; " +
+            "l'action N'ENREGISTRE PAS tout de suite : un code à 4 chiffres " +
+            "s'affiche À L'ÉCRAN DE L'APP et tu ne le vois JAMAIS — dis à " +
+            "l'usager que le code s'affiche à l'écran et demande-le-lui. " +
+            "(2) quand l'usager fournit un code, appelle confirm avec ce code " +
+            "EXACT : c'est lui qui crée l'enregistrement. Ne devine, " +
+            "n'invente, ne complète et ne réinterprète JAMAIS un code ; si " +
+            "l'usager n'en fournit pas, demande-le une fois et attend. Un " +
+            "code refusé (incorrect, expiré) ou un verrou : rapporte le " +
+            "message de l'outil tel quel, propose de refaire la demande " +
+            "(nouveau code) ou d'attendre — ne suggère JAMAIS d'essayer " +
+            "d'autres codes. LE RÉSULTAT DE L'OUTIL FAIT FOI : toute " +
+            "réponse de record_program qui contient error signifie qu'AUCUN " +
+            "enregistrement n'a été créé à ce tour — rapporte-la telle " +
+            "quelle et ne dis JAMAIS que l'enregistrement est fait, prévu " +
+            "ou programmé tant que l'outil n'a pas répondu ok. Un toast " +
+            "s'affiche aussi à la TV à chaque étape ; inutile de le " +
+            "répéter. L'usager peut re-demander le même programme : la " +
+            "nouvelle demande remplace la précédente. Pour TOUTE question sur " +
+            "l'état de la réservation (attente, expiration, essais ratés, " +
+            "verrou), appelle d'abord record_program avec action=status " +
+            "(lecture seule, ne révèle JAMAIS le code) et rapporte l'état " +
+            "réel — ne devine jamais l'état du bucket d'après tes propres " +
+            "bulles. Réservation en attente ≠ enregistrement créé : le " +
+            "timer n'existe que lorsque le code est confirmé.";
 
         // ------------------------------------------------------------------
         //  DTO requête / réponse — ChatExternal
@@ -199,6 +245,23 @@ namespace LLM_AI
             public string Date { get; set; }
             public string Session { get; set; }
             public string Error { get; set; }
+
+            /// <summary>Code à 4 chiffres d'une réservation d'enregistrement
+            /// créée pendant CE tour (human-in-the-loop, v1.13.23). Canal
+            /// HORS BANDE : le code n'est JAMAIS vu du LLM (ni dans le tool,
+            /// ni dans l'historique) — l'app compagnon l'affiche à l'écran
+            /// (« 🔑 Code de confirmation ») et l'usager le fournit ensuite
+            /// dans son message. Null si le tour n'a pas créé de
+            /// réservation.</summary>
+            public string ConfirmCode { get; set; }
+
+            /// <summary>Notice VÉRIDIQUE du tour (v1.13.23, anti-menteur) :
+            /// refus de confirmation d'enregistrement (code erroné, verrou,
+            /// quota, création ratée) — jointe au DTO HORS BANDE (le texte ne
+            /// passe JAMAIS par le LLM) ; l'app compagnon l'affiche dans un
+            /// encadré distinct, même si le modèle embellit sa réponse.
+            /// Consommée une fois. Null si le tour n'a rien à signaler.</summary>
+            public string Notice { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -328,16 +391,48 @@ namespace LLM_AI
             // tour — la bascule 🔊 est par tour, pas par session).
             string extraWorkflow = ExternalWorkflowBlock + (req.Tts
                 ? ExternalTtsBlock : string.Empty);
+
+            // Tool d'enregistrement (v1.13.23) : portes CUMULATIVES — opt-in +
+            // liste DÉDIÉE d'usagers + droit natif d'enregistrer. Absent du
+            // chemin : le chat reste lecture seule (inchangé).
+            List<ILlmTool> extraTools = null;
+            if (cfg.ExternalChatRecordingsEnabled
+                && UserListedFor(cfg.ExternalChatRecordingUsers, user.Name)
+                && PermissionGate.CanRecordLive(user))
+            {
+                extraTools = new List<ILlmTool>
+                    { new RecordingChatTool(cfg, user, _liveTv, LibraryManager,
+                        ApplicationHost, _sessions, Logger) };
+                extraWorkflow += ExternalRecordingBlock;
+                Logger.Info("[LLM_AI] [CHAT-EXT] Tool d'enregistrement activé (confirm. à deux phases) — usager {0}.",
+                    user.Name);
+            }
+
             if (req.Tts)
                 Logger.Info("[LLM_AI] [CHAT-EXT] Canal de livraison : synthèse vocale (bloc de formulation orale injecté) — usager {0}.",
                     user.Name);
 
+            // Instant de DÉBUT du tour : le code du bucket n'est joint à la
+            // réponse que si CE tour en a produit une (jamais re-servi d'un
+            // vieux pending).
+            long turnStartTicks = DateTimeOffset.UtcNow.Ticks;
+
             string reply;
             try
             {
-                reply = await runner.RunChatAsync(cfg, "CHAT-EXT", history, message,
+                // Interception DÉTERMINISTE de la confirmation (v1.13.23,
+                // anti-menteur) : si une réservation existe pour l'usager et
+                // que le message porte un code à 4 chiffres isolé, la
+                // confirmation est traitée ICI — le modèle n'a AUCUN rôle
+                // (ni auto-confirmation, ni refus noyé dans une réponse
+                // optimiste : les deux modes de mensonge constatés en test
+                // live). Sinon : chemin normal, tool record_program.
+                string intercepted = await RecordingChatTool.TryConfirmFromMessageAsync(
+                    cfg, user, _liveTv, LibraryManager, ApplicationHost, _sessions,
+                    message, Logger, turnStartTicks, ct).ConfigureAwait(false);
+                reply = intercepted ?? await runner.RunChatAsync(cfg, "CHAT-EXT", history, message,
                     _sessions, _tasks, _notifications, ct, memoryBlock,
-                    null, extraWorkflow, parentalNote, user, false).ConfigureAwait(false);
+                    extraTools, extraWorkflow, parentalNote, user, false).ConfigureAwait(false);
             }
             // Même sémantique que le chat admin : annulation DÉPASSANT la
             // requête (timeout backend LLM) → JSON propre ; déconnexion du
@@ -383,8 +478,25 @@ namespace LLM_AI
                 Enabled = true,
                 Reply = reply,
                 Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
-                Session = savedSession
+                Session = savedSession,
+                // Canal HORS BANDE du code (human-in-the-loop) : le PIN généré
+                // par le tool n'est jamais vu du LLM — il ne transite que par
+                // ce champ, affiché par l'app compagnon à l'écran. Null si le
+                // tour n'a pas créé de réservation (jamais re-servi d'un
+                // vieux pending : créé après le début du tour seulement).
+                ConfirmCode = RecordingPendingStore.GetFreshCode(user.Name, turnStartTicks),
+                // Notice anti-menteur (hors bande) : le refus de confirmation
+                // s'affiche à l'écran, indépendamment du texte du modèle.
+                Notice = RecordingPendingStore.GetFreshNotice(user.Name, turnStartTicks)
             };
+        }
+
+        /// <summary>Usager listé (nom exact, insensible à la casse) —
+        /// discipline des listes du chat externe.</summary>
+        private static bool UserListedFor(List<string> list, string user)
+        {
+            return list != null && list
+                .Any(u => string.Equals((u ?? "").Trim(), user, StringComparison.OrdinalIgnoreCase));
         }
 
         // ------------------------------------------------------------------

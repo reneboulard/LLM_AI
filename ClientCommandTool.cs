@@ -25,7 +25,16 @@ namespace LLM_AI
     ///     fail-closed avant tout effet (le LLM ne peut rien demander
     ///     d'autre). Exclusions permanentes : <c>SendKey</c> (poids
     ///     arbitraire), <c>TakeScreenshot</c> (intimité), <c>Restart</c>/
-    ///     <c>Shutdown</c>/<c>Identify</c> (serveur), <c>Seek</c>.</item>
+    ///     <c>Shutdown</c>/<c>Identify</c> (serveur).</item>
+    /// <item><b>v1.13.22 — contrôle du visionnement</b> : <c>playback_status</c>
+    ///     (position, durée, pistes), <c>seek</c> (relatif signé ou absolu,
+    ///     clampé côté serveur au programme en cours — canal
+    ///     <c>PlaystateRequest.Seek</c> validé live, jamais <c>SendKey</c>) et
+    ///     <c>set_subtitle_track</c>/<c>set_audio_track</c> (langue, « off » ou
+    ///     index, résolus sur les <c>MediaStreams</c> de l'item en cours).
+    ///     Toasts SÉLECTIFS : un toast court s'affiche à l'écran UNIQUEMENT
+    ///     après une bascule de piste réussie — rien pour seek/pause/volume,
+    ///     l'image et l'OSD natif du client parlent déjà.</item>
     /// <item><b>Session bornée</b> : seules les sessions DONT l'usager est
     ///     celui de la requête sont ciblées (même règle que <c>Show</>,
     ///     forme « plus récente gagne ») — un usager ne pilote jamais
@@ -60,14 +69,23 @@ namespace LLM_AI
         public string Description =>
             "Envoie une commande non destructive au client Emby ACTIF de l'usager " +
             "(sa session à lui — jamais un autre appareil). Projection de fiche, " +
-            "lecture/pause/arrêt, volume. Utilise-le quand l'usager demande " +
+            "lecture/pause/arrêt, volume, ET contrôle du visionnement en cours : " +
+            "état de lecture (playback_status), saut de temps (seek), bascule des " +
+            "pistes de sous-titres et d'audio. Utilise-le quand l'usager demande " +
             "d'afficher ou de contrôler ce qui passe sur son écran.";
 
         public string ArgumentsSchema => @"{
-  ""command"": ""display_item | play_item | go_home | pause | unpause | stop | set_volume | mute | unmute"",
+  ""command"": ""playback_status | seek | set_subtitle_track | set_audio_track | display_item | play_item | go_home | pause | unpause | stop | set_volume | mute | unmute"",
+  ""offset_seconds"": ""(seek) décalage signé en secondes, ex. 30 ou -10 (|x| ≤ 1800)"",
+  ""position_seconds"": ""(seek) position absolue dans le programme (0 = début)"",
+  ""track"": ""(set_subtitle_track / set_audio_track) off | langue fr/fre | numéro de piste renvoyé par playback_status"",
   ""item_id"": ""(display_item / play_item) identifiant de l'item (id renvoyé par les outils)"",
   ""volume"": ""(set_volume) entier 0-100""
 }";
+
+        // Bornes du contrôle du visionnement (fail-closed).
+        private const long TicksPerSecond = 10_000_000;
+        private const int MaxSeekOffsetSeconds = 1800;
 
         // ------------------------------------------------------------------
         //  Exécution
@@ -84,6 +102,14 @@ namespace LLM_AI
                     case "play_item":
                         return await ItemCommandAsync(command, Str(args, "item_id"), ct)
                             .ConfigureAwait(false);
+                    case "playback_status":
+                        return Status();
+                    case "seek":
+                        return await SeekAsync(args, ct).ConfigureAwait(false);
+                    case "set_subtitle_track":
+                        return await SetTrackAsync(args, subtitles: true, ct).ConfigureAwait(false);
+                    case "set_audio_track":
+                        return await SetTrackAsync(args, subtitles: false, ct).ConfigureAwait(false);
                     case "go_home":
                     case "set_volume":
                     case "mute":
@@ -97,8 +123,10 @@ namespace LLM_AI
                         // Fail-closed : le LLM ne décide pas de ce qui est
                         // envoyable — seule l'allowlist ci-dessus l'est.
                         return Json(new { error = "commande inconnue ou non autorisée : « "
-                            + command + " » (autorisées : display_item, play_item, "
-                            + "go_home, pause, unpause, stop, set_volume, mute, unmute)." });
+                            + command + " » (autorisées : playback_status, seek, "
+                            + "set_subtitle_track, set_audio_track, display_item, "
+                            + "play_item, go_home, pause, unpause, stop, set_volume, "
+                            + "mute, unmute)." });
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -233,6 +261,232 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  playback_status — état de la lecture en cours (lecture seule)
+        // ------------------------------------------------------------------
+
+        private string Status()
+        {
+            var session = ResolveSession();
+            if (session == null)
+                return Json(NoSessionError());
+
+            var np = session.NowPlayingItem;
+            if (np == null)
+            {
+                // Lecture seule légitime : l'usager peut demander
+                // « est-ce que ça joue ? » — pas une erreur.
+                return Json(new { ok = true, playing = false,
+                    device = session.DeviceName,
+                    note = "Aucune lecture en cours sur cet appareil." });
+            }
+
+            var ps = session.PlayState;
+            long pos = ps?.PositionTicks ?? 0;
+            long runtime = np.RunTimeTicks ?? 0;
+            var tracks = new List<object>();
+            foreach (var m in np.MediaStreams ?? Array.Empty<MediaBrowser.Model.Entities.MediaStream>())
+            {
+                if (m.Type != MediaBrowser.Model.Entities.MediaStreamType.Audio
+                    && m.Type != MediaBrowser.Model.Entities.MediaStreamType.Subtitle)
+                    continue;
+                tracks.Add(new {
+                    type = m.Type == MediaBrowser.Model.Entities.MediaStreamType.Audio ? "audio" : "subtitle",
+                    index = m.Index, lang = m.Language, title = m.Title,
+                    external = m.IsExternal });
+            }
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command playback_status — usager {0}, appareil {1}, item {2}, position {3} s.",
+                _user.Name, session.DeviceName, np.Name, pos / TicksPerSecond);
+            return Json(new {
+                ok = true, playing = true,
+                device = session.DeviceName, client = session.Client,
+                item = new { id = np.Id, name = np.Name, type = np.Type,
+                    series = np.SeriesName },
+                position_seconds = pos / TicksPerSecond,
+                runtime_seconds = runtime / TicksPerSecond,
+                remaining_seconds = runtime > pos ? (runtime - pos) / TicksPerSecond : 0,
+                paused = ps?.IsPaused ?? false,
+                can_seek = ps?.CanSeek ?? false,
+                play_method = ps?.PlayMethod,
+                audio_track = ps?.AudioStreamIndex,
+                subtitle_track = ps?.SubtitleStreamIndex,
+                tracks = tracks });
+        }
+
+        // ------------------------------------------------------------------
+        //  seek — saut de temps, cible calculée côté serveur (jamais SendKey)
+        // ------------------------------------------------------------------
+
+        private async Task<string> SeekAsync(JsonElement args, CancellationToken ct)
+        {
+            long? offsetSec = TryGetLong(args, "offset_seconds");
+            long? absSec = TryGetLong(args, "position_seconds");
+            if (offsetSec == null && absSec == null)
+                return Json(new { error = "Paramètre requis : offset_seconds (relatif, signé) ou position_seconds (absolu)." });
+            if (offsetSec != null && Math.Abs(offsetSec.Value) > MaxSeekOffsetSeconds)
+                return Json(new { error = "offset_seconds est limité à ±" + MaxSeekOffsetSeconds + " secondes." });
+
+            var session = ResolveSession();
+            if (session == null)
+                return Json(NoSessionError());
+            var np = session.NowPlayingItem;
+            if (np == null)
+                return Json(new { error = "Aucune lecture en cours sur cet appareil." });
+
+            var ps = session.PlayState;
+            if (ps == null || !ps.CanSeek)
+                return Json(new { error = "Le flux en cours ne permet pas de saut de temps." });
+
+            // Clamp au programme en cours (runtime inconnu → relatif toléré
+            // sans borne haute ; absolu non clampé, le client tranche).
+            long pos = ps.PositionTicks ?? 0;
+            long runtime = np.RunTimeTicks ?? 0;
+            long target = absSec != null
+                ? absSec.Value * TicksPerSecond
+                : pos + offsetSec.Value * TicksPerSecond;
+            target = Math.Max(0, target);
+            if (runtime > 0) target = Math.Min(target, runtime);
+
+            await _sessions.SendPlaystateCommand(null, session.Id,
+                new PlaystateRequest { Command = PlaystateCommand.Seek,
+                    SeekPositionTicks = target }, ct).ConfigureAwait(false);
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek {0} -> position {1} s — usager {2}.",
+                absSec != null ? "absolu" : ("relatif " + offsetSec + " s"),
+                target / TicksPerSecond, _user.Name);
+            // PAS de toast ni de relecture : l'image est le feedback, et la
+            // position remonte avec quelques secondes de retard (gotcha).
+            return Json(new { ok = true, command = "seek",
+                device = session.DeviceName, item = np.Name,
+                new_position_seconds = target / TicksPerSecond });
+        }
+
+        // ------------------------------------------------------------------
+        //  set_subtitle_track / set_audio_track — langue, « off » ou index
+        // ------------------------------------------------------------------
+
+        private async Task<string> SetTrackAsync(JsonElement args, bool subtitles, CancellationToken ct)
+        {
+            string track = (Str(args, "track") ?? "").Trim();
+            var session = ResolveSession();
+            if (session == null)
+                return Json(NoSessionError());
+            var np = session.NowPlayingItem;
+            if (np == null)
+                return Json(new { error = "Aucune lecture en cours sur cet appareil." });
+
+            var wantedType = subtitles
+                ? MediaBrowser.Model.Entities.MediaStreamType.Subtitle
+                : MediaBrowser.Model.Entities.MediaStreamType.Audio;
+            var streams = (np.MediaStreams ?? Array.Empty<MediaBrowser.Model.Entities.MediaStream>())
+                .Where(s => s.Type == wantedType).ToArray();
+
+            int targetIndex;
+            string lang = null;
+            if (string.Equals(track, "off", StringComparison.OrdinalIgnoreCase))
+            {
+                // « off » = désactiver les sous-titres (Index -1, validé live) —
+                // l'audio en cours est sélectionné, jamais coupé.
+                if (!subtitles)
+                    return Json(new { error = "« off » ne s'applique qu'aux sous-titres." });
+                targetIndex = -1;
+            }
+            else if (int.TryParse(track, out int idx))
+            {
+                var match = streams.FirstOrDefault(s => s.Index == idx);
+                if (match == null)
+                    return Json(new { error = TrackError(streams, subtitles,
+                        "la piste n° " + idx + " est introuvable ou n'est pas du bon type") });
+                targetIndex = idx;
+                lang = match.Language;
+            }
+            else if (track.Length > 0)
+            {
+                // Langue 2 ou 3 lettres (« fr » comme « fra »). Plusieurs
+                // correspondances (incrustée vs externe) : la première gagne,
+                // renvoyée dans la réponse.
+                string code = track.ToLowerInvariant();
+                var match = streams.FirstOrDefault(s => MatchLang(s.Language, code));
+                if (match == null)
+                    return Json(new { error = TrackError(streams, subtitles,
+                        "aucune piste « " + track + " »") });
+                targetIndex = match.Index;
+                lang = code;
+            }
+            else
+                return Json(new { error = "Paramètre 'track' requis (off | langue fr/fre | numéro de piste)." });
+
+            var cmd = new GeneralCommand
+            {
+                Name = subtitles ? "SetSubtitleStreamIndex" : "SetAudioStreamIndex",
+                Arguments = new Dictionary<string, string>
+                    { { "Index", targetIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) } }
+            };
+            await _sessions.SendGeneralCommand(null, session.Id, cmd, ct).ConfigureAwait(false);
+
+            // Toast sélectif : UNIQUEMENT pour les bascules de piste (après
+            // succès) — court, 3-4 s, silencieux si le client ne déclare pas
+            // DisplayMessage.
+            string label = subtitles
+                ? (targetIndex < 0 ? "Sous-titres coupés"
+                    : "Sous-titres " + ShortLang(lang, targetIndex))
+                : "Audio " + ShortLang(lang, targetIndex);
+            await ToastAsync(session, "🤖 " + label, ct).ConfigureAwait(false);
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} -> index {1} ({2}) — usager {3}.",
+                subtitles ? "set_subtitle_track" : "set_audio_track",
+                targetIndex, lang ?? "off", _user.Name);
+            return Json(new { ok = true,
+                command = subtitles ? "set_subtitle_track" : "set_audio_track",
+                device = session.DeviceName, item = np.Name,
+                track_index = targetIndex, lang = lang });
+        }
+
+        private static bool MatchLang(string streamLang, string code)
+        {
+            if (string.IsNullOrWhiteSpace(streamLang)) return false;
+            string l = streamLang.Trim().ToLowerInvariant();
+            return code.Length == 2 ? l.Length >= 2 && l.Substring(0, 2) == code : l == code;
+        }
+
+        private static string ShortLang(string lang, int index)
+        {
+            if (string.IsNullOrWhiteSpace(lang)) return "n° " + index;
+            lang = lang.Trim();
+            return lang.Length <= 2 ? lang.ToUpperInvariant() : lang.Substring(0, 2).ToUpperInvariant();
+        }
+
+        private static string TrackError(IEnumerable<MediaBrowser.Model.Entities.MediaStream> streams,
+            bool subtitles, string reason)
+        {
+            var avail = streams.Select(s => "n° " + s.Index + " ("
+                + (s.Language ?? "sans langue") + (s.IsExternal ? ", externe" : "") + ")");
+            return (subtitles ? "Sous-titres" : "Pistes audio") + " disponibles : "
+                + string.Join(", ", avail) + " — " + reason + ".";
+        }
+
+        /// <summary>Toast cosmétique à l'écran du client : jamais bloquant
+        /// (exception avalée), jamais envoyé si le client ne déclare pas
+        /// <c>DisplayMessage</c>.</summary>
+        private async System.Threading.Tasks.Task ToastAsync(SessionInfo session,
+            string text, CancellationToken ct)
+        {
+            try
+            {
+                bool hasDisplayMessage = (session.SupportedCommands ?? Array.Empty<string>())
+                    .Any(c => string.Equals(c, "DisplayMessage", StringComparison.OrdinalIgnoreCase));
+                if (!hasDisplayMessage) return;
+                await _sessions.SendMessageCommand(null, session.Id, new MessageCommand
+                {
+                    Header = string.Empty,
+                    Text = text,
+                    TimeoutMs = 3500,
+                }, ct).ConfigureAwait(false);
+            }
+            catch { /* cosmétique — un échec de toast ne doit rien casser */ }
+        }
+
+        // ------------------------------------------------------------------
         //  Session bornée (même règle que Show : l'usager ne pilote que
         //  SES sessions ; plus récente LastActivityDate d'abord)
         // ------------------------------------------------------------------
@@ -257,6 +511,28 @@ namespace LLM_AI
         // ------------------------------------------------------------------
         //  Lectures tolérantes + sérialisation
         // ------------------------------------------------------------------
+
+        private static string NoSessionError()
+        {
+            return "Aucune session Emby active pour cet usager (ouvrir l'app Emby sur l'appareil).";
+        }
+
+        private static long? TryGetLong(JsonElement args, string name)
+        {
+            try
+            {
+                if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v))
+                {
+                    if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out long l))
+                        return l;
+                    if (v.ValueKind == JsonValueKind.String
+                        && long.TryParse(v.GetString(), out long parsed))
+                        return parsed;
+                }
+            }
+            catch { }
+            return null;
+        }
 
         private static string Str(JsonElement args, string name)
         {

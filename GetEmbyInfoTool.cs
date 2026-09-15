@@ -197,6 +197,7 @@ namespace LLM_AI
                         }
                     case "scheduled":     result = Scheduled(); break;
                     case "planning":      result = Scheduled(); break;
+                    case "recordings":    result = Recordings(args); break;
                     default:
                         result = Err($"action inconnue : {action}");
                         break;
@@ -447,6 +448,88 @@ namespace LLM_AI
                 series_timers = seriesProj,
                 single_timers = singleProj
             }, s_json);
+        }
+
+        // ------------------------------------------------------------------
+        //  recordings : enregistrements DVR COMPLÉTÉS visibles à l'usager
+        //  (complète scheduled — l'inventaire des timers reste bloqué aux
+        //  externes, décision inchangée : c'est un inventaire du foyer)
+        // ------------------------------------------------------------------
+
+        private string Recordings(JsonElement args)
+        {
+            int limit = OptInt(args, "limit", 10);
+            bool? watched = null;   // true | false | (absent = tous)
+            try
+            {
+                if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("watched", out var w)
+                    && v_isBool(w, out bool b)) watched = b;
+            }
+            catch { }
+
+            if (!RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out var dvrRoot)
+                || string.IsNullOrWhiteSpace(dvrRoot))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    total = 0,
+                    note = "Aucun dossier d'enregistrements configuré (DVR inactif ou chemin inconnu)."
+                }, s_json);
+            }
+
+            // Complétés : les enregistrements finis deviennent des items de
+            // bibliothèque (Movie/Episode) SOUS le chemin d'enregistrements.
+            // L'accès de l'usager filtre le reste (InternalItemsQuery.User —
+            // l'usager externe ne voit que ses bibliothèques autorisées).
+            var q = new InternalItemsQuery
+            {
+                IncludeItemTypes = new[] { "Movie", "Episode" },
+                Recursive = true,
+                Limit = null,
+                EnableTotalRecordCount = false
+            };
+            if (ParentalUser != null) q.User = ParentalUser;
+            if (watched.HasValue) q.IsPlayed = watched.Value;
+
+            var dvrPrefix = NormalizePath(dvrRoot);
+            var items = (_library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                .Where(i => !string.IsNullOrEmpty(i.Path) && NormalizePath(i.Path).StartsWith(dvrPrefix))
+                .OrderByDescending(i => i.DateCreated)
+                .Take(Math.Max(1, limit))
+                .ToArray();
+
+            var proj = items.Select(i => new
+            {
+                id = i.InternalId.ToString(),
+                name = i.Name,
+                type = TypeLabel(i),
+                series = i is MediaBrowser.Controller.Entities.TV.Episode e ? e.SeriesName : null,
+                date_added = i.DateCreated.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+                image_url = ImageUrl(i.InternalId)
+            });
+
+            _logger?.Info("[LLM_AI] get_emby_info recordings — usager={0}, total={1} (chemin DVR filtré).",
+                ParentalUser?.Name ?? "admin", items.Length);
+            return JsonSerializer.Serialize(new { total = items.Length, results = proj }, s_json);
+        }
+
+        private static bool v_isBool(JsonElement v, out bool b)
+        {
+            b = false;
+            try
+            {
+                if (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
+                { b = v.GetBoolean(); return true; }
+                if (v.ValueKind == JsonValueKind.String
+                    && bool.TryParse(v.GetString(), out b)) return true;
+            }
+            catch { }
+            return false;
+        }
+
+        private static string NormalizePath(string path)
+        {
+            return (path ?? "").Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
         }
 
         // ------------------------------------------------------------------

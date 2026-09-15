@@ -785,6 +785,13 @@ define(["loading"], function (loading) {
         view.querySelector("#numExternalChatPerMinute").value = isNaN(ecm) ? 5 : Math.max(0, ecm);
         var ecd = parseInt(cfg.ExternalChatMaxPerDay, 10);
         view.querySelector("#numExternalChatPerDay").value = isNaN(ecd) ? 150 : Math.max(0, ecd);
+        // Enregistrements à la voix (v1.13.23) : opt-in + liste dédiée +
+        // quota de créations/jour (0 = illimité, préservé au save).
+        view.querySelector("#chkExternalChatRecordings").checked = !!cfg.ExternalChatRecordingsEnabled;
+        view.querySelector("#txtExternalChatRecordingUsers").value = Array.isArray(cfg.ExternalChatRecordingUsers)
+            ? cfg.ExternalChatRecordingUsers.join("\n") : (cfg.ExternalChatRecordingUsers || "");
+        var ecr = parseInt(cfg.ExternalChatRecordingMaxPerDay, 10);
+        view.querySelector("#numExternalChatRecordingMaxPerDay").value = isNaN(ecr) ? 3 : Math.max(0, ecr);
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
     }
@@ -912,7 +919,14 @@ define(["loading"], function (loading) {
             })(view.querySelector("#numExternalChatPerMinute").value),
             ExternalChatMaxPerDay: (function (v) {
                 var n = parseInt(v, 10); return isNaN(n) ? 150 : Math.max(0, Math.min(2000, n));
-            })(view.querySelector("#numExternalChatPerDay").value)
+            })(view.querySelector("#numExternalChatPerDay").value),
+            // Enregistrements à la voix (v1.13.23) : 0 = illimité est légitime.
+            ExternalChatRecordingsEnabled: view.querySelector("#chkExternalChatRecordings").checked,
+            ExternalChatRecordingUsers: (view.querySelector("#txtExternalChatRecordingUsers").value || "")
+                .split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean),
+            ExternalChatRecordingMaxPerDay: (function (v) {
+                var n = parseInt(v, 10); return isNaN(n) ? 3 : Math.max(0, Math.min(100, n));
+            })(view.querySelector("#numExternalChatRecordingMaxPerDay").value)
         };
     }
 

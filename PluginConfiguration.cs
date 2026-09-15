@@ -1132,5 +1132,42 @@ namespace LLM_AI
         /// à zéro. Voir <see cref="ChatRateLimiter"/>.
         /// </summary>
         public int ExternalChatMaxPerDay { get; set; } = 150;
+
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : autorise les
+        /// usagers listés dans <see cref="ExternalChatRecordingUsers"/> (ET
+        /// portant le droit natif <c>EnableLiveTvManagement</c> —
+        /// <see cref="PermissionGate.CanRecordLive"/>) à programmer des
+        /// enregistrements DVR via le chat externe, avec confirmation à
+        /// deux phases par code à 4 chiffres (<see cref="RecordingPendingStore"/> :
+        /// réservation dans un bucket serveur, code affiché à l'écran de
+        /// l'app, jamais visible du LLM ; verrou après 3 codes erronés ;
+        /// quota <see cref="ExternalChatRecordingMaxPerDay"/> compté à
+        /// l'effet seulement). Faux = aucun tool d'enregistrement sur le
+        /// chemin externe (chat inchangé, lecture seule).
+        /// </summary>
+        public bool ExternalChatRecordingsEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Liste blanche DÉDIÉE des usagers Emby autorisés à programmer des
+        /// enregistrements par le chat externe (nom d'usager exact,
+        /// insensible à la casse). Vide = AUCUN usager, même si
+        /// <see cref="ExternalChatRecordingsEnabled"/> est vrai
+        /// (fail-closed). Porte CUMULATIVE : le droit natif d'enregistrer
+        /// (<see cref="PermissionGate.CanRecordLive"/>) est exigé EN PLUS —
+        /// lister un usager ne contourne jamais la policy Emby. Les
+        /// administrateurs restent refusés sur tout le chemin externe.
+        /// </summary>
+        public List<string> ExternalChatRecordingUsers { get; set; } = new List<string>();
+
+        /// <summary>
+        /// Nombre max d'enregistrements créés PAR 24 HEURES (fenêtre
+        /// glissante) par usager, via le chat externe — garde-fou dur
+        /// côté serveur : le compteur ne bouge qu'à la CRÉATION réelle
+        /// du timer (confirm réussi), jamais aux réservations (expirées
+        /// ou refusées, elles ne paient rien). <c>0</c> = illimité
+        /// (préserver le 0 à la sauvegarde). Défaut 3.
+        /// </summary>
+        public int ExternalChatRecordingMaxPerDay { get; set; } = 3;
     }
 }
