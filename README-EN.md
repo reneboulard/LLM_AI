@@ -702,8 +702,19 @@ modify another plugin's config). Full details:
   Conversation memory reuses `chat_memory.json` (key = resolved user). The app also
   ships the **`client_command`** tool (non-destructive commands on the user's active
   client: projection, play/pause/stop, volume, playback status `playback_status` —
-  position, remaining time, active tracks, time skips `seek` — approximate, the
-  server-known position lags a few seconds, subtitle on/off `set_subtitle_track`
+  position, remaining time, active tracks, `series_id`/`season`/`episode` of what
+  plays, time skips `seek` — approximate, the
+  server-known position lags a few seconds, launching `play_item` — movie or
+  episode; a series/season starts at its next unwatched episode (the client does
+  not expand a series id), next episode `play_next` — "skip to the next one"
+  during playback, confirmed by RE-READING what the client actually plays:
+  if the library holds duplicate occurrences — two DIFFERENT episodes under the
+  same (season, episode), e.g. one series spread over two folders — the client
+  plays the primary twin of the requested number (verified on Android TV client
+  3.5.55); the plugin therefore announces the client's truth rather than its
+  prediction, and a switch unconfirmed within ~6 s becomes an explicit error
+  instead of a phantom success (v1.13.25–26), subtitle on/off
+  `set_subtitle_track`
   and audio track change `set_audio_track` — off, language, or track index; short
   toast only after a successful track switch) and the **`record_program`** tool
   (voice DVR recordings — reservation with no effect, timer created on PIN

@@ -719,7 +719,7 @@ namespace LLM_AI
                 // sur le chemin chat externe (toolUser), allowlist stricte,
                 // session bornée à l'usager résolu (ClientCommandTool).
                 if (toolUser != null)
-                    tools.Add(new ClientCommandTool(sessions, _library, toolUser, _logger));
+                    tools.Add(new ClientCommandTool(sessions, _library, _host, toolUser, _logger));
                 if (includeAuditTools)
                     tools.AddRange(BuildAuditTools(cfg, sessions, tasks, notifications));
                 if (extraTools != null && extraTools.Count > 0)

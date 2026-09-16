@@ -10,6 +10,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.26.3] — 2026-09-16
+
+### Added (FR)
+- **`play_next` — l'épisode suivant, confirmé par le client.** Nouvelle
+  commande de `client_command` : « passe au suivant » en pleine lecture.
+  Le next up natif d'Emby retourne l'épisode EN COURS non terminé (c'est le
+  « prochain à regarder ») ; `play_next` lance donc le premier épisode non
+  visionné STRICTEMENT APRÈS le courant
+  (`NextUpResolver.FirstUnwatchedAfter`), sans marquer le courant comme
+  vu (aucune écriture surprise). Porte parentale identique à `play_item`.
+- **Occurrences dupliquées en bibliothèque : le client décide, le plugin
+  relaie la vérité.** Découverte d'empirisme (2026-09-16, client Android TV
+  3.5.55) : quand la bibliothèque compte deux occurrences du même
+  (saison, épisode) — par exemple une même série répartie sur deux
+  répertoires où des épisodes DIFFÉRENTS héritent du même numéro — le
+  client joue le jumeau « principal » du (saison, épisode) demandé, pas
+  l'id exact envoyé. Conséquences en chaîne, toutes rencontrées en
+  direct :
+  - un `PlayNow` vers un id différent **bascule la lecture même en
+    cours** — la croyance « PlayNow ignoré pendant la lecture » était un
+    artefact : le client jouait fidèlement l'autre copie du même contenu ;
+  - la résolution de `play_next` dédouble par (saison, épisode), pas par
+    id : le jumeau de l'épisode courant est sauté, sinon « le suivant »
+    était le courant, rejoué indéfiniment ;
+  - après l'envoi, `play_next` RELIT ce que le client joue réellement
+    (sondage ~6 s) : la réponse `ok:true` porte le titre réellement à
+    l'écran, pas la prédiction du résolveur — sinon le plugin lui-même
+    nourrissait l'annonce d'un mauvais titre ; bascule non confirmée =
+    erreur explicite (« n'annonce PAS le changement »), le modèle ne peut
+    pas rapporter un succès fantôme.
+- **RÈGLE ABSOLUE — actions réelles uniquement (v1.13.26.1).** Bloc
+  injecté au prompt du chat externe : aucune annonce de lecture, saut,
+  épisode suivant ou commande client sans avoir appelé `client_command`
+  pour CETTE action et reçu `ok:true`. Né des enregistrements à code
+  (v1.13.23) puis de trois mensonges consécutifs d'un petit modèle
+  local (gemma4:latest, 2026-09-16) : actions « effectuées » sans aucun
+  appel d'outil, session empoisonnée par son propre historique — une
+  règle non injectée au prompt est une règle inexistante.
+
+### Added (EN)
+- **`play_next` — the next episode, confirmed by the client.** New
+  `client_command` command: "skip to the next one" during playback.
+  Emby's native next-up returns the UNFINISHED current episode (it is
+  the "next to watch"); `play_next` therefore launches the first
+  unwatched episode STRICTLY AFTER the current one
+  (`NextUpResolver.FirstUnwatchedAfter`), without marking the current
+  one watched (no surprise writes). Same parental gate as `play_item`.
+- **Duplicate library occurrences: the client decides, the plugin relays
+  the truth.** Empirical finding (2026-09-16, Android TV client 3.5.55):
+  when the library holds two occurrences of the same (season, episode) —
+  e.g. one series spread over two folders where DIFFERENT episodes
+  inherit the same number — the client plays the "primary" twin of the
+  requested (season, episode), not the exact id sent. Chain of
+  consequences, all observed live:
+  - a `PlayNow` toward a different id **switches playback even
+    mid-stream** — the "PlayNow ignored during playback" belief was an
+    artifact: the client was faithfully playing the other copy of the
+    same content;
+  - `play_next` resolution dedupes by (season, episode), not by id: the
+    current episode's twin is skipped, otherwise "the next one" was the
+    current one, replayed forever;
+  - after sending, `play_next` RE-READS what the client actually plays
+    (~6 s poll): the `ok:true` reply carries the title really on screen,
+    not the resolver's prediction — otherwise the plugin itself fed the
+    small model a wrong title to announce; unconfirmed switch = explicit
+    error ("do NOT announce the change"), the model cannot report a
+    phantom success.
+- **ABSOLUTE RULE — real actions only (v1.13.26.1).** Prompt block
+  injected into the external chat: never announce a playback, a skip, a
+  next episode or a client command without having called
+  `client_command` for THAT action and received `ok:true`. Born from the
+  PIN recordings (v1.13.23) and three consecutive lies of a small local
+  model (gemma4:latest, 2026-09-16): actions "performed" with no tool
+  call at all, the session poisoned by its own history — a rule not
+  injected into the prompt is a rule that does not exist.
+
+## [1.13.25.1] — 2026-09-16
+
+### Added (FR)
+- **Série → épisode jouable (v1.13.25.0).** Un `PlayNow` portant un id de
+  série/saison est silencieusement ignoré par le client Android TV (le
+  serveur répond 204, l'app ne joue rien — vérifié 2026-09-16) :
+  `play_item` étend donc une série/saison en son prochain épisode non
+  visionné (`NextUpResolver` : next up natif + repli premier non vu — sur
+  ce build, `GetNextUp` est vide pour une série jamais commencée et peut
+  renvoyer un épisode déjà vu), et refuse tout autre conteneur
+  (collection, playlist, personne) avec une erreur explicite plutôt
+  qu'un no-op que le modèle habillerait d'une erreur inventée. Résolution
+  unifiée et partagée avec la normalisation des playlists AI Tonight.
+- **Contexte de lecture enrichi (v1.13.25.1).** `playback_status`
+  expose `series_id`, `season`, `episode` — le modèle peut raisonner sur
+  la position dans la série en un seul appel.
+
+### Added (EN)
+- **Series → playable leaf (v1.13.25.0).** A `PlayNow` carrying a
+  series/season id is silently ignored by the Android TV client (server
+  answers 204, the app plays nothing — verified 2026-09-16): `play_item`
+  therefore expands a series/season into its next unwatched episode
+  (`NextUpResolver`: native next-up + first-unwatched fallback — on this
+  build, `GetNextUp` is empty for a never-started series and may return
+  an already-watched episode), and refuses any other container
+  (collection, playlist, person) with an explicit error instead of a
+  no-op the model would dress up with an invented failure. Resolution
+  unified and shared with AI Tonight playlist normalization.
+- **Richer playback context (v1.13.25.1).** `playback_status` exposes
+  `series_id`, `season`, `episode` — the model can reason about the
+  position in the series in a single call.
+
 ## [1.13.24.0] — 2026-09-15
 
 ### Added (FR)

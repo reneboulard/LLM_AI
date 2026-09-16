@@ -727,8 +727,19 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   usager résolu). L'app embarque aussi le tool **`client_command`** (commandes non
   destructives sur le client actif de l'usager : projection, lecture/pause/arrêt,
   volume, état de lecture `playback_status` — position, durée restante, pistes
-  actives, sauts en avant/arrière `seek` — approximatifs, la position connue du
-  serveur a quelques secondes de retard, sous-titres on/off `set_subtitle_track` et
+  actives, `series_id`/`season`/`episode` de ce qui joue, sauts en avant/arrière
+  `seek` — approximatifs, la position connue du
+  serveur a quelques secondes de retard, lancement `play_item` — film ou épisode ;
+  une série/saison démarre à son prochain épisode non visionné (le client ne
+  développe pas un id de série), épisode suivant `play_next` — « passe au
+  suivant » en pleine lecture, confirmé par une RELECTURE de ce que le client
+  joue réellement : si la bibliothèque compte des occurrences dupliquées — deux
+  épisodes DIFFÉRENTS sous le même (saison, épisode), par exemple une série
+  répartie sur deux répertoires — le client joue le jumeau principal du numéro
+  demandé (vérifié sur client Android TV 3.5.55) ; le plugin annonce donc la
+  vérité du client et non sa prédiction, et une bascule non confirmée en ~6 s
+  devient une erreur explicite plutôt qu'un succès fantôme (v1.13.25–26),
+  sous-titres on/off `set_subtitle_track` et
   changement de piste sonore `set_audio_track` — off, langue ou n° de piste, toast
   court uniquement après une bascule de piste réussie) et le tool
   **`record_program`** (enregistrement DVR à la voix — réservation sans effet,

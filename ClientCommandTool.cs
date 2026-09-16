@@ -34,7 +34,11 @@ namespace LLM_AI
     ///     index, résolus sur les <c>MediaStreams</c> de l'item en cours).
     ///     Toasts SÉLECTIFS : un toast court s'affiche à l'écran UNIQUEMENT
     ///     après une bascule de piste réussie — rien pour seek/pause/volume,
-    ///     l'image et l'OSD natif du client parlent déjà.</item>
+    ///     l'image et l'OSD natif du client parlent déjà.
+    ///     <c>playback_status</c> inclut aussi l'id de la série et les
+    ///     numéros S/E de l'épisode en cours (v1.13.25.1) : « prochain
+    ///     épisode » = <c>play_item(series_id)</c> en un seul tool, sans
+    ///     recherche intermédiaire.</item>
     /// <item><b>Session bornée</b> : seules les sessions DONT l'usager est
     ///     celui de la requête sont ciblées (même règle que <c>Show</>,
     ///     forme « plus récente gagne ») — un usager ne pilote jamais
@@ -43,6 +47,23 @@ namespace LLM_AI
     ///     passent la policy parentale de l'usager
     ///     (<see cref="PermissionGate.IsParentallyAllowed"/>) — fail-closed,
     ///     la raison n'est pas révélée.</item>
+    /// <item><b>Feuille jouable (v1.13.25)</b> : un <c>PlayNow</c> sur un id
+    ///     de série/saison est ignoré par le client Android TV —
+    ///     <c>play_item</c> étend une série/saison en son prochain épisode
+    ///     non visionné (<see cref="NextUpResolver.ResolvePlayingEpisode"/>,
+    ///     next up + repli), et refuse tout autre conteneur (collection,
+    ///     playlist, personne) avec une erreur explicite au lieu d'un no-op
+    ///     silencieux que le LLM habillerait d'une erreur inventée.</item>
+    /// <item><b>play_next (v1.13.26)</b> : « passe au suivant » en pleine
+    ///     lecture — le next up d'Emby retourne l'épisode EN COURS non
+    ///     terminé, cette commande lance donc le premier non visionné
+    ///     STRICTEMENT APRÈS le courant
+    ///     (<see cref="NextUpResolver.FirstUnwatchedAfter"/>), dédupliqué
+    ///     par (saison, épisode). Après l'envoi, elle RELIT l'item que le
+    ///     client joue réellement (il peut substituer le jumeau principal
+    ///     du (saison, épisode) demandé) et l'annonce — bascule non
+    ///     confirmée en ~6 s = erreur explicite. Sans marquer le courant
+    ///     comme vu (aucune écriture surprise).</item>
     /// <item><b>Lecture seule du serveur</b> : aucune écriture métadonnées,
     ///     aucun tool d'action — une commande ne touche qu'un flux client.</item>
     /// </list>
@@ -52,14 +73,16 @@ namespace LLM_AI
     {
         private readonly ISessionManager _sessions;
         private readonly ILibraryManager _library;
+        private readonly IServerApplicationHost _host;
         private readonly User _user;
         private readonly ILogger _logger;
 
         public ClientCommandTool(ISessionManager sessions, ILibraryManager library,
-            User user, ILogger logger)
+            IServerApplicationHost host, User user, ILogger logger)
         {
             _sessions = sessions;
             _library = library;
+            _host = host;
             _user = user;
             _logger = logger;
         }
@@ -69,17 +92,18 @@ namespace LLM_AI
         public string Description =>
             "Envoie une commande non destructive au client Emby ACTIF de l'usager " +
             "(sa session à lui — jamais un autre appareil). Projection de fiche, " +
-            "lecture/pause/arrêt, volume, ET contrôle du visionnement en cours : " +
-            "état de lecture (playback_status), saut de temps (seek), bascule des " +
-            "pistes de sous-titres et d'audio. Utilise-le quand l'usager demande " +
-            "d'afficher ou de contrôler ce qui passe sur son écran.";
+            "lecture/pause/arrêt, épisode suivant, volume, ET contrôle du " +
+            "visionnement en cours : état de lecture (playback_status), saut de " +
+            "temps (seek), bascule des pistes de sous-titres et d'audio. " +
+            "Utilise-le quand l'usager demande d'afficher ou de contrôler ce qui " +
+            "passe sur son écran.";
 
         public string ArgumentsSchema => @"{
-  ""command"": ""playback_status | seek | set_subtitle_track | set_audio_track | display_item | play_item | go_home | pause | unpause | stop | set_volume | mute | unmute"",
+  ""command"": ""playback_status | seek | set_subtitle_track | set_audio_track | display_item | play_item | play_next | go_home | pause | unpause | stop | set_volume | mute | unmute"",
   ""offset_seconds"": ""(seek) décalage signé en secondes, ex. 30 ou -10 (|x| ≤ 1800)"",
   ""position_seconds"": ""(seek) position absolue dans le programme (0 = début)"",
   ""track"": ""(set_subtitle_track / set_audio_track) off | langue fr/fre | numéro de piste renvoyé par playback_status"",
-  ""item_id"": ""(display_item / play_item) identifiant de l'item (id renvoyé par les outils)"",
+  ""item_id"": ""(display_item / play_item) identifiant de l'item (id renvoyé par les outils) — play_item accepte un film, un épisode OU une série (jouée depuis son prochain épisode non visionné)"",
   ""volume"": ""(set_volume) entier 0-100""
 }";
 
@@ -102,6 +126,8 @@ namespace LLM_AI
                     case "play_item":
                         return await ItemCommandAsync(command, Str(args, "item_id"), ct)
                             .ConfigureAwait(false);
+                    case "play_next":
+                        return await PlayNextAsync(ct).ConfigureAwait(false);
                     case "playback_status":
                         return Status();
                     case "seek":
@@ -125,8 +151,8 @@ namespace LLM_AI
                         return Json(new { error = "commande inconnue ou non autorisée : « "
                             + command + " » (autorisées : playback_status, seek, "
                             + "set_subtitle_track, set_audio_track, display_item, "
-                            + "play_item, go_home, pause, unpause, stop, set_volume, "
-                            + "mute, unmute)." });
+                            + "play_item, play_next, go_home, pause, unpause, stop, "
+                            + "set_volume, mute, unmute)." });
                 }
             }
             catch (OperationCanceledException) { throw; }
@@ -191,14 +217,171 @@ namespace LLM_AI
                     device = session.DeviceName, item = item.Name });
             }
 
+            // play_item — toujours une FEUILLE jouable (v1.13.25) :
+            // un PlayNow portant un id de série/saison est ACCEPTÉ par le
+            // serveur (204) mais IGNORÉ par le client Android TV (vérifié
+            // 2026-09-16 sur BRAVIA, Emby for Android 3.5.55 : un id épisode
+            // joue, un id série reste sans effet — et le LLM, croyant à un
+            // échec, inventait alors une erreur client). Une série/saison
+            // devient donc son prochain épisode non visionné de l'usager
+            // (next up + repli — NextUpResolver, même résolution que les
+            // playlists AI Tonight) ; tout autre conteneur non jouable
+            // (collection, playlist, personne) est refusé explicitement au
+            // lieu d'un no-op silencieux.
+            var playTarget = item;
+            if (item is MediaBrowser.Controller.Entities.TV.Series
+                || item is MediaBrowser.Controller.Entities.TV.Season)
+            {
+                playTarget = NextUpResolver.ResolvePlayingEpisode(
+                    _library, _host, _user, item, _logger,
+                    "[CHAT-EXT] client_command play_item — ");
+                if (playTarget == null)
+                    return Json(new { error = "Aucun épisode non visionné à jouer pour « "
+                        + (item.Name ?? "cette série") + " » (série déjà entièrement vue ?)." });
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command play_item : série « {0} » → épisode « {1} » (id={2}).",
+                    item.Name, playTarget.Name, playTarget.InternalId);
+            }
+            else if (item is Folder)
+            {
+                return Json(new { error = "Type non jouable directement ("
+                    + item.GetType().Name
+                    + ") — attendu : film, épisode, ou série (développée en son prochain épisode)." });
+            }
+
+            // L'épisode étendu passe la MÊME porte parentale que la série
+            // (fail-closed, la raison n'est pas révélée).
+            if (!ReferenceEquals(playTarget, item)
+                && PermissionGate.IsParentallyAllowed(_user, playTarget) != PermissionGate.ParentalVerdict.Allowed)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} refusé (parental, épisode étendu) — usager {1}.",
+                    command, _user.Name);
+                return Json(new { error = "Cet item n'est pas autorisé pour cet usager." });
+            }
+
             // play_item — démarrer la lecture maintenant (PlayNow).
             await _sessions.SendPlayCommand(null, session.Id, new PlayRequest
             {
-                ItemIds = new[] { item.InternalId },
+                ItemIds = new[] { playTarget.InternalId },
                 PlayCommand = PlayCommand.PlayNow
             }, ct).ConfigureAwait(false);
             return Json(new { ok = true, command = "play_item",
-                device = session.DeviceName, item = item.Name });
+                device = session.DeviceName, item = playTarget.Name,
+                series = ReferenceEquals(playTarget, item) ? null : item.Name });
+        }
+
+        // ------------------------------------------------------------------
+        //  play_next — épisode suivant EXPLICITE de ce qui joue
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Passe à l'épisode suivant (v1.13.26) en lançant par
+        /// <c>PlayNow</c> le premier épisode non visionné STRICTEMENT APRÈS
+        /// l'épisode en cours (<see cref="NextUpResolver.FirstUnwatchedAfter"/>,
+        /// dédupliqué par (saison, épisode) — la bibliothèque peut compter
+        /// deux épisodes DIFFÉRENTS sous le même (saison, épisode), et sans
+        /// garde le « suivant » était le jumeau du courant, rejoué).
+        /// <b>Confirmation terrain (anti-menteur)</b> : le client peut
+        /// substituer l'item demandé par le jumeau principal de son
+        /// (saison, épisode) (vérifié 2026-09-16 sur BRAVIA : id 121711
+        /// demandé → 121713 joué) ; après l'envoi, la commande RELIT donc
+        /// ce que le client joue réellement (~6 s) et annonce CET item —
+        /// pas la prédiction du résolveur. Pas de bascule confirmée =
+        /// erreur explicite (le LLM ne peut pas annoncer un succès
+        /// fantôme). Ne MARQUE PAS le courant comme vu (aucune écriture
+        /// surprise).
+        /// </summary>
+        private async Task<string> PlayNextAsync(CancellationToken ct)
+        {
+            var session = ResolveSession();
+            if (session == null)
+                return Json(NoSessionError());
+
+            var np = session.NowPlayingItem;
+            if (np == null)
+                return Json(new { error = "Rien n'est en lecture — play_next "
+                    + "lance l'épisode suivant de ce qui joue (utilise play_item "
+                    + "pour démarrer une série)." });
+            if (!string.Equals(np.Type, "Episode", StringComparison.OrdinalIgnoreCase))
+                return Json(new { error = "L'item en lecture n'est pas un épisode "
+                    + "(« " + np.Name + " ») — play_next ne s'applique qu'aux séries." });
+
+            var current = ItemIdResolver.Resolve(_library, (np.Id ?? "").Trim());
+            // Série : depuis l'entité épisode si résolue, sinon depuis le
+            // SeriesId du DTO (les deux formes passent ItemIdResolver).
+            var series = (current as MediaBrowser.Controller.Entities.TV.Episode)?.Series
+                ?? ItemIdResolver.Resolve(_library, (np.SeriesId ?? "").Trim());
+            if (series == null)
+                return Json(new { error = "Série de l'épisode en cours introuvable — "
+                    + "impossible de déterminer le suivant." });
+
+            MediaBrowser.Controller.Library.IUserDataManager userData = null;
+            try { userData = _host?.TryResolve<MediaBrowser.Controller.Library.IUserDataManager>(); }
+            catch { }
+
+            var next = NextUpResolver.FirstUnwatchedAfter(
+                _library, userData, _user, series, current, _logger,
+                "[CHAT-EXT] client_command play_next — ");
+            if (next == null)
+                return Json(new { error = "Aucun épisode non visionné après « "
+                    + (current?.Name ?? np.Name) + " » (fin de saison ou série terminée ?)." });
+
+            // Même porte parentale que play_item (fail-closed, la raison
+            // n'est pas révélée).
+            if (PermissionGate.IsParentallyAllowed(_user, next) != PermissionGate.ParentalVerdict.Allowed)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command play_next refusé (parental) — usager {0}.",
+                    _user.Name);
+                return Json(new { error = "Cet item n'est pas autorisé pour cet usager." });
+            }
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command play_next : épisode « {0} » → « {1} » (id={2}).",
+                current?.Name ?? np.Name, next.Name, next.InternalId);
+
+            var fromId = (np.Id ?? "").Trim();
+            var fromName = current?.Name ?? np.Name;
+
+            await _sessions.SendPlayCommand(null, session.Id, new PlayRequest
+            {
+                ItemIds = new[] { next.InternalId },
+                PlayCommand = PlayCommand.PlayNow
+            }, ct).ConfigureAwait(false);
+
+            // Confirmation terrain : relire l'item que le client joue
+            // VRAIMENT (il peut substituer le jumeau principal du (S,E)
+            // demandé) et annoncer celui-là. ~6 s max, 500 ms/sondage.
+            string playedName = null, playedId = null;
+            int? playedSeason = null, playedEpisode = null;
+            for (int i = 0; i < 12; i++)
+            {
+                await Task.Delay(500, ct).ConfigureAwait(false);
+                var np2 = ResolveSession()?.NowPlayingItem;
+                if (np2 == null) continue; // bascule en cours (arrêt/relance)
+                var id2 = (np2.Id ?? "").Trim();
+                if (!string.IsNullOrEmpty(id2) && !string.Equals(id2, fromId, StringComparison.OrdinalIgnoreCase))
+                {
+                    playedName = np2.Name; playedId = id2;
+                    playedSeason = np2.ParentIndexNumber; playedEpisode = np2.IndexNumber;
+                    break;
+                }
+            }
+
+            if (playedName == null)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command play_next : bascule NON confirmée par le client en 6 s (demandé « {0} », id={1}).",
+                    next.Name, next.InternalId);
+                return Json(new { error = "La commande a été envoyée mais le client n'a "
+                    + "pas confirmé de bascule (l'épisode « " + fromName + " » joue "
+                    + "toujours). N'annonce PAS le changement — vérifie "
+                    + "playback_status ou l'écran." });
+            }
+
+            if (!string.Equals(playedId, next.InternalId.ToString(), StringComparison.OrdinalIgnoreCase))
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command play_next : client a substitué l'item demandé (id={0}) — joue « {1} » (id={2}), jumeau du même (saison, épisode) dans la bibliothèque.",
+                    next.InternalId, playedName, playedId);
+
+            return Json(new { ok = true, command = "play_next",
+                device = session.DeviceName, from = fromName, series = series.Name,
+                item = playedName, season = playedSeason, episode = playedEpisode });
         }
 
         // ------------------------------------------------------------------
@@ -301,7 +484,14 @@ namespace LLM_AI
                 ok = true, playing = true,
                 device = session.DeviceName, client = session.Client,
                 item = new { id = np.Id, name = np.Name, type = np.Type,
-                    series = np.SeriesName },
+                    series = np.SeriesName,
+                    // Contexte de navigation (v1.13.25.1) : l'id de la série
+                    // et les numéros S/E permettent au LLM d'enchaîner
+                    // DIRECTEMENT play_item(series_id) — « prochain épisode »
+                    // — sans le find intermédiaire qui faisait dériver les
+                    // petits modèles (id recopié/déformé).
+                    series_id = np.SeriesId,
+                    season = np.ParentIndexNumber, episode = np.IndexNumber },
                 position_seconds = pos / TicksPerSecond,
                 runtime_seconds = runtime / TicksPerSecond,
                 remaining_seconds = runtime > pos ? (runtime - pos) / TicksPerSecond : 0,

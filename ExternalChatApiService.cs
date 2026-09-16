@@ -129,12 +129,24 @@ namespace LLM_AI
             "playback_status (position, durée restante, pistes disponibles), " +
             "seek (avance/recule de N secondes, ou saute à N secondes / au " +
             "début), set_subtitle_track / set_audio_track (langue, « off », " +
-            "ou numéro de piste). Consulte playback_status AVANT un saut de " +
-            "temps. La position connue du serveur a quelques secondes de " +
-            "retard : présente les sauts comme approximatifs, ne promets " +
-            "jamais une précision à la seconde. Un toast s'affiche à l'écran " +
-            "pour les bascules de piste : inutile de le répéter dans ta " +
-            "réponse.";
+            "ou numéro de piste). Pour LANCER : play_item (film, épisode ou " +
+            "série — une série démarre à son prochain épisode non visionné) " +
+            "et play_next (l'épisode suivant APRÈS celui en cours — « passe " +
+            "au suivant » en pleine lecture). Consulte playback_status " +
+            "AVANT un saut de temps. La position connue du serveur a quelques " +
+            "secondes de retard : présente les sauts comme approximatifs, ne " +
+            "promets jamais une précision à la seconde. Un toast s'affiche à " +
+            "l'écran pour les bascules de piste : inutile de le répéter dans " +
+            "ta réponse." +
+            "\n### RÈGLE ABSOLUE — ACTIONS RÉELLES UNIQUEMENT (CHAT EXTERNE)\n" +
+            "N'annonce JAMAIS qu'une lecture, un saut, un épisode suivant ou " +
+            "une commande client est effectué sans avoir appelé " +
+            "client_command pour CETTE action et reçu ok:true en retour. " +
+            "Dire « ça démarre » / « c'est lancé » sans appel d'outil est " +
+            "une ERREUR GRAVE, même si l'action semble déjà évidente : le " +
+            "client Emby ne fait RIEN sans la commande. Si l'appel retourne " +
+            "une erreur ou qu'aucun client n'est actif, rapporte simplement " +
+            "l'erreur retournée ou ce que l'usager peut faire lui-même.";
 
         /// <summary>Bloc de workflow INJECTÉ EN PLUS de
         /// <see cref="ExternalWorkflowBlock"/> UNIQUEMENT quand l'app
