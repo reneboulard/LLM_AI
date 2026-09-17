@@ -931,16 +931,19 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>Proposition d'ids TMDB/IMDb issue du LLM (S2 de la tâche orphelins).</summary>
+        /// <summary>Proposition d'ids TMDB/IMDb/TVDB issue du LLM (S2 de la tâche orphelins).</summary>
         internal struct IdGuess
         {
             public string ImdbId;
             public int TmdbId;
+            /// <summary>Id TVDB (séries) — validé via TMDB /find tvdb_id.</summary>
+            public string TvdbId;
             public string OriginalTitle;
             public int? Year;
             public string Confidence;
             public bool IsEmpty =>
-                string.IsNullOrWhiteSpace(ImdbId) && TmdbId <= 0 && string.IsNullOrWhiteSpace(OriginalTitle);
+                string.IsNullOrWhiteSpace(ImdbId) && TmdbId <= 0
+                && string.IsNullOrWhiteSpace(TvdbId) && string.IsNullOrWhiteSpace(OriginalTitle);
         }
 
         /// <summary>Verdict du juge sémantique de synopsis (porte d'acceptation S2).</summary>
@@ -988,9 +991,10 @@ namespace LLM_AI
                     "Tu es un assistant de correspondance de métadonnées pour The Movie Database. " +
                     "À partir d'un titre EPG (souvent un titre québécois qui peut différer du titre " +
                     "France ou du titre original), + année/overview/chaîne optionnels, identifie LA " +
-                    "fiche TMDB la plus probable. Réponds UNIQUEMENT un objet JSON compact, sans " +
+                    "fiche TMDB la plus probable. Pour une série, tu peux aussi proposer son id TVDB " +
+                    "si tu le connais mieux que son id TMDB. Réponds UNIQUEMENT un objet JSON compact, sans " +
                     "explication ni balises markdown : " +
-                    "{\"imdb_id\":\"tt...\",\"tmdb_id\":12345,\"original_title\":\"...\",\"year\":2020," +
+                    "{\"imdb_id\":\"tt...\",\"tmdb_id\":12345,\"tvdb_id\":\"12345\",\"original_title\":\"...\",\"year\":2020," +
                     "\"confidence\":\"high|medium|low\"}. Champs vides (chaîne vide) ou 0 si inconnu.";
 
                 var user = new StringBuilder();
@@ -1116,6 +1120,7 @@ namespace LLM_AI
                     if (r.ValueKind != JsonValueKind.Object) return g;
                     g.ImdbId = StrId(r, "imdb_id");
                     if (r.TryGetProperty("tmdb_id", out var t) && t.TryGetInt32(out int tv)) g.TmdbId = tv;
+                    g.TvdbId = StrId(r, "tvdb_id");
                     g.OriginalTitle = StrId(r, "original_title");
                     if (r.TryGetProperty("year", out var y) && y.TryGetInt32(out int yv)) g.Year = yv;
                     g.Confidence = StrId(r, "confidence");

@@ -10,6 +10,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.27.1] — 2026-09-17
+
+### Changed (FR)
+- **Audit `OrphanAuditTaggedIds` : mismatch = flaguer, pas striper.** Le
+  dry-run de validation a montré que la garde lexicale titre↔fiche est
+  **aveugle aux titres traduits** : trois fiches correctes étaient rejetées
+  faute de token commun (« Erreur vitale » = « The Fatal Flaw », « Jungle
+  en délire » = « La Famille Delajungle », libellé EPG vs titre officiel
+  différent) — et le comportement initial (retrait des ids + reprise
+  S1→S2→S3) les aurait détruites sans espoir de les retrouver (la reprise
+  échoue sur la même garde). Correction : un mismatch **conserve les ids**
+  et se contente de migrer le tag vers `llmai-needs-review` — la
+  confirmation (ou le retrait de l'id) reste une décision humaine dans
+  l'éditeur Emby ; les vraies mauvaises identifications restent visibles
+  pour la même action manuelle. Le tag `llmai-not-found` est retiré au
+  passage (l'item a des ids, il n'est plus « introuvable », il attend une
+  confirmation). Les fiches illisibles (ex. fiche film posée sur un item
+  série) continuent d'être sautées sans écriture.
+
+### Changed (EN)
+- **`OrphanAuditTaggedIds` audit: flag on mismatch, don't strip.** The
+  validation dry-run showed the title↔entry lexical guard is **blind to
+  translated titles**: three CORRECT entries were rejected for lack of a
+  shared token (a French title sharing no word with the original one, an
+  EPG label differing from the official title) — and the initial behavior
+  (strip ids + immediate S1→S2→S3 retry) would have destroyed them beyond
+  recovery (the retry fails on the same guard). Fixed: a mismatch now
+  **keeps the ids** and merely migrates the tag to `llmai-needs-review` —
+  confirming (or removing the id) stays a human decision in the Emby
+  editor; genuinely wrong identifications remain equally visible for that
+  same manual action. The `llmai-not-found` tag is removed in the process
+  (the item has ids — it's no longer "not found", it awaits confirmation).
+  Unreadable entries (e.g. a movie entry set on a series-typed item) are
+  still skipped without any write.
+
+## [1.13.27.0] — 2026-09-17
+
+### Added (FR)
+- **Identification des orphelins : la date-marqueur d'Emby « au grain de
+  sel ».** Découverte de terrain (2026-09) : quand Emby n'identifie pas une
+  vidéo, il colle une **date ISO en fin de titre** (« Arthur l'aventurier
+  au Costa Rica 2017-01-01 ») — une date de diffusion, pas l'année de
+  l'œuvre (fiche TMDB : 2015). Ce seul marqueur sabotait toute la chaîne :
+  requêtes de recherche avec la date collée (S0/S1 : zéro résultat), filtre
+  `primary_release_year` sur une année fausse, garde d'année ±1 qui rejetait
+  la bonne fiche, requête web avec la date dupliquée. Corrections :
+  - `CleanEpgTitle` retire les dates ISO des requêtes de recherche (le
+    `Name` de l'item n'est jamais modifié) ;
+  - quand le titre porte le marqueur, l'année est dite **soft** : la
+    recherche part SANS filtre d'année et la porte ne rejette plus sur
+    l'écart d'années — l'acceptation repose sur le titre lexicale + le
+    juge synopsis ;
+  - S1 gagne une **cascade annuelle** générale : si la recherche filtrée
+    par année ne retourne rien, on rejoue sans filtre (l'année de diffusion
+    peut s'éloigner de l'année de sortie) ;
+  - S3 interroge le web avec le titre nettoyé et n'appende que l'année
+    fiable.
+- **S3 : ids TMDB extraits des URLs de résultats.** Les fiches sans
+  présence IMDb (documentaires québécois…) n'atterrissaient jamais : on
+  extrait maintenant aussi les ids `themoviedb.org/movie|tv/<id>` (y compris
+  les URLs slug), validés comme les ids IMDb.
+- **S2 : les séries peuvent être proposées par id TVDB**, validé via
+  `TMDB /find?external_source=tvdb_id` — le LLM connaît souvent mieux
+  TVDB pour les séries ; aucune nouvelle dépendance.
+- **Audit des taggés qui ont reçu un id entre-temps (opt-in
+  `OrphanAuditTaggedIds`).** Un item marqué introuvable/besoin-revue peut
+  être identifié par Emby APRÈS le tag — parfois à tort (cas réel : un
+  dessin animé jeunesse rattrapé sur un drama coréen homonyme). L'audit
+  relit la fiche de l'id posé et la confronte au titre de l'item :
+  match → verrous + tag identifié ; mismatch → ids retirés, champs issus
+  de la fausse fiche vidés, reprise immédiate S1→S2→S3. Respecte le
+  dry-run. Passe 04 h uniquement (avec vérité EPG, l'audit à juge synopsis
+  reste la voie).
+
+### Added (EN)
+- **Orphan identification: Emby's trailing date, taken with a grain of
+  salt.** Field finding (2026-09): when Emby fails to identify a video it
+  appends an **ISO date to the title** ("Arthur l'aventurier au Costa
+  Rica 2017-01-01") — a broadcast date, not the work's year (TMDB entry:
+  2015). That single marker sabotaged the whole chain: searches with the
+  date glued on (S0/S1: zero results), a `primary_release_year` filter on
+  a wrong year, the ±1 year gate rejecting the right entry, a web query
+  with the date duplicated. Fixes:
+  - `CleanEpgTitle` strips ISO dates from search queries (the item's
+    `Name` is never modified);
+  - when the title carries the marker, the year is **soft**: the search
+    runs WITHOUT a year filter and the gate no longer rejects on year
+    gaps — acceptance rests on the lexical title + the synopsis judge;
+  - S1 gains a general **year cascade**: when the year-filtered search
+    returns nothing, retry unfiltered (broadcast year can drift from
+    release year);
+  - S3 queries the web with the cleaned title and only appends a trusted
+    year.
+- **S3: TMDB ids extracted from result URLs.** Entries with no IMDb
+  presence (Quebec documentaries…) could never land: ids from
+  `themoviedb.org/movie|tv/<id>` URLs (slug URLs included) are now
+  extracted too and validated like IMDb ids.
+- **S2: series can be proposed by TVDB id**, validated through
+  `TMDB /find?external_source=tvdb_id` — the LLM often knows TVDB better
+  for series; no new dependency.
+- **Audit of tagged items that received an id in the meantime (opt-in
+  `OrphanAuditTaggedIds`).** An item tagged not-found/needs-review can be
+  identified by Emby AFTER the tag — sometimes wrongly (real case: a
+  kids' cartoon matched to a namesake Korean drama). The audit re-reads
+  the entry of the written id and checks it against the item title:
+  match → locks + identified tag; mismatch → ids removed, fields from
+  the wrong entry cleared, immediate S1→S2→S3 retry. Honors the dry-run.
+  4 AM pass only (with EPG truth, the synopsis-judge audit remains the
+  path).
+
+---
+
 ## [1.13.26.3] — 2026-09-16
 
 ### Added (FR)

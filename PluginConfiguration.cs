@@ -930,6 +930,19 @@ namespace LLM_AI
         /// </summary>
         public bool OrphanValidateOnRecordingEnd { get; set; } = false;
 
+        /// <summary>
+        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : audit des items taggés
+        /// <c>llmai-not-found</c>/<c>llmai-needs-review</c> qui ont reçu des ids
+        /// provider <b>entre-temps</b> (identification tardive d'Emby — parfois
+        /// fausse, ex. un titre d'émission jeunesse rattrapé sur un drama
+        /// homonyme). La fiche TMDB de l'id posé est relue et confrontée au
+        /// titre de l'item (garde lexicale) : match → verrous + migration du
+        /// tag vers <c>llmai-identified</c> ; mismatch → retrait des ids +
+        /// reprise immédiate du pipeline S1→S2→S3 (auto-remédiation). Respecte
+        /// le dry-run. Mutant des métadonnées — d'où l'opt-in.
+        /// </summary>
+        public bool OrphanAuditTaggedIds { get; set; } = false;
+
         // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Indépendant de la recommandation : un run agent dédié interroge

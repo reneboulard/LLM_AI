@@ -660,6 +660,21 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   pass remains the safety net. Limits: recordings already falsely identified before
   enabling are only recoverable if the EPG truth is still available (guide window or
   existing snapshot).
+- `OrphanAuditTaggedIds` (bool, **default `false` — explicit opt-in**) — during the 4 AM
+  pass, audits `llmai-not-found`/`llmai-needs-review` items that **received an Emby id
+  in the meantime**: the TMDB entry of the written id is checked against the item
+  title — **match** → locks + `llmai-identified` tag; **mismatch** (diverging title:
+  translation, namesake) → `llmai-needs-review` tag with **ids kept** — the lexical
+  guard cannot see translated titles (e.g. a French title sharing no token with the
+  original) and an S1→S2→S3 retry would fail the same way; confirming (or removing
+  the id) stays a human decision, in the Emby editor. Honors the dry-run.
+- Chain details (v1.13.27): when Emby fails to identify a video it appends an **ISO
+  date to the title** (a broadcast date, not the work's year) — the pipeline strips
+  it from queries and treats the year as **indicative** (no `primary_release_year`
+  filter, no ±1 year gate: lexical title + synopsis judge decide). S1 retries
+  without a year filter when the filtered search fails; S3 extracts **IMDb and
+  TMDB** ids from result URLs; S2 accepts a **TVDB** id (series), validated via
+  `TMDB /find tvdb_id`.
 
 ### AI genre translation (GenreCleaner)
 
@@ -777,7 +792,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (internal static) | Pending-modification store (`chat_pending.json`, 10-min expiry, one per conversation, per user). `TakePagePending` (collects the diff card for the turn), `PeekPagePending` (peeks without consuming — nudge net), `Consume` (approval: removes the action if it exists, has not expired, belongs to this user AND session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Chat tool `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`): `list`/`get` (read the five fields) and `set` — **two-phase**: validates (field whitelist, 8000-char cap, non-empty text, field = active mode) then serializes the proposal into `ChatPromptStore`; the write happens only on the "Approve" click (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, deterministic C#) — the LLM has NO direct write path. Divergence warning (lexical overlap < 25 %) carried by the diff card. See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. See [Orphan identification](#orphan-recording-identification). |
-| `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB) → S2 (LLM) → S3 (SearXNG), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis), non-destructive apply + add-only locks, poster via `SaveImage`. |
+| `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), audit of tagged items that received an id in the meantime (`OrphanAuditTaggedIds` — match → identified tag, mismatch → needs-review flag with **ids kept**, translated titles invisible to the lexical guard), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB, Emby date marker = soft year + year cascade) → S2 (LLM, IMDb/TMDB/series-TVDB ids) → S3 (SearXNG, IMDb and TMDB ids from URLs), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis), non-destructive apply + add-only locks, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation when each DVR recording finishes (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle without restart): freezes the **EPG truth** into `recording_validate.json` (`RecordingValidateStore`, EpgSnapshotStore pattern) **before** Emby's identification can overwrite the synopsis, background loop (~3 min after import) → `OrphanResolver` with the truth; dry-run honored, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default poster (`default_poster.jpg`, embedded resource) on the `AI Tonight` collection (BoxSet) and the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
@@ -1305,18 +1320,26 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
 
 1. **S1 — cleanup + multi-language search.** The EPG title is stripped of noise by
    `CleanEpgTitle` (`HD`/`VOSTFR`/`VF`/`VO` markers, "Rediff."/"Inédit", `S##E##` /
-   `Saison \d` / `Épisode \d`, parentheses) then searched on TMDB in several languages:
-   `en-US` (original title), `fr-FR` (France title), + the user's language. A candidate
-   is accepted if the **normalized title** matches (guard against an ambiguous wrong
-   match), with a year check. **S1 only runs when `ProductionYear` is known**: without a
-   reliable year, TMDB search is broad and the lexical guard (no judge) could accept a
-   wrong same-titled film — orphans with no year go straight to S2/S3.
+   `Saison \d` / `Épisode \d`, parentheses, **ISO dates**) then searched on TMDB in
+   several languages: `en-US` (original title), `fr-FR` (France title), + the user's
+   language. A candidate is accepted if the **normalized title** matches (guard
+   against an ambiguous wrong match), with a year check. **S1 only runs when
+   `ProductionYear` is known**: without a reliable year, TMDB search is broad and the
+   lexical guard (no judge) could accept a wrong same-titled film — orphans with no
+   year go straight to S2/S3. **Special case (v1.13.27) — Emby's date marker**: when
+   the title ends with an ISO date glued by Emby (failed identification: the date is
+   the broadcast date, not the work's year), the year is **soft**: S1 searches
+   without a year filter, the ±1 gate is disabled, acceptance rests on the lexical
+   title + the synopsis judge. A year-filtered search that fails is additionally
+   **replayed without the filter** (year cascade, any orphan).
 2. **S2 — LLM proposal validated by TMDB** (if S1 fails). `LlmRunner.ResolveIdsAsync`
-   asks the LLM for an IMDb/TMDB id from the EPG title + overview + channel (one-shot
-   call, multi-backend with fallback). The proposal is **never applied as-is**: it is
-   validated via `FindByExternalIdAsync` (TMDB `/find` by `imdb_id`) or
-   `LookupMetaByIdAsync` (detail by `tmdb_id`) — **TMDB is the source of truth**, a
-   hallucinated id returns null. Failing that, the proposed original title is fed to S1.
+   asks the LLM for an IMDb/TMDB id — **or a TVDB id for a series** (v1.13.27,
+   validated via `TMDB /find` by `tvdb_id`) — from the EPG title + overview + channel
+   (one-shot call, multi-backend with fallback). The proposal is **never applied
+   as-is**: it is validated via `FindByExternalIdAsync` (TMDB `/find` by
+   `imdb_id`/`tvdb_id`) or `LookupMetaByIdAsync` (detail by `tmdb_id`) — **TMDB is
+   the source of truth**, a hallucinated id returns null. Failing that, the proposed
+   original title is fed to S1.
    Each candidate must then pass a **semantic acceptance gate**:
    - **year guard** (`YearCompatible`, ±1 year);
    - **LLM synopsis judge** (`LlmRunner.JudgeSynopsisMatchAsync`) compares the EPG
@@ -1330,12 +1353,14 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
      ("insufficient evidence"). Without this guard, a hallucinated id landing on a real
      but unrelated fiche (empty fiche: no synopsis, no year) was accepted on the id
      alone. The verdict + reasoning are logged.
-3. **S3 — web search (SearXNG) → IMDb id** (if S1 and S2 fail, and
+3. **S3 — web search (SearXNG) → IMDb/TMDB ids** (if S1 and S2 fail, and
    `OrphanSearXngEnabled`). The task queries the self-hosted **[SearXNG](https://docs.searxng.org/)** instance
    (`SearXngUrl` field, already used by the LLM's `web_search` tool; Ollama cloud
-   fallback), extracts **IMDb ids** from result URLs (regex
-   `imdb.com/.../title/tt…`, appearance order = SearXNG relevance), then validates each
-   id via `FindByExternalIdAsync` + the **same acceptance gate** (year + synopsis judge).
+   fallback), extracts **IMDb and TMDB ids** from result URLs (regexes
+   `imdb.com/.../title/tt…` and `themoviedb.org/(movie|tv)/<id>`, appearance order =
+   SearXNG relevance — entries with no IMDb presence become reachable, v1.13.27),
+   then validates each id via `FindByExternalIdAsync`/`LookupMetaByIdAsync` + the
+   **same acceptance gate** (year + synopsis judge).
    Mirrors **exactly** the user's manual method (web-search the title → IMDb id → Emby
    pulls TMDB → compare synopsis+date) and resolves **paraphrased Quebec titles** no
    catalog knows (e.g. "L'histoire de Jean Seberg" → film "Seberg" 2019 → tt1780967). A

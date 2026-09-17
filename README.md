@@ -683,6 +683,21 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
   La passe nocturne 04 h reste en filet. Limites : les enregistrements déjà faussement
   identifiés avant l'activation ne sont rattrapables que si la vérité EPG est encore
   disponible (fenêtre du guide ou snapshot existant).
+- `OrphanAuditTaggedIds` (bool, **défaut `false` — opt-in**) — à la passe 04 h, audite
+  les items `llmai-not-found`/`llmai-needs-review` qui ont **reçu un id Emby
+  entre-temps** : la fiche TMDB de l'id posé est confrontée au titre de l'item —
+  **match** → verrous + tag `llmai-identified` ; **mismatch** (titre divergent :
+  traduction, homonyme) → tag `llmai-needs-review` avec **ids conservés** — la garde
+  lexicale ne voit pas les titres traduits (ex. « Erreur vitale » = « The Fatal
+  Flaw ») et la reprise S1→S2→S3 échouerait pareillement ; la confirmation (ou le
+  retrait de l'id) reste humaine, dans l'éditeur Emby. Respecte le dry-run.
+- Détail de la chaîne (v1.13.27) : quand Emby n'identifie pas une vidéo il colle une
+  **date ISO en fin de titre** (date de diffusion, pas l'année de l'œuvre) — le
+  pipeline la retire des requêtes et traite l'année comme **indicative** (pas de
+  filtre `primary_release_year`, pas de garde ±1 an : titre lexicale + juge
+  synopsis décident). S1 rejoue sans filtre d'année si la recherche filtrée
+  échoue ; S3 extrait les ids **IMDb et TMDB** des URLs de résultats ; S2 accepte
+  un id **TVDB** (séries), validé via `TMDB /find tvdb_id`.
 
 ### Traduction IA des genres EPG (GenreCleaner)
 
@@ -802,7 +817,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (statique interne) | Store des propositions de modification en attente (`chat_pending.json`, expiration 10 min, une par conversation, par usager). `TakePagePending` (relève la carte de diff pour le tour), `PeekPagePending` (consulte sans consommer — filet nudge), `Consume` (approbation : retire l'action si elle existe, n'a pas expiré, appartient à cet usager ET à cette session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Tool de chat `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`) : `list`/`get` (lecture des cinq champs) et `set` — **two-phase** : valide (liste blanche, plafond 8000 car., texte non vide, champ = mode actif) puis sérialise la proposition dans `ChatPromptStore` ; l'écriture n'a lieu qu'au clic « Approuver » (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, C# déterministe) — le LLM n'a AUCUN chemin d'écriture direct. Avertissement de divergence (recouvrement lexical < 25 %) porté par la carte de diff. Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
 | `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series), résolution déléguée à `OrphanResolver` (S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found gelé), dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
-| `OrphanResolver.cs` | `OrphanResolver` (classe interne) | **Résolveur partagé** (tâche 04 h + `RecordingWatcher`) : audit d'un id posé par Emby (juge synopsis — match → verrous+tag, mismatch → retrait des ids + retour à l'état EPG + reprise), **S0** recherche native Emby (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (TMDB multilingue) → S2 (LLM) → S3 (SearXNG), porte d'acceptation commune (année + garde lexicale + juge `JudgeSynopsisMatchAsync`, corroboration obligatoire sur les voies par id sans synopsis comparable), application non destructive + verrous add-only, poster via `SaveImage`. |
+| `OrphanResolver.cs` | `OrphanResolver` (classe interne) | **Résolveur partagé** (tâche 04 h + `RecordingWatcher`) : audit d'un id posé par Emby (juge synopsis — match → verrous+tag, mismatch → retrait des ids + retour à l'état EPG + reprise), audit des taggés ayant reçu un id entre-temps (`OrphanAuditTaggedIds` — match → tag identifié, mismatch → flag needs-review **ids conservés**, titres traduits invisibles à la garde lexicale), **S0** recherche native Emby (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (TMDB multilingue, marqueur de date Emby = année soft + cascade annuelle) → S2 (LLM, ids IMDb/TMDB/TVDB séries) → S3 (SearXNG, ids IMDb et TMDB des URLs), porte d'acceptation commune (année + garde lexicale + juge `JudgeSynopsisMatchAsync`, corroboration obligatoire sur les voies par id sans synopsis comparable), application non destructive + verrous add-only, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation à la fin de chaque enregistrement DVR (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle sans redémarrage) : fige la **vérité EPG** dans `recording_validate.json` (`RecordingValidateStore`, pattern EpgSnapshotStore) **avant** que l'identification d'Emby n'écrase le synopsis, boucle d'arrière-plan (~3 min après l'import) → `OrphanResolver` avec la vérité ; dry-run respecté, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose un poster par défaut standardisé (`default_poster.jpg`, ressource embedded) sur la collection `AI Tonight` (BoxSet) et la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette du guide de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
@@ -1338,19 +1353,27 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 
 1. **S1 — nettoyage + recherche multilingue.** Le titre EPG est débarrassé de son
    bruit par `CleanEpgTitle` (marqueurs `HD`/`VOSTFR`/`VF`/`VO`, « Rediff. »/« Inédit »,
-   `S##E##` / `Saison \d` / `Épisode \d`, parenthèses) puis recherché sur TMDB en
-   plusieurs langues : `en-US` (titre original), `fr-FR` (titre France), + la langue de
-   l'usager. Un candidat est retenu si le **titre normalisé** correspond (garde-fou
-   contre un mauvais match ambigu), avec contrôle de l'année. **S1 n'est lancé que si
-   `ProductionYear` est connu** : sans année fiable, la recherche TMDB est large et la
-   garde lexicale (sans juge) pourrait accepter un faux film homonyme — les orphelins
-   sans année vont directement à S2/S3.
+   `S##E##` / `Saison \d` / `Épisode \d`, parenthèses, **dates ISO**) puis recherché
+   sur TMDB en plusieurs langues : `en-US` (titre original), `fr-FR` (titre France),
+   + la langue de l'usager. Un candidat est retenu si le **titre normalisé**
+   correspond (garde-fou contre un mauvais match ambigu), avec contrôle de l'année.
+   **S1 n'est lancé que si `ProductionYear` est connu** : sans année fiable, la
+   recherche TMDB est large et la garde lexicale (sans juge) pourrait accepter un
+   faux film homonyme — les orphelins sans année vont directement à S2/S3. **Cas
+   particulier (v1.13.27) — marqueur de date d'Emby** : quand le titre se termine
+   par une date ISO collée par Emby (échec d'identification : la date est celle de
+   la diffusion, pas l'année de l'œuvre), l'année est dite **soft** : S1 part sans
+   filtre d'année, la garde ±1 est désactivée, l'acceptation repose sur le titre
+   lexicale + le juge synopsis. La recherche filtrée par année qui échoue est de
+   plus **rejouée sans filtre** (cascade annuelle, tout orphelin).
 2. **S2 — proposition LLM validée par TMDB** (si S1 échoue). `LlmRunner.ResolveIdsAsync`
-   demande au LLM un id IMDb/TMDB à partir du titre EPG + overview + chaîne (appel
+   demande au LLM un id IMDb/TMDB — **ou TVDB pour une série** (v1.13.27, validé via
+   `TMDB /find` par `tvdb_id`) — à partir du titre EPG + overview + chaîne (appel
    one-shot, multi-backend avec repli). La proposition n'est **jamais appliquée telle
-   quelle** : elle est validée via `FindByExternalIdAsync` (TMDB `/find` par `imdb_id`)
-   ou `LookupMetaByIdAsync` (détail par `tmdb_id`) — **TMDB est la source de vérité**, un
-   id halluciné renvoie null. À défaut, le titre original proposé est passé à S1.
+   quelle** : elle est validée via `FindByExternalIdAsync` (TMDB `/find` par
+   `imdb_id`/`tvdb_id`) ou `LookupMetaByIdAsync` (détail par `tmdb_id`) — **TMDB est
+   la source de vérité**, un id halluciné renvoie null. À défaut, le titre original
+   proposé est passé à S1.
    Chaque candidat doit ensuite passer une **porte d'acceptation sémantique** :
    - **garde-fou année** (`YearCompatible`, ±1 an) ;
    - **juge LLM de synopsis** (`LlmRunner.JudgeSynopsisMatchAsync`) qui compare le
@@ -1364,17 +1387,20 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
      explicite (« preuve insuffisante »). Sans cette garde, un id halluciné tombant sur
      une fiche réelle mais sans rapport (fiche vide : ni synopsis, ni année) était
      accepté sur la seule foi de l'id. Le verdict + la justification sont logués.
-3. **S3 — recherche web (SearXNG) → id IMDb** (si S1 et S2 échouent, et
+3. **S3 — recherche web (SearXNG) → ids IMDb/TMDB** (si S1 et S2 échouent, et
    `OrphanSearXngEnabled`). La tâche interroge l'instance **SearXNG** auto-hébergée
    (champ `SearXngUrl`, déjà utilisé par l'outil `web_search` du LLM —
    [SearXNG](https://docs.searxng.org/) ; repli Ollama
-   cloud), extrait les **ids IMDb** des URLs de résultats (regex
-   `imdb.com/.../title/tt…`, ordre d'apparition = pertinence SearXNG), puis valide
-   chaque id via `FindByExternalIdAsync` + la **même porte d'acceptation** (année + juge
-   synopsis). Reproduit **exactement** la méthode manuelle de l'usager (web-search du
-   titre → id IMDb → Emby tire TMDB → comparaison synopsis+date) et résout les **titres
-   paraphrasés québécois** qu'aucun catalogue ne connaît (ex. « L'histoire de Jean
-   Seberg » → film « Seberg » 2019 → tt1780967). Un candidat accepté **sans synopsis à
+   cloud), extrait les **ids IMDb et TMDB** des URLs de résultats (regex
+   `imdb.com/.../title/tt…` et `themoviedb.org/(movie|tv)/<id>`, ordre
+   d'apparition = pertinence SearXNG — les fiches sans présence IMDb
+   deviennent atteignables, v1.13.27), puis valide chaque id via
+   `FindByExternalIdAsync`/`LookupMetaByIdAsync` + la **même porte
+   d'acceptation** (année + juge synopsis). Reproduit **exactement** la méthode
+   manuelle de l'usager (web-search du titre → id IMDb → Emby tire TMDB →
+   comparaison synopsis+date) et résout les **titres paraphrasés québécois**
+   qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg » → film
+   « Seberg » 2019 → tt1780967). Un candidat accepté **sans synopsis à
    comparer** est logué « à confirmer visuellement » (on fait confiance au classement
    SearXNG, comme l'usager le ferait avant de valider à la main).
 

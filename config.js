@@ -753,6 +753,7 @@ define(["loading"], function (loading) {
         view.querySelector("#chkOrphanRetryNeedsReview").checked = !!cfg.OrphanRetryNeedsReview;
         view.querySelector("#chkOrphanEmbyFirstPass").checked = cfg.OrphanEmbyFirstPass !== false;
         view.querySelector("#chkOrphanValidateOnRecordingEnd").checked = !!cfg.OrphanValidateOnRecordingEnd;
+        view.querySelector("#chkOrphanAuditTaggedIds").checked = !!cfg.OrphanAuditTaggedIds;
         // Audit santé — Lecture seule par défaut, remédiation opt-in.
         view.querySelector("#chkAuditEnabled").checked = cfg.AuditEnabled !== false;
         view.querySelector("#chkAuditRemediationEnabled").checked = !!cfg.AuditRemediationEnabled;
@@ -887,6 +888,7 @@ define(["loading"], function (loading) {
             OrphanRetryNeedsReview: view.querySelector("#chkOrphanRetryNeedsReview").checked,
             OrphanEmbyFirstPass: view.querySelector("#chkOrphanEmbyFirstPass").checked,
             OrphanValidateOnRecordingEnd: view.querySelector("#chkOrphanValidateOnRecordingEnd").checked,
+            OrphanAuditTaggedIds: view.querySelector("#chkOrphanAuditTaggedIds").checked,
             ChannelWhitelist: arrayToJson(collectChecked(view.querySelector("#wlChannels"))),
             GenreWhitelist: arrayToJson(collectChecked(view.querySelector("#wlGenres"))),
             SeriesFlags: arrayToJson(collectChecked(view.querySelector("#wlSeriesFlags"))),

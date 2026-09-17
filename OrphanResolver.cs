@@ -155,6 +155,7 @@ namespace LLM_AI
                 string reason;
                 if (strmCard) reason = "carte .strm (bibliothèque ai_suggestions)";
                 else if (taggedIdentified) reason = "déjà taggé " + OrphanIdentifyTask.TagIdentified;
+                else if (!orphan && (taggedReview || taggedNotFound) && cfg.OrphanAuditTaggedIds) reason = "taggé échec + ids reçus entre-temps → audit";
                 else if (taggedNotFound) reason = "déjà taggé " + OrphanIdentifyTask.TagNotFound + " (introuvable — gelé, réactivable en retirant le tag)";
                 else if (taggedReview) reason = retryReview ? ("needs-review (retry ON) → à retraiter") : ("déjà taggé " + OrphanIdentifyTask.TagNeedsReview);
                 else if (!orphan) reason = truth != null ? "a des ids provider → audit" : "a déjà un id provider (non-orphelin)";
@@ -169,6 +170,17 @@ namespace LLM_AI
             }
 
             if (strmCard) return Status.Skipped;
+
+            // Audit des taggés « revenus avec ids » : Emby identifie parfois un
+            // item APRÈS qu'il a été taggé introuvable/besoin-revue — parfois
+            // à tort (homonyme). Option OrphanAuditTaggedIds (opt-in) : la
+            // fiche de l'id posé est confrontée au titre de l'item ; mismatch
+            // = auto-remédiation (ids retirés + reprise S1→S2→S3). Passe 04 h
+            // uniquement : avec vérité EPG (RecordingWatcher), l'audit Emby à
+            // juge synopsis ci-dessous reste la voie supérieure.
+            if (truth == null && !orphan && (taggedReview || taggedNotFound) && cfg.OrphanAuditTaggedIds)
+                return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, userTmdb, verbose, ct).ConfigureAwait(false);
+
             if (tagged) return Status.Skipped;
 
             // --- Audit d'une identification Emby (truth fournie = RecordingWatcher).
@@ -211,16 +223,29 @@ namespace LLM_AI
             string cleanTitle = TmdbLookupTool.CleanEpgTitle(epgTitle);
             if (string.IsNullOrWhiteSpace(cleanTitle)) cleanTitle = epgTitle;
 
+            // Date ISO en fin de titre = marqueur d'échec d'identification
+            // d'Emby (passe 04 h : truth nulle, l'année vient de l'item).
+            // C'est une date de diffusion : l'année qu'elle induit est
+            // « soft » — on ne filtre pas la recherche TMDB dessus et la
+            // porte ne la rejette pas ; l'acceptation repose alors sur le
+            // titre lexicale + le juge synopsis.
+            bool yearSoft = truth == null && TmdbLookupTool.HasEmbyDateMarker(epgTitle);
+            int? searchYear = yearSoft ? (int?)null : year;
+            int? gateYear = yearSoft ? (int?)null : year;
+            if (yearSoft)
+                _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — date Emby en fin de titre : année {1} indicative (soft), titre nettoyé pour la recherche.",
+                    epgTitle, year.HasValue ? year.Value.ToString(CultureInfo.InvariantCulture) : "?");
+
             TmdbMeta meta = null;
             string stage = null;
 
             // S0 : recherche native Emby (moteur du dialogue « Identifier »).
-            if (allowS0 && year.HasValue)
+            if (allowS0 && (searchYear.HasValue || yearSoft))
             {
                 try
                 {
-                    meta = await ResolveViaEmbyAsync(cleanTitle, kind, isSeries, year,
-                        epgTitle, overview, userTmdb, trace, ct).ConfigureAwait(false);
+                    meta = await ResolveViaEmbyAsync(cleanTitle, kind, isSeries, searchYear,
+                        epgTitle, overview, userTmdb, gateYear, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S0";
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -229,14 +254,23 @@ namespace LLM_AI
 
             // S1 : recherche multilingue. Exige une année fiable : sans année,
             // la garde lexicale (sans juge) peut accepter un faux homonyme ;
-            // les items sans année restent à S2/S3 (juge sémantique).
-            if (meta == null && year.HasValue)
+            // les items sans année restent à S2/S3 (juge sémantique) — sauf
+            // année soft (marqueur Emby), où la recherche part SANS filtre
+            // d'année et la porte retombe sur titre lexicale + juge.
+            if (meta == null && (searchYear.HasValue || yearSoft))
             {
                 try
                 {
-                    var s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, year, langs, ct).ConfigureAwait(false);
+                    var s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, searchYear, langs, ct).ConfigureAwait(false);
+                    // Cascade annuelle : l'année de référence est une date de
+                    // diffusion, parfois éloignée de l'année de sortie — si le
+                    // filtre primary_release_year écarte tous les résultats,
+                    // rejouer SANS filtre (PickFirstResult privilégie déjà le
+                    // résultat à la bonne année).
+                    if (s1 == null && searchYear.HasValue)
+                        s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, null, langs, ct).ConfigureAwait(false);
                     if (s1 != null) trace.SawCandidates = true; // une banque liste le titre
-                    if (s1 != null && TitleMatches(cleanTitle, s1.Title, year, s1.Year))
+                    if (s1 != null && TitleMatches(cleanTitle, s1.Title, gateYear, s1.Year))
                     {
                         meta = s1;
                         stage = "S1";
@@ -246,12 +280,14 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S1 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
-            // S2 : proposition LLM validée par TMDB (juge).
+            // S2 : proposition LLM validée par TMDB (juge). L'année reste
+            // envoyée au LLM comme contexte indicatif ; la porte reçoit
+            // gateYear (null si soft).
             if (meta == null)
             {
                 try
                 {
-                    meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year,
+                    meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year, gateYear,
                         overview, truth?.Channel, langs, userTmdb, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S2";
                 }
@@ -259,12 +295,13 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S2 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
-            // S3 : recherche web (SearXNG) → ids IMDb → validation TMDB + juge.
+            // S3 : recherche web (SearXNG) → ids IMDb/TMDB → validation TMDB + juge.
             if (meta == null && cfg.OrphanSearXngEnabled)
             {
                 try
                 {
-                    meta = await ResolveViaSearXngAsync(cfg, epgTitle, kind, year, overview, userTmdb, trace, ct).ConfigureAwait(false);
+                    meta = await ResolveViaSearXngAsync(cfg, epgTitle, cleanTitle, kind, gateYear,
+                        yearSoft, overview, userTmdb, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S3";
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -390,6 +427,82 @@ namespace LLM_AI
             return meta2 != null ? Status.OrphanResolved : Status.NeedsReview;
         }
 
+        // ------------------------------------------------------------------
+        //  Audit des taggés « revenus avec ids » (passe 04 h, option
+        //  OrphanAuditTaggedIds). Un item taggé introuvable/besoin-revue peut
+        //  avoir été identifié par Emby APRÈS le tag — parfois à tort
+        //  (homonyme). Sans vérité EPG, le discriminateur est la garde
+        //  lexicale titre↔fiche (SANS année : l'année posée vient d'Emby,
+        //  pas du guide). Match → validation (verrous + tag identifié) ;
+        //  mismatch → auto-remédiation : ids retirés, champs issus de la
+        //  fausse fiche vidés, reprise immédiate S1→S2→S3. Respecte le
+        //  dry-run. Best-effort.
+        // ------------------------------------------------------------------
+
+        private async Task<Status> AuditTaggedIdsAsync(BaseItem item, PluginConfiguration cfg,
+            string kind, bool isSeries, bool dry, string userTmdb, bool verbose, CancellationToken ct)
+        {
+            string itemName = item.Name;
+            string cleanName = TmdbLookupTool.CleanEpgTitle(itemName);
+            if (string.IsNullOrWhiteSpace(cleanName)) cleanName = itemName;
+
+            // Relire la fiche TMDB de l'id posé (tmdb > imdb > tvdb séries) —
+            // même cascade que l'audit d'identification Emby.
+            TmdbMeta meta = null;
+            string tmdbRaw = item.GetProviderId("tmdb");
+            if (int.TryParse(tmdbRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) && tmdbId > 0)
+                meta = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
+            if (meta == null && !string.IsNullOrWhiteSpace(item.GetProviderId("imdb")))
+                meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("imdb").Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+            if (meta == null && isSeries && !string.IsNullOrWhiteSpace(item.GetProviderId("tvdb")))
+                meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("tvdb").Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+
+            if (meta == null)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » — fiche TMDB illisible pour l'id posé, item laissé tel quel.", itemName);
+                return Status.Skipped;
+            }
+
+            if (TitleMatches(cleanName, meta.Title, null, null))
+            {
+                if (dry)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify (DRY-RUN) : audit taggé « {0} » = « {1} » (tmdb={2}) → validation proposée — aucune écriture.",
+                        itemName, meta.Title, meta.TmdbId);
+                    return Status.OrphanResolved;
+                }
+                await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
+                _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » = « {1} » (tmdb={2}) → validé, tag {3}.",
+                    itemName, meta.Title, meta.TmdbId, OrphanIdentifyTask.TagIdentified);
+                return Status.OrphanResolved;
+            }
+
+            // Mismatch : titre EPG ≠ fiche. Les ids sont CONSERVÉS — la garde
+            // lexicale est aveugle aux titres traduits (dry-run 2026-09-17 :
+            // « Erreur vitale » = « The Fatal Flaw », « Jungle en délire » =
+            // « La Famille Delajungle » — fiches pourtant correctes) et la
+            // reprise S1/S2/S3 échouerait de la même façon (même garde). On
+            // flague needs-review : décision humaine dans l'éditeur Emby
+            // (retirer l'id si la fiche est fausse, puis re-tagguer). Le
+            // not-found est migré : l'item a des ids, il n'est plus
+            // « introuvable », il attend une confirmation.
+            _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » ≠ fiche « {1} » (tmdb={2}) — titre EPG divergent (traduction ? homonyme ?).",
+                itemName, meta.Title ?? "—", meta.TmdbId);
+            if (dry)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify (DRY-RUN) : « {0} » à flaguer {1} (ids conservés) — aucune écriture.",
+                    itemName, OrphanIdentifyTask.TagNeedsReview);
+                return Status.NeedsReview;
+            }
+
+            RemoveTag(item, OrphanIdentifyTask.TagNotFound);
+            AddTag(item, OrphanIdentifyTask.TagNeedsReview);
+            item.UpdateToRepository(ItemUpdateType.MetadataEdit);
+            _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » tagué {1} — ids conservés, fiche à confirmer manuellement (éditeur Emby).",
+                itemName, OrphanIdentifyTask.TagNeedsReview);
+            return Status.NeedsReview;
+        }
+
         /// <summary>
         /// Retrait des ids posés par Emby + retour à l'état EPG (overview/genres
         /// de la vérité, sinon vidés pour re-remplissage par la suite S1/S2/S3).
@@ -437,32 +550,33 @@ namespace LLM_AI
         private const int s_embyMaxCandidates = 8;
 
         private async Task<TmdbMeta> ResolveViaEmbyAsync(string cleanTitle, string kind, bool isSeries,
-            int? year, string epgTitle, string epgOverview, string userTmdb,
+            int? searchYear, string epgTitle, string epgOverview, string userTmdb, int? gateYear,
             PipelineTrace trace, CancellationToken ct)
         {
             // La recherche native suit la langue configurée du serveur ; la
-            // cascade multilingue de S1 reste le repli.
+            // cascade multilingue de S1 reste le repli. searchYear null
+            // (année soft) = recherche sans année.
             if (isSeries)
             {
                 var query = new RemoteSearchQuery<SeriesInfo>
                 {
-                    SearchInfo = new SeriesInfo { Name = cleanTitle, Year = year }
+                    SearchInfo = new SeriesInfo { Name = cleanTitle, Year = searchYear }
                 };
                 var results = await _providers.GetRemoteSearchResults<Series, SeriesInfo>(query, ct).ConfigureAwait(false);
-                return await PickEmbyCandidateAsync(results, kind, year, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
+                return await PickEmbyCandidateAsync(results, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
             }
 
             var mq = new RemoteSearchQuery<MovieInfo>
             {
-                SearchInfo = new MovieInfo { Name = cleanTitle, Year = year }
+                SearchInfo = new MovieInfo { Name = cleanTitle, Year = searchYear }
             };
             var mresults = await _providers.GetRemoteSearchResults<Movie, MovieInfo>(mq, ct).ConfigureAwait(false);
-            return await PickEmbyCandidateAsync(mresults, kind, year, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
+            return await PickEmbyCandidateAsync(mresults, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
         }
 
         private async Task<TmdbMeta> PickEmbyCandidateAsync(
             IEnumerable<MediaBrowser.Model.Providers.RemoteSearchResult> results,
-            string kind, int? year, string epgTitle, string epgOverview,
+            string kind, int? gateYear, string epgTitle, string epgOverview,
             string userTmdb, string cleanTitle, PipelineTrace trace, CancellationToken ct)
         {
             if (results == null) return null;
@@ -489,7 +603,7 @@ namespace LLM_AI
 
                 // Porte renforcée : titre lexicale + année + juge synopsis.
                 if (!await AcceptCandidateAsync(Plugin.Instance?.Configuration, meta, epgTitle,
-                        year, epgOverview, true, cleanTitle, ct).ConfigureAwait(false))
+                        gateYear, epgOverview, true, cleanTitle, ct).ConfigureAwait(false))
                     continue;
 
                 // Converti en fiche TMDB détaillée (genres, poster, statut) ;
@@ -533,22 +647,33 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         private async Task<TmdbMeta> ResolveViaLlmAsync(PluginConfiguration cfg,
-            string epgTitle, string cleanTitle, string kind, int? year,
+            string epgTitle, string cleanTitle, string kind, int? year, int? gateYear,
             string overview, string channel, string[] langs, string userTmdb,
             PipelineTrace trace, CancellationToken ct)
         {
             var guess = await _runner.ResolveIdsAsync(cfg, epgTitle, kind, year, overview, channel, ct).ConfigureAwait(false);
             if (guess.IsEmpty) return null;
 
-            // Année de référence (enregistrement) : préférence à l'année EPG,
-            // sinon à l'année proposée par le LLM.
-            int? expectedYear = year ?? guess.Year;
+            // Année de référence (enregistrement) : préférence à l'année de la
+            // porte (null si année soft), sinon à l'année proposée par le LLM.
+            int? expectedYear = gateYear ?? guess.Year;
 
             // 1) id IMDb → TMDB /find.
             if (!string.IsNullOrWhiteSpace(guess.ImdbId))
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true; // fiche réelle reléguée, même rejetée
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true).ConfigureAwait(false))
+                    return m;
+            }
+
+            // 1b) id TVDB (séries) → TMDB /find tvdb_id : les séries québécoises
+            // absentes de TMDB par titre existent souvent côté TVDB, et le LLM
+            // connaît mieux cette banque pour les séries.
+            if (kind == "series" && !string.IsNullOrWhiteSpace(guess.TvdbId))
+            {
+                var m = await _tmdb.FindByExternalIdAsync(guess.TvdbId.Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+                if (m != null) trace.SawCandidates = true;
                 if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true).ConfigureAwait(false))
                     return m;
             }
@@ -587,13 +712,21 @@ namespace LLM_AI
         private static readonly Regex s_imdbUrlRe = new Regex(
             @"imdb\.com/(?:[a-z\-]+/)?title/(tt\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        /// <summary>Ids TMDB dans les URLs de résultats web — capture aussi
+        /// les URLs slug (<c>themoviedb.org/movie/385870-arthur-…</c>) : les
+        /// fiches sans présence IMDb n'atterrissent que par cette voie.</summary>
+        private static readonly Regex s_tmdbUrlRe = new Regex(
+            @"themoviedb\.org/(?:movie|tv)/(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private async Task<TmdbMeta> ResolveViaSearXngAsync(PluginConfiguration cfg,
-            string epgTitle, string kind, int? year, string overview, string userTmdb,
-            PipelineTrace trace, CancellationToken ct)
+            string epgTitle, string cleanTitle, string kind, int? gateYear, bool yearSoft,
+            string overview, string userTmdb, PipelineTrace trace, CancellationToken ct)
         {
-            // Requête : titre EPG + année si connue (aide à lever l'ambiguïté).
-            string query = epgTitle;
-            if (year.HasValue) query = epgTitle + " " + year.Value.ToString(CultureInfo.InvariantCulture);
+            // Requête : titre NETTOYÉ (la date-marqueur Emby empoisonne la
+            // recherche) + année fiable si connue (aide à lever l'ambiguïté ;
+            // jamais l'année soft).
+            string query = cleanTitle;
+            if (gateYear.HasValue) query = cleanTitle + " " + gateYear.Value.ToString(CultureInfo.InvariantCulture);
 
             string json;
             using (var doc = JsonDocument.Parse("{\"query\":\"" + JsonEscape(query) + "\"}"))
@@ -607,8 +740,11 @@ namespace LLM_AI
                 return null;
             }
 
-            // Extraire les ids IMDb (uniques, ordre d'apparition = pertinence).
-            var ids = new List<string>();
+            // Extraire les ids IMDb et TMDB (uniques, ordre d'apparition =
+            // pertinence). Les fiches sans présence IMDb (docs québécois…)
+            // n'atterrissent que par leur id TMDB dans les URLs de résultats.
+            var imdbIds = new List<string>();
+            var tmdbIds = new List<string>();
             try
             {
                 using (var doc = JsonDocument.Parse(json))
@@ -624,33 +760,33 @@ namespace LLM_AI
                     {
                         foreach (var r in res.EnumerateArray())
                         {
-                            CollectImdbIds(r, "url", ids);
-                            CollectImdbIds(r, "content", ids);
+                            CollectIds(r, "url", imdbIds, tmdbIds);
+                            CollectIds(r, "content", imdbIds, tmdbIds);
                         }
                     }
                     if (root.TryGetProperty("infobox", out var ib) && ib.ValueKind == JsonValueKind.String)
-                        CollectImdbIdsFromText(ib.GetString(), ids);
+                        CollectIdsFromText(ib.GetString(), imdbIds, tmdbIds);
                     if (root.TryGetProperty("answers", out var ans) && ans.ValueKind == JsonValueKind.Array)
                         foreach (var a in ans.EnumerateArray())
-                            if (a.ValueKind == JsonValueKind.String) CollectImdbIdsFromText(a.GetString(), ids);
+                            if (a.ValueKind == JsonValueKind.String) CollectIdsFromText(a.GetString(), imdbIds, tmdbIds);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — échec parsing résultats ({1}).", epgTitle, ex.Message); }
 
-            if (ids.Count == 0)
+            if (imdbIds.Count == 0 && tmdbIds.Count == 0)
             {
                 // Des résultats web existent pour n'importe quelle requête
-                // (définitions de dictionnaire…) — seuls les ids IMDb
+                // (définitions de dictionnaire…) — seuls les ids IMDb/TMDB
                 // extraits comptent comme candidats (sémantique « introuvable »).
-                _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — aucun id IMDb trouvé dans les résultats web.", epgTitle);
+                _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — aucun id IMDb/TMDB trouvé dans les résultats web.", epgTitle);
                 return null;
             }
-            trace.SawCandidates = true; // ids IMDb trouvés dans le web
+            trace.SawCandidates = true; // ids trouvés dans le web
 
-            int? expectedYear = year;
+            int? expectedYear = gateYear;
 
-            foreach (string imdbId in ids)
+            foreach (string imdbId in imdbIds)
             {
                 var m = await _tmdb.FindByExternalIdAsync(imdbId, "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
@@ -662,22 +798,41 @@ namespace LLM_AI
                 }
             }
 
+            foreach (string tmdbIdRaw in tmdbIds)
+            {
+                if (!int.TryParse(tmdbIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) || tmdbId <= 0)
+                    continue;
+                var m = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                {
+                    if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
+                        _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » → candidat « {1} » (tmdb={2}) accepté SANS vérif synopsis — à confirmer visuellement.",
+                            epgTitle, m.Title, tmdbId);
+                    return m;
+                }
+            }
+
             return null;
         }
 
-        private void CollectImdbIds(JsonElement parent, string prop, List<string> ids)
+        private void CollectIds(JsonElement parent, string prop, List<string> imdbIds, List<string> tmdbIds)
         {
             if (!parent.TryGetProperty(prop, out var el) || el.ValueKind != JsonValueKind.String) return;
-            CollectImdbIdsFromText(el.GetString(), ids);
+            CollectIdsFromText(el.GetString(), imdbIds, tmdbIds);
         }
 
-        private void CollectImdbIdsFromText(string text, List<string> ids)
+        private void CollectIdsFromText(string text, List<string> imdbIds, List<string> tmdbIds)
         {
             if (string.IsNullOrEmpty(text)) return;
             foreach (Match match in s_imdbUrlRe.Matches(text))
             {
                 string id = match.Groups[1].Value;
-                if (!ids.Contains(id)) ids.Add(id);
+                if (!imdbIds.Contains(id)) imdbIds.Add(id);
+            }
+            foreach (Match match in s_tmdbUrlRe.Matches(text))
+            {
+                string id = match.Groups[1].Value;
+                if (!tmdbIds.Contains(id)) tmdbIds.Add(id);
             }
         }
 

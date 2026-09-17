@@ -993,6 +993,18 @@
                             redémarrage ; respecte le dry-run ci-dessus.
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkOrphanAuditTaggedIds" />
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.audit">Auditer les taggés qui ont reçu un id entre-temps</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.audit.desc">
+                            Si cochée, les items marqués <b>introuvables/besoins-revue</b> qui ont reçu un id
+                            Emby <b>après</b> le tag sont ré-audités : la fiche TMDB de l'id posé est confrontée
+                            au titre de l'item — <b>match</b> → verrous + tag identifié ; <b>mismatch</b>
+                            (identification Emby fausse, ex. un homonyme) → ids retirés et reprise immédiate
+                            du pipeline S1→S2→S3. Respecte le dry-run. <b>Opt-in</b> : modifie des métadonnées.
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.desc">
                             Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches

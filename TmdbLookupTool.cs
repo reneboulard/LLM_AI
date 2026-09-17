@@ -418,17 +418,33 @@ namespace LLM_AI
 
         // ------------------------------------------------------------------
         //  Nettoyage d'un titre EPG bruité (S1) : retire les marqueurs HD/VO/
-        //  VOSTFR/Rediff/Inédit, les numéros de saison/épisode, et les
-        //  parenthèses, puis collapse les espaces. Conservateur — ne retire que
-        //  le bruit typique des guides TV. Le titre original de l'item n'est
-        //  jamais modifié (ceci ne sert qu'à la requête de recherche).
+        //  VOSTFR/Rediff/Inédit, les numéros de saison/épisode, les
+        //  parenthèses, et les dates ISO (marqueur d'échec d'identification
+        //  qu'Emby colle en fin de titre — la date de diffusion n'est pas
+        //  l'année de l'œuvre), puis collapse les espaces. Conservateur — ne
+        //  retire que le bruit typique des guides TV. Le titre original de
+        //  l'item n'est jamais modifié (ceci ne sert qu'à la requête de
+        //  recherche).
         // ------------------------------------------------------------------
 
         private static readonly Regex s_epgNoise = new Regex(
             @"(?i)\b(?:HD|HDTV|VOSTFR|VF|VO|V\.O\.|V\.F\.|REDIFF|REDIFFUSION|INÉDIT|INEDIT|REDIF)\b" +
             @"|\bS\d{1,2}\s?E\d{1,3}\b|\bSaisons?\s+\d+\b|\b[ÉE]pisodes?\s+\d+\b" +
-            @"|[\(\[][^\)\]]*[\)\]]",
+            @"|[\(\[][^\)\]]*[\)\]]" +
+            @"|\s\d{4}-\d{2}-\d{2}\b",
             RegexOptions.Compiled);
+
+        /// <summary>Date ISO en fin de titre (ex. « … 2017-01-01 ») : marqueur
+        /// qu'Emby colle aux vidéos qu'il n'a PAS réussi à identifier — c'est
+        /// une date de diffusion/ajout, PAS l'année de l'œuvre.</summary>
+        private static readonly Regex s_embyDateMarker = new Regex(
+            @"\s\d{4}-\d{2}-\d{2}\s*$", RegexOptions.Compiled);
+
+        /// <summary>Le titre porte-t-il la date-marqueur d'échec d'identification
+        /// d'Emby ? L'année qui en découle doit être traitée avec un grain de sel
+        /// (indicative) par le pipeline orphelins.</summary>
+        internal static bool HasEmbyDateMarker(string title) =>
+            !string.IsNullOrWhiteSpace(title) && s_embyDateMarker.IsMatch(title);
 
         internal static string CleanEpgTitle(string s)
         {
