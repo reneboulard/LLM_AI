@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.24.0 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.13.27.1 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -809,7 +809,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Also answers `CanRecord`/`CanLiveTv` (v1.13.12.0: caller's permissions, policy read live). Serves **only** those fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 12 system-audit actions (sessions, tasks, transcoding, disks, logs, host metrics, processes, library) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 17 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). |
@@ -852,7 +852,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
 | `web_fetch` | Fetch/read a web page (`WebFetchDirect` for raw read). |
 | `new_releases` | TV new releases from the `NewReleaseSources` web sources (one per line): bare URL = auto-detected RSS/Atom feed; `URL :: @showbizz` = built-in Showbizz.net extractor ("Saison 1" blocks); `URL :: .NET regex` = custom extraction (required `title` group, optional `url`/`date`). Alias `showbizz_new_releases` (existing prompts). 24h cache invalidated by any source change (no restart). |
-| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 15 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`; **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 20 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `ratings_check` (rating hygiene); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
 
 ---
 
@@ -1225,6 +1225,7 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 | Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `transcode`, `gpu_transcode` |
 | Hardware & OS | `host_metrics` (BCL: process, GC, runtime, uptime, scan running, aggregate transcode CPU — GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters) |
 | Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres) |
+| Security & hygiene | `security_check` (missing passwords, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below) |
 
 | Family | **Remediation** actions (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1417,6 +1418,40 @@ never aborts the pass (per-item try/catch). Scope: **library `Movie`/`Series` it
 > `OrphanIdentifyDryRun` checked, trigger the task manually (Dashboard ▶ Scheduled
 > Tasks) and inspect the `[LLM_AI] OrphanIdentify` log lines before unchecking dry-run
 > for a real apply.
+
+### Known limitation — cross-kind movie/series fiches (kind cascade, future improvement)
+
+Every TMDB read (S1 search, S2/S3 validations, audit) queries the **item's Emby
+kind** (`Movie` → `/movie`, `Series` → `/tv`). A documentary mistyped in the EPG —
+a one-off film recorded as a "series", or the reverse — therefore points to a
+fiche **of the other kind**: S1 searches the wrong bucket, id-based validations
+return 404, and the audit skips it ("unreadable fiche"). The real fiche exists, it
+is simply **unreachable** through the whole chain (real case: a movie fiche set on
+a `Series`-typed item, manual remediation required).
+
+**Planned improvement ("kind cascade")** — carry the kind through to the fiche
+instead of deriving it from the item:
+
+- **S3**: read the kind from the **TMDB URL itself** (`themoviedb.org/movie/…` vs
+  `/tv/…`) — free, unambiguous;
+- **S1**: when the primary bucket fails, retry via `/search/multi` and honor
+  TMDB's `media_type`;
+- **S2**: the LLM returns its **proposed kind** in the verdict (`"type":
+  "movie"|"series"`) and validation runs under that kind; opposite-kind retry
+  **only** when absent — and then with the **synopsis judge mandatory** (never
+  title+year alone: TMDB movie and series id namespaces are independent, the same
+  number can designate two different works);
+- **audit**: re-read the fiche under the opposite kind when it is unreadable under
+  the item's kind.
+
+Retained apply policy: an accepted **cross-kind** fiche is applied (non-destructive
++ locks) but tagged **`llmai-needs-review`** with an explicit log line ("movie fiche
+applied to a series item — to confirm") rather than `llmai-identified`. Rationale:
+Emby itself can never re-read a cross-kind fiche on refresh (providers query by the
+item's kind) — a later Emby re-identification would overwrite the plugin fiche,
+and an `llmai-identified` item is never re-audited. A single human confirmation
+settles the case for good. The acceptance gate is otherwise unchanged (lexical +
+synopsis judge, kind-agnostic).
 
 ---
 
@@ -1694,7 +1729,8 @@ approved on the page — without ever opening the configuration page by hand.
   read the five fields; `set` only **proposes** — the proposal is serialized into
   `chat_pending.json` (10-min expiry, one per conversation) and the page shows an
   **Approve/Reject diff card**. The write happens only on the "Approve" click, in
-  deterministic C# (endpoint `ChatPrompt/Approve`): the LLM has NO direct write path,
+  deterministic C# (endpoint `ChatPrompt/Approve`; refusal goes through
+  `ChatPrompt/Refuse`, which writes nothing): the LLM has NO direct write path,
   approval cannot be bypassed by prompting. Guardrails: field whitelist, 8000-char
   cap, **field ↔ mode cross-validation** (a set may only target the active mode's
   prompt) and a **divergence warning** (lexical overlap < 25 % with the current text
@@ -2039,7 +2075,7 @@ Hard-reload (Emby JS cache). Check that the `i18n` key exists in both `STRINGS.f
 `STRINGS.en`.
 
 **Build: 0 warnings / 0 errors expected:** `bash deploy.sh` must finish with no errors or
-warnings. JS files are validated with `node --check` before deployment.
+warnings. The JS files are embedded in the DLL by the build (no separate JS step).
 
 ---
 

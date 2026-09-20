@@ -73,7 +73,7 @@
          Nécessairement en texte (data URI) car cet endpoint lit les ressources
          en UTF-8 et corromprait un binaire. -->
     <EmbeddedResource Include="bg.js" />
-    <!-- Vidéo de confirmation (10 s, 640x360, h264) renvoyée par l'endpoint
+    <!-- Vidéo de confirmation (8 s, 1280x720, h264) renvoyée par l'endpoint
          /Plugins/LLMAI/Activate quand l'usager lit une carte .strm : crée le
          timer d'enregistrement puis stream ce clip. Binaire OK ici car servi
          par notre propre endpoint (Content-Type video/mp4), pas par la route

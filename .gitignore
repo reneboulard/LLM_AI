@@ -19,6 +19,9 @@ dist/
 ## Claude Code local instructions
 CLAUDE.md
 
+## OpenCode local instructions
+AGENTS.md
+
 ## Generated at build (LLM_AI.csproj target GenerateAssetVersionJs)
 asset_version.js
 

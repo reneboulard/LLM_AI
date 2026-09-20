@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.24.0 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.13.27.1 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -834,7 +834,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `ClassificationMap.cs` | `ClassificationMap` (statique interne) | **Pont Classification Mapper** (lecture seule) : lecteur paresseux de `classification_mapper_config.json` (dossier de configuration du **serveur**, pas des plugins ; re-stat mtime throttlé 30 s — les mappings édités dans l'UI de Classification Mapper sont suivis sans redémarrage) ; normalise les classifications officielles hétérogènes (« PG-13 », « TV-14 », « 13+ »…) vers les valeurs canoniques de l'UI (« CA-G », « CA-14A »…). Neutre si le plugin est absent (passthrough en casse). Utilisé par l'action `find` de `get_emby_info`. Voir [Classifications officielles](#classifications-officielles-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | Endpoints **usager** de la page Recommandations : `GET /Plugins/LLMAI/Recos` (dernières recommandations de la tâche planifiée + date, tout usager authentifié — la page ne lit plus la config plugin via l'endpoint hôte admin `/Configuration`, qui renvoyait 403 aux non-admin) et `POST /Plugins/LLMAI/Forget {Title}` (bouton **Oublier** : ajoute à `DroppedTitles` serveur-side via `SaveConfiguration`). Répond en plus `CanRecord`/`CanLiveTv` (v1.13.12.0 : droits de l'appelant, policy lue à chaud). Ne sert **que** ces champs — jamais la config complète (clés API, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Update` : compare le tag de la dernière release GitHub (`releases/latest`, workflow `release.yml`) à la version d'assembly installée → bannière de mise à jour sur la page de config. Lecture seule (aucun téléchargement), cache 1 h sous verrou (limite API GitHub), `Force=1` pour bypasser, ne lève jamais (`Error` → pas de bannière). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 12 actions d'audit système (sessions, tâches, transcodage, disques, journaux, métriques hôte, processus, bibliothèque) + 3 actions de remédiation gated par `AuditRemediationEnabled`. Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 17 actions d'inspection (télémétrie, config, sessions, tâches, journaux, transcodage, matériel/OS, disques, bibliothèque, sécurité, hygiène des cotes et des marquages) + 3 actions de remédiation gated par `AuditRemediationEnabled`. Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
 | `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary` (rapprochement bibliothèque : titre exact/flou, **repli par id IMDb** via `AnyProviderIdEquals` — reco possédée → `library_id`, exclue du record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (pliage d'accents partagé `FoldAscii` : « leçons » ≡ « lecons »), résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Filet de formatage `SanitizeReport` (flèches LaTeX → « → », balises HTML dénudées) appliqué aux sorties audit et chat. Path chat : `RunChatAsync` (multi-tours, tous les outils existants, priorités LLM usager). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService` **et** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (statique interne) | Résolution bilingue des ids Emby : longs (InternalId — forme canonique du plugin, la seule que la couche REST/UI accepte) **et** Guids historiques (input legacy seulement, jamais émis). Corriger la devise d'ids qui faisait échouer toutes les validations Tonight. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour les paths audit et chat (sans toucher aux appelants recommandation). `RunChatAsync` : entrée multi-tours qui rejoue l'historique (user/assistant, borné) entre le system prompt et le nouveau message — même boucle partagée (`RunLoopAsync`). |
@@ -877,7 +877,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web (`WebFetchDirect` pour lecture brute). |
 | `new_releases` | Nouveautés TV depuis les sources web de `NewReleaseSources` (une par ligne) : URL seule = flux RSS/Atom auto-détecté ; `URL :: @showbizz` = extracteur Showbizz.net intégré (blocs « Saison 1 ») ; `URL :: regex .NET` = extraction personnalisée (groupe `title` requis, `url`/`date` optionnels). Alias `showbizz_new_releases` (prompts existants). Cache 24h invalidé par tout changement de sources (sans redémarrage). |
-| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 15 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata` ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
+| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 20 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (mots de passe, HTTPS, accès externe, IP publiques), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin), `ratings_check` (hygiène des cotes) ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---
 
@@ -1252,6 +1252,7 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
 | Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `transcode`, `gpu_transcode` |
 | Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
 | Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres) |
+| Sécurité & hygiène | `security_check` (mots de passe manquants, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous) |
 
 | Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1457,6 +1458,41 @@ passage (per-item try/catch). Scope : **items de bibliothèque `Movie`/`Series`*
 > `OrphanIdentifyDryRun` coché, déclencher la tâche manuellement (Dashboard ▶ Tâches
 > planifiées) et inspecter les lignes `[LLM_AI] OrphanIdentify` du journal avant de
 > décocher le dry-run pour une vraie application.
+
+### Limite connue — fiches croisées film/série (cascade de type, amélioration future)
+
+Toutes les lectures TMDB (recherche S1, validations S2/S3, audit) interrogent le
+**type Emby de l'item** (`Movie` → `/movie`, `Series` → `/tv`). Un documentaire mal
+typé dans l'EPG — film unique enregistré comme « série », ou l'inverse — pointe donc
+vers une fiche de **l'autre type** : S1 cherche dans le mauvais bac, les validations
+par id renvoient 404 et l'audit saute (« fiche illisible »). La vraie fiche existe,
+elle est simplement **injoignable** par toute la chaîne (cas réel : fiche film posée
+sur un item `Series`, remédiation manuelle nécessaire).
+
+**Amélioration prévue (« cascade de type »)** — faire suivre le type jusqu'à la
+fiche au lieu de le déduire de l'item :
+
+- **S3** : lire le type **de l'URL TMDB** elle-même (`themoviedb.org/movie/…` vs
+  `/tv/…`) — gratuit, sans ambiguïté ;
+- **S1** : en cas d'échec du bac principal, rejouer via `/search/multi` et honorer
+  le `media_type` renvoyé par TMDB ;
+- **S2** : le LLM retourne le **type proposé** dans son verdict (`"type":
+  "movie"|"series"`) et la validation se fait sous ce type ; repli sur le type
+  opposé **seulement** si absent — et alors avec **juge synopsis obligatoire**
+  (jamais titre+année seuls : les numéros TMDB film et série sont des espaces
+  indépendants, un même nombre peut désigner deux œuvres différentes) ;
+- **audit** : relire la fiche sous le type opposé quand elle est illisible sous le
+  type de l'item.
+
+Politique d'application retenue : une fiche **croisée** acceptée est appliquée
+(non destructive + verrous) mais taguée **`llmai-needs-review`** avec un log explicite
+(« fiche de type film appliquée sur un item série — à confirmer ») plutôt que
+`llmai-identified`. Motif : Emby lui-même ne peut jamais relire une fiche croisée au
+refresh (les providers interrogent selon le type de l'item) — un ré-identifiage
+Emby ultérieur écraserait la fiche du plugin, et un item `llmai-identified` n'est
+plus jamais ré-audité. Une confirmation humaine unique règle le cas définitivement.
+La porte d'acceptation reste inchangée (lexicale + juge synopsis, agnostique du
+type).
 
 ---
 
@@ -1747,7 +1783,8 @@ le chat, approuvé sur la page — sans jamais ouvrir la page de configuration �
   lisent les cinq champs ; `set` ne fait que **proposer** — la proposition est
   sérialisée dans `chat_pending.json` (expiration 10 min, une par conversation) et la
   page affiche une **carte de diff** Approuver/Refuser. L'écriture n'a lieu qu'au clic
-  « Approuver », en C# déterministe (endpoint `ChatPrompt/Approve`) : le LLM n'a
+  « Approuver », en C# déterministe (endpoint `ChatPrompt/Approve` ; le refus passe par
+  `ChatPrompt/Refuse`, qui n'écrit rien) : le LLM n'a
   AUCUN chemin d'écriture direct, l'approbation n'est pas contournable par prompt.
   Garde-fous : liste blanche des champs, plafond 8000 caractères, **validation
   croisée champ ↔ mode** (un set ne peut viser que le prompt du mode actif) et
@@ -2103,7 +2140,7 @@ Hard-reload (cache JS Emby). Vérifier que la clé `i18n` existe dans `STRINGS.f
 `STRINGS.en`.
 
 **Build : 0 warning / 0 erreur attendu :** `bash deploy.sh` doit terminer sans erreur ni
-warning. Les JS sont validés par `node --check` avant déploiement.
+warning. Les JS sont embarqués dans la DLL par le build (aucune étape JS distincte).
 
 ---
 
