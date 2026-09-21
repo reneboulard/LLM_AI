@@ -453,6 +453,17 @@ define([], function () {
                         if (data.Pending && data.Pending.ActionId) {
                             appendPendingCard(data.Pending);
                         }
+                        // Actions Emby en attente (v1.13.29, deux phases) :
+                        // une carte Approuver/Refuser par proposition —
+                        // l'exécution passe par l'endpoint ChatAction, le
+                        // LLM n'a aucun rôle.
+                        if (data.PendingActions && data.PendingActions.length) {
+                            for (var pa = 0; pa < data.PendingActions.length; pa++) {
+                                if (data.PendingActions[pa] && data.PendingActions[pa].ActionId) {
+                                    appendActionCard(data.PendingActions[pa]);
+                                }
+                            }
+                        }
                         // Identifiant de session (mémoire de conversation) :
                         // retourné à chaque tour, rejoué au suivant.
                         if (data.Session) chatSessionId = data.Session;
@@ -521,7 +532,12 @@ define([], function () {
 
                 function appendPendingCard(pending) {
                     if (!chatLog) return;
-                    var previous = chatLog.querySelectorAll(".chatPending");
+                    // Une seule carte de prompt active par session (la
+                    // nouvelle remplace l'ancienne) : on verrouille les
+                    // précédentes. Les cartes d'ACTION (.chatPendingAction,
+                    // v1.13.29) sont exclues — elles ont chacune leur
+                    // ActionId et ne sont pas supplantées par un prompt.
+                    var previous = chatLog.querySelectorAll(".chatPending:not(.chatPendingAction)");
                     for (var i = 0; i < previous.length; i++) lockStaleCard(previous[i]);
                     var card = document.createElement("div");
                     card.className = "chatPending";
@@ -622,6 +638,98 @@ define([], function () {
                             function () {
                                 return "[Admin] J'ai refusé la modification du prompt « " +
                                     (pending.Label || pending.Field) + " » — rien n'a été écrit.";
+                            });
+                    });
+                }
+
+                // ------------------------------------------------------------------
+                //  Carte d'ACTION EMBY en attente (v1.13.29, deux phases) :
+                //  le tool d'action du chat n'exécute jamais — il dépose ;
+                //  l'admin approuve ici, l'endpoint ChatAction exécute en
+                //  code serveur déterministe (le LLM n'a aucun rôle). Les
+                //  arguments restent côté serveur : le clic n'envoie que
+                //  l'ActionId (comme la carte de prompt).
+                // ------------------------------------------------------------------
+                function appendActionCard(pending) {
+                    // Une seule carte active par proposition : un second
+                    // dépôt identique dans la même session est supplanté
+                    // côté serveur au tour suivant ; ici on rend ce que le
+                    // serveur vient d'envoyer.
+                    var card = document.createElement("div");
+                    card.className = "chatPending chatPendingAction";
+                    card.innerHTML =
+                        '<div class="chatPendingTitle">⚡ ' + esc(i18n.t("chat.action.pending.title")) + '</div>' +
+                        '<div class="chatPendingLabel">' + esc(pending.Label || "?") + '</div>' +
+                        '<div class="chatPendingButtons">' +
+                            '<button is="emby-button" type="button" class="raised btnApproveAction" data-i18n="chat.action.approve">Approuver</button>' +
+                            '<button is="emby-button" type="button" class="raised btnRefuseAction" data-i18n="chat.action.refuse">Refuser</button>' +
+                        '</div>' +
+                        '<div class="chatPendingResult" hidden></div>';
+                    chatLog.appendChild(card);
+                    chatLog.scrollTop = chatLog.scrollHeight;
+
+                    var actionId = String(pending.ActionId || "");
+                    var actionLabel = String(pending.Label || "");
+                    function decideAction(url, doneText, makeNote) {
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl(url, { session: chatSessionId || "" }),
+                            type: "POST",
+                            data: JSON.stringify({ ActionId: actionId }),
+                            contentType: "application/json",
+                            dataType: "json"
+                        }).then(function (resp) {
+                            resp = resp || {};
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                if (resp.Ok) {
+                                    res.textContent = doneText +
+                                        (resp.Detail ? " — " + resp.Detail : "");
+                                } else {
+                                    res.textContent = i18n.t("chat.action.error") +
+                                        " : " + (resp.Error || "?");
+                                    res.style.color = "#e57373";
+                                }
+                                res.hidden = false;
+                            }
+                            // Note au LLM dans le fil (re-postée à chaque
+                            // tour) : le résultat d'exécution réel — le
+                            // modèle ne doit JAMAIS croire un texte qui
+                            // prétend une exécution, seule cette note (ou
+                            // le silence) fait foi.
+                            chatHistory.push({ role: "user", content: makeNote(resp) });
+                        }, function (err) {
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                res.textContent = i18n.t("chat.action.error") +
+                                    " : " + (err && err.status ? "HTTP " + err.status : "?");
+                                res.style.color = "#e57373";
+                                res.hidden = false;
+                            }
+                        });
+                    }
+
+                    var approveBtn = card.querySelector(".btnApproveAction");
+                    var refuseBtn = card.querySelector(".btnRefuseAction");
+                    if (approveBtn) approveBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decideAction("Plugins/LLMAI/ChatAction/Approve",
+                            i18n.t("chat.action.approved"),
+                            function (resp) {
+                                return "[Admin] J'ai approuvé l'action « " + actionLabel + " » — " +
+                                    (resp && resp.Ok
+                                        ? "elle a été exécutée" + (resp.Detail ? " : " + resp.Detail : ".")
+                                        : "mais l'exécution n'a pas abouti : " + (resp && resp.Error ? resp.Error : "?"));
+                            });
+                    });
+                    if (refuseBtn) refuseBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decideAction("Plugins/LLMAI/ChatAction/Refuse",
+                            i18n.t("chat.action.refused"),
+                            function () {
+                                return "[Admin] J'ai refusé l'action « " + actionLabel +
+                                    " » — rien n'a été exécuté.";
                             });
                     });
                 }

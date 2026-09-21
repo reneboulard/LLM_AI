@@ -1046,8 +1046,12 @@ namespace LLM_AI
         /// cartes .strm, timers d'enregistrement, tags « AI Tonight », entrées
         /// de collection, entrées de playlist, déclenchement de run. Les
         /// actions refusées par les garde-fous existants (owned-guard, drop
-        /// list, dedup…) ne consomment PAS le budget. <c>0</c> = chat en
-        /// <b>lecture seule</b> (aucun outil d'action construit).
+        /// list, dedup…) ne consomment PAS le budget. Consommation à
+        /// l'<b>exécution approuvée</b> (v1.13.29 : les outils déposent une
+        /// proposition sans effet ; le budget n'est vérifié/consommé que
+        /// lorsque l'admin approuve la carte). <c>0</c> = chat en
+        /// <b>lecture seule</b> (aucun outil d'action construit ; les
+        /// approbations sont refusées).
         /// </summary>
         public int ChatActionBudget { get; set; } = 10;
 

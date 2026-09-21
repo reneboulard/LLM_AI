@@ -10,6 +10,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.29.1] — 2026-09-21
+
+### Fixed (FR)
+- **Verdict d'approbation du chat affiché sans lecture de la réponse.** La
+  carte « Approuver / Refuser » d'une action affichait le texte « Approuvé —
+  action exécutée par le serveur » dès que la requête HTTP aboutissait, même
+  quand le serveur répondait `Ok:false` avec une erreur (p. ex. *« Action
+  introuvable ou expirée (attente valable 10 minutes) »* après dépassement du
+  TTL) : la branche d'erreur était du code mort (elle testait le libellé
+  d'affichage, pas la réponse du serveur). La carte teste désormais
+  `Ok`/`Error` comme la carte des prompts — verdict réel affiché, erreur en
+  rouge. (Validé sur le terrain : dépôt à 17:53, clic à 18:04 hors TTL →
+  aucun timer DVR créé, réponse serveur correcte ; seule la pastille mentait.
+  La note `[Admin]` poussée au LLM lisait déjà `Ok`/`Error` correctement.)
+
+### Fixed (EN)
+- **Chat approval verdict shown without reading the response.** The action
+  "Approve / Refuse" card displayed "Approved — action executed by the
+  server" as soon as the HTTP request succeeded, even when the server
+  replied `Ok:false` with an error (e.g. "Action not found or expired
+  (10-minute window)" after TTL): the error branch was dead code (it tested
+  the display label, not the server response). The card now tests
+  `Ok`/`Error` like the prompt card — real verdict shown, error in red.
+  (Field-validated: deposit at 17:53, click at 18:04 past TTL → no DVR timer
+  created, server response correct; only the card lied. The `[Admin]` note
+  pushed to the LLM already read `Ok`/`Error` correctly.)
+
+## [1.13.29.0] — 2026-09-21
+
+### Added (FR)
+- **Confirmation mécanique hors-LLM des actions du chat (deux phases).** Le
+  chat admin n'avait qu'une barrière de prompt pour les 8 outils d'action
+  (« proposer puis exécuter après confirmation explicite ») : un texte
+  injecté dans un synopsis (via `web_fetch` ou une fiche média) pouvait
+  pousser le LLM à appeler un mutateur sans volonté réelle de l'admin. La
+  confirmation est désormais **mécanique et hors de portée du modèle** —
+  même architecture que la carte d'approbation de `plugin_prompts` (elle-même
+  parente du System Guard 2FA de l'app compagnon) :
+  (1) chaque outil d'action (`record_program`, `create_card`, `tag_ai_tonight`,
+  `collection_add`/`_remove`, `playlist_add`/`_remove`, `run_tonight_run`)
+  n'exécute plus jamais sur l'appel du LLM — il **dépose** une proposition
+  (pending figé outil + arguments complets, `status="awaiting_approval"`)
+  dans le nouveau store en mémoire `ChatActionStore` ; les garde-fous
+  précoces (params requis, 10 ids max) répondent avant dépôt ;
+  (2) la réponse HTTP du chat porte `pending_actions` — la page rend une
+  **carte « Approuver / Refuser »** par proposition (le clic n'envoie que
+  l'`ActionId`, les arguments restent côté serveur) ;
+  (3) l'approbation passe par les endpoints `POST /Plugins/LLMAI/ChatAction/Approve`
+  et `/Refuse` (admin-only) : le pending est consommé **single-use** avec
+  **liaison usager + session** (un autre compte ou une autre session ne peut
+  pas approuver), puis l'exécution repasse par le **même code métier**
+  (fabrique `BuildToolByName` → `ExecuteCoreAsync`) — budget consommé à
+  l'exécution, gardes métier inchangés, toast de traçabilité habituel.
+  Le résultat d'exécution est affiché sur la carte et repoussé dans le fil
+  comme note `[Admin]` (le LLM apprend le résultat au tour suivant — il ne
+  doit jamais croire un texte qui prétend une exécution, seule la note fait
+  foi, rappelé dans le bloc de workflow et les descriptions d'outils).
+  TTL 10 min, plafond de 10 propositions par session (un dépôt en masse est
+  refusé proprement), en mémoire uniquement (le redémarrage vide les
+  pendings — rien de destructeur, l'admin redemande l'action). Les
+  descriptions des 8 outils et le bloc de workflow décrivent le protocole
+  deux phases ; i18n FR/EN de la carte.
+
+### Added (EN)
+- **Out-of-LLM mechanical confirmation for chat actions (two phases).** The
+  admin chat previously had only a prompt-level barrier for the 8 action
+  tools ("propose, then execute after explicit confirmation") — text injected
+  into a synopsis (via `web_fetch` or a media fiche) could drive the LLM to
+  call a mutator without the admin's real intent. Confirmation is now
+  **mechanical and out of the model's reach** — same architecture as the
+  `plugin_prompts` approval card (itself the parent of the companion app's
+  System Guard 2FA):
+  (1) every action tool (`record_program`, `create_card`, `tag_ai_tonight`,
+  `collection_add`/`_remove`, `playlist_add`/`_remove`, `run_tonight_run`)
+  no longer executes on the LLM's call — it DEPOSITS a proposal (frozen
+  tool + full-arguments pending, `status="awaiting_approval"`) into the new
+  in-memory store `ChatActionStore`; early guards (required params, 10-id
+  cap) answer before the deposit;
+  (2) the chat HTTP response carries `pending_actions` — the page renders an
+  **"Approve / Refuse" card** per proposal (the click sends only the
+  `ActionId`; arguments stay server-side);
+  (3) approval goes through the admin-only `POST /Plugins/LLMAI/ChatAction/Approve`
+  and `/Refuse` endpoints: the pending is consumed **single-use** with
+  **user + session binding** (another account or session cannot approve),
+  then execution reuses the **same business code** (`BuildToolByName`
+  factory → `ExecuteCoreAsync`) — budget consumed at execution, business
+  guards unchanged, usual trace toast. The execution result is shown on the
+  card and pushed back to the thread as an `[Admin]` note (the LLM learns
+  the outcome next turn — it must never trust text claiming an execution,
+  only the note counts; restated in the workflow block). 10-min TTL, 10
+  proposals per session cap (mass depositing is refused cleanly), in-memory
+  only (a restart clears pendings — nothing destructive, the admin asks
+  again). The 8 tool descriptions and the workflow block describe the
+  two-phase protocol; card strings localized FR/EN.
+
 ## [1.13.28.0] — 2026-09-20
 
 ### Added (FR)

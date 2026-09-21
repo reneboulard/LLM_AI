@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -127,6 +128,28 @@ namespace LLM_AI
             /// ce tour (v1.13.8) — la page rend la carte de diff
             /// Approuver/Refuser. Null si aucune.</summary>
             public PendingApprovalInfo Pending { get; set; }
+            /// <summary>Actions Emby déposées par les tools d'action pendant
+            /// ce tour (v1.13.29, deux phases) — la page rend une carte
+            /// « Approuver / Refuser » par proposition ; l'exécution passe
+            /// par les endpoints ChatAction, jamais par le LLM. Null si
+            /// aucune.</summary>
+            public List<ChatPendingActionInfo> PendingActions { get; set; }
+        }
+
+        /// <summary>
+        /// Descriptif d'une action Emby en attente d'approbation (deux
+        /// phases v1.13.29) : le clic n'envoie QUE <see cref="ActionId"/> —
+        /// l'outil et ses arguments restent figés côté serveur
+        /// (<see cref="ChatActionStore"/>, expiration 10 min, liaison
+        /// usager+session à l'approbation).
+        /// </summary>
+        public class ChatPendingActionInfo
+        {
+            public string ActionId { get; set; }
+            public string Tool { get; set; }
+            /// <summary>Libellé français de la proposition (ton des toasts
+            /// de traçabilité).</summary>
+            public string Label { get; set; }
         }
 
         /// <summary>
@@ -376,6 +399,21 @@ namespace LLM_AI
                 };
             }
 
+            // Actions Emby déposées pendant le tour (v1.13.29, deux phases) :
+            // la page rend une carte Approuver/Refuser par proposition —
+            // l'exécution passe par les endpoints ChatAction, jamais par le
+            // LLM (la page ne parse jamais le texte du LLM pour les
+            // découvrir).
+            var pendingCards = ChatActionStore.TakePagePending(sessionId);
+            var pendingActions = pendingCards.Count > 0
+                ? pendingCards.Select(a => new ChatPendingActionInfo
+                    {
+                        ActionId = a.ActionId,
+                        Tool = a.Tool,
+                        Label = a.Label
+                    }).ToList()
+                : null;
+
             return new ChatResponse
             {
                 Enabled = true,
@@ -383,7 +421,8 @@ namespace LLM_AI
                 Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 Session = savedSession,
                 Actions = turnActions.Count > 0 ? turnActions : null,
-                Pending = pendingInfo
+                Pending = pendingInfo,
+                PendingActions = pendingActions
             };
         }
 
@@ -634,6 +673,145 @@ namespace LLM_AI
 
             ChatPromptStore.Discard(req?.ActionId, Logger);
             return new ChatPromptDecisionResponse { Ok = true };
+        }
+
+        // ------------------------------------------------------------------
+        //  Approbation des ACTIONS EMBY du chat (v1.13.29, deux phases)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/ChatAction/Approve</c> — exécute l'action
+        /// Emby déposée en attente par un tool d'action (v1.13.29). Le LLM
+        /// n'a AUCUN rôle dans cette exécution : le pending figé porte
+        /// l'outil ET ses arguments, la consommation vérifie usager + session
+        /// (anti-rejeu single-use, TTL 10 min), puis
+        /// <see cref="ChatActions.BuildToolByName"/> reconstruit l'outil et
+        /// <see cref="IChatActionTool.ExecuteCoreAsync"/> exécute en code
+        /// serveur déterministe — budget consommé À CE MOMENT (pas au dépôt),
+        /// garde-fous métier inchangés, toast de traçabilité habituel.
+        /// Réservé aux administrateurs.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatAction/Approve", "POST")]
+        public class ChatActionApproveRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public class ChatActionDecisionResponse
+        {
+            public bool Ok { get; set; }
+            public string Label { get; set; }
+            /// <summary>Détail du résultat d'exécution (affiché sur la carte
+            /// et poussé dans le fil pour le LLM).</summary>
+            public string Detail { get; set; }
+            public string Error { get; set; }
+        }
+
+        public async Task<object> Post(ChatActionApproveRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatActionDecisionResponse { Error = "Réservé aux administrateurs." };
+
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return new ChatActionDecisionResponse { Error = "Configuration du plugin indisponible." };
+
+            var cfgBudget = Math.Max(0, cfg.ChatActionBudget);
+            if (cfgBudget <= 0)
+                return new ChatActionDecisionResponse { Error =
+                    "La couche d'action du chat est désactivée (budget 0) — rien n'a été exécuté." };
+
+            var action = ChatActionStore.Consume(req?.ActionId, RequestSessionHint(),
+                admin.Id.ToString());
+            if (action == null)
+                return new ChatActionDecisionResponse { Error =
+                    "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau l'action dans la conversation." };
+
+            var tool = ChatActions.BuildToolByName(action.Tool, cfg, action.Session, admin,
+                admin.Id.ToString(), LibraryManager, _liveTv, _collections, _playlists,
+                UserManager, ApplicationHost, Logger, _json);
+            if (tool == null)
+                return new ChatActionDecisionResponse { Error =
+                    "Outil d'action indisponible ou inconnu — proposition invalide." };
+
+            JsonElement args = default;
+            try
+            {
+                using var doc = JsonDocument.Parse(action.ArgsJson ?? "{}");
+                args = doc.RootElement.Clone();
+            }
+            catch { args = default; }
+
+            string result;
+            try
+            {
+                result = await tool.ExecuteCoreAsync(args,
+                    Request?.CancellationToken ?? CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return new ChatActionDecisionResponse { Error = "Exécution annulée." };
+            }
+            catch (Exception ex)
+            {
+                Logger.ErrorException("[LLM_AI] Chat action : échec d'exécution approuvée (action_id={0}, tool={1}, usager={2}) : {3}",
+                    ex, action.ActionId, action.Tool, admin.Name, ex.Message);
+                result = JsonSerializer.Serialize(new { status = "failed", detail = ex.Message });
+            }
+
+            // Le core retourne le JSON canonique {status, detail} — extrait
+            // pour la carte (le LLM le recevra via la note [Admin] de la page).
+            string status = "failed";
+            string detail = null;
+            try
+            {
+                using var doc2 = JsonDocument.Parse(result ?? "{}");
+                var root = doc2.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String)
+                        status = st.GetString() ?? "failed";
+                    if (root.TryGetProperty("detail", out var d) && d.ValueKind == JsonValueKind.String)
+                        detail = d.GetString();
+                }
+            }
+            catch { detail = result; }
+
+            Logger.Info("[LLM_AI] Chat action : approbation admin (action_id={0}, tool={1}, usager={2}) → {3}.",
+                action.ActionId, action.Tool, admin.Name, status);
+
+            bool ok = string.Equals(status, "ok", StringComparison.OrdinalIgnoreCase);
+            return new ChatActionDecisionResponse
+            {
+                Ok = ok,
+                Label = action.Label,
+                Detail = ok ? (detail ?? "Action exécutée.") : null,
+                Error = ok ? null : (detail ?? "Échec de l'exécution — consultez le journal du serveur.")
+            };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/ChatAction/Refuse</c> — retire l'action en
+        /// attente sans l'exécuter (nettoyage légitime par tout admin, comme
+        /// le refus des prompts ; n'exige pas la session).
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatAction/Refuse", "POST")]
+        public class ChatActionRefuseRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public object Post(ChatActionRefuseRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatActionDecisionResponse { Error = "Réservé aux administrateurs." };
+
+            ChatActionStore.Discard(req?.ActionId);
+            return new ChatActionDecisionResponse { Ok = true };
         }
 
         /// <summary>Indice de session pour la consommation d'un pending :

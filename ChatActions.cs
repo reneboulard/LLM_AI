@@ -22,6 +22,26 @@ using MediaBrowser.Model.Users;
 namespace LLM_AI
 {
     /// <summary>
+    /// Contrat des outils d'action deux-phases du chat (v1.13.29).
+    /// <see cref="ExecuteAsync"/> (hérité d'<see cref="ILlmTool"/>) DÉPOSE
+    /// une proposition dans <see cref="ChatActionStore"/> sans exécuter ;
+    /// <see cref="ExecuteCoreAsync"/> est l'exécution réelle, appelée
+    /// UNIQUEMENT par l'endpoint <c>/Plugins/LLMAI/ChatAction/Approve</c>
+    /// après consommation du pending — jamais par la boucle LLM. La boucle
+    /// de l'agent ne voit donc que le dépôt : un texte injecté dans un
+    /// synopsis peut empiler des propositions, jamais d'exécutions.
+    /// </summary>
+    internal interface IChatActionTool
+    {
+        /// <summary>Clé d'usine (nom d'outil exposé au LLM).</summary>
+        string ToolKey { get; }
+
+        /// <summary>Exécution réelle de l'action (code métier inchangé,
+        /// budget consommé ici — à l'approbation, pas au dépôt).</summary>
+        Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct);
+    }
+
+    /// <summary>
     /// Couche d'action du chat admin (v1.13) : le LLM du chat obtient des
     /// outils qui agissent sur les MÊMES surfaces Emby que le plugin (cartes
     /// .strm, timers d'enregistrement, tag « AI Tonight », collection,
@@ -33,12 +53,19 @@ namespace LLM_AI
     /// logique métier.
     /// </summary>
     /// <remarks>
-    /// <para><b>Admin-only + human in the middle</b> : le chat reste réservé
-    /// aux administrateurs (vérifié côté endpoint) ; l'étiquette attendue est
-    /// « proposer dans le texte, exécuter après confirmation explicite de
-    /// l'admin » (annoncée dans le bloc de workflow et dans la description de
-    /// chaque outil — niveau prompt). Les garde-fous DURS sont ailleurs :
-    /// budget d'actions (<see cref="PluginConfiguration.ChatActionBudget"/>,
+    /// <para><b>Admin-only + confirmation mécanique hors-LLM</b> (v1.13.29) :
+    /// le chat reste réservé aux administrateurs (vérifié côté endpoint).
+    /// La confirmation n'est PLUS une étiquette de prompt (jugée par le
+    /// LLM, donc falsifiable par une injection dans un synopsis) : chaque
+    /// outil d'action est <b>deux-phases</b> — l'appel du LLM dépose une
+    /// proposition (aucun effet) dans <see cref="ChatActionStore"/>, la
+    /// page rend une carte « Approuver / Refuser », et l'endpoint
+    /// <c>/Plugins/LLMAI/ChatAction/Approve</c> exécute en code serveur
+    /// déterministe (le LLM n'a aucun rôle, même philosophie que le PIN de
+    /// <see cref="RecordingChatTool"/> et l'approbation de
+    /// <see cref="ChatPromptsTool"/>). Les garde-fous DURS restent en
+    /// place à l'exécution : budget d'actions
+    /// (<see cref="PluginConfiguration.ChatActionBudget"/>,
     /// <see cref="PluginConfiguration.ChatActionConversationCap"/>) et
     /// garde-fous métier inchangés (owned-guard, watched-guard, drop list,
     /// dedup — déjà dans les primitives réutilisées).</para>
@@ -179,6 +206,72 @@ namespace LLM_AI
             => Interlocked.Exchange(ref _runGate, 0);
 
         // ------------------------------------------------------------------
+        //  Deux phases (v1.13.29) : dépôt de proposition + exécution à
+        //  l'approbation. Le LLM ne peut JAMAIS exécuter directement —
+        //  l'approbation est un clic admin hors de sa portée.
+        // ------------------------------------------------------------------
+
+        /// <summary>Dépose une proposition d'action (aucun effet) et retourne
+        /// la réponse JSON pour le LLM (<c>status="awaiting_approval"</c>).
+        /// Le pending fige l'outil ET ses arguments : l'approbation porte
+        /// exactement sur ce dépôt (anti-TOCTOU). <paramref name="label"/>
+        /// est le texte de la carte côté page (français, ton des toasts).</summary>
+        internal static string CreatePending(string sessionId, string userId,
+            string toolKey, JsonElement args, string label)
+        {
+            string argsJson;
+            try { argsJson = JsonSerializer.Serialize(args); }
+            catch { argsJson = "{}"; }
+            var a = ChatActionStore.Create(sessionId, userId, toolKey, argsJson, label);
+            if (a == null)
+                return Json(new { status = "refused",
+                    detail = "Trop de propositions en attente (10 maximum) — l'admin doit d'abord trancher les cartes existantes." });
+            return Json(new { status = "awaiting_approval", action_id = a.ActionId,
+                detail = "Proposition déposée (aucune exécution). L'admin approuve en cliquant la carte " +
+                         "« Approuver » de la page — le résultat d'exécution arrivera ensuite dans la " +
+                         "conversation comme note [Admin]. N'annoncez JAMAIS l'exécution avant cette note " +
+                         "et ne redéposez pas une proposition identique tant que l'admin n'a pas tranché." });
+        }
+
+        /// <summary>
+        /// Fabrique d'outil d'action par clé (endpoint d'approbation) :
+        /// reconstruit l'instance avec les services de l'endpoint pour
+        /// exécuter le pending consommé. Retourne null pour une clé inconnue
+        /// ou pour <c>run_tonight_run</c> quand l'opt-in
+        /// <see cref="PluginConfiguration.ChatTonightRunEnabled"/> a été
+        /// retiré depuis le dépôt (fail-closed).
+        /// </summary>
+        public static IChatActionTool BuildToolByName(string toolName, PluginConfiguration cfg,
+            string sessionId, User adminUser, string adminUserId,
+            ILibraryManager library, ILiveTvManager liveTv, ICollectionManager collections,
+            IPlaylistManager playlists, IUserManager users, IServerApplicationHost host,
+            ILogger logger, IJsonSerializer json)
+        {
+            switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "record_program":
+                    return new RecordProgramTool(cfg, sessionId, adminUserId, liveTv, library, host, logger);
+                case "create_card":
+                    return new CreateCardTool(cfg, sessionId, adminUserId, library, liveTv, host, logger);
+                case "tag_ai_tonight":
+                    return new TagTonightTool(cfg, sessionId, adminUserId, library, logger);
+                case "collection_add":
+                    return new CollectionAddTool(cfg, sessionId, adminUserId, collections, library, host, logger);
+                case "collection_remove":
+                    return new CollectionRemoveTool(cfg, sessionId, adminUserId, collections, library, logger);
+                case "playlist_add":
+                    return new PlaylistAddTool(cfg, sessionId, adminUserId, playlists, library, adminUser, host, logger);
+                case "playlist_remove":
+                    return new PlaylistRemoveTool(cfg, sessionId, adminUserId, playlists, library, adminUser, logger);
+                case "run_tonight_run":
+                    if (cfg == null || !cfg.ChatTonightRunEnabled) return null;
+                    return new RunTonightTool(cfg, sessionId, adminUser, adminUserId, users, json, library, liveTv, host, logger);
+                default:
+                    return null;
+            }
+        }
+
+        // ------------------------------------------------------------------
         //  Bloc de workflow injecté dans le system prompt du chat
         // ------------------------------------------------------------------
 
@@ -200,10 +293,20 @@ namespace LLM_AI
             b.Append("Budget d'actions : ").Append(Budget(cfg)).Append(" par tour, ")
               .Append(Cap(cfg)).Append(" pour toute la conversation — au-delà, les outils refuseront. ");
             b.Append("Une action refusée par un garde-fou (déjà possédé, déjà visionné, drop list, doublon) ne consomme pas le budget.\n");
-            b.Append("ÉTIQUETTE OBLIGATOIRE : présentez d'abord votre proposition dans votre réponse ");
-            b.Append("(quoi, où, pourquoi) et attendez une confirmation explicite de l'admin dans la conversation ");
-            b.Append("avant d'appeler un outil d'action. Ne retirez jamais (playlist_remove, collection_remove) ");
-            b.Append("ce que vous n'avez pas ajouté vous-même dans cette conversation.\n");
+            b.Append("PROTOCOLE À DEUX PHASES (mécanique, v1.13.29) : chaque appel d'outil d'action DÉPOSE une ");
+            b.Append("proposition (status \"awaiting_approval\") sans exécuter quoi que ce soit. L'admin approuve ");
+            b.Append("en cliquant la carte « Approuver » de la page — le résultat d'exécution lui arrive ensuite ");
+            b.Append("dans la conversation comme note [Admin]. N'annoncez JAMAIS une exécution avant cette note, ");
+            b.Append("ne redéposez pas une proposition identique tant que l'admin n'a pas tranché, et ne demandez ");
+            b.Append("JAMAIS à l'admin d'écrire du code ou un id de proposition. ");
+            b.Append("PRIORITÉ DE L'ORDRE EXPLICITE : quand l'admin demande une action précise (programmer un ");
+            b.Append("enregistrement, taguer, ajouter à une collection ou playlist…), recherchez l'item et DÉPOSEZ ");
+            b.Append("immédiatement — l'admin tranche à la carte. Votre profil de goûts oriente vos suggestions ");
+            b.Append("SPONTANÉES, jamais un ordre de l'admin : ne le contredisez pas, ne le dissuadez pas et ne ");
+            b.Append("re-proposez pas autre chose à sa place (un programme d'actualité ou hors de vos genres ");
+            b.Append("préférés se programme aussi, sur demande).\n");
+            b.Append("Ne retirez jamais (playlist_remove, ");
+            b.Append("collection_remove) ce que vous n'avez pas ajouté vous-même dans cette conversation.\n");
             return b.ToString();
         }
 
@@ -225,18 +328,22 @@ namespace LLM_AI
             // Singleton Emby, re-posé à chaque tour (les outils y lisent le
             // gestionnaire pour les toasts de traçabilité — cf. ci-dessous).
             s_sessions = sessions;
+            // Liaison d'usager des pendings (deux phases v1.13.29) : la
+            // proposition est émise par CET admin — un autre compte ne peut
+            // pas approuver (ChatActionStore.Consume vérifie).
+            string userId = adminUser?.Id.ToString() ?? "";
             var tools = new List<ILlmTool>
             {
-                new RecordProgramTool(cfg, sessionId, liveTv, library, host, logger),
-                new CreateCardTool(cfg, sessionId, library, liveTv, host, logger),
-                new TagTonightTool(cfg, sessionId, library, logger),
-                new CollectionAddTool(cfg, sessionId, collections, library, host, logger),
-                new CollectionRemoveTool(cfg, sessionId, collections, library, logger),
-                new PlaylistAddTool(cfg, sessionId, playlists, library, adminUser, host, logger),
-                new PlaylistRemoveTool(cfg, sessionId, playlists, library, adminUser, logger),
+                new RecordProgramTool(cfg, sessionId, userId, liveTv, library, host, logger),
+                new CreateCardTool(cfg, sessionId, userId, library, liveTv, host, logger),
+                new TagTonightTool(cfg, sessionId, userId, library, logger),
+                new CollectionAddTool(cfg, sessionId, userId, collections, library, host, logger),
+                new CollectionRemoveTool(cfg, sessionId, userId, collections, library, logger),
+                new PlaylistAddTool(cfg, sessionId, userId, playlists, library, adminUser, host, logger),
+                new PlaylistRemoveTool(cfg, sessionId, userId, playlists, library, adminUser, logger),
             };
             if (cfg != null && cfg.ChatTonightRunEnabled)
-                tools.Add(new RunTonightTool(cfg, sessionId, adminUser, users, json, library, liveTv, host, logger));
+                tools.Add(new RunTonightTool(cfg, sessionId, adminUser, userId, users, json, library, liveTv, host, logger));
             return tools;
         }
 
@@ -371,28 +478,32 @@ namespace LLM_AI
         //  Tool : record_program (timer d'enregistrement)
         // ------------------------------------------------------------------
 
-        private class RecordProgramTool : ILlmTool
+        private class RecordProgramTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly ILiveTvManager _liveTv;
             private readonly ILibraryManager _library;
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
-            public RecordProgramTool(PluginConfiguration cfg, string sessionId,
+            public RecordProgramTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 ILiveTvManager liveTv, ILibraryManager library,
                 IServerApplicationHost host, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _liveTv = liveTv;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _liveTv = liveTv;
                 _library = library; _host = host; _logger = logger;
             }
 
+            public string ToolKey => "record_program";
             public string Name => "record_program";
             public string Description =>
                 "Programme l'enregistrement d'un programme EPG (timer Emby : SeriesTimer pour une série, Timer pour un film). " +
-                "Ne l'appeler qu'APRÈS confirmation explicite de l'admin. Les garde-fous du plugin s'appliquent " +
-                "(déjà possédé, déjà visionné, drop list, doublon — refus sans consommer le budget).";
+                "DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — l'admin " +
+                "approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive ensuite comme " +
+                "note [Admin]. N'annoncez JAMAIS l'exécution avant cette note. Les garde-fous du plugin s'appliquent " +
+                "à l'exécution (déjà possédé, déjà visionné, drop list, doublon — refus sans consommer le budget).";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"title\":{\"type\":\"string\",\"description\":\"Titre du programme\"}," +
@@ -400,7 +511,23 @@ namespace LLM_AI
                 "\"kind\":{\"type\":\"string\",\"enum\":[\"movie\",\"series\"],\"description\":\"Type de contenu\"}}," +
                 "\"required\":[\"title\",\"program_id\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 (boucle LLM) : dépôt de la proposition,
+            /// aucun effet — l'exécution passe par l'approbation admin.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string title = ArgString(args, "title");
+                string programId = ArgString(args, "program_id");
+                string kind = ArgString(args, "kind") ?? "movie";
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(programId))
+                    return Task.FromResult(Json(new { status = "refused", detail = "title et program_id sont requis." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Enregistrement « " + title.Trim() + " » (DVR, " +
+                    (string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase) ? "série" : "film") + ")"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
+            /// l'endpoint d'approbation (budget consommé ici).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -455,28 +582,32 @@ namespace LLM_AI
         //  Tool : create_card (carte .strm)
         // ------------------------------------------------------------------
 
-        private class CreateCardTool : ILlmTool
+        private class CreateCardTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly ILibraryManager _library;
             private readonly ILiveTvManager _liveTv;
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
-            public CreateCardTool(PluginConfiguration cfg, string sessionId,
+            public CreateCardTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 ILibraryManager library, ILiveTvManager liveTv,
                 IServerApplicationHost host, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _library = library;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _library = library;
                 _liveTv = liveTv; _host = host; _logger = logger;
             }
 
+            public string ToolKey => "create_card";
             public string Name => "create_card";
             public string Description =>
                 "Crée une carte .strm dans la bibliothèque « AI Suggestions » (proposition d'enregistrement cliquable, " +
-                "programme EPG à venir). Ne l'appeler qu'APRÈS confirmation explicite de l'admin. La carte est " +
-                "éphémère : nettoyée par Emby à la prochaine génération planifiée.";
+                "programme EPG à venir). DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans " +
+                "exécuter — l'admin approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive " +
+                "ensuite comme note [Admin]. N'annoncez JAMAIS l'exécution avant cette note. La carte est éphémère : " +
+                "nettoyée par Emby à la prochaine génération planifiée.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"title\":{\"type\":\"string\"}," +
@@ -485,7 +616,22 @@ namespace LLM_AI
                 "\"reason\":{\"type\":\"string\",\"description\":\"Pourquoi cette reco (1 phrase)\"}}," +
                 "\"required\":[\"title\",\"program_id\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string title = ArgString(args, "title");
+                string programId = ArgString(args, "program_id");
+                if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(programId))
+                    return Task.FromResult(Json(new { status = "refused",
+                        detail = "title et program_id sont requis (une carte pointe un programme EPG à venir)." }));
+                string reason = ArgString(args, "reason") ?? "";
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Carte .strm « " + title.Trim() + " »" +
+                    (string.IsNullOrWhiteSpace(reason) ? "" : " — " + reason.Trim())));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -536,29 +682,46 @@ namespace LLM_AI
         //  Tool : tag_ai_tonight (tag « AI Tonight »)
         // ------------------------------------------------------------------
 
-        private class TagTonightTool : ILlmTool
+        private class TagTonightTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly ILibraryManager _library;
             private readonly ILogger _logger;
 
-            public TagTonightTool(PluginConfiguration cfg, string sessionId,
+            public TagTonightTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 ILibraryManager library, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _library = library; _logger = logger;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _library = library; _logger = logger;
             }
 
+            public string ToolKey => "tag_ai_tonight";
             public string Name => "tag_ai_tonight";
             public string Description =>
                 "Étiquette des items de la bibliothèque avec le tag « AI Tonight » (filtre par tag dans Emby). " +
-                "Ne l'appeler qu'APRÈS confirmation explicite de l'admin. 1 à 10 ids.";
+                "DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — l'admin " +
+                "approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive ensuite comme " +
+                "note [Admin]. N'annoncez JAMAIS l'exécution avant cette note. 1 à 10 ids.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"item_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Ids items (1-10)\"}}," +
                 "\"required\":[\"item_ids\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                var ids = ArgIdList(args, "item_ids");
+                if (ids == null || ids.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis (1-10 ids)." }));
+                if (ids.Count > 10)
+                    return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Tag « AI Tonight » : " + ids.Count + " item(s)"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -595,33 +758,50 @@ namespace LLM_AI
         //  Tools : collection (additif + retrait tracé)
         // ------------------------------------------------------------------
 
-        private class CollectionAddTool : ILlmTool
+        private class CollectionAddTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly ICollectionManager _collections;
             private readonly ILibraryManager _library;
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
-            public CollectionAddTool(PluginConfiguration cfg, string sessionId,
+            public CollectionAddTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 ICollectionManager collections, ILibraryManager library,
                 IServerApplicationHost host, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _collections = collections;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _collections = collections;
                 _library = library; _host = host; _logger = logger;
             }
 
+            public string ToolKey => "collection_add";
             public string Name => "collection_add";
             public string Description =>
                 "Ajoute des items à la collection Emby « AI Tonight » (additif — ne touche pas aux membres existants). " +
-                "Ne l'appeler qu'APRÈS confirmation explicite de l'admin. 1 à 10 ids.";
+                "DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — l'admin " +
+                "approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive ensuite comme " +
+                "note [Admin]. N'annoncez JAMAIS l'exécution avant cette note. 1 à 10 ids.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"item_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Ids items (1-10)\"}}," +
                 "\"required\":[\"item_ids\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                var ids = ArgIdList(args, "item_ids");
+                if (ids == null || ids.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis (1-10 ids)." }));
+                if (ids.Count > 10)
+                    return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Ajout à la collection « AI Tonight » : " + ids.Count + " item(s)"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -667,31 +847,47 @@ namespace LLM_AI
             }
         }
 
-        private class CollectionRemoveTool : ILlmTool
+        private class CollectionRemoveTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly ICollectionManager _collections;
             private readonly ILibraryManager _library;
             private readonly ILogger _logger;
 
-            public CollectionRemoveTool(PluginConfiguration cfg, string sessionId,
+            public CollectionRemoveTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 ICollectionManager collections, ILibraryManager library, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _collections = collections;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _collections = collections;
                 _library = library; _logger = logger;
             }
 
+            public string ToolKey => "collection_remove";
             public string Name => "collection_remove";
             public string Description =>
                 "Retire des items de la collection « AI Tonight » — SEULEMENT des items que vous avez ajoutés " +
-                "vous-même dans cette conversation (collection_add). Toute autre demande est refusée.";
+                "vous-même dans cette conversation (collection_add). Toute autre demande est refusée. " +
+                "DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — " +
+                "l'admin approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive " +
+                "ensuite comme note [Admin]. N'annoncez JAMAIS l'exécution avant cette note.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"item_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}," +
                 "\"required\":[\"item_ids\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                var ids = ArgIdList(args, "item_ids");
+                if (ids == null || ids.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Retrait de la collection « AI Tonight » : " + ids.Count + " item(s)"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -741,36 +937,53 @@ namespace LLM_AI
         //  Tools : playlist (additif + retrait tracé)
         // ------------------------------------------------------------------
 
-        private class PlaylistAddTool : ILlmTool
+        private class PlaylistAddTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly IPlaylistManager _playlists;
             private readonly ILibraryManager _library;
             private readonly User _adminUser;
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
-            public PlaylistAddTool(PluginConfiguration cfg, string sessionId,
+            public PlaylistAddTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 IPlaylistManager playlists, ILibraryManager library,
                 User adminUser, IServerApplicationHost host, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _playlists = playlists;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _playlists = playlists;
                 _library = library; _adminUser = adminUser; _host = host; _logger = logger;
             }
 
+            public string ToolKey => "playlist_add";
             public string Name => "playlist_add";
             public string Description =>
                 "Ajoute des items à la playlist privée du compte admin (« AI Tonight · {admin} », v1.13.18.0 — " +
                 "la playlist publique foyer « AI Tonight » reste remplie uniquement par le run « Watch Tonight » " +
                 "avec intersection parentale). Additif — ne touche pas aux entrées existantes. " +
-                "Ne l'appeler qu'APRÈS confirmation explicite de l'admin. 1 à 10 ids.";
+                "DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — l'admin " +
+                "approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive ensuite comme " +
+                "note [Admin]. N'annoncez JAMAIS l'exécution avant cette note. 1 à 10 ids.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"item_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Ids items (1-10)\"}}," +
                 "\"required\":[\"item_ids\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                var ids = ArgIdList(args, "item_ids");
+                if (ids == null || ids.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis (1-10 ids)." }));
+                if (ids.Count > 10)
+                    return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Ajout à la playlist privée de l'admin : " + ids.Count + " item(s)"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -834,34 +1047,50 @@ namespace LLM_AI
             }
         }
 
-        private class PlaylistRemoveTool : ILlmTool
+        private class PlaylistRemoveTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly IPlaylistManager _playlists;
             private readonly ILibraryManager _library;
             private readonly User _adminUser;
             private readonly ILogger _logger;
 
-            public PlaylistRemoveTool(PluginConfiguration cfg, string sessionId,
+            public PlaylistRemoveTool(PluginConfiguration cfg, string sessionId, string adminUserId,
                 IPlaylistManager playlists, ILibraryManager library, User adminUser, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _playlists = playlists;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _playlists = playlists;
                 _library = library; _adminUser = adminUser; _logger = logger;
             }
 
+            public string ToolKey => "playlist_remove";
             public string Name => "playlist_remove";
             public string Description =>
                 "Retire des items de la playlist privée du compte admin (« AI Tonight · {admin} », v1.13.18.0 — " +
                 "symétrique de playlist_add) — SEULEMENT des items que vous avez ajoutés " +
                 "vous-même dans cette conversation (les InternalId items sont les ids d'entrée de la playlist). " +
-                "Toute autre demande est refusée.";
+                "Toute autre demande est refusée. DEUX PHASES : l'appel DÉPOSE une proposition " +
+                "(status \"awaiting_approval\") sans exécuter — l'admin approuve en cliquant la carte " +
+                "« Approuver » de la page, le résultat d'exécution arrive ensuite comme note [Admin]. " +
+                "N'annoncez JAMAIS l'exécution avant cette note.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"item_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}," +
                 "\"required\":[\"item_ids\"]}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                var ids = ArgIdList(args, "item_ids");
+                if (ids == null || ids.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis." }));
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Retrait de la playlist privée de l'admin : " + ids.Count + " item(s)"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
@@ -924,10 +1153,11 @@ namespace LLM_AI
         //  Tool : run_tonight_run (déclenchement du run « ce soir »)
         // ------------------------------------------------------------------
 
-        private class RunTonightTool : ILlmTool
+        private class RunTonightTool : ILlmTool, IChatActionTool
         {
             private readonly PluginConfiguration _cfg;
             private readonly string _sessionId;
+            private readonly string _adminUserId;
             private readonly User _adminUser;
             private readonly IUserManager _users;
             private readonly IJsonSerializer _json;
@@ -936,25 +1166,40 @@ namespace LLM_AI
             private readonly IServerApplicationHost _host;
             private readonly ILogger _logger;
 
-            public RunTonightTool(PluginConfiguration cfg, string sessionId, User adminUser,
+            public RunTonightTool(PluginConfiguration cfg, string sessionId, User adminUser, string adminUserId,
                 IUserManager users, IJsonSerializer json, ILibraryManager library,
                 ILiveTvManager liveTv, IServerApplicationHost host, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _adminUser = adminUser; _users = users;
-                _json = json; _library = library; _liveTv = liveTv; _host = host; _logger = logger;
+                _cfg = cfg; _sessionId = sessionId; _adminUser = adminUser; _adminUserId = adminUserId;
+                _users = users; _json = json; _library = library; _liveTv = liveTv; _host = host; _logger = logger;
             }
 
+            public string ToolKey => "run_tonight_run";
             public string Name => "run_tonight_run";
             public string Description =>
                 "Déclenche le run « À regarder ce soir » (même code path que la tâche planifiée et le login : " +
                 "cache, profil, EPG, surfaces configurées — genre/collection/playlist). Les directives de session " +
                 "(optionnelles, 500 caractères max) ne valent QUE pour ce run. Un seul run à la fois, 2 maximum " +
-                "par conversation. Ne l'appeler qu'APRÈS confirmation explicite de l'admin.";
+                "par conversation. DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") " +
+                "sans exécuter — l'admin approuve en cliquant la carte « Approuver » de la page, le résultat " +
+                "d'exécution arrive ensuite comme note [Admin]. N'annoncez JAMAIS l'exécution avant cette note.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
                 "\"directives\":{\"type\":\"string\",\"description\":\"Directives one-shot pour ce run (max 500 caractères)\"}}}";
 
-            public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            /// <summary>Phase 1 : dépôt, aucun effet.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string directives = (ArgString(args, "directives") ?? "").Trim();
+                if (directives.Length > 500) directives = directives.Substring(0, 500);
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Run « À regarder ce soir »" +
+                    (directives.Length > 0 ? " (directives : " +
+                        (directives.Length > 80 ? directives.Substring(0, 80) + "…" : directives) + ")" : "")));
+            }
+
+            /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
             {
                 try
                 {
