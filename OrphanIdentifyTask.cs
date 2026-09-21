@@ -6,6 +6,7 @@ using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Controller.Providers;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
@@ -32,7 +33,10 @@ namespace LLM_AI
     /// multilingue, S2 proposition LLM validée par TMDB, S3 recherche web
     /// SearXNG → id IMDb. Porte d'acceptation commune : année compatible +
     /// (garde lexicale sur les voies par titre) + juge sémantique LLM dès que
-    /// les deux synopsis existent.</para>
+    /// les deux synopsis existent. Repli de type : une série dont la chaîne
+    /// échoue est rejouée en kind movie (film importé comme série par
+    /// Emby — la fiche est alors appliquée à l'item, dont le type est
+    /// conservé).</para>
     /// <para><b>Application non destructive</b> : on ne remplit que les ids
     /// provider absents, un <c>Overview</c> vide, des <c>Genres</c> vides, et un
     /// poster <c>Primary</c> manquant. <b>Le <c>Name</c> EPG n'est jamais
@@ -70,6 +74,16 @@ namespace LLM_AI
         /// à réviser, la fiche EPG est la meilleure métadonnée disponible.
         /// GELÉ pour la passe nocturne ; réactivable en retirant le tag.</summary>
         public const string TagNotFound = "llmai-not-found";
+        /// <summary>Tag posé (add-only) quand une fiche du type opposé à
+        /// l'item a été acceptée — film sur un item série, ou l'inverse. Emby
+        /// type l'import DVR d'après le guide : le type de l'item n'est jamais
+        /// modifié, seule la fiche (ids/métadonnées/poster) porte l'œuvre
+        /// correcte. Ce tag SURVIT à la confirmation du besoin-revue
+        /// (contrairement à <see cref="TagNeedsReview"/>) : il sert à
+        /// retrouver ces items pour replacer éventuellement le fichier dans
+        /// la bibliothèque de son type (déplacement manuel — Emby ré-importe
+        /// alors l'œuvre avec le bon type et le plugin la ré-identifie).</summary>
+        public const string TagCrossKind = "llmai-cross-kind";
 
         public OrphanIdentifyTask(
             ILogger logger,
@@ -163,6 +177,7 @@ namespace LLM_AI
             }
 
             int scanned = 0, orphans = 0, resolved = 0, review = 0, notFound = 0, skipped = 0, errors = 0;
+            int crossKind = 0;
             int total = items.Length;
             int idx = 0;
 
@@ -174,6 +189,12 @@ namespace LLM_AI
                 idx++;
                 try { progress?.Report((double)idx / total * 100.0); } catch { /* best-effort */ }
                 scanned++;
+
+                // Snapshot du tag croisé AVANT traitement : le tag est
+                // add-only — un gain = fiche croisée fraîchement appliquée
+                // (la notification ne compte que les NOUVEAUX, jamais les
+                // déjà taggés retraités).
+                bool hadCross = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind);
 
                 OrphanResolver.Status st;
                 try
@@ -190,6 +211,8 @@ namespace LLM_AI
                     continue;
                 }
 
+                if (!hadCross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)) crossKind++;
+
                 switch (st)
                 {
                     case OrphanResolver.Status.Skipped: skipped++; break;
@@ -202,8 +225,18 @@ namespace LLM_AI
             }
 
             _logger?.Info(
-                "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} introuvables={4} ignorés(non-orphelin/.strm/déjà taggé)={5} erreurs={6} ({7}).",
-                scanned, orphans, resolved, review, notFound, skipped, errors, dry ? "DRY-RUN" : "application");
+                "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} introuvables={4} ignorés(non-orphelin/.strm/déjà taggé)={5} erreurs={6} fiches-croisées-nouvelles={7} ({8}).",
+                scanned, orphans, resolved, review, notFound, skipped, errors, crossKind, dry ? "DRY-RUN" : "application");
+
+            // Notification (pattern des tags disque) : uniquement les fiches
+            // croisées NOUVELLES de cette passe — le compte est nul sinon.
+            if (crossKind > 0)
+            {
+                OrphanResolver.NotifyCrossKind(
+                    _host.TryResolve<INotificationManager>(),
+                    _host.TryResolve<IUserManager>(),
+                    cfg, _host, _logger, crossKind);
+            }
         }
     }
 }

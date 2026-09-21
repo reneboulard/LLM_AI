@@ -431,14 +431,17 @@ namespace LLM_AI
             @"(?i)\b(?:HD|HDTV|VOSTFR|VF|VO|V\.O\.|V\.F\.|REDIFF|REDIFFUSION|INÉDIT|INEDIT|REDIF)\b" +
             @"|\bS\d{1,2}\s?E\d{1,3}\b|\bSaisons?\s+\d+\b|\b[ÉE]pisodes?\s+\d+\b" +
             @"|[\(\[][^\)\]]*[\)\]]" +
-            @"|\s\d{4}-\d{2}-\d{2}\b",
+            @"|\s\d{4}-\d{2}-\d{2}\b" +
+            @"|\s?\d{4}_\d{2}_\d{2}(_\d{2}){3}\b",
             RegexOptions.Compiled);
 
-        /// <summary>Date ISO en fin de titre (ex. « … 2017-01-01 ») : marqueur
-        /// qu'Emby colle aux vidéos qu'il n'a PAS réussi à identifier — c'est
-        /// une date de diffusion/ajout, PAS l'année de l'œuvre.</summary>
+        /// <summary>Date ISO ou horodaté underscore en fin de titre (« …
+        /// 2017-01-01 » ou « … 2025_09_08_20_00_00 » — convention de
+        /// renommage manuel) : marqueur qu'Emby/le renommage colle aux vidéos
+        /// qu'il n'a PAS réussi à identifier — c'est une date de
+        /// diffusion/enregistrement, PAS l'année de l'œuvre.</summary>
         private static readonly Regex s_embyDateMarker = new Regex(
-            @"\s\d{4}-\d{2}-\d{2}\s*$", RegexOptions.Compiled);
+            @"(?:\s\d{4}-\d{2}-\d{2}|\s?\d{4}_\d{2}_\d{2}(_\d{2}){3})\s*$", RegexOptions.Compiled);
 
         /// <summary>Le titre porte-t-il la date-marqueur d'échec d'identification
         /// d'Emby ? L'année qui en découle doit être traitée avec un grain de sel

@@ -243,6 +243,10 @@ namespace LLM_AI
                     ["disktag.notif.title"] = "LLM AI — Disque des enregistrements presque plein",
                     ["disktag.notif.desc"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables). Le seuil disque est franchi. Pour libérer de l'espace : filtrez la bibliothèque des enregistrements par le tag « {1} », multi-sélectionnez puis supprimez (le plugin ne supprime jamais rien lui-même).",
                     ["disktag.notif.desc.uncovered"] = "{0} enregistrement(s) visionné(s) tagué(s) « {1} » (~{2:0.#} Go récupérables) — insuffisant pour ramener le disque au-dessus du seuil. Supprimez-les, puis d'autres enregistrements (ou réduisez les timers) manuellement. Le plugin ne supprime jamais rien lui-même.",
+                    // Notification « fiche croisée » (v1.13.28) — œuvre identifiée
+                    // sous le type opposé à l'item (film sur série, ou l'inverse).
+                    ["crosskind.notif.title"] = "LLM AI — Œuvre(s) enregistrée(s) sous le mauvais type Emby",
+                    ["crosskind.notif.desc"] = "{0} enregistrement(s) identifié(s) avec une fiche du type opposé (film sur un item série, ou l'inverse) — tagué(s) « {1} ». Les ids, synopsis, genres et poster corrects sont écrits et verrouillés ; le type de l'item Emby est figé par l'import DVR et n'est jamais modifié. Pour replacer une œuvre dans la bonne bibliothèque : déplacez son fichier (ex. le .ts) vers la bibliothèque visée — Emby le ré-importera avec le bon type et le plugin le ré-identifiera. Filtrez par le tag « {1} » pour retrouver ces items.",
                     // Toasts d'activation d'une carte .strm (v1.12) — {0} = titre du programme.
                     ["activate.toast.programmed"] = "Enregistrement programmé : {0}",
                     ["activate.toast.duplicate"] = "Déjà programmé : {0}",
@@ -300,6 +304,10 @@ namespace LLM_AI
                     ["disktag.notif.title"] = "LLM AI — Recording disk almost full",
                     ["disktag.notif.desc"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable). The disk threshold is crossed. To free space: filter the recordings library by the tag \"{1}\", multi-select and delete (the plugin never deletes anything itself).",
                     ["disktag.notif.desc.uncovered"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable) — not enough to bring the disk back above the threshold. Delete them, then other recordings (or reduce timers) manually. The plugin never deletes anything itself.",
+                    // Cross-kind notification (v1.13.28) — work identified under
+                    // the opposite kind of the item (movie on a series, or reverse).
+                    ["crosskind.notif.title"] = "LLM AI — Recording(s) typed under the wrong Emby kind",
+                    ["crosskind.notif.desc"] = "{0} recording(s) identified with a fiche of the opposite kind (movie on a series item, or the reverse) — tagged \"{1}\". Correct ids/metadata/poster are written and locked; the item's type is fixed by Emby at DVR import and is never changed. To move a work to the right library: move its file (e.g. the .ts) to the target library — Emby re-imports it under the right kind and the plugin re-identifies it. Filter by the tag \"{1}\" to find these items.",
                     // .strm card activation toasts (v1.12) — {0} = program title.
                     ["activate.toast.programmed"] = "Recording scheduled: {0}",
                     ["activate.toast.duplicate"] = "Already scheduled: {0}",

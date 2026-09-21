@@ -1358,9 +1358,12 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    sur TMDB en plusieurs langues : `en-US` (titre original), `fr-FR` (titre France),
    + la langue de l'usager. Un candidat est retenu si le **titre normalisé**
    correspond (garde-fou contre un mauvais match ambigu), avec contrôle de l'année.
-   **S1 n'est lancé que si `ProductionYear` est connu** : sans année fiable, la
-   recherche TMDB est large et la garde lexicale (sans juge) pourrait accepter un
-   faux film homonyme — les orphelins sans année vont directement à S2/S3. **Cas
+   **S1 est lancé aussi sans `ProductionYear` (v1.13.28)** : sans année fiable,
+   la doctrine de corroboration s'applique — seule l'**égalité exacte** du titre
+   du guide avec la fiche est une preuve (un homonyme dont le titre diffère —
+   inclus, traduit… — ne passe pas) ; cas réel : « La foudre, un éclair de
+   génie », fiche movie 2026 au titre identique, atteignable par la recherche
+   seule alors que le LLM hallucinait à chaque essai. **Cas
    particulier (v1.13.27) — marqueur de date d'Emby** : quand le titre se termine
    par une date ISO collée par Emby (échec d'identification : la date est celle de
    la diffusion, pas l'année de l'œuvre), l'année est dite **soft** : S1 part sans
@@ -1376,7 +1379,9 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    la source de vérité**, un id halluciné renvoie null. À défaut, le titre original
    proposé est passé à S1.
    Chaque candidat doit ensuite passer une **porte d'acceptation sémantique** :
-   - **garde-fou année** (`YearCompatible`, ±1 an) ;
+   - **garde-fou année** (`YearCompatible`, ±1 an ; toute année inconnue ou
+     aberrante `< 1900` — « 0 si inconnu » du LLM, gracenote `Year=1` —
+     lève la garde) ;
    - **juge LLM de synopsis** (`LlmRunner.JudgeSynopsisMatchAsync`) qui compare le
      synopsis EPG au synopsis TMDB et confirme qu'ils décrivent la *même œuvre* — un id
      qui existe mais qui pointe vers un film homonyme d'une autre époque (ex. « Le
@@ -1452,47 +1457,103 @@ passage (per-item try/catch). Scope : **items de bibliothèque `Movie`/`Series`*
 > enregistrement DVR, `PremiereDate`/`DateCreated` sont des dates de **diffusion** ou
 > d'enregistrement (ex. 2024), pas l'année de sortie du film — les utiliser filtrait
 > TMDB à tort et ratait des films existants. Les orphelins sans `ProductionYear`
-> sautent S1 et s'appuient sur le juge synopsis (S2/S3) pour éviter un faux match.
+> sautent la **garde d'année** de S1 : la recherche tourne, mais sans année
+> fiable seule l'**égalité exacte** du titre du guide avec la fiche est une
+> preuve (doctrine de corroboration v1.13.28) — un homonyme au titre
+> différent ne passe pas.
 
 > 📌 **Vérification recommandée** : activer `OrphanIdentifyEnabled` **avec**
 > `OrphanIdentifyDryRun` coché, déclencher la tâche manuellement (Dashboard ▶ Tâches
 > planifiées) et inspecter les lignes `[LLM_AI] OrphanIdentify` du journal avant de
 > décocher le dry-run pour une vraie application.
 
-### Limite connue — fiches croisées film/série (cascade de type, amélioration future)
+### Fiches croisées film/série — cascade de type (repli series→movie)
 
 Toutes les lectures TMDB (recherche S1, validations S2/S3, audit) interrogent le
-**type Emby de l'item** (`Movie` → `/movie`, `Series` → `/tv`). Un documentaire mal
-typé dans l'EPG — film unique enregistré comme « série », ou l'inverse — pointe donc
-vers une fiche de **l'autre type** : S1 cherche dans le mauvais bac, les validations
-par id renvoient 404 et l'audit saute (« fiche illisible »). La vraie fiche existe,
-elle est simplement **injoignable** par toute la chaîne (cas réel : fiche film posée
-sur un item `Series`, remédiation manuelle nécessaire).
+**type Emby de l'item** (`Movie` → `/movie`, `Series` → `/tv`). Or Emby type
+l'import DVR d'après le guide : un film/documentaire diffusé avec des
+métadonnées d'épisode (titre d'épisode, saison, marqueur IsSeries du programme)
+atterrit en `Series`/`Episode` alors que l'œuvre est un film — la banque « tv »
+de TMDB ne la connaîtra jamais, et le `/find` d'un id IMDb de film ne regarde
+que `movie_results` (cas réel du 2026-09-20 : « La foudre, un éclair de génie »,
+film `tmdb=1674784`, importé comme série puis taggé `llmai-needs-review` après
+une résolution tentée uniquement en kind series).
 
-**Amélioration prévue (« cascade de type »)** — faire suivre le type jusqu'à la
-fiche au lieu de le déduire de l'item :
+**Cascade implémentée (repli de type series→movie)** — quand l'item est une
+série et que la chaîne échoue en kind series, le pipeline complet
+(S0 natif Emby → S1 → S2 → S3) est **rejoué en kind movie** sur le même item,
+avec la même porte d'acceptation (année ±1 + garde lexicale — inclusion
+contiguë **ou sous-séquence ordonnée de tokens**, p. ex. « ADN business :
+la face cachée des tests grand public » vs « ADN, la face cachée des tests
+grand public » — + juge synopsis) :
 
-- **S3** : lire le type **de l'URL TMDB** elle-même (`themoviedb.org/movie/…` vs
-  `/tv/…`) — gratuit, sans ambiguïté ;
-- **S1** : en cas d'échec du bac principal, rejouer via `/search/multi` et honorer
-  le `media_type` renvoyé par TMDB ;
-- **S2** : le LLM retourne le **type proposé** dans son verdict (`"type":
-  "movie"|"series"`) et la validation se fait sous ce type ; repli sur le type
-  opposé **seulement** si absent — et alors avec **juge synopsis obligatoire**
-  (jamais titre+année seuls : les numéros TMDB film et série sont des espaces
-  indépendants, un même nombre peut désigner deux œuvres différentes) ;
-- **audit** : relire la fiche sous le type opposé quand elle est illisible sous le
-  type de l'item.
+- une fiche croisée acceptée est **appliquée** (non destructive + verrous — le
+  type de l'item, fixé par Emby à l'import, n'est jamais modifié) mais taguée
+  **`llmai-needs-review`** avec un log explicite (« fiche de type film
+  appliquée sur un item série — à confirmer ») plutôt que `llmai-identified` :
+  Emby ne peut jamais relire une fiche croisée au refresh (les providers
+  interrogent selon le type de l'item) ;
+- à la passe suivante, l'audit `OrphanAuditTaggedIds` — et l'audit des
+  identifications Emby avec vérité EPG — relit la fiche **sous le type opposé**
+  quand elle est illisible sous le type de l'item : match lexical du titre →
+  confirmation (tag `llmai-identified`, verrous déjà posés). Un item
+  `needs-review` portant une fiche croisée correcte **converge donc tout seul**
+  au passage suivant ; une confirmation humaine reste possible (éditeur Emby :
+  retirer l'id si la fiche est fausse, sinon laisser converger).
+- **Tag + notification** : la fiche croisée appliquée pose un tag add-only
+  `llmai-cross-kind` (survit à la confirmation — filtrable dans Emby) et une
+  notification est envoyée aux usagers (compteur limité aux nouvelles). Pour
+  replacer l'œuvre dans la bibliothèque de son type : déplacez le fichier
+  (Emby le ré-importe avec le bon type et le plugin le ré-identifie) — le
+  plugin ne déplace jamais de média.
 
-Politique d'application retenue : une fiche **croisée** acceptée est appliquée
-(non destructive + verrous) mais taguée **`llmai-needs-review`** avec un log explicite
-(« fiche de type film appliquée sur un item série — à confirmer ») plutôt que
-`llmai-identified`. Motif : Emby lui-même ne peut jamais relire une fiche croisée au
-refresh (les providers interrogent selon le type de l'item) — un ré-identifiage
-Emby ultérieur écraserait la fiche du plugin, et un item `llmai-identified` n'est
-plus jamais ré-audité. Une confirmation humaine unique règle le cas définitivement.
-La porte d'acceptation reste inchangée (lexicale + juge synopsis, agnostique du
-type).
+Le repli est **unidirectionnel** (series→movie seulement) : l'inverse (œuvre
+sérielle importée comme Movie) n'est pas observé, et un vrai film homonyme
+d'une série risquerait un faux match. Restent hors cascade : S1 via
+`/search/multi` (le repli rejoue la recherche par kind, pas en multi) et S3 qui
+lirait le type dans l'URL TMDB elle-même.
+
+**Validé en production (2026-09-20, première passe).** 4730 items scannés,
+0 erreur : 7 fiches croisées appliquées et notifiées à tous les usagers, dont
+« ADN, la face cachée des tests grand public » résolue dès **S0** (recherche
+native Emby + garde par tokens : TMDB l'indexe sous « ADN business : la face
+cachée des tests grand public ») ; un item coincé en `needs-review`
+(« Les voleurs d'identité ») a convergé tout seul via la relecture croisée de
+l'audit ; un titre à horodaté underscore (« Alerte en orbite
+2023_10_23_20_00_00 ») validé par l'audit contre le sous-titre officiel.
+
+> **Piège TMDB — les pièges du chemin « titre proposé par le LLM ».** La
+> recherche S2 passe `primary_release_year=<année devinée>` : (1) pour une
+> œuvre récente que le modèle ne connaît pas, l'année devinée peut être
+> fausse et le filtre rend la vraie fiche invisible (« La foudre, un éclair
+> de génie » — fiche movie 2026, année devinée ≠ 2026 → 0 résultat à chaque
+> passe, alors que la même requête **sans filtre d'année** la trouvait) —
+> corrigé par une **cascade annuelle en repli** ; (2) plus sournois : le LLM
+> répond `"year":0` (sa convention « 0 si inconnu »), qui était parsé en
+> `expectedYear=0` — et TMDB **ignore** `primary_release_year=0` (la fiche
+> est donc trouvée) tandis que la garde d'année rejetait
+> `YearCompatible(0, 2026)`… en silence. Corrigé : « 0 si inconnu » reste
+> null, toute année `< 1900` est traitée comme inconnue partout, et sans
+> année fiable côté item un **titre exact** prime sur l'année devinée (une
+> correspondance lâche garde la garde d'année, et est rejetée sans année
+> fiable ni synopsis comparable — une proposition non exacte du LLM ne doit
+> jamais suffire). (3) Enfin, même la corroboration des voies par id peut se
+> valider elle-même : l'année et l'id viennent tous deux du LLM, et un
+> halluciné (`tt1054588`, « Un Éclair de génie » 2008) a passé le fil via un
+> titre de fiche **suffixe** du titre EPG + une année devinée cohérente-fausse.
+> Désormais, sans synopsis comparable : sans année fiable, seule l'**égalité
+> exacte du titre du guide** avec la fiche est une preuve sur les voies
+> LLM/web ; avec une année fiable, la garde lexicale (titre du guide) ou
+> l'année corroborante suffit. Les rejets de la porte et
+> les ids extraits par S3 sont désormais logués — des impasses qui étaient
+> totalement invisibles (fiche correcte rejetée sans trace ; id IMDb réel
+> `tt40791857` extrait du web puis refusé par `/find`, plus récent que le
+> mapping TMDB). Rappel : le cache TMDB 24 h n'archive que les résultats
+> valides, jamais les erreurs — un « aucun film » se rejoue donc
+> intégralement à la passe suivante. Pour diagnostiquer : re-boucler la
+> recherche avec et sans `primary_release_year`, puis regarder les lignes
+> « rejeté — année incompatible / garde de titre / voie LLM sans synopsis »
+> du journal avant d'incriminer le pipeline.
 
 ---
 

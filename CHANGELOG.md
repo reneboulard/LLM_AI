@@ -10,6 +10,281 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.28.0] — 2026-09-20
+
+### Added (FR)
+- **Cascade de type (repli series→movie) pour les fiches croisées.** Emby type
+  l'import DVR d'après le guide : un film/documentaire diffusé avec des
+  métadonnées d'épisode (titre d'épisode, saison, marqueur IsSeries) atterrit
+  en Series/Episode alors que l'œuvre est un film — et toute la chaîne
+  d'identification cherchait dans le mauvais bac (la banque « tv » de TMDB ne
+  connaît pas l'œuvre ; le `/find` d'un id IMDb de film ne regarde que
+  `movie_results`). Cas réel du 2026-09-20 : « La foudre, un éclair de génie »
+  (film `tmdb=1674784`) importé comme série, taggé `llmai-needs-review` après
+  une résolution tentée uniquement en kind series. Quand l'item est une série
+  et que la chaîne échoue en kind series, le pipeline complet (S0→S1→S2→S3)
+  est rejoué en kind **movie** sur le même item, même porte d'acceptation.
+  Une fiche croisée acceptée est appliquée (non destructive, type d'item
+  conservé) mais taguée `llmai-needs-review` (« fiche de type film appliquée
+  sur un item série — à confirmer ») plutôt que `llmai-identified` — Emby ne
+  peut jamais relire une fiche croisée au refresh. Repli unidirectionnel :
+  l'inverse (œuvre sérielle importée comme Movie) n'est pas observé et
+  risquerait un faux match.
+- **Audits : relecture croisée des fiches illisibles.** Les deux audits
+  (OrphanAuditTaggedIds, audit des identifications Emby avec vérité EPG)
+  relisent la fiche **sous le type opposé** quand elle est illisible sous le
+  type de l'item (fiche film posée sur un item série). Match lexical du titre
+  → confirmation (`llmai-identified`, verrous déjà posés) : un item
+  needs-review portant une fiche croisée correcte converge tout seul à la
+  passe suivante. Sans cette relecture, l'audit sautait éternellement une
+  fiche pourtant correcte.
+- **Tag `llmai-cross-kind` + notification.** La fiche croisée appliquée pose
+  un tag add-only **`llmai-cross-kind`** qui SURVIT à la confirmation du
+  besoin-revue (contrairement à `llmai-needs-review`, consommé par l'audit) :
+  il sert à retrouver ces items dans Emby (filtrable par tag). À chaque
+  nouvelle fiche croisée, une **notification** est envoyée à tous les usagers
+  (pattern des tags disque — compteur limité aux NOUVEAUX de la passe, à la
+  fin de l'enregistrement côté `RecordingWatcher`, groupé à la passe 04 h).
+  Agnostique du kind : couvre aussi l'inverse (fiche série posée sur un item
+  Movie, détectée par la relecture croisée des audits). Le remplacement du
+  fichier dans la bibliothèque de son type reste une action de l'usager — le
+  plugin ne déplace jamais de média.
+- **Robustesse de la porte d'acceptation (cas « ADN business »).** Trois
+  correctifs rendant résoluble la classe des enregistrements mal importés :
+  (1) **année aberrante** (< 1900, p. ex. `ProductionYear=1` des imports
+  gracenote) traitée comme inconnue — auparavant elle empoisonnait la
+  recherche (`primary_release_year=1` : zéro résultat) et rejetait toute
+  fiche (`YearCompatible(1, 2025)`) ; (2) garde lexicale étendue par
+  **sous-séquence ordonnée de tokens** (≥ 2 tokens) — attrape les variantes à
+  sous-titre inséré (« ADN business : la face cachée des tests grand
+  public » vs « ADN, la face cachée des tests grand public »), invisibles à
+  l'inclusion contiguë ; (3) **horodatés underscore** en fin de titre
+  (`2025_09_08_20_00_00`, convention de renommage manuel) strippés comme la
+  date ISO et reconnus comme date-marqueur (année indicative).
+- **Validé en production (2026-09-20, première passe).** 4730 items, 0
+  erreur : 7 fiches croisées appliquées + notification (3/3 usagers) ; « ADN,
+  la face cachée des tests grand public » résolue en S0 via la garde par
+  tokens ; « Les voleurs d'identité » (coincé en `needs-review`) convergé
+  tout seul par la relecture croisée de l'audit ; horodaté underscore
+  (« Alerte en orbite 2023_10_23_20_00_00 ») validé à l'audit. Seul raté
+  observé : « La foudre, un éclair de génie » — **trois blocages diagnostiqués
+  en trois passes** (les erreurs TMDB n'étant jamais mises en cache, chaque
+  passe rejoue tout) : (1) la recherche S2 sur le titre proposé par le LLM
+  était filtrée par `primary_release_year=<année devinée>` (≠ 2026 → 0
+  résultat, alors que la fiche était bien dans l'index) → cascade annuelle ;
+  (2) après déploiement de la cascade, la passe suivante **trouvait la fiche**
+  (TMDB ignore d'ailleurs `primary_release_year=0`) mais la porte la
+  rejetait : le LLM répondait `"year":0` (sa convention « 0 si inconnu »),
+  parsé comme `expectedYear=0` → `YearCompatible(0, 2026)` = rejet
+  silencieux ; parallèlement S3 extrayait bien l'id IMDb réel des résultats
+  web (`tt40791857`) mais `/find` ne le connaît pas encore (id IMDb plus
+  récent que le mapping TMDB) — une impasse **totalement silencieuse**.
+  Corrigé et instrumenté (voir les points suivants).
+- **S2 : « 0 si inconnu » ne doit plus tuer la porte.** La convention du
+  prompt (`year: 0` = inconnu) était parsée en `Year=0` (non-null) : la
+  recherche partait avec `primary_release_year=0` (que TMDB ignore — la
+  fiche était donc trouvée) mais la garde d'année recevait `expectedYear=0`
+  et rejetait la vraie fiche. Trois garde-fous : `ParseIdGuess` laisse
+  `year<=0` à null ; la doctrine « année aberrante = inconnue » (< 1900)
+  est appliquée **partout** (`YearCompatible`, et `TitleMatches` qui
+  délègue désormais à la même règle) ; les rejets de la porte (année /
+  titre) sont désormais **logués** (le rejet silencieux de ce cas a coûté
+  tout le diagnostic).
+- **S2, chemin « titre proposé par le LLM » : cascade annuelle + année
+  indicative.** La recherche par titre (avec garde lexicale) est rejouée
+  **sans filtre d'année** quand l'année devinée par le LLM ne renvoie rien
+  (œuvre récente inconnue du modèle). Surtout : sans année fiable côté item
+  (`gateYear` null), un **titre exact** (égalité normalisée, pas une simple
+  inclusion) prime sur l'année devinée — le LLM se trompe d'année sur les
+  œuvres qu'il ne connaît pas (2017 deviné pour un doc de 2026), et cette
+  garde ne protège de toute façon pas contre une proposition
+  cohérente-mais-fausse (le LLM devine l'année de la fiche qu'il propose).
+  Une correspondance lâche (inclusion) conserve la garde d'année
+  (homonymes d'époques différentes). Le filet reste le tag
+  `llmai-needs-review` + l'audit `OrphanAuditTaggedIds`.
+- **S2, voie par titre : un match lâche sans preuve ne suffit plus.** Seconde
+  passe de production (2026-09-20, backend gemma4:31b cloud) : le LLM a
+  proposé un titre inventé (« The Lightning Thief ») pour « La foudre, un
+  éclair de génie » — l'inclusion dans « Percy Jackson & the Olympians: The
+  Lightning Thief » (année devinée = année de la fiche : cohérente… et
+  fausse) a fait **appliquer la mauvaise fiche** (l'inclusion est passée, le
+  juge n'a rien arbitré faute de synopsis EPG). Désormais, sans année fiable
+  côté item ET sans synopsis comparable, un titre lâche
+  (inclusion/sous-séquence) est **rejeté** — seule une égalité de titre
+  exacte porte une proposition non exacte. L'item a été remis à blanc (ids
+  faux, overview et verrous retirés) ; la fiche croisée « Voyages au centre
+  de la Terre » appliquée dans la même passe (tmdb=1190205) était, elle,
+  correcte — la voie marche dès que le LLM propose le vrai titre.
+- **S2/S3 : la corroboration s'ancre sur le titre du guide, pas sur la
+  proposition.** Troisième passe de production (2026-09-20) : le LLM a
+  proposé l'id IMDb halluciné `tt1054588` (« Flash of Genius » / « Un
+  Éclair de génie », 2008) et la corroboration a accepté via deux signaux
+  **circulaires** : le titre de la fiche est un suffixe du titre EPG
+  (« …un éclair de génie » ⊂ « La foudre, un éclair de génie ») et l'année
+  devinée (2008) égale celle de la fiche que l'id pointe — id ET année
+  venaient tous deux du LLM, la « corroboration » se validait elle-même.
+  Désormais, sur les voies LLM/web (S2 par id, S2 par titre proposé, S3
+  web), sans synopsis comparable : sans année fiable côté item, seule
+  l'**égalité exacte du titre du guide** avec la fiche est une preuve ;
+  avec une année fiable, la garde lexicale (titre du guide) ou l'année
+  corroborante suffit. La voie par titre proposé ancre aussi son
+  exception « titre exact » sur le titre du guide (la fiche trouvée VIA
+  une proposition la « confirme » toujours). L'item a été re-mis à blanc
+  (ids, overview, verrous) ; en parallèle l'audit a validé la convergence
+  croisée attendue (« Voyages au centre de la Terre » → `llmai-identified`).
+- **S1 : la recherche du titre du guide tourne aussi sans année (égalité
+  exacte exigée).** Quatrième passe (2026-09-20) : les rejets de la
+  corroboration ont tenu (trois hallucinations du LLM rejetées : « The
+  Flash », « Flash of Genius » — le LLM associe « foudre » à autre chose à
+  chaque essai), mais la foudre restait bloquée en needs-review : la
+  recherche S1 sur le titre du guide — qui trouve la vraie fiche (titre
+  IDENTIQUE, vérifié cinq fois) — exigeait une année fiable ou soft et
+  l'item n'en a aucune. L'item partait donc en S2/S3 où le LLM hallucine
+  systématiquement. Désormais S1 tourne aussi sans année, sous la même
+  doctrine : sans année fiable, seule l'**égalité exacte** du titre du
+  guide avec la fiche est une preuve (un homonyme dont le titre diffère ne
+  passe pas) ; avec une année fiable ou soft, comportement inchangé (garde
+  lexicale + année). Dans le cas de la foudre, la passe « series » ne
+  trouve rien (la banque tv ignore l'œuvre) et le repli de type applique
+  la fiche movie au titre exact, taguée à confirmer.
+- **S3 : visibilité de la boucle by-id.** Les ids IMDb/TMDB extraits des
+  résultats web sont logués — sans cela, une boucle dont tous les `/find`
+  renvoient vide (id IMDb trop récent pour TMDB, cas réel
+  `tt40791857`) est totalement invisible dans les journaux.
+
+### Added (EN)
+- **Kind cascade (series→movie replay) for cross-kind fiches.** Emby types the
+  DVR import from the guide: a film/documentary aired with episode metadata
+  (episode title, season, IsSeries flag) lands as Series/Episode although the
+  work is a movie — and the whole identification chain searched the wrong
+  bucket (TMDB's "tv" bucket does not know the work; the `/find` of a movie
+  IMDb id only looks at `movie_results`). Real case, 2026-09-20: "La foudre,
+  un éclair de génie" (movie `tmdb=1674784`) imported as a series, tagged
+  `llmai-needs-review` after a resolution attempted only in the series kind.
+  When the item is a series and the chain fails in the series kind, the full
+  pipeline (S0→S1→S2→S3) is replayed in the **movie** kind on the same item,
+  same acceptance gate. An accepted cross-kind fiche is applied
+  (non-destructive, item type kept) but tagged `llmai-needs-review` ("movie
+  fiche applied to a series item — to confirm") rather than
+  `llmai-identified` — Emby can never re-read a cross-kind fiche on refresh.
+  One-directional replay: the reverse (a serial work imported as a Movie) is
+  not observed and would risk a false match.
+- **Audits: cross-kind re-read of unreadable fiches.** Both audits
+  (OrphanAuditTaggedIds and the Emby-id audit with EPG truth) re-read the
+  fiche **under the opposite kind** when it is unreadable under the item's
+  kind (movie fiche set on a series item). A lexical title match →
+  confirmation (`llmai-identified`, locks already set): a needs-review item
+  carrying a correct cross-kind fiche converges by itself on the next pass.
+  Without this cross-read, the audit would skip a perfectly correct fiche
+  forever.
+- **`llmai-cross-kind` tag + notification.** The applied cross-kind fiche sets
+  an add-only tag **`llmai-cross-kind`** that SURVIVES the needs-review
+  confirmation (unlike `llmai-needs-review`, consumed by the audit): it makes
+  these items findable in Emby (tag filter). Each NEW cross-kind fiche
+  triggers a **notification** to all users (disk-tag pattern — counter
+  limited to the pass's new ones; per recording on the `RecordingWatcher`
+  path, batched on the 04:00 pass). Kind-agnostic: covers the reverse too
+  (series fiche on a Movie item, caught by the audit cross-read). Moving the
+  file to its kind's library stays a user action — the plugin never moves
+  media.
+- **Acceptance-gate robustness (the "ADN business" case).** Three fixes make
+  the mis-typed-recording class resolvable: (1) a **bogus year** (< 1900,
+  e.g. the `ProductionYear=1` of gracenote imports) is treated as unknown —
+  before, it poisoned the search (`primary_release_year=1`: zero results)
+  and rejected every fiche (`YearCompatible(1, 2025)`); (2) the lexical
+  guard extended with an **ordered token subsequence** match (≥ 2 tokens) —
+  catches subtitle-insertion variants ("ADN business : la face cachée des
+  tests grand public" vs "ADN, la face cachée des tests grand public"),
+  invisible to contiguous containment; (3) **underscore timestamps** at the
+  end of the title (`2025_09_08_20_00_00`, manual-renaming convention) are
+  stripped like the ISO date and recognized as a date marker (indicative
+  year).
+- **Field-validated in production (2026-09-20, first pass).** 4730 items, 0
+  errors: 7 cross-kind fiches applied + notification (3/3 users); "ADN, la
+  face cachée des tests grand public" resolved at S0 via the token guard;
+  "Les voleurs d'identité" (stuck in `needs-review`) converged by itself via
+  the audit cross-read; an underscore timestamp ("Alerte en orbite
+  2023_10_23_20_00_00") validated at the audit. Only observed miss: "La
+  foudre, un éclair de génie" — **three blockers diagnosed across three
+  passes** (TMDB errors are never cached, so each pass replays everything): (1) the
+  S2 search on the LLM-proposed title was filtered by
+  `primary_release_year=<guessed year>` (≠ 2026 → 0 results, although the
+  fiche WAS in the TMDB index) → year cascade; (2) after deploying the
+  cascade, the next pass **found the fiche** (TMDB actually ignores
+  `primary_release_year=0`) but the gate rejected it: the LLM answered
+  `"year":0` (its "0 if unknown" convention), parsed as `expectedYear=0` →
+  `YearCompatible(0, 2026)` = silent rejection; meanwhile S3 did extract the
+  real IMDb id from the web results (`tt40791857`) but `/find` does not know
+  it yet (an IMDb id newer than TMDB's mapping) — a **fully silent** dead
+  end. Fixed and instrumented (see the following entries).
+- **S2: "0 if unknown" must not kill the gate.** The prompt convention
+  (`year: 0` = unknown) was parsed into `Year=0` (non-null): the search went
+  out with `primary_release_year=0` (which TMDB ignores — the fiche was
+  therefore found) but the year guard received `expectedYear=0` and rejected
+  the true fiche. Three safeguards: `ParseIdGuess` leaves `year<=0` as null;
+  the "bogus year = unknown" doctrine (< 1900) is applied **everywhere**
+  (`YearCompatible`, and `TitleMatches` which now delegates to the same
+  rule); the gate's rejections (year / title) are now **logged** (the silent
+  rejection in this case cost the whole diagnosis).
+- **S2, "LLM-proposed title" path: year cascade + indicative year.** The
+  title search (with the lexical guard) is replayed **without a year filter**
+  when the LLM's guessed year returns nothing (a recent work unknown to the
+  model). Above all: with no reliable item year (`gateYear` null), an
+  **exact title** (normalized equality, not mere containment) outranks the
+  guessed year — the LLM misdates works it does not know (2017 guessed for a
+  2026 doc), and this guard never protected against a coherent-but-wrong
+  proposal anyway (the LLM guesses the year of the very fiche it proposes).
+  A loose match (containment) keeps the year guard (same-title works of
+  different eras). The safety net remains the `llmai-needs-review` tag +
+  the `OrphanAuditTaggedIds` audit.
+- **S2, title path: a loose match with no evidence no longer suffices.**
+  Second production pass (2026-09-20, gemma4:31b cloud backend): the LLM
+  proposed an invented title ("The Lightning Thief") for "La foudre, un
+  éclair de génie" — the containment inside "Percy Jackson & the Olympians:
+  The Lightning Thief" (guessed year = the fiche's year: coherent… and
+  wrong) led to **applying the wrong fiche** (the containment passed, and
+  the judge could not arbitrate for lack of an EPG synopsis). From now on,
+  with no reliable item year AND no comparable synopsis, a loose title
+  (containment/subsequence) is **rejected** — only an exact title equality
+  can carry a non-exact proposal. The item was reset (wrong ids, overview
+  and locks removed); the "Voyages au centre de la Terre" cross-kind fiche
+  applied in the same pass (tmdb=1190205) was correct — the path works as
+  soon as the LLM proposes the real title.
+- **S2/S3: corroboration anchors on the guide's title, not the proposal.**
+  Third production pass (2026-09-20): the LLM proposed the hallucinated IMDb
+  id `tt1054588` ("Flash of Genius" / "Un Éclair de génie", 2008) and the
+  corroboration accepted via two **circular** signals: the fiche's title is a
+  suffix of the EPG title ("…un éclair de génie" ⊂ "La foudre, un éclair de
+  génie") and the guessed year (2008) equals the year of the fiche the id
+  points at — the id AND the year both came from the LLM, the
+  "corroboration" validated itself. From now on, on the LLM/web paths (S2
+  by id, S2 by proposed title, S3 web), with no comparable synopsis: with no
+  reliable item year, only the **exact guide-title equality** with the fiche
+  counts as proof; with a reliable year, the lexical guard (guide's title) or
+  the corroborating year suffices. The proposed-title path also anchors its
+  "exact title" exception on the guide's title (a fiche found VIA a proposal
+  always "confirms" it). The item was reset again (ids, overview, locks);
+  meanwhile the audit validated the expected cross-read convergence
+  ("Voyages au centre de la Terre" → `llmai-identified`).
+- **S1: the guide-title search now also runs with no year (exact equality
+  required).** Fourth pass (2026-09-20): the corroboration rejections held
+  (three LLM hallucinations rejected: "The Flash", "Flash of Genius" — the
+  LLM associates "foudre" with something else every time), but the foudre
+  stayed stuck in needs-review: the S1 search on the guide's title — which
+  finds the true fiche (IDENTICAL title, verified five times) — required a
+  reliable or soft year and the item has none. The item therefore went to
+  S2/S3 where the LLM hallucinates systematically. From now on S1 also runs
+  without a year, under the same doctrine: with no reliable year, only the
+  **exact equality** of the guide's title with the fiche counts as proof (a
+  homonym whose title differs does not pass); with a reliable or soft year,
+  behavior unchanged (lexical guard + year). For the foudre, the "series"
+  pass finds nothing (the tv bucket ignores the work) and the kind replay
+  applies the movie fiche with the exact title, tagged for confirmation.
+- **S3: visibility of the by-id loop.** The IMDb/TMDB ids extracted from web
+  results are now logged — without it, a loop whose every `/find` returns
+  empty (an IMDb id too new for TMDB, real case `tt40791857`) is completely
+  invisible in the logs.
+
 ## [1.13.27.1] — 2026-09-17
 
 ### Changed (FR)

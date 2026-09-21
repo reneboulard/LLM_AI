@@ -22,6 +22,10 @@ using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
 
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Model.Querying;
+
+using Emby.Notifications;
 
 namespace LLM_AI
 {
@@ -51,6 +55,15 @@ namespace LLM_AI
     /// <b>S2 — proposition LLM</b> (juge). <b>S3 — SearXNG → id IMDb</b>
     /// (juge).</para></item>
     /// </list>
+    /// <para><b>Repli de type (series→movie)</b> : quand l'item est une série
+    /// et que la chaîne échoue en kind series, la chaîne est rejouée en kind
+    /// movie sur le même item. Emby type l'import DVR d'après le guide : un
+    /// film/documentaire diffusé avec des métadonnées d'épisode atterrit en
+    /// Series/Episode alors que l'œuvre est un film — la banque « tv » de
+    /// TMDB ne la connaîtra jamais. Unidirectionnel : l'inverse (œuvre
+    /// sérielle importée comme Movie) n'est pas observé et un vrai film
+    /// homonyme d'une série risquerait un faux match. Le type d'item n'est
+    /// jamais modifié.</para>
     /// <para><b>Porte d'acceptation</b> commune : année compatible (±1 an) +
     /// (garde lexicale sur les voies par titre) + juge LLM dès que les deux
     /// synopsis existent (sinon acceptation sur année+titre, comme la pratique
@@ -201,6 +214,44 @@ namespace LLM_AI
             var trace = new PipelineTrace();
             var meta = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
                 allowS0, langs, userTmdb, dry, trace, ct).ConfigureAwait(false);
+
+            // Repli de type « film importé comme série » : Emby type l'import
+            // DVR d'après le guide — un film/documentaire diffusé avec des
+            // métadonnées d'épisode (titre d'épisode, saison, marqueur
+            // IsSeries du programme) atterrit en Series/Episode alors que
+            // l'œuvre est un film. La passe en kind series échoue alors PAR
+            // CONSTRUCTION (la banque « tv » de TMDB ne connaît pas l'œuvre ;
+            // le /find d'un id IMDb de film, proposé en S2, ne regarde que
+            // movie_results). Cas réel du 2026-09-20 : « La foudre, un éclair
+            // de génie » (tmdb=1674784, film) taggé needs-review après une
+            // résolution tentée uniquement en series. On rejoue donc le
+            // pipeline complet en kind « movie » sur le même item — la porte
+            // (année ±1 + garde lexicale + juge synopsis) reste la même, la
+            // fiche appliquée écrit seulement les ids/champs manquants (le
+            // type de l'item, fixé par Emby à l'import, n'est jamais modifié :
+            // l'invariant « le plugin ne détruit rien » s'applique). Repli
+            // unidirectionnel series→movie : l'inverse (œuvre sérielle
+            // importée comme Movie) suppose une erreur inverse du guide,
+            // jamais observée — et un vrai film homonyme d'une série absent
+            // de TMDB risquerait un faux match. Trace pré-ensemencée : la
+            // sémantique du tag d'échec (needs-review vs introuvable) fusionne
+            // les candidats vus par les DEUX passes.
+            if (meta == null && isSeries)
+            {
+                var movieTrace = new PipelineTrace { SawCandidates = trace.SawCandidates };
+                meta = await ResolvePipelineAsync(item, truth, cfg, "movie", false,
+                    allowS0, langs, userTmdb, dry, movieTrace, ct, crossKind: true).ConfigureAwait(false);
+                trace = movieTrace;
+                if (meta != null)
+                    _logger?.Info(
+                        "[LLM_AI] OrphanIdentify : {0}« {1} » — fiche de type film appliquée sur un item série — à confirmer (type d'item conservé, Emby ne peut pas relire cette fiche au refresh).",
+                        dry ? "(DRY-RUN) " : "", epgTitle);
+                // Fiche croisée appliquée → needs-review (pas identified) :
+                // l'audit OrphanAuditTaggedIds des passes suivantes relit la
+                // fiche sous le type opposé et confirme (ou l'humain tranche).
+                if (meta != null) return Status.NeedsReview;
+            }
+
             if (meta == null) return trace.SawCandidates ? Status.NeedsReview : Status.NotFound;
             return Status.OrphanResolved;
         }
@@ -213,7 +264,8 @@ namespace LLM_AI
 
         private async Task<TmdbMeta> ResolvePipelineAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool allowS0,
-            string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct)
+            string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct,
+            bool crossKind = false)
         {
             string epgTitle = truth?.Title ?? item.Name;
             // Année = ProductionYear UNIQUEMENT (date de DIFFUSION pour un DVR,
@@ -223,13 +275,30 @@ namespace LLM_AI
             string cleanTitle = TmdbLookupTool.CleanEpgTitle(epgTitle);
             if (string.IsNullOrWhiteSpace(cleanTitle)) cleanTitle = epgTitle;
 
-            // Date ISO en fin de titre = marqueur d'échec d'identification
-            // d'Emby (passe 04 h : truth nulle, l'année vient de l'item).
-            // C'est une date de diffusion : l'année qu'elle induit est
-            // « soft » — on ne filtre pas la recherche TMDB dessus et la
-            // porte ne la rejette pas ; l'acceptation repose alors sur le
-            // titre lexicale + le juge synopsis.
-            bool yearSoft = truth == null && TmdbLookupTool.HasEmbyDateMarker(epgTitle);
+            // Année aberrante (imports gracenote : ProductionYear = 1…) : elle
+            // n'a aucun sens (année < 1900) et empoisonne toute la chaîne — la
+            // requête part avec primary_release_year=1 (zéro résultat) et la
+            // garde d'année rejette TOUT (YearCompatible(1, 2025) = faux). Cas
+            // réel 2026-09-20 : « ADN, la face cachée des tests grand public »,
+            // Year=1, vraie fiche movie 2025. Traitée comme la date-marqueur
+            // Emby : année inconnue — recherche SANS filtre d'année, porte
+            // sans garde d'année (le titre + le juge décident).
+            bool bogusYear = year.HasValue && year.Value < 1900;
+            if (bogusYear)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — année aberrante ({1}) traitée comme inconnue.",
+                    epgTitle, year.Value);
+                year = null;
+            }
+
+            // Date ISO ou horodaté underscore en fin de titre = marqueur
+            // d'échec d'identification d'Emby (passe 04 h : truth nulle,
+            // l'année vient de l'item). C'est une date de diffusion : l'année
+            // qu'elle induit est « soft » — on ne filtre pas la recherche TMDB
+            // dessus et la porte ne la rejette pas ; l'acceptation repose alors
+            // sur le titre lexicale + le juge synopsis.
+            bool yearSoft = bogusYear
+                || (truth == null && TmdbLookupTool.HasEmbyDateMarker(epgTitle));
             int? searchYear = yearSoft ? (int?)null : year;
             int? gateYear = yearSoft ? (int?)null : year;
             if (yearSoft)
@@ -252,12 +321,20 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S0 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
-            // S1 : recherche multilingue. Exige une année fiable : sans année,
-            // la garde lexicale (sans juge) peut accepter un faux homonyme ;
-            // les items sans année restent à S2/S3 (juge sémantique) — sauf
-            // année soft (marqueur Emby), où la recherche part SANS filtre
-            // d'année et la porte retombe sur titre lexicale + juge.
-            if (meta == null && (searchYear.HasValue || yearSoft))
+            // S1 : recherche multilingue sur le titre du guide. Avec une
+            // année fiable (ou soft) : garde lexicale + garde d'année (les
+            // homonymes d'époques différentes sont rejetés). SANS aucune
+            // année : S1 tournait avec une garde stricte — l'item partait
+            // alors en S2/S3 où le LLM hallucine (cas réel 2026-09-20 :
+            // « La foudre, un éclair de génie » — fiche movie 2026 au titre
+            // IDENTIQUE, atteignable par la recherche seule, jamais proposée
+            // par le LLM : trois hallucinations rejetées en trois passes).
+            // La doctrine de corroboration s'applique : sans année fiable,
+            // seule l'ÉGALITÉ EXACTE du titre du guide avec la fiche est une
+            // preuve — un homonyme dont le titre diffère (inclus, traduit…)
+            // ne passe pas.
+            bool exactOnlyS1 = !searchYear.HasValue && !yearSoft;
+            if (meta == null && (searchYear.HasValue || yearSoft || exactOnlyS1))
             {
                 try
                 {
@@ -270,7 +347,11 @@ namespace LLM_AI
                     if (s1 == null && searchYear.HasValue)
                         s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, null, langs, ct).ConfigureAwait(false);
                     if (s1 != null) trace.SawCandidates = true; // une banque liste le titre
-                    if (s1 != null && TitleMatches(cleanTitle, s1.Title, gateYear, s1.Year))
+                    bool s1Ok = exactOnlyS1
+                        ? NormalizeTitle(cleanTitle).Length > 0
+                          && NormalizeTitle(cleanTitle) == NormalizeTitle(s1?.Title)
+                        : TitleMatches(cleanTitle, s1?.Title, gateYear, s1?.Year);
+                    if (s1Ok)
                     {
                         meta = s1;
                         stage = "S1";
@@ -339,9 +420,10 @@ namespace LLM_AI
                 return meta;
             }
 
-            await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
+            await ApplyAsync(item, meta, kind, isSeries, ct, crossKind).ConfigureAwait(false);
             _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » → tmdb={1} imdb={2} tvdb={3} ({4}) ; Name verrouillé, tag {5}.",
-                epgTitle, meta.TmdbId, meta.ImdbId ?? "—", meta.TvdbId ?? "—", stage, OrphanIdentifyTask.TagIdentified);
+                epgTitle, meta.TmdbId, meta.ImdbId ?? "—", meta.TvdbId ?? "—", stage,
+                crossKind ? OrphanIdentifyTask.TagNeedsReview : OrphanIdentifyTask.TagIdentified);
             return meta;
         }
 
@@ -366,13 +448,34 @@ namespace LLM_AI
 
             // Relire la fiche TMDB de l'id posé par Emby (tmdb > imdb > tvdb).
             TmdbMeta meta = null;
+            bool crossRead = false; // fiche lue sous le type opposé à l'item
             string tmdbRaw = item.GetProviderId("tmdb");
-            if (int.TryParse(tmdbRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) && tmdbId > 0)
+            int.TryParse(tmdbRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId);
+            if (tmdbId > 0)
                 meta = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
             if (meta == null && !string.IsNullOrWhiteSpace(item.GetProviderId("imdb")))
                 meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("imdb").Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
             if (meta == null && isSeries && !string.IsNullOrWhiteSpace(item.GetProviderId("tvdb")))
                 meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("tvdb").Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+
+            // Fiche illisible sous le type de l'item → relire sous le type
+            // opposé (fiche croisée : id de film écrit par Emby sur un item
+            // série, ou fiche posée par le repli de type). tvdb n'a de sens
+            // que dans l'espace série — pas de relecture croisée par tvdb.
+            if (meta == null)
+            {
+                string otherKind = isSeries ? "movie" : "series";
+                if (tmdbId > 0)
+                    meta = await _tmdb.LookupMetaByIdAsync(tmdbId, otherKind, userTmdb, ct).ConfigureAwait(false);
+                if (meta == null && !string.IsNullOrWhiteSpace(item.GetProviderId("imdb")))
+                    meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("imdb").Trim(), "imdb_id", otherKind, userTmdb, ct).ConfigureAwait(false);
+                if (meta != null)
+                {
+                    crossRead = true;
+                    _logger?.Info("[LLM_AI] Recording : « {0} » — fiche illisible en type « {1} », relue en « {2} » (fiche croisée).",
+                        epgTitle, kind, otherKind);
+                }
+            }
 
             if (meta == null)
             {
@@ -399,9 +502,11 @@ namespace LLM_AI
                         epgTitle, meta.TmdbId);
                     return Status.OrphanResolved;
                 }
-                await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
-                _logger?.Info("[LLM_AI] Recording : « {0} » = id d'Emby (tmdb={1}) validé par le juge — verrous posés, tag {2}.",
-                    epgTitle, meta.TmdbId, OrphanIdentifyTask.TagIdentified);
+                await ApplyAsync(item, meta, kind, isSeries, ct, crossKind: crossRead).ConfigureAwait(false);
+                _logger?.Info("[LLM_AI] Recording : « {0} » = id d'Emby (tmdb={1}) validé par le juge — verrous posés, tag {2}{3}.",
+                    epgTitle, meta.TmdbId,
+                    crossRead ? OrphanIdentifyTask.TagNeedsReview : OrphanIdentifyTask.TagIdentified,
+                    crossRead ? " (fiche croisée — à confirmer, type d'item conservé)" : "");
                 return Status.OrphanResolved;
             }
 
@@ -449,13 +554,36 @@ namespace LLM_AI
             // Relire la fiche TMDB de l'id posé (tmdb > imdb > tvdb séries) —
             // même cascade que l'audit d'identification Emby.
             TmdbMeta meta = null;
+            bool crossRead = false; // fiche lue sous le type opposé à l'item
             string tmdbRaw = item.GetProviderId("tmdb");
-            if (int.TryParse(tmdbRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) && tmdbId > 0)
+            int.TryParse(tmdbRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId);
+            if (tmdbId > 0)
                 meta = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
             if (meta == null && !string.IsNullOrWhiteSpace(item.GetProviderId("imdb")))
                 meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("imdb").Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
             if (meta == null && isSeries && !string.IsNullOrWhiteSpace(item.GetProviderId("tvdb")))
                 meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("tvdb").Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
+
+            // Fiche illisible sous le type de l'item → relire sous le type
+            // opposé : c'est le cas d'une fiche croisée posée par le repli de
+            // type du pipeline (film sur un item série) — l'audit est le
+            // mécanisme de confirmation décrit dans le README. Sans cette
+            // relecture croisée, l'audit sauterait éternellement une fiche
+            // pourtant correcte. tvdb n'a de sens que dans l'espace série.
+            if (meta == null)
+            {
+                string otherKind = isSeries ? "movie" : "series";
+                if (tmdbId > 0)
+                    meta = await _tmdb.LookupMetaByIdAsync(tmdbId, otherKind, userTmdb, ct).ConfigureAwait(false);
+                if (meta == null && !string.IsNullOrWhiteSpace(item.GetProviderId("imdb")))
+                    meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("imdb").Trim(), "imdb_id", otherKind, userTmdb, ct).ConfigureAwait(false);
+                if (meta != null)
+                {
+                    crossRead = true;
+                    _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » — fiche illisible en type « {1} », relue en « {2} » (fiche croisée).",
+                        itemName, kind, otherKind);
+                }
+            }
 
             if (meta == null)
             {
@@ -471,6 +599,10 @@ namespace LLM_AI
                         itemName, meta.Title, meta.TmdbId);
                     return Status.OrphanResolved;
                 }
+                // Fiche croisée confirmée : le tag croisé (add-only) marque
+                // l'item durablement — findable pour un éventuel replacement
+                // du fichier dans la bibliothèque de son type.
+                if (crossRead) AddTag(item, OrphanIdentifyTask.TagCrossKind);
                 await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
                 _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » = « {1} » (tmdb={2}) → validé, tag {3}.",
                     itemName, meta.Title, meta.TmdbId, OrphanIdentifyTask.TagIdentified);
@@ -495,6 +627,7 @@ namespace LLM_AI
                 return Status.NeedsReview;
             }
 
+            if (crossRead) AddTag(item, OrphanIdentifyTask.TagCrossKind); // fiche croisée présente, douteuse — findable
             RemoveTag(item, OrphanIdentifyTask.TagNotFound);
             AddTag(item, OrphanIdentifyTask.TagNeedsReview);
             item.UpdateToRepository(ItemUpdateType.MetadataEdit);
@@ -663,7 +796,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true; // fiche réelle reléguée, même rejetée
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -674,7 +807,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.TvdbId.Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true;
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -683,7 +816,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.LookupMetaByIdAsync(guess.TmdbId, kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true;
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -695,8 +828,61 @@ namespace LLM_AI
                 {
                     int? y = guess.Year ?? year;
                     var m = await _tmdb.LookupMetaMultiLangAsync(ot, kind, y, langs, ct).ConfigureAwait(false);
+                    // Cascade annuelle (miroir de S1) : l'année proposée par le
+                    // LLM peut être fausse pour une œuvre récente qu'il ne
+                    // connaît pas — le filtre primary_release_year rend alors
+                    // la vraie fiche invisible (cas réel 2026-09-20 : « La
+                    // foudre, un éclair de génie », fiche movie 2026, l'année
+                    // devinée ≠ 2026 → 0 résultat à chaque passe). Rejouer
+                    // SANS filtre d'année : la porte d'acceptation reste
+                    // chargée de valider (titre exigé ; garde d'année sauf
+                    // titre exact sans année fiable, voir plus bas).
+                    if (m == null && y.HasValue)
+                        m = await _tmdb.LookupMetaMultiLangAsync(ot, kind, null, langs, ct).ConfigureAwait(false);
                     if (m != null) trace.SawCandidates = true;
-                    if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, true, ot, ct).ConfigureAwait(false))
+                    // Porte : l'année devinée par le LLM n'est indicative que
+                    // quand l'item n'a pas d'année fiable (gateYear null) —
+                    // une œuvre récente que le LLM ne connaît pas reçoit une
+                    // année fausse (2017 pour un doc de 2026) qui rejetterait
+                    // la vraie fiche trouvée par la cascade. Titre EXACT —
+                    // ancré sur le TITRE DU GUIDE, pas sur la proposition :
+                    // la fiche trouvée via une proposition la « confirme »
+                    // toujours (cercle vicieux, cas réel 2026-09-20 : le LLM
+                    // a proposé « Flash of Genius » (hallucination sur
+                    // « foudre, éclair de génie ») et la fiche 14914 portait
+                    // ce même titre — égalité circulaire) = preuve plus
+                    // forte que l'année devinée ; le tag needs-review +
+                    // l'audit restent le filet. Garde d'année conservée pour
+                    // les correspondances lâches (homonymes d'époques
+                    // différentes), et un match lâche sans synopsis est
+                    // rejeté (voir plus bas : rien n'arbitre alors la
+                    // proposition du LLM).
+                    int? gateForCandidate = expectedYear;
+                    if (!gateYear.HasValue && m != null)
+                    {
+                        string na = NormalizeTitle(cleanTitle);
+                        if (na.Length > 0 && na == NormalizeTitle(m.Title))
+                        {
+                            // Titre du guide exact : l'année devinée est indicative.
+                            gateForCandidate = null;
+                        }
+                        else if (string.IsNullOrWhiteSpace(overview))
+                        {
+                            // Titre lâche (inclusion/sous-séquence) + ni année
+                            // fiable ni synopsis = aucune preuve décisive. Cas
+                            // réel 2026-09-20 : le LLM a proposé « The
+                            // Lightning Thief » (hallucination sémantique sur
+                            // « foudre ») et l'inclusion dans « Percy Jackson
+                            // & the Olympians: The Lightning Thief » (année
+                            // devinée = année de la fiche, cohérente-fausse)
+                            // a fait appliquer la mauvaise fiche.
+                            _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — titre lâche sans année fiable ni synopsis comparable (proposé « {2} »).",
+                                m.Title, m.TmdbId, ot);
+                            m = null;
+                        }
+                    }
+                    if (await AcceptCandidateAsync(cfg, m, epgTitle, gateForCandidate, overview, true, ot, ct,
+                            corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                         return m;
                 }
             }
@@ -782,14 +968,19 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — aucun id IMDb/TMDB trouvé dans les résultats web.", epgTitle);
                 return null;
             }
+            // Logué : sans lui, une boucle by-id dont les /find renvoient
+            // vide (id IMDb trop récent pour TMDB) est totalement invisible.
             trace.SawCandidates = true; // ids trouvés dans le web
+            _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — ids extraits des résultats web : imdb=[{1}] tmdb=[{2}].",
+                epgTitle, string.Join(", ", imdbIds), string.Join(", ", tmdbIds));
 
             int? expectedYear = gateYear;
 
             foreach (string imdbId in imdbIds)
             {
                 var m = await _tmdb.FindByExternalIdAsync(imdbId, "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct,
+                        corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                 {
                     if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
                         _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » → candidat « {1} » (tt={2}) accepté SANS vérif synopsis — à confirmer visuellement.",
@@ -803,7 +994,8 @@ namespace LLM_AI
                 if (!int.TryParse(tmdbIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) || tmdbId <= 0)
                     continue;
                 var m = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct,
+                        corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                 {
                     if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
                         _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » → candidat « {1} » (tmdb={2}) accepté SANS vérif synopsis — à confirmer visuellement.",
@@ -861,37 +1053,68 @@ namespace LLM_AI
         //  juge LLM confirme que les synopsis décrivent la même œuvre).
         //  Un candidat rejeté n'arrête jamais la chaîne (« on continue »).
         //  Optionnellement, garde de titre lexicale (voies par titre).
-        //  Voies par id (S2) sans synopsis comparable : corroboration exigée
-        //  (corroborateNoSynopsis) — titre lexicale ou années des deux côtés.
+        //  Voies LLM/web (S2 par id, S2 par titre proposé, S3 web) sans
+        //  synopsis comparable : corroboration exigée (corroborateNoSynopsis)
+        //  ANCRÉE SUR LE TITRE DU GUIDE, pas sur la proposition du LLM —
+        //  une fiche choisie PAR la proposition la « confirme » toujours
+        //  (cercle vicieux, cas réel 2026-09-20 : id halluciné tt1054588 →
+        //  « Un Éclair de génie », suffixe du titre EPG + année devinée
+        //  cohérente-fausse). Sans année fiable (gateYear) ni synopsis :
+        //  seule l'ÉGALITÉ EXACTE du titre du guide est une preuve.
+        //  gateYear = année fiable de l'item (null si soft/absente) — sert à
+        //  distinguer « année corroborante » de « année devinée (circulaire) ».
         // ------------------------------------------------------------------
 
         private async Task<bool> AcceptCandidateAsync(PluginConfiguration cfg, TmdbMeta m,
             string epgTitle, int? epgYear, string epgSynopsis,
             bool requireTitleMatch, string matchTitle, CancellationToken ct,
-            bool corroborateNoSynopsis = false)
+            bool corroborateNoSynopsis = false, int? gateYear = null)
         {
             if (m == null || m.TmdbId <= 0) return false;
 
-            // Garde-fou année (deux œuvres d'époques différentes).
-            if (!YearCompatible(epgYear, m.Year)) return false;
+            // Garde-fou année (deux œuvres d'époques différentes). Rejet
+            // logué : ce garde est silencieux sinon, et un « 0 si inconnu »
+            // du LLM y a déjà caché une fiche correcte (cas 2026-09-20).
+            if (!YearCompatible(epgYear, m.Year))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — année incompatible (attendue {2}, fiche {3}).",
+                    m.Title, m.TmdbId,
+                    epgYear.HasValue ? epgYear.Value.ToString(CultureInfo.InvariantCulture) : "—",
+                    m.Year.HasValue ? m.Year.Value.ToString(CultureInfo.InvariantCulture) : "—");
+                return false;
+            }
 
             // Garde de titre lexicale (voies par titre uniquement).
-            if (requireTitleMatch && !TitleMatches(matchTitle, m.Title, epgYear, m.Year)) return false;
+            if (requireTitleMatch && !TitleMatches(matchTitle, m.Title, epgYear, m.Year))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — garde de titre (proposé « {2} »).",
+                    m.Title, m.TmdbId, matchTitle ?? "—");
+                return false;
+            }
 
             // Pas de synopsis à comparer : acceptation sur année (+titre) —
-            // conserve le comportement EPG sans synopsis. Sur les voies PAR ID
-            // (S2 : id IMDb/TMDB proposé par le LLM), un id seul n'est pas une
-            // preuve — un id halluciné qui tombe sur une fiche réelle mais
-            // sans rapport serait accepté à tort ; exiger alors une
-            // corroboration (titre lexicale OU années des deux côtés).
+            // conserve le comportement EPG sans synopsis. Sur les voies
+            // LLM/web (S2 par id, S2 par titre proposé, S3 web), un id ou un
+            // titre PROPOSÉ n'est pas une preuve : la fiche trouvée via cette
+            // proposition la valide toujours (cercle vicieux). Sans année
+            // fiable ni synopsis comparable, seule l'égalité EXACTE du titre
+            // du guide avec la fiche est décisive ; avec une année fiable, la
+            // garde lexicale (titre du guide) ou l'année corroborante suffit.
             if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(m.Overview))
             {
                 if (!corroborateNoSynopsis) return true;
-                bool titleOk = TitleMatches(TmdbLookupTool.CleanEpgTitle(epgTitle), m.Title, epgYear, m.Year);
-                bool yearsOk = epgYear.HasValue && m.Year.HasValue; // YearCompatible déjà passé plus haut
-                if (titleOk || yearsOk) return true;
-                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — voie par id sans synopsis comparable, preuve insuffisante (titre ou année).",
-                    m.Title, m.TmdbId);
+                string epgClean = TmdbLookupTool.CleanEpgTitle(epgTitle);
+                string a = NormalizeTitle(epgClean);
+                bool exactGuide = a.Length > 0 && a == NormalizeTitle(m.Title);
+                bool titleOk = TitleMatches(epgClean, m.Title, epgYear, m.Year);
+                bool yearsOk = gateYear.HasValue && m.Year.HasValue; // année FIABLE — YearCompatible déjà passé plus haut
+                if (gateYear.HasValue ? (titleOk || yearsOk) : exactGuide) return true;
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — voie LLM sans synopsis comparable : {2} (titre guide « {3} », fiche « {4} »).",
+                    m.Title, m.TmdbId,
+                    gateYear.HasValue
+                        ? "titre du guide sans rapport lexical avec la fiche"
+                        : "sans année fiable, seule l'égalité exacte du titre du guide est une preuve",
+                    epgClean, m.Title);
                 return false;
             }
 
@@ -919,7 +1142,8 @@ namespace LLM_AI
         //  Application non destructive + verrouillage
         // ------------------------------------------------------------------
 
-        internal async Task ApplyAsync(BaseItem item, TmdbMeta meta, string kind, bool isSeries, CancellationToken ct)
+        internal async Task ApplyAsync(BaseItem item, TmdbMeta meta, string kind, bool isSeries, CancellationToken ct,
+            bool crossKind = false)
         {
             // --- Provider ids (uniquement ceux absents) ---
             if (meta.TmdbId > 0 && string.IsNullOrWhiteSpace(item.GetProviderId("tmdb")))
@@ -957,10 +1181,16 @@ namespace LLM_AI
             if (setOverview) AddLock(item, MetadataFields.Overview);
             if (setGenres) AddLock(item, MetadataFields.Genres);
 
-            // --- Tag d'idempotence ---
+            // --- Tag d'idempotence --- (fiche croisée : needs-review — l'item
+            // reste sous le radar de l'audit OrphanAuditTaggedIds, qui confirme
+            // via la relecture croisée ; une fiche du type de l'item est
+            // identifiée directement, Emby sait la relire au refresh. Le tag
+            // croisé est ADD-ONLY : il survit à la confirmation et sert à
+            // retrouver ces items — le type de l'item n'est jamais modifié.)
             RemoveTag(item, OrphanIdentifyTask.TagNeedsReview);
             RemoveTag(item, OrphanIdentifyTask.TagNotFound);
-            AddTag(item, OrphanIdentifyTask.TagIdentified);
+            AddTag(item, crossKind ? OrphanIdentifyTask.TagNeedsReview : OrphanIdentifyTask.TagIdentified);
+            if (crossKind) AddTag(item, OrphanIdentifyTask.TagCrossKind);
 
             var updateType = ItemUpdateType.MetadataEdit | (setImage ? ItemUpdateType.ImageUpdate : ItemUpdateType.None);
             item.UpdateToRepository(updateType);
@@ -1027,7 +1257,11 @@ namespace LLM_AI
         }
 
         /// <summary>Garde de titre lexicale (casse/accents/ponctuation ignorés,
-        /// inclusion acceptée ; années > 1 an d'écart refusées).</summary>
+        /// inclusion acceptée ; années > 1 an d'écart refusées). Deuxième
+        /// voie : sous-séquence ordonnée de tokens — attrape les variantes à
+        /// sous-titre inséré (« ADN business : la face cachée des tests grand
+        /// public » vs « ADN, la face cachée des tests grand public »),
+        /// invisibles à l'inclusion contiguë.</summary>
         internal static bool TitleMatches(string epgTitle, string tmdbTitle, int? epgYear, int? metaYear)
         {
             if (string.IsNullOrWhiteSpace(tmdbTitle)) return false;
@@ -1035,20 +1269,60 @@ namespace LLM_AI
             string b = NormalizeTitle(tmdbTitle);
             if (a.Length == 0 || b.Length == 0) return false;
 
-            bool titleOk = a == b || a.Contains(b, StringComparison.Ordinal) || b.Contains(a, StringComparison.Ordinal);
+            bool titleOk = a == b || a.Contains(b, StringComparison.Ordinal) || b.Contains(a, StringComparison.Ordinal)
+                || TokenSubsequence(epgTitle, tmdbTitle);
             if (!titleOk) return false;
 
-            if (epgYear.HasValue && metaYear.HasValue && Math.Abs(epgYear.Value - metaYear.Value) > 1)
-                return false;
+            // Même doctrine d'année que la porte (inconnue/aberrante = pas de
+            // garde) : un « 0 si inconnu » qui filerait ici rejetterait à tort.
+            return YearCompatible(epgYear, metaYear);
+        }
 
-            return true;
+        /// <summary>Garde par tokens : les mots (normalisés) du titre le plus
+        /// court apparaissent <b>dans l'ordre</b> dans le plus long — le
+        /// sous-titre inséré (« business ») n'empêche plus le match. Exige ≥ 2
+        /// tokens côté titre court pour éviter le match sur un seul mot.</summary>
+        internal static bool TokenSubsequence(string epgTitle, string tmdbTitle)
+        {
+            string[] a = Tokens(epgTitle);
+            string[] b = Tokens(tmdbTitle);
+            if (a.Length < 2 || b.Length < a.Length) return false;
+            int j = 0;
+            foreach (string t in b)
+            {
+                if (string.Equals(t, a[j], StringComparison.Ordinal))
+                {
+                    j++;
+                    if (j == a.Length) return true;
+                }
+            }
+            return j == a.Length;
+        }
+
+        /// <summary>Titre → tokens normalisés (mots alphanumériques, casse et
+        /// accents ignorés — même normalisation que <see cref="NormalizeTitle"/>
+        /// appliquée par mot).</summary>
+        private static string[] Tokens(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return Array.Empty<string>();
+            var list = new List<string>();
+            foreach (string part in Regex.Split(s.Trim(), "[^\\p{L}\\p{N}]+"))
+            {
+                if (string.IsNullOrWhiteSpace(part)) continue;
+                string n = NormalizeTitle(part);
+                if (n.Length > 0) list.Add(n);
+            }
+            return list.ToArray();
         }
 
         /// <summary>Garde d'année : accepte si l'une des deux années est
-        /// inconnue, ou si elles diffèrent d'au plus un an.</summary>
+        /// inconnue ou aberrante (< 1900 — « 0 si inconnu » du LLM, gracenote
+        /// Year=1 : doctrine « année aberrante = inconnue »), ou si elles
+        /// diffèrent d'au plus un an.</summary>
         internal static bool YearCompatible(int? expected, int? actual)
         {
-            if (!expected.HasValue || !actual.HasValue) return true;
+            if (!expected.HasValue || expected.Value < 1900) return true;
+            if (!actual.HasValue || actual.Value < 1900) return true;
             return Math.Abs(expected.Value - actual.Value) <= 1;
         }
 
@@ -1096,6 +1370,69 @@ namespace LLM_AI
             var list = new List<string>(t);
             list.RemoveAt(i);
             item.Tags = list.ToArray();
+        }
+
+        /// <summary>L'item porte-t-il ce tag ? (snapshot avant/après résolution :
+        /// le tag croisé est add-only, un gain = fiche croisée fraîchement
+        /// appliquée.)</summary>
+        internal static bool HasTag(BaseItem item, string tag)
+        {
+            var t = item?.Tags ?? Array.Empty<string>();
+            return Array.IndexOf(t, tag) >= 0;
+        }
+
+        // ------------------------------------------------------------------
+        //  Notification « fiche croisée » (même pattern que
+        //  RecordingDiskManager.NotifyTagPass / LlmScheduledTask) : les
+        //  items tagués llmai-cross-kind sont filtrables dans Emby ; le
+        //  déplacement du fichier dans la bibliothèque de son type reste une
+        //  action de l'usager (le plugin ne déplace jamais de média).
+        // ------------------------------------------------------------------
+
+        internal static void NotifyCrossKind(INotificationManager notifications, IUserManager users,
+            PluginConfiguration cfg, IServerApplicationHost host, ILogger logger, int count)
+        {
+            if (notifications == null || users == null || count <= 0) return;
+
+            string langKey = I18n.ResolveDisplayLangKey(host);
+            string title = I18n.S("crosskind.notif.title", langKey);
+            string desc = string.Format(CultureInfo.InvariantCulture,
+                I18n.S("crosskind.notif.desc", langKey), count, OrphanIdentifyTask.TagCrossKind);
+            string url = (cfg?.EmbyPublicUrl ?? string.Empty).Trim();
+
+            List<MediaBrowser.Controller.Entities.User> list;
+            try { list = users.GetUserList(new UserQuery()).ToList(); }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] OrphanIdentify : lecture des usagers pour notification échouée ({0}).", ex.Message);
+                return;
+            }
+
+            int sent = 0;
+            foreach (var u in list ?? new List<MediaBrowser.Controller.Entities.User>())
+            {
+                if (u == null) continue;
+                try
+                {
+                    notifications.SendNotification(new NotificationRequest
+                    {
+                        Title = title,
+                        Description = desc,
+                        Url = url,
+                        Date = DateTimeOffset.UtcNow,
+                        Severity = LogSeverity.Info,
+                        User = u
+                    });
+                    sent++;
+                }
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] OrphanIdentify : notification à « {0} » échouée ({1}).", u.Name, ex.Message);
+                }
+            }
+            if (sent > 0)
+                logger?.Info("[LLM_AI] OrphanIdentify : notification fiche croisée ({0}) envoyée à {1}/{2} usager(s).",
+                    count, sent, list?.Count ?? 0);
         }
     }
 }

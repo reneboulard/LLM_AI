@@ -1122,7 +1122,12 @@ namespace LLM_AI
                     if (r.TryGetProperty("tmdb_id", out var t) && t.TryGetInt32(out int tv)) g.TmdbId = tv;
                     g.TvdbId = StrId(r, "tvdb_id");
                     g.OriginalTitle = StrId(r, "original_title");
-                    if (r.TryGetProperty("year", out var y) && y.TryGetInt32(out int yv)) g.Year = yv;
+                    // Convention du prompt : « 0 si inconnu ». 0 doit rester
+                    // null : sinon la porte reçoit expectedYear=0 et
+                    // YearCompatible(0, 2026) rejette la vraie fiche (cas réel
+                    // 2026-09-20 : « La foudre, un éclair de génie » — fiche
+                    // trouvée par la recherche, rejetée par la garde d'année).
+                    if (r.TryGetProperty("year", out var y) && y.TryGetInt32(out int yv) && yv > 0) g.Year = yv;
                     g.Confidence = StrId(r, "confidence");
                 }
             }

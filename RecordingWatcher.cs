@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
@@ -287,6 +288,8 @@ namespace LLM_AI
                     continue;
                 }
 
+                bool hadCross = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind);
+
                 OrphanResolver.Status status;
                 try
                 {
@@ -304,6 +307,16 @@ namespace LLM_AI
                 {
                     status = OrphanResolver.Status.Skipped;
                     _logger?.Warn("[LLM_AI] Recording : erreur sur « {0} » ({1}) — abandon de l'entrée.", item?.Name, ex.Message);
+                }
+
+                // Fiche croisée fraîchement appliquée → notification immédiate
+                // (add-only : un gain seulement, jamais les déjà taggés).
+                if (!hadCross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
+                {
+                    OrphanResolver.NotifyCrossKind(
+                        _host.TryResolve<INotificationManager>(),
+                        _host.TryResolve<IUserManager>(),
+                        cfg, _host, _logger, 1);
                 }
 
                 // Résolu ou abandonné : l'entrée sort du store (la passe 04 h

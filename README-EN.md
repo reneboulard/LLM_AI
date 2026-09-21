@@ -1324,10 +1324,13 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
    `Saison \d` / `Épisode \d`, parentheses, **ISO dates**) then searched on TMDB in
    several languages: `en-US` (original title), `fr-FR` (France title), + the user's
    language. A candidate is accepted if the **normalized title** matches (guard
-   against an ambiguous wrong match), with a year check. **S1 only runs when
-   `ProductionYear` is known**: without a reliable year, TMDB search is broad and the
-   lexical guard (no judge) could accept a wrong same-titled film — orphans with no
-   year go straight to S2/S3. **Special case (v1.13.27) — Emby's date marker**: when
+   against an ambiguous wrong match), with a year check. **S1 also runs with no
+   `ProductionYear` (v1.13.28)**: without a reliable year the corroboration
+   doctrine applies — only the **exact equality** of the guide's title with the
+   fiche counts as proof (a homonym whose title differs — contained, translated… —
+   does not pass); real case: "La foudre, un éclair de génie", movie fiche 2026
+   with an identical title, reachable by the search alone while the LLM
+   hallucinated on every attempt. **Special case (v1.13.27) — Emby's date marker**: when
    the title ends with an ISO date glued by Emby (failed identification: the date is
    the broadcast date, not the work's year), the year is **soft**: S1 searches
    without a year filter, the ±1 gate is disabled, acceptance rests on the lexical
@@ -1342,7 +1345,9 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
    the source of truth**, a hallucinated id returns null. Failing that, the proposed
    original title is fed to S1.
    Each candidate must then pass a **semantic acceptance gate**:
-   - **year guard** (`YearCompatible`, ±1 year);
+   - **year guard** (`YearCompatible`, ±1 year; any unknown or bogus year
+     `< 1900` — the LLM's "0 if unknown", gracenote `Year=1` — lifts the
+     guard);
    - **LLM synopsis judge** (`LlmRunner.JudgeSynopsisMatchAsync`) compares the EPG
      synopsis to the TMDB synopsis and confirms they describe the *same work* — an id
      that exists but points to a same-titled film from a different era (e.g. "Le
@@ -1411,47 +1416,99 @@ never aborts the pass (per-item try/catch). Scope: **library `Movie`/`Series` it
 > S2/S3 year guard is `ProductionYear` **only**. For a DVR recording,
 > `PremiereDate`/`DateCreated` are **broadcast** or recording dates (e.g. 2024), not the
 > film's release year — using them filtered TMDB wrongly and missed existing films.
-> Orphans with no `ProductionYear` skip S1 and rely on the synopsis judge (S2/S3) to
-> avoid a wrong match.
+> Orphans with no `ProductionYear` skip the S1 **year guard**: the search runs, but
+> with no reliable year only the **exact equality** of the guide's title with the
+> fiche counts as proof (corroboration doctrine, v1.13.28) — a homonym with a
+> different title does not pass.
 
 > 📌 **Recommended verification**: enable `OrphanIdentifyEnabled` **with**
 > `OrphanIdentifyDryRun` checked, trigger the task manually (Dashboard ▶ Scheduled
 > Tasks) and inspect the `[LLM_AI] OrphanIdentify` log lines before unchecking dry-run
 > for a real apply.
 
-### Known limitation — cross-kind movie/series fiches (kind cascade, future improvement)
+### Cross-kind movie/series fiches — kind cascade (series→movie replay)
 
 Every TMDB read (S1 search, S2/S3 validations, audit) queries the **item's Emby
-kind** (`Movie` → `/movie`, `Series` → `/tv`). A documentary mistyped in the EPG —
-a one-off film recorded as a "series", or the reverse — therefore points to a
-fiche **of the other kind**: S1 searches the wrong bucket, id-based validations
-return 404, and the audit skips it ("unreadable fiche"). The real fiche exists, it
-is simply **unreachable** through the whole chain (real case: a movie fiche set on
-a `Series`-typed item, manual remediation required).
+kind** (`Movie` → `/movie`, `Series` → `/tv`). Emby types the DVR import from
+the guide: a film/documentary aired with episode metadata (episode title,
+season, program IsSeries flag) lands as `Series`/`Episode` although the work is
+a movie — TMDB's "tv" bucket will never know it, and the `/find` of a movie
+IMDb id only looks at `movie_results` (real case, 2026-09-20: "La foudre, un
+éclair de génie", movie `tmdb=1674784`, imported as a series then tagged
+`llmai-needs-review` after a resolution attempted only in the series kind).
 
-**Planned improvement ("kind cascade")** — carry the kind through to the fiche
-instead of deriving it from the item:
+**Implemented cascade (series→movie kind replay)** — when the item is a series
+and the chain fails in the series kind, the full pipeline (native Emby S0 → S1
+→ S2 → S3) is **replayed in the movie kind** on the same item, with the same
+acceptance gate (year ±1 + lexical guard — contiguous containment **or
+ordered token subsequence**, e.g. "ADN business : la face cachée des tests
+grand public" vs "ADN, la face cachée des tests grand public" — + synopsis
+judge):
 
-- **S3**: read the kind from the **TMDB URL itself** (`themoviedb.org/movie/…` vs
-  `/tv/…`) — free, unambiguous;
-- **S1**: when the primary bucket fails, retry via `/search/multi` and honor
-  TMDB's `media_type`;
-- **S2**: the LLM returns its **proposed kind** in the verdict (`"type":
-  "movie"|"series"`) and validation runs under that kind; opposite-kind retry
-  **only** when absent — and then with the **synopsis judge mandatory** (never
-  title+year alone: TMDB movie and series id namespaces are independent, the same
-  number can designate two different works);
-- **audit**: re-read the fiche under the opposite kind when it is unreadable under
-  the item's kind.
+- an accepted cross-kind fiche is **applied** (non-destructive + locks — the
+  item type, fixed by Emby at import, is never changed) but tagged
+  **`llmai-needs-review`** with an explicit log line ("movie fiche applied to
+  a series item — to confirm") rather than `llmai-identified`: Emby itself can
+  never re-read a cross-kind fiche on refresh (providers query by the item's
+  kind);
+- on the next pass, the `OrphanAuditTaggedIds` audit — and the Emby-id audit
+  with EPG truth — re-read the fiche **under the opposite kind** when it is
+  unreadable under the item's kind: a lexical title match → confirmation
+  (`llmai-identified` tag, locks already set). An item tagged `needs-review`
+  carrying a correct cross-kind fiche therefore **converges by itself** on the
+  next pass; a human confirmation stays possible (Emby editor: remove the id
+  if the fiche is wrong, otherwise let it converge).
+- **Tag + notification**: the applied cross-kind fiche sets an add-only
+  `llmai-cross-kind` tag (survives the confirmation — filterable in Emby) and
+  a notification is sent to users (counter limited to new ones). To move the
+  work to its kind's library: move the file (Emby re-imports it under the
+  right kind and the plugin re-identifies it) — the plugin never moves media.
 
-Retained apply policy: an accepted **cross-kind** fiche is applied (non-destructive
-+ locks) but tagged **`llmai-needs-review`** with an explicit log line ("movie fiche
-applied to a series item — to confirm") rather than `llmai-identified`. Rationale:
-Emby itself can never re-read a cross-kind fiche on refresh (providers query by the
-item's kind) — a later Emby re-identification would overwrite the plugin fiche,
-and an `llmai-identified` item is never re-audited. A single human confirmation
-settles the case for good. The acceptance gate is otherwise unchanged (lexical +
-synopsis judge, kind-agnostic).
+The replay is **one-directional** (series→movie only): the reverse (a serial
+work imported as a Movie) is not observed, and a genuine movie that is a
+namesake of a series would risk a false match. Still outside the cascade: S1
+via `/search/multi` (the replay re-runs the per-kind search, not a multi
+search) and S3 reading the kind from the TMDB URL itself.
+
+**Field-validated in production (2026-09-20, first pass).** 4730 items
+scanned, 0 errors: 7 cross-kind fiches applied and notified to all users,
+including "ADN, la face cachée des tests grand public" resolved at **S0**
+(native Emby search + token guard: TMDB indexes it as "ADN business : la
+face cachée des tests grand public"); an item stuck in `needs-review`
+("Les voleurs d'identité") converged by itself via the audit cross-read; an
+underscore-timestamp title ("Alerte en orbite 2023_10_23_20_00_00")
+validated by the audit against the official subtitle.
+
+> **TMDB pitfall — the traps of the "LLM-proposed title" path.**
+> The S2 search passes `primary_release_year=<guessed year>`: (1) for a
+> recent work the model does not know, its guessed year can be wrong and the
+> filter makes the true fiche invisible ("La foudre, un éclair de génie" —
+> movie fiche 2026, guessed year ≠ 2026 → 0 results on every pass, while the
+> same query **without a year filter** found it) — fixed with a **year-cascade
+> fallback**; (2) sneakier: the LLM answers `"year":0` (its "0 if unknown"
+> convention), which was parsed into `expectedYear=0` — and TMDB **ignores**
+> `primary_release_year=0` (so the fiche IS found) while the year guard
+> rejected `YearCompatible(0, 2026)`… silently. Fixed: "0 if unknown" stays
+> null, any year `< 1900` is treated as unknown everywhere, and with no
+> reliable item year an **exact title** outranks the guessed year (a loose
+> match keeps the year guard, and is rejected with no reliable year and no
+> comparable synopsis — a non-exact LLM proposal must never suffice). (3)
+> Finally, even the by-id paths' corroboration could validate itself: the
+> year and the id both come from the LLM, and a hallucinated one
+> (`tt1054588`, "Un Éclair de génie" 2008) passed through a fiche title that
+> is a **suffix** of the EPG title plus a coherent-wrong guessed year. From
+> now on, with no comparable synopsis: with no reliable year, only the
+> **exact guide-title equality** with the fiche counts as proof on the
+> LLM/web paths; with a reliable year, the lexical guard (guide's title) or
+> the corroborating year suffices. The gate's rejections and the ids extracted
+> by S3 are now logged — dead ends that were totally invisible (a correct
+> fiche rejected without a trace; the real IMDb id `tt40791857` extracted
+> from the web then refused by `/find`, newer than TMDB's mapping).
+> Reminder: the 24h TMDB cache only stores valid results, never errors — an
+> "aucun film" therefore replays in full on the next pass. To diagnose:
+> re-curl the search with and without `primary_release_year`, then read the
+> "rejected — incompatible year / title guard / LLM path without synopsis"
+> log lines before blaming the pipeline.
 
 ---
 
