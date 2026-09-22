@@ -230,6 +230,17 @@ namespace LLM_AI
             // nouvelle conversation (les sessions passées jamais résumées
             // sont condensées paresseusement, en tâche de fond).
             string sessionId = (req?.Session ?? string.Empty).Trim();
+            // v1.13.30.2 : allouer l'id de session DÈS LE DÉBUT du tour quand
+            // la page n'en porte pas (premier tour d'une conversation). Sinon
+            // les dépôts du tour (cartes prompt + action, budget) partent sous
+            // la clé « default » tandis que la page approuve avec l'id généré
+            // par RecordTurn en fin de tour — Consume rejette alors le clic
+            // (« Action introuvable ou expirée ») sans autre symptôme (constat
+            // terrain 2026-09-21 : carte rendue, clic 200, exécution jamais
+            // atteinte). RecordTurn « assure » une session inconnue : l'id
+            // alloué ici est repris tel quel par la mémoire et la réponse.
+            if (sessionId.Length == 0)
+                sessionId = ChatMemoryStore.NewSessionId();
             var existingSession = cfg.ChatMemoryEnabled && sessionId.Length > 0
                 ? ChatMemoryStore.Find(cfg, userId, sessionId)
                 : null;
@@ -262,7 +273,8 @@ namespace LLM_AI
             {
                 actionTools = ChatActions.BuildTools(cfg, sessionId, admin,
                     LibraryManager, _liveTv, _collections, _playlists,
-                    UserManager, ApplicationHost, Logger, _json, _sessions);
+                    UserManager, ApplicationHost, Logger, _json, _sessions,
+                    _tasks, _notifications);
                 actionsWorkflow = ChatActions.BuildWorkflowBlock(cfg);
                 Logger.Info("[LLM_AI] [CHAT] Couche d'action active : {0} outil(s), budget {1}/tour.",
                     actionTools.Count, cfg.ChatActionBudget);
@@ -370,7 +382,7 @@ namespace LLM_AI
             if (cfg.ChatMemoryEnabled && !string.IsNullOrWhiteSpace(reply)
                 && !reply.StartsWith("Échec du chat", StringComparison.Ordinal))
             {
-                savedSession = ChatMemoryStore.RecordTurn(cfg, userId, existingSession != null ? sessionId : "",
+                savedSession = ChatMemoryStore.RecordTurn(cfg, userId, sessionId,
                     fromUser: true, text: message, logger: Logger);
                 ChatMemoryStore.RecordTurn(cfg, userId, savedSession,
                     fromUser: false, text: reply, logger: Logger);
@@ -631,8 +643,15 @@ namespace LLM_AI
             var action = ChatPromptStore.Consume(req?.ActionId, RequestSessionHint(),
                 admin.Id.ToString(), Logger);
             if (action == null)
+            {
+                // Branche sinon muette : mismatch session dépôt/clic ou TTL —
+                // loguer le hint (même diagnostic que les cartes d'action).
+                Logger.Info("[LLM_AI] Chat prompt Approve : pending introuvable/expiré " +
+                    "(action_id={0}, session={1}, usager={2}).",
+                    req?.ActionId, RequestSessionHint(), admin.Name);
                 return new ChatPromptDecisionResponse { Error =
                     "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau la sauvegarde dans la conversation." };
+            }
 
             string text = (action.NewText ?? string.Empty).Trim();
             if (!ChatPromptsTool.IsKnownField(action.Field) || text.Length == 0 ||
@@ -726,15 +745,28 @@ namespace LLM_AI
             var action = ChatActionStore.Consume(req?.ActionId, RequestSessionHint(),
                 admin.Id.ToString());
             if (action == null)
+            {
+                // Branche sinon muette (constat v1.13.30.1 : rejet de session
+                // sans aucune trace côté serveur) — loguer le hint pour
+                // diagnostiquer un mismatch dépôt/clic.
+                Logger.Info("[LLM_AI] Chat action Approve : pending introuvable/expiré " +
+                    "(action_id={0}, session={1}, usager={2}).",
+                    req?.ActionId, RequestSessionHint(), admin.Name);
                 return new ChatActionDecisionResponse { Error =
                     "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau l'action dans la conversation." };
+            }
 
             var tool = ChatActions.BuildToolByName(action.Tool, cfg, action.Session, admin,
                 admin.Id.ToString(), LibraryManager, _liveTv, _collections, _playlists,
-                UserManager, ApplicationHost, Logger, _json);
+                UserManager, ApplicationHost, Logger, _json, _sessions,
+                _tasks, _notifications);
             if (tool == null)
+            {
+                Logger.Info("[LLM_AI] Chat action Approve : outil inconnu (tool={0}) — proposition invalide.",
+                    action.Tool);
                 return new ChatActionDecisionResponse { Error =
                     "Outil d'action indisponible ou inconnu — proposition invalide." };
+            }
 
             JsonElement args = default;
             try

@@ -72,53 +72,90 @@ namespace LLM_AI
 
         public string Name => "system_audit";
 
-        public string Description =>
-            "Audite la santé du serveur Emby, du système hôte ET de la bibliothèque. Retourne du JSON minimal. " +
-            "Actions (lecture seule) : server_info, system_config (configuration serveur : HTTPS, ports, " +
-            "mode maintenance, cache path, rétention des logs — via IServerConfigurationManager, cross-OS), " +
-            "security_check (sécurité : mots de passe des comptes/admins, accès distant et HTTPS, " +
-            "UPnP, en-têtes proxy, preuves d'accès externe — sessions actives ET historique des appareils " +
-            "avec IP publique ; si un accès externe est observé, les avertissements sont rehaussés critique " +
-            "— constats severity critique/avertissement/ok avec correctif), " +
-            "upnp_check (interroge le routeur en UPnP : passerelle détectée ? IP WAN externe ? table de " +
-            "redirection de ports — UN MAPPING VERS LE PORT EMBY 8096/8920 EST CRITIQUE ; lecture seule, " +
-            "n'ajoute/supprime JAMAIS de mapping ; attention : les redirections manuelles du routeur sont " +
-            "invisibles pour l'UPnP, seul un test externe les voit), " +
-            "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
-            "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
-            "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
-            "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type), " +
-            "metadata_health (santé de l'identification : comptes des tags llmai-identified / " +
-            "llmai-needs-review du plugin — items validés vs non trouvés avec exemples —, des items " +
-            "identifiés par Emby mais JAMAIS audités par le plugin, et des orphelins sans id ni tag ; " +
-            "décomposition Movie/Series, épisodes exclus — leurs métadonnées dérivent de la série), " +
-            "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
-            "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
-            "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
-            "Actions de REMÉDIATION (écriture, requièrent AuditRemediationEnabled activé en config) : " +
-            "stop_session, trigger_task, send_message.";
+        // Description DYNAMIQUE (v1.13.30) : les actions de remédiation n'y
+        // figurent QUE si AuditRemediationEnabled est activé. Sans le flag,
+        // elles n'existent pas pour le LLM — le chat admin doit router vers
+        // les tools DÉDIÉS stop_session / trigger_task / send_message (deux
+        // phases), sinon le modèle appelle system_audit action=stop_session,
+        // reçoit l'erreur de gate et rapporte un faux « pas les droits »
+        // (constat terrain 2026-09-21, gemma4, 11 tools chat pourtant actifs).
+        public string Description
+        {
+            get
+            {
+                return
+                    "Audite la santé du serveur Emby, du système hôte ET de la bibliothèque. Retourne du JSON minimal. " +
+                    "Actions (lecture seule) : server_info, system_config (configuration serveur : HTTPS, ports, " +
+                    "mode maintenance, cache path, rétention des logs — via IServerConfigurationManager, cross-OS), " +
+                    "security_check (sécurité : mots de passe des comptes/admins, accès distant et HTTPS, " +
+                    "UPnP, en-têtes proxy, preuves d'accès externe — sessions actives ET historique des appareils " +
+                    "avec IP publique ; si un accès externe est observé, les avertissements sont rehaussés critique " +
+                    "— constats severity critique/avertissement/ok avec correctif), " +
+                    "upnp_check (interroge le routeur en UPnP : passerelle détectée ? IP WAN externe ? table de " +
+                    "redirection de ports — UN MAPPING VERS LE PORT EMBY 8096/8920 EST CRITIQUE ; lecture seule, " +
+                    "n'ajoute/supprime JAMAIS de mapping ; attention : les redirections manuelles du routeur sont " +
+                    "invisibles pour l'UPnP, seul un test externe les voit), " +
+                    "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
+                    "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
+                    "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
+                    "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type), " +
+                    "metadata_health (santé de l'identification : comptes des tags llmai-identified / " +
+                    "llmai-needs-review du plugin — items validés vs non trouvés avec exemples —, des items " +
+                    "identifiés par Emby mais JAMAIS audités par le plugin, et des orphelins sans id ni tag ; " +
+                    "décomposition Movie/Series, épisodes exclus — leurs métadonnées dérivent de la série), " +
+                    "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
+                    "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
+                    "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
+                    (RemediationEnabled
+                        ? "Actions de REMÉDIATION (écriture, chemin DIRECT de l'audit, gated AuditRemediationEnabled) : " +
+                          "stop_session, trigger_task, send_message. IMPORTANT : dans le chat admin, PRÉFÉREZ TOUJOURS " +
+                          "les tools DÉDIÉS stop_session / trigger_task / send_message (deux phases avec carte " +
+                          "d'approbation) — n'utilisez ces actions d'audit qu'en dehors du chat (endpoint audit, " +
+                          "tâche planifiée), quand les tools dédiés n'existent pas."
+                        : string.Empty);
+            }
+        }
 
-        public string ArgumentsSchema => @"{
-  ""action"": ""server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | library_stats | missing_metadata | metadata_health | ratings_check | stop_session | trigger_task | send_message"",
-  ""limit"": ""(active_sessions / list_logs) nombre max de résultats (défaut 50)"",
-  ""include_hidden"": ""(scheduled_tasks) true pour inclure les tâches cachées (défaut false)"",
-  ""top_n"": ""(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)"",
-  ""type"": ""(missing_metadata) type d'item Emby à auditer (défaut Movie — ex. Series, Episode, MusicAlbum)"",
-  ""sample_limit"": ""(missing_metadata) taille de l'échantillon à examiner (défaut 1000, max 5000) — les comptes sont estimés sur cet échantillon"",
-  ""file"": ""(inspect_log) nom du fichier journal (nom seul, pas de chemin) — depuis list_logs"",
-  ""tail"": ""(inspect_log, sans grep) nombre de lignes à lire depuis la fin (défaut 200, max 2000)"",
-  ""grep"": ""(inspect_log, optionnel) regex .NET pour filtrer — active le mode grep : retourne les lignes matchantes + 'context' lignes autour (déduction), cap 50 matchs"",
-  ""context"": ""(inspect_log, grep) lignes de contexte autour de chaque match (défaut 2, 0-10)"",
-  ""include_transcode_size"": ""(disk_storage) true pour calculer la taille du dossier de transcodage (défaut false)"",
-  ""session_id"": ""(stop_session) identifiant de la session à arrêter"",
-  ""task_id"": ""(trigger_task) identifiant (Id) de la tâche planifiée à déclencher"",
-  ""task_key"": ""(trigger_task) clé alternative (Key) de la tâche planifiée"",
-  ""user_id|user_name"": ""(send_message) identifiant Guid OU nom de l'usager destinataire"",
-  ""header"": ""(send_message) titre du message (défaut « Message »)"",
-  ""text"": ""(send_message) corps du message — requis"",
-  ""delivery"": ""(send_message) notification (défaut, inbox/cloche) | osd (toast à l'écran, requiert une session active)"",
-  ""timeout_ms"": ""(send_message, osd) durée d'affichage du toast en ms (défaut 5000)""
-}";
+        // Schéma DYNAMIQUE (v1.13.30) : sans AuditRemediationEnabled, les
+        // actions de remédiation ne figurent ni dans l'énumération d'actions
+        // ni dans les paramètres — le LLM ne peut pas les mal-router (cf.
+        // Description). Les tools DÉDIÉS du chat restent la voie normale.
+        public string ArgumentsSchema => BuildSchema(RemediationEnabled);
+
+        private static string BuildSchema(bool remediation)
+        {
+            string actions =
+                "server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | " +
+                "list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
+                "library_stats | missing_metadata | metadata_health | ratings_check";
+            string remediationParams = "";
+            if (remediation)
+            {
+                actions += " | stop_session | trigger_task | send_message";
+                remediationParams =
+                    "\n  \"session_id\": \"(stop_session) identifiant de la session à arrêter\"," +
+                    "\n  \"task_id\": \"(trigger_task) identifiant (Id) de la tâche planifiée à déclencher\"," +
+                    "\n  \"task_key\": \"(trigger_task) clé alternative (Key) de la tâche planifiée\"," +
+                    "\n  \"user_id|user_name\": \"(send_message) identifiant Guid OU nom de l'usager destinataire\"," +
+                    "\n  \"header\": \"(send_message) titre du message (défaut « Message »)\"," +
+                    "\n  \"text\": \"(send_message) corps du message — requis\"," +
+                    "\n  \"delivery\": \"(send_message) notification (défaut, inbox/cloche) | osd (toast à l'écran, requiert une session active)\"," +
+                    "\n  \"timeout_ms\": \"(send_message, osd) durée d'affichage du toast en ms (défaut 5000)\"";
+            }
+            return "{\n" +
+                "  \"action\": \"" + actions + "\",\n" +
+                "  \"limit\": \"(active_sessions / list_logs) nombre max de résultats (défaut 50)\",\n" +
+                "  \"include_hidden\": \"(scheduled_tasks) true pour inclure les tâches cachées (défaut false)\",\n" +
+                "  \"top_n\": \"(processes) nombre de processus à lister dans top_by_memory et top_by_cpu (défaut 8)\",\n" +
+                "  \"type\": \"(missing_metadata) type d'item Emby à auditer (défaut Movie — ex. Series, Episode, MusicAlbum)\",\n" +
+                "  \"sample_limit\": \"(missing_metadata) taille de l'échantillon à examiner (défaut 1000, max 5000) — les comptes sont estimés sur cet échantillon\",\n" +
+                "  \"file\": \"(inspect_log) nom du fichier journal (nom seul, pas de chemin) — depuis list_logs\",\n" +
+                "  \"tail\": \"(inspect_log, sans grep) nombre de lignes à lire depuis la fin (défaut 200, max 2000)\",\n" +
+                "  \"grep\": \"(inspect_log, optionnel) regex .NET pour filtrer — active le mode grep : retourne les lignes matchantes + 'context' lignes autour (déduction), cap 50 matchs\",\n" +
+                "  \"context\": \"(inspect_log, grep) lignes de contexte autour de chaque match (défaut 2, 0-10)\",\n" +
+                "  \"include_transcode_size\": \"(disk_storage) true pour calculer la taille du dossier de transcodage (défaut false)\"" +
+                remediationParams + "\n}";
+        }
 
         private static readonly JsonSerializerOptions s_json = new JsonSerializerOptions
         {
@@ -2548,12 +2585,17 @@ namespace LLM_AI
         private static bool RemediationEnabled =>
             Plugin.Instance?.Configuration?.AuditRemediationEnabled == true;
 
-        /// <summary>Message d'erreur standard quand la remédiation est désactivée.</summary>
+        /// <summary>Message d'erreur standard quand la remédiation est désactivée.
+        /// Redirige explicitement vers les tools DÉDIÉS du chat (v1.13.30) :
+        /// si un LLM de chat s'aventure malgré tout sur ce chemin, l'erreur le
+        /// ramène vers la carte d'approbation au tour suivant.</summary>
         private static string RemediationDisabledErr() =>
             JsonSerializer.Serialize(new
             {
                 error = "remediation désactivée — activez « AuditRemediationEnabled » dans la config du plugin " +
-                        "pour autoriser stop_session / trigger_task / send_message. Recommande l'action dans le rapport au lieu de l'exécuter."
+                        "pour autoriser stop_session / trigger_task / send_message. Recommande l'action dans le rapport au lieu de l'exécuter. " +
+                        "(Chat admin : n'utilisez PAS ces actions d'audit — les tools DÉDIÉS stop_session / trigger_task / send_message " +
+                        "de la couche d'action du chat sont deux phases, sans flag, et sont disponibles.)"
             }, s_json);
 
         /// <summary>
@@ -2569,20 +2611,16 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(sessionId))
                 return Err("paramètre 'session_id' requis (voir active_sessions).");
 
-            var session = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
-                .FirstOrDefault(s => s.Id == sessionId);
-            if (session == null)
-                return Err($"session introuvable : {sessionId}");
-
-            await _sessions.SendPlaystateCommand(null, sessionId,
-                new PlaystateRequest { Command = PlaystateCommand.Stop }, ct).ConfigureAwait(false);
-
+            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // deux chemins, un seul code métier.
+            var r = await ServerRemediation.StopSessionAsync(_sessions, sessionId, ct).ConfigureAwait(false);
+            if (r.Error != null) return Err(r.Error);
             return JsonSerializer.Serialize(new
             {
-                stopped = true,
-                session_id = sessionId,
-                user_name = session.UserName,
-                now_playing = session.NowPlayingItem?.Name
+                stopped = r.Stopped,
+                session_id = r.SessionId,
+                user_name = r.UserName,
+                now_playing = r.NowPlaying
             }, s_json);
         }
 
@@ -2600,17 +2638,16 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(taskId) && string.IsNullOrWhiteSpace(taskKey))
                 return Err("paramètre 'task_id' ou 'task_key' requis (voir scheduled_tasks).");
 
-            var worker = MatchTask(taskId, taskKey);
-            if (worker == null)
-                return Err($"tâche introuvable (task_id={taskId}, task_key={taskKey}).");
-
-            _tasks.QueueScheduledTask(worker.ScheduledTask, new TaskOptions());
+            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // l'audit ne filtre PAS les tâches cachées (comportement historique).
+            var r = ServerRemediation.TriggerTask(_tasks, taskId, taskKey, excludeHidden: false);
+            if (r.Error != null) return Err(r.Error);
             return JsonSerializer.Serialize(new
             {
-                queued = true,
-                task_id = worker.Id,
-                name = worker.Name,
-                key = worker.ScheduledTask?.Key
+                queued = r.Queued,
+                task_id = r.TaskId,
+                name = r.Name,
+                key = r.Key
             }, s_json);
         }
 
@@ -2639,68 +2676,27 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(text))
                 return Err("paramètre 'text' requis (corps du message).");
 
-            var users = ResolveUsers(recipient);
-            if (users.Count == 0)
-                return Err($"usager introuvable : {recipient}");
-
             string delivery = (OptString(args, "delivery") ?? "notification").ToLowerInvariant();
             int timeoutMs = OptInt(args, "timeout_ms", 5000);
 
-            if (delivery == "osd")
+            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // deux chemins, un seul code métier (les deux modes de livraison
+            // et la résolution usager sont documentés sur ServerRemediation).
+            var r = await ServerRemediation.SendMessageAsync(_sessions, _users, _notifications, _logger,
+                recipient, header, text, delivery, timeoutMs, ct).ConfigureAwait(false);
+            if (r.Error != null) return Err(r.Error);
+
+            if (string.Equals(r.Delivery, "osd", StringComparison.Ordinal))
             {
-                int reached = 0;
-                var sessions = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>()).ToList();
-                foreach (var u in users)
-                {
-                    string uid = u.Id.ToString();
-                    foreach (var s in sessions.Where(x => string.Equals(x.UserId, uid, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        try
-                        {
-                            await _sessions.SendMessageCommand(null, s.Id,
-                                new MessageCommand { Header = header, Text = text, TimeoutMs = timeoutMs },
-                                ct).ConfigureAwait(false);
-                            reached++;
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger?.Warn("[LLM_AI] system_audit send_message(osd) session {0} : {1}", s.Id, ex.Message);
-                        }
-                    }
-                }
                 return JsonSerializer.Serialize(new
                 {
-                    delivery = "osd",
-                    recipients = users.Count,
-                    sessions_reached = reached,
-                    note = reached == 0 ? "Aucune session active — aucun toast envoyé. Utilise delivery=notification pour une livraison persistante." : null
+                    delivery = r.Delivery,
+                    recipients = r.Recipients,
+                    sessions_reached = r.Sent,
+                    note = r.Note
                 }, s_json);
             }
-
-            // notification (défaut) — chemin inbox/cloche éprouvé.
-            int sent = 0;
-            var now = DateTimeOffset.UtcNow;
-            foreach (var u in users)
-            {
-                try
-                {
-                    var req = new NotificationRequest
-                    {
-                        Title = header,
-                        Description = text,
-                        Date = now,
-                        Severity = LogSeverity.Info,
-                        User = u
-                    };
-                    _notifications.SendNotification(req);
-                    sent++;
-                }
-                catch (Exception ex)
-                {
-                    _logger?.Warn("[LLM_AI] system_audit send_message(notification) « {0} » : {1}", u.Name, ex.Message);
-                }
-            }
-            return JsonSerializer.Serialize(new { delivery = "notification", sent, recipients = users.Count }, s_json);
+            return JsonSerializer.Serialize(new { delivery = r.Delivery, sent = r.Sent, recipients = r.Recipients }, s_json);
         }
 
         // ------------------------------------------------------------------
@@ -2864,47 +2860,6 @@ namespace LLM_AI
         {
             try { return (w.ScheduledTask as IConfigurableScheduledTask)?.IsHidden ?? false; }
             catch { return false; }
-        }
-
-        /// <summary>Repère une tâche par Id (worker.Id) ou Key (ScheduledTask.Key).</summary>
-        private IScheduledTaskWorker MatchTask(string taskId, string taskKey)
-        {
-            var workers = _tasks.ScheduledTasks ?? Array.Empty<IScheduledTaskWorker>();
-            foreach (var w in workers)
-            {
-                if (!string.IsNullOrWhiteSpace(taskId)
-                    && string.Equals(w.Id, taskId, StringComparison.OrdinalIgnoreCase))
-                    return w;
-                if (!string.IsNullOrWhiteSpace(taskKey)
-                    && string.Equals(w.ScheduledTask?.Key, taskKey, StringComparison.OrdinalIgnoreCase))
-                    return w;
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Résout des usagers par identifiant (Guid) OU nom (insensible casse).
-        /// On liste puis on match — robuste quel que soit le type de User.Id.
-        /// </summary>
-        private List<User> ResolveUsers(string recipient)
-        {
-            var result = new List<User>();
-            try
-            {
-                var all = _users.GetUserList(new UserQuery()) ?? Array.Empty<User>();
-                foreach (var u in all)
-                {
-                    if (u == null) continue;
-                    if (string.Equals(u.Name, recipient, StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(u.Id.ToString(), recipient, StringComparison.OrdinalIgnoreCase))
-                        result.Add(u);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.Warn("[LLM_AI] system_audit ResolveUsers : {0}", ex.Message);
-            }
-            return result;
         }
 
         /// <summary>

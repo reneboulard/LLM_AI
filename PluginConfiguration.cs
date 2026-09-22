@@ -1065,17 +1065,6 @@ namespace LLM_AI
 
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : autorise le tool de
-        /// chat <c>run_tonight_run(directives?)</c> — déclenche le run « À
-        /// regarder ce soir » (même code path que la tâche planifiée et le
-        /// login) avec des directives de session ÉPHÉMÈRES injectées dans le
-        /// prompt de ce run uniquement (jamais persistées dans la config).
-        /// Limites propres : un seul run chat à la fois, 2 par conversation
-        /// au maximum, directives plafonnées à 500 caractères.
-        /// </summary>
-        public bool ChatTonightRunEnabled { get; set; } = false;
-
-        /// <summary>
-        /// <b>Opt-in explicite (défaut <c>false</c>)</b> : autorise le tool de
         /// chat <c>plugin_prompts</c> (v1.13.8) — lecture des cinq
         /// prompts/directives de la config et, surtout, PROPOSITION
         /// d'écriture. L'écriture est two-phase : le tool ne fait que

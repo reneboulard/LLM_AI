@@ -579,7 +579,9 @@ tool). See [Server health audit](#server-health-audit).
   `send_message`) during the audit. While unchecked, these actions return an error and
   the LLM only **recommends** them in the report. Double control: the audit prompt also
   instructs the LLM never to act without an explicit request — this flag only opens the
-  *capability*, not autonomy.
+  *capability*, not autonomy. Since v1.13.30, these three actions also have a **chat**
+  two-phase path (Approve/Refuse card), available without this flag — the primitives
+  are shared (`ServerRemediation`); the config only governs the audit's direct path.
 - **Household surfaces (v1.13.13.0, full verdicts v1.13.16.0)** — the security part
   of the audit also checks access coherence across the plugin's surfaces: the
   **"AI Tonight"** playlists (public household AND private per-user — items outside
@@ -692,10 +694,12 @@ modify another plugin's config). Full details:
   persisted sessions, lazy summarization, "Resume" button. See
   [Conversation memory](#conversation-memory).
 - `ChatActionBudget` (int, default `10`) — chat action budget **per turn**
-  (all surfaces combined: cards, timers, tags, collection, playlist, run).
-  `0` = read-only chat. `ChatActionConversationCap` (int, default `30`) —
-  cumulative cap per conversation. `ChatTonightRunEnabled` (bool, default
-  `false` — opt-in) — enables the `run_tonight_run` tool. See
+  (all surfaces combined: cards, timers, tags, collection, playlist, run,
+  remediation). `0` = read-only chat. `ChatActionConversationCap` (int,
+  default `30`) — cumulative cap per conversation. Since v1.13.30,
+  `run_tonight_run` and the remediation tools (`stop_session`, `trigger_task`,
+  `send_message`) are **always proposable**: the chat's approval card replaces
+  the config opt-in (v1.13.30 removed `ChatTonightRunEnabled`). See
   [Chat action layer](#chat-action-layer).
 - `ChatPromptsEnabled` (bool, default `false` — opt-in) — enables the chat tool
   `plugin_prompts` (read + write-proposal for the five configuration prompts).
@@ -787,7 +791,8 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (internal static) | Reflective memory card (`memory_card.json`): current version + **immutable history of the 4 previous versions** (anti-drift counterweight), ~250-word cap, fail-open (LLM failure → previous card kept). `BuildInjectionBlock`: the "ASSISTANT MEMORY" block re-injected into prompts when `MemoryCardEnabled` — **replaces** the classic feedback-loop directive (transparent fallback otherwise). |
 | `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Weekly revision (Sunday 4:30, opt-in `MemoryCardEnabled`): **100% C# join** of the week's events (decisions × telemetry with live percentage via snapshot × **card-version calibration** `mv` × pool-discarded candidates × watched-without-reco × playback slots), then **one tool-less LLM call** rewrites the card (must carry the current one forward, imposed sections, weak/strong signal nuance, ≤ 250 words). See [Reflective memory](#reflective-memory). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (internal static) | Chat conversation memory (`chat_memory.json`, per user, 5 sessions / 30 days): verbatim turns (compacted to the last 6 after summarization), session summary (≤ 1500 chars). `BuildInjectionBlock`: previous session summary + last exchanges, appended to the chat workflow (throwaway — the next summary replaces it). Opt-in `ChatMemoryEnabled`. See [Conversation memory](#conversation-memory). |
-| `ChatActions.cs` | `ChatActions` (internal static) | **Chat action layer** (v1.13): 8 two-phase tools (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, opt-in `run_tonight_run`) reusing the plugin's primitives — a proposal is deposited (frozen tool+arguments pending in `ChatActionStore`) then executed on approval via the `ChatAction/Approve` endpoint (v1.13.29); per-turn + per-conversation budget (consumed at execution, all-or-nothing batches), "one chat run at a time" gate, added-items trace (the only removable ones), workflow block (budget + two-phase protocol), visual trace of successful actions (Emby toast + `TurnActions` label sent to the page — v1.13.1/v1.13.4). See [Chat action layer](#chat-action-layer). |
+| `ChatActions.cs` | `ChatActions` (internal static) | **Chat action layer** (v1.13): 11 two-phase tools (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `stop_session`, `trigger_task`, `send_message`, `run_tonight_run`) reusing the plugin's primitives — a proposal is deposited (frozen tool+arguments pending in `ChatActionStore`) then executed on approval via the `ChatAction/Approve` endpoint (v1.13.29; remediation + run always proposable since v1.13.30 — the card replaces the config opt-in); per-turn + per-conversation budget (consumed at execution, all-or-nothing batches), "one chat run at a time" gate, added-items trace (the only removable ones), workflow block (budget + two-phase protocol), visual trace of successful actions (Emby toast + `TurnActions` label sent to the page — v1.13.1/v1.13.4). See [Chat action layer](#chat-action-layer). |
+| `ServerRemediation.cs` | `ServerRemediation` (internal static) | **Server remediation primitives** (v1.13.30): stopping an active session's playback (PlaystateCommand Stop), triggering a scheduled task (`QueueScheduledTask`, hidden tasks excluded for the chat path), sending an Emby message to a user (inbox notification or OSD toast). Single business code for two callers: the chat action tools (two-phase, card) and `system_audit` (direct path gated by `AuditRemediationEnabled`, historical JSON shapes preserved). |
 | `ChatActionStore.cs` | `ChatActionStore` / `ChatPendingEmbyAction` (internal static) | **Pending action-proposal store** (v1.13.29, two-phase): frozen tool+arguments pending deposited by the chat tools, collected into `ChatResponse.PendingActions` (the page's "Approve / Refuse" card), consumed single-use by the `ChatAction/Approve` endpoint (user+session binding, 10-min TTL, 10 proposals/session cap, in-memory only — a restart clears pendings, nothing destructive). See [Chat action layer](#chat-action-layer). |
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (internal static) | **Chat editing contexts** (v1.13.8, port of the llm_core "contexts" pattern): five dropdown modes (one per editable prompt). `BuildBlock` injects at EVERY turn: the mode's editing guide (prompt role, invariants, drafting conventions), the prompt's CURRENT text re-read from config (read-modify-write source of truth) and the server-resolved target language. Also carries the `CommonRules` (```text delivery channel, read-modify-write, drafting conventions, languages, saving, exclusive mode) appended at the end of the block. The page list and `context_id` validation both derive from the `All` registry (one entry = one mode). See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (internal static) | Pending-modification store (`chat_pending.json`, 10-min expiry, one per conversation, per user). `TakePagePending` (collects the diff card for the turn), `PeekPagePending` (peeks without consuming — nudge net), `Consume` (approval: removes the action if it exists, has not expired, belongs to this user AND session). |
@@ -810,7 +815,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Also answers `CanRecord`/`CanLiveTv` (v1.13.12.0: caller's permissions, policy read live). Serves **only** those fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 17 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene) + 3 remediation actions gated by `AuditRemediationEnabled`. Log FS confinement (name-only + extension whitelist + canonical containment). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 17 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene) + 3 remediation actions gated by `AuditRemediationEnabled` — primitives shared with the chat action tools via `ServerRemediation` (v1.13.30). Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). |
@@ -1257,7 +1262,12 @@ must then **recommend** the action in its report instead of executing it.
 - **Gated remediation**: `stop_session` / `trigger_task` / `send_message` check
   `Plugin.Instance.Configuration.AuditRemediationEnabled` before acting (default off). The
   audit prompt also instructs the LLM to **never** execute remediation without an explicit
-  request (defense in depth).
+  request (defense in depth). Since v1.13.30, these actions also have a two-phase **chat**
+  path (card, no flag) — primitives shared via `ServerRemediation`, one business code for
+  both callers. Since v1.13.30.1, the remediation actions appear in the `system_audit`
+  description and schema **only when the flag is on** (without the flag, the LLM can no
+  longer see or mis-route them); cross routing notes: in the chat, the DEDICATED tools
+  are the normal path, and the gate error redirects to them.
 - **Processes: pure BCL** — `Process.GetProcesses()` exposes only names/CPU time/age,
   **never** arguments or content: no secret leakage.
 
@@ -1743,16 +1753,27 @@ the Tonight run — reusing the existing primitives, under strict limits
   Consumption **on success**: an action refused by a guard (already owned,
   already watched, drop list, duplicate) consumes nothing; a batch that
   exceeds the remaining budget is refused wholesale (all-or-nothing).
-- **8 tools**: `record_program` (timer via `AutoProgrammer.ProgramOneAsync`),
+- **11 tools**: `record_program` (timer via `AutoProgrammer.ProgramOneAsync`),
   `create_card` (single .strm card, ephemeral by construction — the
   `.llmai_reco` marker makes Emby clean it at the next scheduled generation),
   `tag_ai_tonight` (tag, v1.13.3), `collection_add`/`collection_remove`,
   `playlist_add`/`playlist_remove` (additive primitives that target the
   **admin account's private** playlist "AI Tonight · {admin}", v1.13.18.0 —
   never the public household playlist, filled only by the Tonight run;
-  removal only accepts items the chat added itself in the conversation) and
-  `run_tonight_run` (opt-in).
-- **`run_tonight_run(directives?)`** (`ChatTonightRunEnabled`, default false):
+  removal only accepts items the chat added itself in the conversation),
+  `stop_session` (stop playback of an active session — v1.13.30),
+  `trigger_task` (trigger a scheduled task, hidden tasks excluded —
+  v1.13.30), `send_message` (inbox notification or OSD toast to a user —
+  v1.13.30) and `run_tonight_run`.
+- **Remediation and run: always proposable (v1.13.30)** — `stop_session`,
+  `trigger_task`, `send_message` and `run_tonight_run` are proposable at all
+  times: the chat's "Approve / Refuse" card replaces the config opt-in
+  (`ChatTonightRunEnabled` removed; the audit keeps its direct path behind
+  `AuditRemediationEnabled`, primitives shared via `ServerRemediation`). The
+  admin's click is the consent — the config only governs automatic paths.
+  Remaining hard gate for the run: `TonightEnabled` (module off = refusal at
+  execution).
+- **`run_tonight_run(directives?)`**:
   triggers the Tonight run on the exact code path of the scheduled task and
   login. **Ephemeral** session directives (≤ 500 chars, valid for that run
   only, never persisted); one chat run at a time, 2 per conversation; runId
@@ -1760,6 +1781,12 @@ the Tonight run — reusing the existing primitives, under strict limits
   badge on the Recommendations page (the metadata survives the per-user
   cache). Results are delivered through the usual surfaces (page, tag,
   collection, playlist per config).
+- **Enriched remediation cards (v1.13.30)**: `stop_session` shows WHO is
+  watching WHAT (user name + current title); `trigger_task` resolves the task
+  at deposit and shows its NAME (a hallucinated id is refused before the
+  click); `send_message` shows the recipient, delivery mode and text
+  (truncated). A deposit that cannot resolve (session ended, unknown user)
+  is refused before reaching the card.
 - **Visual action trace**: every successful action emits its label to two
   outputs (v1.13.1/v1.13.4) — (1) an **Emby toast** 🤖 to all admin sessions
   (visible on normal Emby pages, other devices…; the web client does NOT render

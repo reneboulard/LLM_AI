@@ -10,6 +10,229 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.30.4] — 2026-09-21
+
+### Fixed (FR)
+- **`trigger_task` : le nom affiché est désormais un sélecteur valide.**
+  Constat terrain : « active la tâche scan media library » → le LLM a passé
+  un id **abrégé par lui-même** (`6330ee8fb4a957f3…` avec points de
+  suspension littéraux) et le nom affiché (« Scan Media Library ») dans
+  `task_key` — double échec : l'id tronqué ne matche rien, et `MatchTask`
+  ne comparait `task_key` qu'à la clé interne `ScheduledTask.Key` (que
+  l'audit `scheduled_tasks` n'expose même pas — le LLM ne pouvait jamais
+  fournir une clé valide). Correctifs : (1) `MatchTask` accepte le **nom
+  affiché** en repli (prépondérance Id &gt; Key &gt; nom, tâches cachées
+  exclues sur toutes les passes) ; (2) le schéma n'exige plus `task_id`
+  (c'est la contrainte qui poussait le modèle à fabriquer un id) —
+  descriptions explicites « id copié ENTIÈREMENT OU clé OU nom » ; (3) le
+  refus de résolution liste les tâches disponibles avec nom, clé et **id
+  complet** (cap 15) — l'erreur porte des identifiants copiables, le modèle
+  se corrige au tour suivant sans nouvel appel d'audit ni demande
+  d'« autorisation ».
+
+### Fixed (EN)
+- **`trigger_task`: the displayed name is now a valid selector.** Field
+  observation: "active la tâche scan media library" → the LLM passed an id
+  **abbreviated by itself** (`6330ee8fb4a957f3…` with literal ellipsis) and
+  the displayed name ("Scan Media Library") in `task_key` — double failure:
+  the truncated id matches nothing, and `MatchTask` only compared
+  `task_key` against the internal `ScheduledTask.Key` (which the
+  `scheduled_tasks` audit action does not even expose — the model could
+  never provide a valid key). Fixes: (1) `MatchTask` falls back to the
+  **displayed name** (precedence Id &gt; Key &gt; name, hidden tasks
+  excluded on every pass); (2) the schema no longer requires `task_id`
+  (that is what pressured the model into inventing one) — descriptions now
+  say "ENTIRELY copied id OR key OR name"; (3) the resolution refusal lists
+  the available tasks with name, key and **full id** (cap 15) — the error
+  carries copyable identifiers so the model self-corrects on the next turn
+  without another audit call or asking for "permission".
+
+---
+
+## [1.13.30.3] — 2026-09-21
+
+### Fixed (FR)
+- **`stop_session` ne prétend plus un arrêt quand rien ne joue.** Constat
+  terrain : session de Test sans lecture → carte « Lecture arrêtée pour
+  Test. » alors que le Stop n'avait rien coupé (le toast omettait déjà le
+  titre, mais le détail de la carte et la note [Admin] affirmaient un arrêt).
+  Le `StopResult.NowPlaying` (déjà capturé par la primitive partagée)
+  gouverne désormais le rapport : étiquette de carte honnête au dépôt
+  (« Arrêt de la session de X (aucune lecture en cours) »), détail/log/toast
+  à l'exécution (« rien à arrêter ») — le Stop est quand même envoyé (no-op
+  inoffensif), le statut reste `ok` (l'état souhaité est atteint). La
+  description du tool signale le cas au LLM.
+
+### Fixed (EN)
+- **`stop_session` no longer claims a stop when nothing is playing.** Field
+  observation: Test's session with no playback → card "Lecture arrêtée pour
+  Test." although the Stop had cut nothing (the toast already omitted the
+  title, but the card detail and the [Admin] note claimed a stop).
+  `StopResult.NowPlaying` (already captured by the shared primitive) now
+  drives the report: honest card label at deposit ("Arrêt de la session de
+  X (aucune lecture en cours)"), detail/log/toast at execution ("rien à
+  arrêter") — the Stop is still sent (harmless no-op), the status stays
+  `ok` (the desired state is reached). The tool description mentions the
+  case to the LLM.
+
+---
+
+## [1.13.30.2] — 2026-09-21
+
+### Fixed (FR)
+- **L'approbation des cartes échouait au premier tour d'une conversation**
+  (« Action introuvable ou expirée » au clic, alors que la carte s'était
+  bien rendue). Cause : la page chat démarre sans id de session et ne
+  l'apprend qu'en lisant la réponse du serveur ; le dépôt de la carte se
+  fait donc PENDANT le tour sous la clé « default », tandis que l'id réel
+  (`c…`) n'est généré qu'en fin de tour par la mémoire de conversation — au
+  clic, la page renvoie l'id réel et la vérification de session de
+  `Consume` rejette (mismatch `default` ≠ `c…`). Les validations précédentes
+  passaient car menées sur des sessions continuées (2ᵉ tour et plus).
+  Correctif : l'id de session est **alloué au début du tour** quand la page
+  n'en porte pas — dépôts (cartes d'action ET cartes de prompt, budget) et
+  approbation partagent le même identifiant dès le premier tour ;
+  `RecordTurn` reprend cet id tel quel (session inconnue → créée avec cette
+  identité). Effet induit : le plafond de budget « par conversation » n'est
+  plus scindé entre « default » (tour 1) et l'id réel (tours suivants).
+- **Journaux de diagnostic sur les rejets d'approbation.** Les branches
+  « pending introuvable/expiré » et « outil inconnu » des endpoints
+  ChatAction/ChatPrompt Approve étaient muettes (constat : carte rendue,
+  clic HTTP 200, exécution jamais atteinte, aucun log) — elles loguent
+  désormais action_id, session (hint) et usager pour diagnostiquer un
+  mismatch sans redéployer à l'aveugle.
+
+### Fixed (EN)
+- **Card approval failed on the first turn of a conversation** (« Action
+  introuvable ou expirée » on click, although the card rendered fine). The
+  chat page starts without a session id and only learns it from the server
+  response; the card deposit therefore happens DURING the turn under the
+  key "default", while the real id (`c…`) is only generated at turn end by
+  the conversation memory — on click the page sends the real id and the
+  session check in `Consume` rejects the mismatch. Previous validations
+  passed because they ran on continued sessions (2nd turn and later). Fix:
+  the session id is **allocated at the start of the turn** when the page
+  carries none — deposits (action AND prompt cards, budget) and approval
+  share the same id from the very first turn; `RecordTurn` reuses it as is
+  (unknown session → created with that identity). Side effect: the
+  per-conversation budget cap is no longer split between "default" (turn 1)
+  and the real id (later turns).
+- **Diagnostic logs on approval rejections.** The "pending not
+  found/expired" and "unknown tool" branches of the ChatAction/ChatPrompt
+  endpoints were silent (observed: card rendered, HTTP 200 click, execution
+  never reached, no log) — they now log action_id, session (hint) and user
+  so a deposit/click mismatch can be diagnosed without blind redeploying.
+
+---
+
+## [1.13.30.1] — 2026-09-21
+
+### Fixed (FR)
+- **Le chat mal-routait l'arrêt de session vers l'audit.** Constat terrain
+  (v1.13.30.0, gemma4) : les 11 tools d'action du chat étaient actifs (log
+  « Couche d'action active : 11 outil(s) »), mais le LLM appelait
+  `system_audit` avec `action=stop_session` — l'action de remédiation de
+  l'audit, gated `AuditRemediationEnabled` — au lieu du **tool chat DÉDIÉ du
+  même nom** ; il recevait l'erreur de gate et rapportait « vous n'avez pas
+  les droits / activez AuditRemediationEnabled ». Collision de nom entre le
+  tool et l'action d'audit, aggravée par le fait que l'audit annonçait ses
+  actions de remédiation dans sa description et son schéma quelle que soit la
+  config. Trois correctifs : (1) description et schéma de `system_audit`
+  **dynamiques** — les actions de remédiation n'y figurent que si
+  `AuditRemediationEnabled` est activé (sans le flag, le LLM ne peut plus les
+  voir ni les appeler) ; (2) **notes de routage croisées** — la description
+  de l'audit (quand le flag est on) dit de PRÉFÉRER les tools dédiés du chat,
+  et les trois tools dédiés (`stop_session`, `trigger_task`, `send_message`)
+  disent explicitement de NE PAS passer par `system_audit` ; (3) l'erreur de
+  gate de l'audit **redirige vers les tools dédiés** — un mal-routage
+  résiduel se corrige au tour suivant.
+
+### Fixed (EN)
+- **The chat mis-routed session stop to the audit.** Field finding
+  (v1.13.30.0, gemma4): all 11 chat action tools were active (log "Action
+  layer active: 11 tool(s)"), but the LLM called `system_audit` with
+  `action=stop_session` — the audit's remediation action, gated by
+  `AuditRemediationEnabled` — instead of the **dedicated chat tool of the
+  same name**; it received the gate error and reported "you don't have the
+  rights / enable AuditRemediationEnabled". Name collision between the tool
+  and the audit action, aggravated by the audit announcing its remediation
+  actions in its description and schema regardless of config. Three fixes:
+  (1) `system_audit` description and schema are now **dynamic** — remediation
+  actions appear only when `AuditRemediationEnabled` is on (without the flag,
+  the LLM can no longer see or call them); (2) **cross routing notes** — the
+  audit's description (when the flag is on) says to PREFER the dedicated chat
+  tools, and the three dedicated tools (`stop_session`, `trigger_task`,
+  `send_message`) explicitly say NOT to go through `system_audit`; (3) the
+  audit's gate error now **redirects to the dedicated tools** — any residual
+  mis-routing self-corrects on the next turn.
+
+## [1.13.30.0] — 2026-09-21
+
+### Added (FR)
+- **La carte d'approbation du chat remplace les opt-ins config (v1.13.30) —
+  « proposable, la carte décide ».** Jusqu'ici, `run_tonight_run` exigeait le
+  flag `ChatTonightRunEnabled` (retiré) et les actions de remédiation de
+  l'audit n'avaient que le chemin direct de `system_audit` (gate
+  `AuditRemediationEnabled`). Le principe : **la config gouverne les chemins
+  automatiques ; dans le chat, le clic admin est le consentement** — la carte
+  « Approuver / Refuser » est mécanique et hors de portée du LLM (v1.13.29),
+  donc proposer ne suffit jamais à exécuter :
+  (1) trois nouveaux tools d'action deux phases — `stop_session` (arrête la
+  lecture d'une session active via PlaystateCommand Stop), `trigger_task`
+  (file une tâche planifiée du plugin OU d'Emby — scan bibliothèque… — tâches
+  cachées exclues), `send_message` (notification inbox/cloche persistante ou
+  toast OSD à un usager) — construits sur les primitives de l'audit extraites
+  dans le nouveau `ServerRemediation.cs` (code métier unique, formes JSON de
+  l'audit conservées, gate `AuditRemediationEnabled` inchangée pour son
+  chemin direct) ;
+  (2) `run_tonight_run` est **toujours proposable** (`ChatTonightRunEnabled`
+  retiré de la config et de la page ; gate dure restante : `TonightEnabled`,
+  module éteint = refus à l'exécution ; limites propres inchangées : un run à
+  la fois, 2 par conversation, directives éphémères ≤ 500 caractères) ;
+  (3) **cartes enrichies pour le contrôle humain** : `stop_session` affiche
+  QUI regarde QUOI (usager + titre en cours), `trigger_task` résout la tâche
+  AU DÉPÔT et affiche son NOM (un id halluciné est refusé avant d'arriver à
+  la carte), `send_message` affiche destinataire résolu + mode + texte
+  tronqué — un dépôt non résolvable (session terminée, usager introuvable)
+  est refusé avant la carte ; l'exécution revalide tout et rembourse le
+  budget si le contexte a changé (session finie entre dépôt et clic) ;
+  (4) budget d'actions inchangé (par tour + conversation, consommé à
+  l'exécution) ; i18n de la page de config alignée (case et chaînes
+  `cfg.chat.actions.tonightrun` retirées FR/EN) ; README FR/EN mis à jour
+  (11 tools, section remédiation).
+
+### Added (EN)
+- **The chat's approval card replaces config opt-ins (v1.13.30) —
+  "proposable, the card decides".** Until now, `run_tonight_run` required the
+  `ChatTonightRunEnabled` flag (now removed) and the audit's remediation
+  actions only had the direct `system_audit` path (gate
+  `AuditRemediationEnabled`). The principle: **the config governs automatic
+  paths; in the chat, the admin's click is the consent** — the "Approve /
+  Refuse" card is mechanical and out of the LLM's reach (v1.13.29), so
+  proposing never means executing:
+  (1) three new two-phase action tools — `stop_session` (stops playback of an
+  active session via PlaystateCommand Stop), `trigger_task` (queues a
+  scheduled task from the plugin OR Emby — library scan… — hidden tasks
+  excluded), `send_message` (persistent inbox notification or OSD toast to a
+  user) — built on the audit's primitives extracted into the new
+  `ServerRemediation.cs` (single business code, audit JSON shapes preserved,
+  `AuditRemediationEnabled` gate unchanged for its direct path);
+  (2) `run_tonight_run` is **always proposable** (`ChatTonightRunEnabled`
+  removed from config and page; remaining hard gate: `TonightEnabled`, module
+  off = refusal at execution; own limits unchanged: one run at a time, 2 per
+  conversation, ephemeral directives ≤ 500 chars);
+  (3) **enriched cards for human control**: `stop_session` shows WHO is
+  watching WHAT (user + current title), `trigger_task` resolves the task AT
+  DEPOSIT and shows its NAME (a hallucinated id is refused before reaching
+  the card), `send_message` shows resolved recipient + mode + truncated text
+  — an unresolvable deposit (session ended, unknown user) is refused before
+  the card; execution revalidates everything and refunds the budget if
+  context changed (session gone between deposit and click);
+  (4) action budget unchanged (per turn + conversation, consumed at
+  execution); config page i18n aligned (checkbox and
+  `cfg.chat.actions.tonightrun` strings removed FR/EN); README FR/EN updated
+  (11 tools, remediation section).
+
 ## [1.13.29.1] — 2026-09-21
 
 ### Fixed (FR)

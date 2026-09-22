@@ -13,10 +13,12 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Session;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Tasks;
 using MediaBrowser.Model.Users;
 
 namespace LLM_AI
@@ -45,12 +47,13 @@ namespace LLM_AI
     /// Couche d'action du chat admin (v1.13) : le LLM du chat obtient des
     /// outils qui agissent sur les MÊMES surfaces Emby que le plugin (cartes
     /// .strm, timers d'enregistrement, tag « AI Tonight », collection,
-    /// playlist, déclenchement du run Tonight) — en réutilisant les
+    /// playlist, déclenchement du run Tonight, remédiation serveur : arrêt de
+    /// session / tâche planifiée / message usager) — en réutilisant les
     /// primitives existantes (<see cref="AutoProgrammer.ProgramOneAsync"/>,
     /// <see cref="AiTagger.AddAsync"/>, managers additifs,
     /// <see cref="StrmLibraryGenerator.WriteSingleCardAsync"/>,
-    /// <see cref="TonightService.GenerateTonightAsync"/>), pas de nouvelle
-    /// logique métier.
+    /// <see cref="TonightService.GenerateTonightAsync"/>,
+    /// <see cref="ServerRemediation"/>), pas de nouvelle logique métier.
     /// </summary>
     /// <remarks>
     /// <para><b>Admin-only + confirmation mécanique hors-LLM</b> (v1.13.29) :
@@ -205,6 +208,29 @@ namespace LLM_AI
         public static void EndRun()
             => Interlocked.Exchange(ref _runGate, 0);
 
+        /// <summary>Énumération compacte des tâches non cachées pour le
+        /// détail d'un refus de résolution : nom, clé et id COMPLET. Un id
+        /// tronqué dans l'appel du LLM (abrégé « avec des … ») est exactement
+        /// ce qui a causé l'échec terrain du 2026-09-21 — l'erreur doit donc
+        /// porter des identifiants copiables pour que le modèle se corrige
+        /// seul au tour suivant, sans nouvel appel d'audit.</summary>
+        internal static string TaskListHint(ITaskManager tasks, int max)
+        {
+            try
+            {
+                var workers = (tasks?.ScheduledTasks ?? Array.Empty<IScheduledTaskWorker>())
+                    .Where(w => w != null && !ServerRemediation.IsHidden(w))
+                    .Take(max)
+                    .ToList();
+                if (workers.Count == 0) return "aucune";
+                var parts = workers.Select(w =>
+                    (w.ScheduledTask?.Name ?? w.Name ?? "?")
+                    + " (key=" + (w.ScheduledTask?.Key ?? "?") + ", id=" + w.Id + ")");
+                return string.Join(" ; ", parts) + (workers.Count >= max ? " …" : string.Empty);
+            }
+            catch { return "indisponible"; }
+        }
+
         // ------------------------------------------------------------------
         //  Deux phases (v1.13.29) : dépôt de proposition + exécution à
         //  l'approbation. Le LLM ne peut JAMAIS exécuter directement —
@@ -237,15 +263,15 @@ namespace LLM_AI
         /// Fabrique d'outil d'action par clé (endpoint d'approbation) :
         /// reconstruit l'instance avec les services de l'endpoint pour
         /// exécuter le pending consommé. Retourne null pour une clé inconnue
-        /// ou pour <c>run_tonight_run</c> quand l'opt-in
-        /// <see cref="PluginConfiguration.ChatTonightRunEnabled"/> a été
-        /// retiré depuis le dépôt (fail-closed).
+        /// ou pour <c>run_tonight_run</c> quand la config est indisponible
+        /// (fail-closed).
         /// </summary>
         public static IChatActionTool BuildToolByName(string toolName, PluginConfiguration cfg,
             string sessionId, User adminUser, string adminUserId,
             ILibraryManager library, ILiveTvManager liveTv, ICollectionManager collections,
             IPlaylistManager playlists, IUserManager users, IServerApplicationHost host,
-            ILogger logger, IJsonSerializer json)
+            ILogger logger, IJsonSerializer json, ISessionManager sessions,
+            ITaskManager tasks, INotificationManager notifications)
         {
             switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
             {
@@ -264,8 +290,14 @@ namespace LLM_AI
                 case "playlist_remove":
                     return new PlaylistRemoveTool(cfg, sessionId, adminUserId, playlists, library, adminUser, logger);
                 case "run_tonight_run":
-                    if (cfg == null || !cfg.ChatTonightRunEnabled) return null;
+                    if (cfg == null) return null;
                     return new RunTonightTool(cfg, sessionId, adminUser, adminUserId, users, json, library, liveTv, host, logger);
+                case "stop_session":
+                    return new StopSessionTool(cfg, sessionId, adminUserId, sessions, logger);
+                case "trigger_task":
+                    return new TriggerTaskTool(cfg, sessionId, adminUserId, tasks, logger);
+                case "send_message":
+                    return new SendMessageTool(cfg, sessionId, adminUserId, sessions, users, notifications, logger);
                 default:
                     return null;
             }
@@ -287,9 +319,8 @@ namespace LLM_AI
             b.Append("\n\n### ACTIONS EMBY DISPONIBLES\n");
             b.Append("Vous pouvez agir sur les surfaces Emby du plugin via des outils d'action ");
             b.Append("(record_program, create_card, tag_ai_tonight, collection_add, collection_remove, ");
-            b.Append("playlist_add, playlist_remove");
-            if (cfg != null && cfg.ChatTonightRunEnabled) b.Append(", run_tonight_run");
-            b.Append(").\n");
+            b.Append("playlist_add, playlist_remove, stop_session, trigger_task, send_message, ");
+            b.Append("run_tonight_run — ce dernier requiert le module « À regarder ce soir » activé).\n");
             b.Append("Budget d'actions : ").Append(Budget(cfg)).Append(" par tour, ")
               .Append(Cap(cfg)).Append(" pour toute la conversation — au-delà, les outils refuseront. ");
             b.Append("Une action refusée par un garde-fou (déjà possédé, déjà visionné, drop list, doublon) ne consomme pas le budget.\n");
@@ -316,14 +347,16 @@ namespace LLM_AI
 
         /// <summary>
         /// Construit les outils d'action du chat. Appelé par l'endpoint de
-        /// chat seulement si <c>cfg.ChatActionBudget &gt; 0</c>
-        /// (<c>run_tonight_run</c> requiert en plus
-        /// <c>cfg.ChatTonightRunEnabled</c>).
+        /// chat seulement si <c>cfg.ChatActionBudget &gt; 0</c>.
+        /// Depuis v1.13.30, tous les tools (remédiation et run compris) sont
+        /// construits sans opt-in config : la carte d'approbation est le
+        /// consentement.
         /// </summary>
         public static List<ILlmTool> BuildTools(PluginConfiguration cfg, string sessionId, User adminUser,
             ILibraryManager library, ILiveTvManager liveTv, ICollectionManager collections,
             IPlaylistManager playlists, IUserManager users, IServerApplicationHost host, ILogger logger,
-            IJsonSerializer json, ISessionManager sessions)
+            IJsonSerializer json, ISessionManager sessions, ITaskManager tasks,
+            INotificationManager notifications)
         {
             // Singleton Emby, re-posé à chaque tour (les outils y lisent le
             // gestionnaire pour les toasts de traçabilité — cf. ci-dessous).
@@ -341,9 +374,17 @@ namespace LLM_AI
                 new CollectionRemoveTool(cfg, sessionId, userId, collections, library, logger),
                 new PlaylistAddTool(cfg, sessionId, userId, playlists, library, adminUser, host, logger),
                 new PlaylistRemoveTool(cfg, sessionId, userId, playlists, library, adminUser, logger),
+                // Remédiation serveur (v1.13.30) : la carte d'approbation
+                // remplace l'opt-in config — proposable en permanence, la
+                // décision appartient au clic admin.
+                new StopSessionTool(cfg, sessionId, userId, sessions, logger),
+                new TriggerTaskTool(cfg, sessionId, userId, tasks, logger),
+                new SendMessageTool(cfg, sessionId, userId, sessions, users, notifications, logger),
+                // run_tonight_run : toujours proposable (v1.13.30 — la carte
+                // remplace ChatTonightRunEnabled) ; l'exécution refuse si le
+                // module « À regarder ce soir » est désactivé (gate dure).
+                new RunTonightTool(cfg, sessionId, adminUser, userId, users, json, library, liveTv, host, logger),
             };
-            if (cfg != null && cfg.ChatTonightRunEnabled)
-                tools.Add(new RunTonightTool(cfg, sessionId, adminUser, userId, users, json, library, liveTv, host, logger));
             return tools;
         }
 
@@ -1287,6 +1328,355 @@ namespace LLM_AI
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action run_tonight_run : {0}", ex.Message);
+                    return Json(new { status = "failed", detail = ex.Message });
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        //  Tool : stop_session (arrêt de lecture d'une session active)
+        // ------------------------------------------------------------------
+
+        private class StopSessionTool : ILlmTool, IChatActionTool
+        {
+            private readonly PluginConfiguration _cfg;
+            private readonly string _sessionId;
+            private readonly string _adminUserId;
+            private readonly ISessionManager _sessions;
+            private readonly ILogger _logger;
+
+            public StopSessionTool(PluginConfiguration cfg, string sessionId, string adminUserId,
+                ISessionManager sessions, ILogger logger)
+            {
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _sessions = sessions; _logger = logger;
+            }
+
+            public string ToolKey => "stop_session";
+            public string Name => "stop_session";
+            public string Description =>
+                "Arrête la lecture d'une session Emby active (PlaystateCommand Stop — coupe la lecture et le " +
+                "transcodage en cours, n'agit pas sur la session elle-même ; si aucune lecture n'est en cours, " +
+                "l'exécution le rapporte : « rien à arrêter »). Les sessions actives et leurs ids " +
+                "viennent de system_audit (action active_sessions). C'est LE chemin du chat pour arrêter une " +
+                "lecture — n'utilisez PAS system_audit action=stop_session (remédiation de l'audit, gated " +
+                "AuditRemediationEnabled). DEUX PHASES : l'appel DÉPOSE une proposition " +
+                "(status \"awaiting_approval\") sans exécuter — l'admin approuve en cliquant la carte « Approuver » " +
+                "de la page, le résultat d'exécution arrive ensuite comme note [Admin]. N'annoncez JAMAIS " +
+                "l'exécution avant cette note.";
+            public string ArgumentsSchema =>
+                "{\"type\":\"object\",\"properties\":{" +
+                "\"session_id\":{\"type\":\"string\",\"description\":\"Id de la session à arrêter (source=active_sessions)\"}}," +
+                "\"required\":[\"session_id\"]}";
+
+            /// <summary>Phase 1 (boucle LLM) : dépôt de la proposition,
+            /// aucun effet — l'exécution passe par l'approbation admin.
+            /// Lecture seule d'enrichissement : la carte montre QUI regarde
+            /// QUOI, c'est l'info dont l'admin a besoin pour trancher.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string sid = ArgString(args, "session_id");
+                if (string.IsNullOrWhiteSpace(sid))
+                    return Task.FromResult(Json(new { status = "refused",
+                        detail = "session_id est requis (voir system_audit, action active_sessions)." }));
+
+                var session = (_sessions?.Sessions ?? Enumerable.Empty<SessionInfo>())
+                    .FirstOrDefault(s => s.Id == sid.Trim());
+                if (session == null)
+                    return Task.FromResult(Json(new { status = "refused",
+                        detail = "session introuvable : " + sid.Trim() + " (voir system_audit, action active_sessions)." }));
+
+                string label = session.NowPlayingItem?.Name != null
+                    ? "Arrêt de la lecture de " + (session.UserName ?? "un usager")
+                        + " — « " + session.NowPlayingItem.Name + " »"
+                    : "Arrêt de la session de " + (session.UserName ?? "un usager")
+                        + " (aucune lecture en cours)";
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args, label));
+            }
+
+            /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
+            /// l'endpoint d'approbation (budget consommé ici).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
+            {
+                try
+                {
+                    string sid = ArgString(args, "session_id");
+                    if (string.IsNullOrWhiteSpace(sid))
+                        return Json(new { status = "refused", detail = "session_id est requis." });
+
+                    var verdict = Reserve(_sessionId, 1, _cfg);
+                    if (verdict != BudgetVerdict.Ok)
+                        return BudgetRefusal(_sessionId, verdict, _cfg);
+
+                    // Primitive partagée avec system_audit (ServerRemediation).
+                    var r = await ServerRemediation.StopSessionAsync(_sessions, sid.Trim(), ct).ConfigureAwait(false);
+                    if (r.Error != null)
+                    {
+                        Refund(_sessionId, 1); // garde-fou : pas une action réelle
+                        return Json(new { status = "refused",
+                            detail = r.Error + " — la session a pu se terminer entre le dépôt et l'approbation." });
+                    }
+
+                    string who = r.UserName ?? "un usager";
+                    if (r.NowPlaying == null)
+                    {
+                        // Rien ne joue sur la session : le Stop est envoyé
+                        // (no-op inoffensif) mais le rapport ne doit PAS
+                        // prétendre un arrêt — la carte et la note [Admin]
+                        // disent la vérité (constat terrain 2026-09-21).
+                        _logger?.Info("[LLM_AI] Chat action stop_session : rien à arrêter pour {0} " +
+                            "(aucune lecture en cours, session={1}).", who, r.SessionId);
+                        await ToastActionAsync(_sessionId, "Chat : rien à arrêter pour " + who +
+                            " (aucune lecture en cours)", _logger).ConfigureAwait(false);
+                        return Json(new { status = "ok",
+                            detail = "Aucune lecture en cours pour " + who + " — rien à arrêter." });
+                    }
+
+                    string what = " (« " + r.NowPlaying + " »)";
+                    _logger?.Info("[LLM_AI] Chat action stop_session : lecture arrêtée pour {0} (session={1}).",
+                        who, r.SessionId);
+                    await ToastActionAsync(_sessionId, "Chat : lecture arrêtée pour " + who + what, _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = "Lecture arrêtée pour " + who + what + "." });
+                }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (Exception ex)
+                {
+                    Refund(_sessionId, 1);
+                    _logger?.Warn("[LLM_AI] Chat action stop_session : {0}", ex.Message);
+                    return Json(new { status = "failed", detail = ex.Message });
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        //  Tool : trigger_task (déclenchement d'une tâche planifiée)
+        // ------------------------------------------------------------------
+
+        private class TriggerTaskTool : ILlmTool, IChatActionTool
+        {
+            private readonly PluginConfiguration _cfg;
+            private readonly string _sessionId;
+            private readonly string _adminUserId;
+            private readonly ITaskManager _tasks;
+            private readonly ILogger _logger;
+
+            public TriggerTaskTool(PluginConfiguration cfg, string sessionId, string adminUserId,
+                ITaskManager tasks, ILogger logger)
+            {
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _tasks = tasks; _logger = logger;
+            }
+
+            public string ToolKey => "trigger_task";
+            public string Name => "trigger_task";
+            public string Description =>
+                "Déclenche une tâche planifiée (mise en file d'exécution — tâches du plugin : orphelins, reco hebdo, " +
+                "mémoire… ; tâches Emby : scan bibliothèque…). Le listing (id + nom) vient de " +
+                "system_audit (action scheduled_tasks) : passez task_id (copiez-le ENTIÈREMENT, sans abréviation) " +
+                "OU task_key — qui accepte la clé interne OU le nom affiché (ex. « Scan Media Library »). " +
+                "Les tâches cachées sont exclues. C'est LE chemin du chat — n'utilisez PAS system_audit " +
+                "action=trigger_task (remédiation de l'audit, gated AuditRemediationEnabled). DEUX PHASES : " +
+                "l'appel DÉPOSE une proposition (status \"awaiting_approval\") sans exécuter — " +
+                "l'admin approuve en cliquant la carte « Approuver » de la page, le résultat d'exécution arrive " +
+                "ensuite comme note [Admin]. N'annoncez JAMAIS l'exécution avant cette note.";
+            public string ArgumentsSchema =>
+                "{\"type\":\"object\",\"properties\":{" +
+                "\"task_id\":{\"type\":\"string\",\"description\":\"Id (worker.Id) de la tâche — copiez-le ENTIÈREMENT depuis scheduled_tasks, JAMAIS d'abréviation ni de …\"}," +
+                "\"task_key\":{\"type\":\"string\",\"description\":\"Clé interne (ScheduledTask.Key) OU nom affiché de la tâche (ex. Scan Media Library) — l'un des deux suffit\"}}}";
+
+            /// <summary>Phase 1 (boucle LLM) : dépôt de la proposition,
+            /// aucun effet — l'exécution passe par l'approbation admin.
+            /// Validation au dépôt : la tâche est résolue (lecture seule) et
+            /// son NOM figure sur la carte — l'admin voit CE qu'il déclenche,
+            /// un id halluciné est refusé avant d'être soumis au clic.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string taskId = ArgString(args, "task_id");
+                string taskKey = ArgString(args, "task_key");
+                if (string.IsNullOrWhiteSpace(taskId) && string.IsNullOrWhiteSpace(taskKey))
+                    return Task.FromResult(Json(new { status = "refused",
+                        detail = "task_id ou task_key requis (voir system_audit, action scheduled_tasks)." }));
+
+                var worker = ServerRemediation.MatchTask(_tasks, taskId, taskKey, excludeHidden: true);
+                if (worker == null)
+                    return Task.FromResult(Json(new { status = "refused",
+                        detail = "tâche introuvable ou cachée (task_id=" + (taskId ?? "") + ", task_key=" + (taskKey ?? "")
+                            + "). Tâches disponibles : " + TaskListHint(_tasks, 15)
+                            + " — réessayez avec l'id exact OU le nom affiché dans task_key " +
+                              "(listing complet : system_audit, action scheduled_tasks)." }));
+
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Déclenchement de la tâche « " + worker.Name + " »"));
+            }
+
+            /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
+            /// l'endpoint d'approbation (budget consommé ici).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
+            {
+                try
+                {
+                    string taskId = ArgString(args, "task_id");
+                    string taskKey = ArgString(args, "task_key");
+                    if (string.IsNullOrWhiteSpace(taskId) && string.IsNullOrWhiteSpace(taskKey))
+                        return Json(new { status = "refused", detail = "task_id ou task_key requis." });
+
+                    var verdict = Reserve(_sessionId, 1, _cfg);
+                    if (verdict != BudgetVerdict.Ok)
+                        return BudgetRefusal(_sessionId, verdict, _cfg);
+
+                    // Primitive partagée avec system_audit (ServerRemediation) —
+                    // exclusion des tâches cachées (fail-closed).
+                    var r = ServerRemediation.TriggerTask(_tasks, taskId, taskKey, excludeHidden: true);
+                    if (r.Error != null)
+                    {
+                        Refund(_sessionId, 1); // garde-fou : pas une action réelle
+                        return Json(new { status = "refused", detail = r.Error });
+                    }
+
+                    _logger?.Info("[LLM_AI] Chat action trigger_task : tâche « {0} » mise en file (id={1}).",
+                        r.Name, r.TaskId);
+                    await ToastActionAsync(_sessionId, "Chat : tâche « " + r.Name + " » déclenchée", _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = "Tâche « " + r.Name + " » mise en file d'exécution." });
+                }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (Exception ex)
+                {
+                    Refund(_sessionId, 1);
+                    _logger?.Warn("[LLM_AI] Chat action trigger_task : {0}", ex.Message);
+                    return Json(new { status = "failed", detail = ex.Message });
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        //  Tool : send_message (message Emby à un usager)
+        // ------------------------------------------------------------------
+
+        private class SendMessageTool : ILlmTool, IChatActionTool
+        {
+            private readonly PluginConfiguration _cfg;
+            private readonly string _sessionId;
+            private readonly string _adminUserId;
+            private readonly ISessionManager _sessions;
+            private readonly IUserManager _users;
+            private readonly INotificationManager _notifications;
+            private readonly ILogger _logger;
+
+            public SendMessageTool(PluginConfiguration cfg, string sessionId, string adminUserId,
+                ISessionManager sessions, IUserManager users, INotificationManager notifications, ILogger logger)
+            {
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId;
+                _sessions = sessions; _users = users; _notifications = notifications; _logger = logger;
+            }
+
+            public string ToolKey => "send_message";
+            public string Name => "send_message";
+            public string Description =>
+                "Envoie un message Emby à un usager : delivery=notification (défaut — inbox/cloche, persistante, " +
+                "livrée même sans session active) ou delivery=osd (toast à l'écran, requiert une session active). " +
+                "L'usager se résout par Guid (user_id) ou nom (user_name). C'est LE chemin du chat — n'utilisez PAS " +
+                "system_audit action=send_message (remédiation de l'audit, gated AuditRemediationEnabled). " +
+                "DEUX PHASES : l'appel DÉPOSE une " +
+                "proposition (status \"awaiting_approval\") sans exécuter — l'admin approuve en cliquant la carte " +
+                "« Approuver » de la page, le résultat d'exécution arrive ensuite comme note [Admin]. " +
+                "N'annoncez JAMAIS l'exécution avant cette note.";
+            public string ArgumentsSchema =>
+                "{\"type\":\"object\",\"properties\":{" +
+                "\"user_id\":{\"type\":\"string\",\"description\":\"Guid du destinataire\"}," +
+                "\"user_name\":{\"type\":\"string\",\"description\":\"Nom du destinataire (alternative à user_id)\"}," +
+                "\"header\":{\"type\":\"string\",\"description\":\"Titre du message (défaut « Message »)\"}," +
+                "\"text\":{\"type\":\"string\",\"description\":\"Corps du message\"}," +
+                "\"delivery\":{\"type\":\"string\",\"enum\":[\"notification\",\"osd\"],\"description\":\"notification (défaut) | osd\"}," +
+                "\"timeout_ms\":{\"type\":\"integer\",\"description\":\"(osd) durée d'affichage du toast en ms (défaut 5000)\"}}," +
+                "\"required\":[\"text\"]}";
+
+            /// <summary>Phase 1 (boucle LLM) : dépôt de la proposition,
+            /// aucun effet — l'exécution passe par l'approbation admin.
+            /// Lecture seule : le destinataire est résolu (son nom figure sur
+            /// la carte) et un usager introuvable est refusé avant le clic.</summary>
+            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+            {
+                string recipient = ArgString(args, "user_id") ?? ArgString(args, "user_name");
+                string text = ArgString(args, "text");
+                if (string.IsNullOrWhiteSpace(recipient))
+                    return Task.FromResult(Json(new { status = "refused", detail = "user_id ou user_name requis." }));
+                if (string.IsNullOrWhiteSpace(text))
+                    return Task.FromResult(Json(new { status = "refused", detail = "text est requis (corps du message)." }));
+
+                string delivery = (ArgString(args, "delivery") ?? "notification").Trim().ToLowerInvariant();
+                if (delivery != "notification" && delivery != "osd")
+                    return Task.FromResult(Json(new { status = "refused", detail = "delivery doit valoir notification ou osd." }));
+
+                var resolved = ServerRemediation.ResolveUsers(_users, _logger, recipient.Trim());
+                if (resolved.Count == 0)
+                    return Task.FromResult(Json(new { status = "refused", detail = "usager introuvable : " + recipient.Trim() + "." }));
+
+                string header = ArgString(args, "header") ?? "Message";
+                string shownText = text.Trim();
+                if (shownText.Length > 60) shownText = shownText.Substring(0, 60) + "…";
+                return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
+                    "Message Emby à " + resolved[0].Name + " (" + delivery + ") : " + header + " — " + shownText));
+            }
+
+            /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
+            /// l'endpoint d'approbation (budget consommé ici).</summary>
+            public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)
+            {
+                try
+                {
+                    string recipient = ArgString(args, "user_id") ?? ArgString(args, "user_name");
+                    string text = ArgString(args, "text");
+                    if (string.IsNullOrWhiteSpace(recipient) || string.IsNullOrWhiteSpace(text))
+                        return Json(new { status = "refused", detail = "destinataire (user_id/user_name) et text requis." });
+
+                    string delivery = (ArgString(args, "delivery") ?? "notification").Trim().ToLowerInvariant();
+                    int timeoutMs = 5000;
+                    try
+                    {
+                        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("timeout_ms", out var t)
+                            && t.ValueKind == JsonValueKind.Number)
+                            timeoutMs = t.GetInt32();
+                    }
+                    catch { }
+                    if (timeoutMs <= 0) timeoutMs = 5000;
+
+                    var verdict = Reserve(_sessionId, 1, _cfg);
+                    if (verdict != BudgetVerdict.Ok)
+                        return BudgetRefusal(_sessionId, verdict, _cfg);
+
+                    // Primitive partagée avec system_audit (ServerRemediation).
+                    var r = await ServerRemediation.SendMessageAsync(_sessions, _users, _notifications, _logger,
+                        recipient.Trim(), ArgString(args, "header") ?? "Message", text.Trim(),
+                        delivery, timeoutMs, ct).ConfigureAwait(false);
+                    if (r.Error != null)
+                    {
+                        Refund(_sessionId, 1); // garde-fou : pas une action réelle
+                        return Json(new { status = "refused", detail = r.Error });
+                    }
+
+                    string recipientName = recipient.Trim();
+                    var resolved = ServerRemediation.ResolveUsers(_users, _logger, recipientName);
+                    if (resolved.Count > 0) recipientName = resolved[0].Name;
+
+                    string detail;
+                    if (r.Delivery == "osd")
+                    {
+                        detail = "Toast OSD : " + r.Sent + " session(s) atteinte(s) sur " + r.Recipients + " destinataire(s)."
+                            + (r.Note != null ? " " + r.Note : "");
+                    }
+                    else
+                    {
+                        detail = "Notification envoyée à " + recipientName + " (" + r.Sent + "/" + r.Recipients + ").";
+                    }
+
+                    _logger?.Info("[LLM_AI] Chat action send_message : {0} vers {1} ({2}).", r.Delivery, recipientName, r.Sent);
+                    await ToastActionAsync(_sessionId, "Chat : message (" + r.Delivery + ") envoyé à " + recipientName,
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = detail });
+                }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (Exception ex)
+                {
+                    Refund(_sessionId, 1);
+                    _logger?.Warn("[LLM_AI] Chat action send_message : {0}", ex.Message);
                     return Json(new { status = "failed", detail = ex.Message });
                 }
             }

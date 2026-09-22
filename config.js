@@ -765,12 +765,12 @@ define(["loading"], function (loading) {
         view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
         // Couche d'action du chat (v1.13) : budget par tour (0 = lecture
-        // seule), plafond par conversation, run Tonight opt-in.
+        // seule), plafond par conversation. run_tonight_run : toujours
+        // proposable depuis v1.13.30 (la carte d'approbation remplace l'opt-in).
         var cab = parseInt(cfg.ChatActionBudget, 10);
         view.querySelector("#numChatActionBudget").value = isNaN(cab) ? 10 : cab;
         var cac = parseInt(cfg.ChatActionConversationCap, 10);
         view.querySelector("#numChatActionCap").value = isNaN(cac) ? 30 : cac;
-        view.querySelector("#chkChatTonightRun").checked = !!cfg.ChatTonightRunEnabled;
         // Édition de prompts par le chat (v1.13.8, opt-in) : tool
         // plugin_prompts avec approbation deux phases.
         view.querySelector("#chkChatPrompts").checked = !!cfg.ChatPromptsEnabled;
@@ -907,7 +907,6 @@ define(["loading"], function (loading) {
             // Couche d'action du chat (v1.13).
             ChatActionBudget: parseInt(view.querySelector("#numChatActionBudget").value, 10) || 0,
             ChatActionConversationCap: parseInt(view.querySelector("#numChatActionCap").value, 10) || 30,
-            ChatTonightRunEnabled: view.querySelector("#chkChatTonightRun").checked,
             // Édition de prompts par le chat (v1.13.8, opt-in).
             ChatPromptsEnabled: view.querySelector("#chkChatPrompts").checked,
             // Chat externe (v1.13.21) — secret édité ici (l'admin peut le

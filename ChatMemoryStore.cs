@@ -115,6 +115,16 @@ namespace LLM_AI
         //  Écritures
         // -----------------------------------------------------------------
 
+        /// <summary>Générateur d'identifiant de session (« c » + tampon UTC
+        /// + suffixe hex). Exposé pour l'allocation d'office au début du tour
+        /// (v1.13.30.2) : quand la page ne porte pas d'id (premier tour d'une
+        /// conversation), le serveur alloue l'id AVANT les dépôts — sinon les
+        /// cartes déposées partent sous la clé « default » et l'approbation
+        /// par clic (envoyée avec l'id généré en fin de tour) est rejetée.</summary>
+        internal static string NewSessionId() =>
+            "c" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
+                + "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+
         /// <summary>
         /// Enregistre un tour : ajoute à la session portée par
         /// <paramref name="sessionId"/> (l'assure : inconnue → nouvelle
@@ -135,8 +145,7 @@ namespace LLM_AI
                     var all = LoadAll();
                     var sid = (sessionId ?? "").Trim();
                     if (sid.Length == 0)
-                        sid = "c" + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
-                            + "-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                        sid = NewSessionId();
                     var s = all.FirstOrDefault(x => string.Equals(x.Id ?? "", sid, StringComparison.Ordinal)
                                                     && string.Equals(x.User ?? "", userId ?? "", StringComparison.Ordinal));
                     if (s == null)
