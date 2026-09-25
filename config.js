@@ -1122,6 +1122,241 @@ define(["loading"], function (loading) {
                 }
             }
 
+            // File de régularisation cross-kind : GET /Plugins/LLMAI/CrossKindQueue
+            // (chargée au viewshow + bouton), dialogue natif <dialog> pour
+            // choisir la destination, POST /Plugins/LLMAI/CrossKindRegularize
+            // (copie vérifiée SANS suppression — l'original reste en place,
+            // l'usager le retire ensuite), puis scan bibliothèque Emby
+            // déclenché côté client après un succès. La file relit la fiche
+            // TMDB de chaque item (titre/année pour le nommage) : quelques
+            // requêtes par item, la zone affiche un état de chargement.
+            var ckListEl = view.querySelector("#crossKindList");
+            if (ckListEl) {
+                var ckLibs = [];
+                var ckEntry = null;
+                var ckDlg = view.querySelector("#dlgCrossKind");
+
+                var ckKindLabel = function (kind) {
+                    return kind === "movie" ? i18n.t("cfg.crosskind.kind.movie")
+                                            : i18n.t("cfg.crosskind.kind.series");
+                };
+                var ckStatusHtml = function (e) {
+                    return e.Regularized
+                        ? '<span class="ckBadge ckDone">' + esc(i18n.t("cfg.crosskind.status.done")) + '</span>'
+                        : '<span class="ckBadge">' + esc(i18n.t("cfg.crosskind.status.pending")) + '</span>';
+                };
+                var ckRowHtml = function (e) {
+                    var cross = esc(i18n.t("cfg.crosskind.cross",
+                        ckKindLabel(e.FicheKind), ckKindLabel(e.ItemKind)));
+                    var target = esc(i18n.t("cfg.crosskind.target",
+                        e.SuggestedFolder || "?", e.SuggestedFile || "?"));
+                    var paths = (e.SourceFiles || []).map(esc).join("<br>");
+                    return '<div class="ckItem">' +
+                        '<b>' + esc(e.Name || "?") + '</b>' + ckStatusHtml(e) +
+                        '<div class="fieldDescription">' + cross + '<br>' + target + '</div>' +
+                        (paths ? '<div class="ckPaths">' + paths + '</div>' : '') +
+                        '<div style="margin-top:0.5em;">' +
+                        '<button is="emby-button" type="button" class="raised btnCkRegularize" data-ck="' +
+                        esc(e.ItemId) + '">' + esc(i18n.t("cfg.crosskind.regularize")) + '</button>' +
+                        '</div></div>';
+                };
+                var ckLastItems = [];
+                var ckRender = function (entries) {
+                    ckLastItems = entries || [];
+                    if (ckLastItems.length === 0) {
+                        ckListEl.innerHTML = '<div class="fieldDescription">' +
+                            esc(i18n.t("cfg.crosskind.queue.empty")) + '</div>';
+                        return;
+                    }
+                    ckListEl.innerHTML = ckLastItems.map(ckRowHtml).join("");
+                };
+                var ckLoad = function () {
+                    ckListEl.innerHTML = '<div class="fieldDescription">' +
+                        esc(i18n.t("cfg.crosskind.queue.loading")) + '</div>';
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/CrossKindQueue"),
+                        type: "GET"
+                    }).then(function (resp) { return resp.json(); }).then(function (data) {
+                        if (data && data.Error) {
+                            ckListEl.innerHTML = '<div class="fieldDescription">' +
+                                esc(data.Error) + '</div>';
+                            return;
+                        }
+                        ckRender(data && data.Items);
+                    }, function () {
+                        ckListEl.innerHTML = '<div class="fieldDescription">' +
+                            esc(i18n.t("cfg.crosskind.queue.err")) + '</div>';
+                    });
+                };
+
+                var ckBtn = view.querySelector("#btnCrossKindRefresh");
+                if (ckBtn) ckBtn.addEventListener("click", ckLoad);
+
+                // Bibliothèques (une fois par affichage de la page) — le
+                // dialogue les liste, triées : films d'abord (cas principal),
+                // puis séries, puis le reste.
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/CrossKindLibraries"),
+                    type: "GET"
+                }).then(function (resp) { return resp.json(); }).then(function (data) {
+                    if (!data || data.Error) return;
+                    ckLibs = (data.Libraries || []).filter(function (l) {
+                        return l && l.Paths && l.Paths.length > 0;
+                    }).sort(function (a, b) {
+                        var d = (a.Type === "movies" ? 0 : 1) - (b.Type === "movies" ? 0 : 1);
+                        if (d !== 0) return d;
+                        return (a.Name || "").localeCompare(b.Name || "");
+                    });
+                }, function () { /* best-effort : la saisie libre reste possible */ });
+
+                if (ckDlg) {
+                    var ckFolderEl = ckDlg.querySelector("#ckDlgFolder");
+                    var ckFileEl = ckDlg.querySelector("#ckDlgFile");
+                    var ckLibEl = ckDlg.querySelector("#ckDlgLib");
+                    var ckResultEl = ckDlg.querySelector("#ckDlgResult");
+                    var ckGoBtn = ckDlg.querySelector("#ckDlgGo");
+
+                    // La liste des bibliothèques : « Nom (type) » — la valeur
+                    // porte l'indice dans ckLibs. Films en tête (tri au fetch).
+                    var ckFillLibs = function () {
+                        if (!ckLibEl) return;
+                        var opts = ['<option value="">—</option>'];
+                        for (var i = 0; i < ckLibs.length; i++) {
+                            var l = ckLibs[i];
+                            opts.push('<option value="' + i + '">' +
+                                esc(l.Name || "?") + (l.Type ? " (" + esc(l.Type) + ")" : "") +
+                                " — " + esc(l.Paths[0]) + '</option>');
+                        }
+                        ckLibEl.innerHTML = opts.join("");
+                    };
+
+                    var ckOpen = function (entry) {
+                        ckEntry = entry;
+                        var titleEl = ckDlg.querySelector("#ckDlgTitle");
+                        var srcEl = ckDlg.querySelector("#ckDlgSources");
+                        if (titleEl) titleEl.textContent = i18n.t("cfg.crosskind.dialog.title", entry.Name || "?");
+                        if (srcEl) {
+                            var list = (entry.SourceFiles || []).map(esc).join("<br>");
+                            srcEl.innerHTML = esc(i18n.t("cfg.crosskind.dialog.sources")) +
+                                ' <span style="font-family:monospace;">' + list + '</span>';
+                        }
+                        if (ckFileEl) ckFileEl.value = entry.SuggestedFile || "";
+                        if (ckResultEl) { ckResultEl.style.display = "none"; ckResultEl.textContent = ""; }
+
+                        // Suggestion de dossier : première bibliothèque Films
+                        // (ou la première quelle qu'elle soit) + « Titre (Année) ».
+                        var sel = -1;
+                        for (var i = 0; i < ckLibs.length; i++) {
+                            if (ckLibs[i].Type === "movies") { sel = i; break; }
+                        }
+                        if (sel < 0 && ckLibs.length > 0) sel = 0;
+                        ckFillLibs();
+                        if (ckLibEl) ckLibEl.value = sel >= 0 ? String(sel) : "";
+                        if (ckFolderEl && sel >= 0) {
+                            ckFolderEl.value = ckLibs[sel].Paths[0] + "/" + (entry.SuggestedFolder || "");
+                        }
+                        ckDlg.showModal();
+                    };
+
+                    if (ckLibEl) {
+                        ckLibEl.addEventListener("change", function () {
+                            if (!ckEntry) return;
+                            var idx = parseInt(ckLibEl.value, 10);
+                            if (isNaN(idx) || !ckLibs[idx]) return;
+                            ckFolderEl.value = ckLibs[idx].Paths[0] + "/" + (ckEntry.SuggestedFolder || "");
+                        });
+                    }
+
+                    ckDlg.querySelector("#ckDlgCancel").addEventListener("click", function () {
+                        ckDlg.close();
+                    });
+
+                    ckGoBtn.addEventListener("click", function () {
+                        if (!ckEntry) return;
+                        var folder = (ckFolderEl.value || "").trim();
+                        var file = (ckFileEl.value || "").trim();
+                        if (!folder) {
+                            if (ckResultEl) {
+                                ckResultEl.style.display = "block";
+                                ckResultEl.textContent = i18n.t("cfg.crosskind.dialog.needfolder");
+                            }
+                            return;
+                        }
+                        ckGoBtn.disabled = true;
+                        var prevLabel = ckGoBtn.textContent;
+                        ckGoBtn.textContent = i18n.t("cfg.crosskind.copying");
+                        if (ckResultEl) { ckResultEl.style.display = "block"; ckResultEl.textContent = "…"; }
+
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl("Plugins/LLMAI/CrossKindRegularize"),
+                            type: "POST",
+                            data: JSON.stringify({
+                                ItemId: ckEntry.ItemId,
+                                TargetFolder: folder,
+                                TargetFile: file
+                            }),
+                            contentType: "application/json",
+                            dataType: "json"
+                        }).then(function (data) {
+                            ckGoBtn.disabled = false;
+                            ckGoBtn.textContent = prevLabel;
+                            if (!data) data = {};
+                            if (data.Error) {
+                                if (ckResultEl) ckResultEl.textContent = data.Error;
+                                return;
+                            }
+                            var nCopied = (data.Copied || []).length;
+                            var nSkipped = (data.Skipped || []).length;
+                            var nFailed = (data.Failed || []).length;
+                            if (ckResultEl) {
+                                var msg = i18n.t("cfg.crosskind.done", nCopied, nSkipped, nFailed);
+                                var lines = (data.Copied || []).concat(data.Skipped || [], data.Failed || []);
+                                ckResultEl.textContent = msg +
+                                    (lines.length ? "\n" + lines.join("\n") : "") +
+                                    (data.Warning ? "\n\n⚠ " + data.Warning : "") +
+                                    // Consigne de nettoyage : uniquement si aucun
+                                    // échec (ne jamais inviter à supprimer
+                                    // l'original quand la copie a raté).
+                                    (nFailed > 0
+                                        ? "\n\n⚠ " + i18n.t("cfg.crosskind.failedNote")
+                                        : "\n\n" + i18n.t("cfg.crosskind.finalize"));
+                            }
+                            // Scan bibliothèque : Emby importe la copie sous
+                            // le type de la bibliothèque cible. Best-effort.
+                            ApiClient.ajax({
+                                url: ApiClient.getUrl("Library/Refresh"),
+                                type: "POST"
+                            }).then(function () { /* scan déclenché */ }, function () { /* silencieux */ });
+                            ckLoad(); // rafraîchit la file (statut « copie faite »)
+                        }, function (err) {
+                            ckGoBtn.disabled = false;
+                            ckGoBtn.textContent = prevLabel;
+                            if (ckResultEl) {
+                                ckResultEl.textContent = i18n.t("cfg.crosskind.dialog.err",
+                                    (err && err.statusText ? err.statusText : err));
+                            }
+                        });
+                    });
+                }
+
+                // Délégation des clics « Régulariser… » → ouvre le dialogue
+                // avec l'entrée correspondante.
+                ckListEl.addEventListener("click", function (e) {
+                    var btn = e.target && e.target.closest ? e.target.closest(".btnCkRegularize") : null;
+                    if (!btn || !ckDlg) return;
+                    var id = btn.getAttribute("data-ck");
+                    var entry = (ckLastItems || []).filter(function (x) {
+                        return x.ItemId === id;
+                    })[0];
+                    if (entry) ckOpen(entry);
+                });
+
+                // Chargement au viewshow : la file se lit d'elle-même (quelques
+                // requêtes TMDB par item côté serveur — l'état de chargement
+                // s'affiche d'abord). Le bouton la recharge à la demande.
+                ckLoad();
+            }
+
             // Traduction des genres (IA) : GET /Plugins/LLMAI/GenreProposals
             // (détection + LLM, lecture seule) puis POST
             // /Plugins/LLMAI/GenreApply des mappages cochés. Admin-only côté

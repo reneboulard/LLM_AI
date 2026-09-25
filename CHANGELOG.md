@@ -10,6 +10,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.13.31.0] — 2026-09-24
+
+### Added (FR)
+- **File de régularisation « cross-kind » (v1.13.31) — industrialiser la
+  recette vérifiée en réel.** Un enregistrement DVR mal typé (fiche film
+  posée sur un item série, ou l'inverse — tag `llmai-cross-kind` de la passe
+  orphelins) ne peut pas être re-typé sur place ; en revanche, copier son
+  fichier vidéo vers la bibliothèque du type voulu avec un nommage
+  « Titre (Année) » fait ré-importer nativement par Emby sous le bon type
+  (vérifié en réel : « France, il était une fois demain »). Industrialisé :
+  (1) nouveau service `CrossKindApiService` — `GET CrossKindQueue` (items
+  taggés `llmai-cross-kind` : fiche TMDB croisée relue à chaque ouverture en
+  lecture seule via la cascade tmdb→imdb, kind item/fiche, fichiers source
+  vidéo — cartes `.strm` exclues —, cible suggérée « Titre (Année) », statut
+  « copie faite »), `GET CrossKindLibraries` (bibliothèques cibles :
+  films/séries/contenu mixte seulement — la bibliothèque de cartes `.strm`
+  du plugin et le répertoire des enregistrements DVR ne sont pas suggérés),
+  `POST CrossKindRegularize` (copie **vérifiée par taille**, idempotente —
+  déjà copié = ignoré —, suffixe « (2)… » pour les enregistrements multiples,
+  tag `llmai-regularized` add-only posé sur succès complet, **JAMAIS de
+  suppression** — l'original reste en place, invariant du repo) ;
+  (2) panneau « File de régularisation » sur la page de config : liste
+  actionnable item par item, dialogue de destination (bibliothèque, dossier
+  prérempli « Titre (Année) », nom de fichier éditable — nommage épisode
+  « SxxExx » pour le cas fiche-série), scan bibliothèque déclenché côté
+  client après copie réussie ; erreurs API en FR, libellés i18n FR/EN ;
+  (3) garde-fous de destination : avertissement non bloquant quand la
+  destination est dans le répertoire DVR (soumis à la rétention Emby) ou
+  hors de toute bibliothèque (le fichier ne serait pas importé) ; message
+  explicite en cas d'accès refusé (la copie s'exécute sous l'utilisateur
+  `emby` — la bibliothèque cible doit lui être inscriptible :
+  `chgrp emby <dossier> && chmod g+w <dossier>` ou `setfacl -m u:emby:rwx`
+  + ACL par défaut) ; la consigne « supprimez les originaux » ne s'affiche
+  qu'en cas de succès complet (en cas d'échec : ne pas supprimer, corriger
+  et relancer — la copie reprend là où elle s'est arrêtée) ;
+  (4) dialogue à couleurs explicites quel que soit le thème du dashboard
+  (les boutons sans classe `emby-button` gardent le rendu natif du
+  navigateur — texte invisible sur le fond du dialogue).
+- **`web_fetch` enrichi : lecture directe auto-hébergée + extraction locale
+  structurée.** Nouveau backend direct (défaut, `WebFetchDirect`, aucune clé
+  requise) : `HttpClient` côté plugin + extraction locale de la page en JSON
+  structuré — titre, métadonnées og:/twitter + canonical, JSON-LD schema.org
+  (≤5), texte du contenu principal (Readability-lite : boilerplate
+  nav/aside/form retiré, repli body sans header/footer), titres h1–h6 et
+  tableaux en markdown ; l'**URL finale après redirections** est renvoyée au
+  LLM (liens courts, miroirs). Repli **Ollama Cloud**
+  (`/api/web_fetch`) sur les pages anti-bot/inaccessibles en direct quand
+  une clé est présente. Garde **SSRF** appliquée aux deux backends (refus
+  des hôtes IP littéraux et des noms résolvant vers une adresse
+  privée/réservée/boucle locale) ; timeout 20 s sans casser le repli
+  (`HttpClient.Timeout` lève `TaskCanceledException` alors que le token
+  d'annulation n'est pas déclenché — traité explicitement). Portage C# de
+  l'extraction de `fetch_web_page.php` (sans ses dépendances
+  curl-impersonate/Redis, non portables).
+
+### Added (EN)
+- **Cross-kind regularization queue (v1.13.31) — industrialize the
+  field-verified recipe.** A DVR recording typed the wrong way (movie fiche
+  on a series item, or the reverse — the orphan pass's `llmai-cross-kind`
+  tag) cannot be re-typed in place; instead, copying its video file into a
+  library of the wanted type with a "Title (Year)" name makes Emby
+  natively re-import it under the correct type (field-verified: "France,
+  il était une fois demain"). Industrialized: (1) new
+  `CrossKindApiService` — `GET CrossKindQueue` (items tagged
+  `llmai-cross-kind`: cross TMDB fiche re-read at every opening, read-only
+  via the tmdb→imdb cascade, item/fiche kind, source video files —
+  `.strm` cards excluded —, suggested "Title (Year)" target, "copy done"
+  status), `GET CrossKindLibraries` (target libraries: movie/TV/
+  mixed-content only — the plugin's `.strm` card library and the DVR
+  recordings folder are not offered), `POST CrossKindRegularize`
+  (**size-verified** copy, idempotent — already copied = skipped —, "(2)…"
+  suffix for multiple recordings, add-only `llmai-regularized` tag on full
+  success, **NEVER deletes** — the original stays in place, repo invariant);
+  (2) "Regularization queue" panel on the config page: list actionable
+  item by item, destination dialog (library, pre-filled "Title (Year)"
+  folder, editable file name — "SxxExx" episode naming for the
+  series-fiche case), library scan triggered client-side after a
+  successful copy; API errors in FR, i18n labels FR/EN;
+  (3) destination guardrails: non-blocking warning when the destination is
+  inside the DVR recordings folder (subject to Emby's retention) or
+  outside any library (the file would not be imported); explicit message
+  on access denied (the copy runs as the `emby` user — the target library
+  must be writable by it: `chgrp emby <folder> && chmod g+w <folder>` or
+  `setfacl -m u:emby:rwx` + default ACL); the "delete the originals"
+  instruction is only shown on full success (on failure: do not delete,
+  fix and retry — the copy resumes where it left off);
+  (4) dialog with explicit colors whatever the dashboard theme is
+  (unclassed `emby-button`s keep the browser's native rendering —
+  invisible text on the dialog background).
+- **`web_fetch` enriched: self-hosted direct read + local structured
+  extraction.** New direct backend (default, `WebFetchDirect`, no key
+  required): plugin-side `HttpClient` + local page extraction into
+  structured JSON — title, og:/twitter + canonical metadata, schema.org
+  JSON-LD (≤5), main-content text (Readability-lite: nav/aside/form
+  boilerplate stripped, body fallback without header/footer), h1–h6
+  headings and tables as markdown; the **final URL after redirects** is
+  returned to the LLM (short links, mirrors). **Ollama Cloud** fallback
+  (`/api/web_fetch`) for anti-bot/directly-inaccessible pages when a key
+  is present. **SSRF** guard applied to both backends (literal-IP hosts
+  and names resolving to private/reserved/loopback addresses are
+  refused); 20 s timeout without breaking the fallback
+  (`HttpClient.Timeout` throws `TaskCanceledException` while the
+  cancellation token is NOT cancelled — handled explicitly). C# port of
+  `fetch_web_page.php`'s extraction (without its non-portable
+  curl-impersonate/Redis dependencies).
+
 ## [1.13.30.4] — 2026-09-21
 
 ### Fixed (FR)

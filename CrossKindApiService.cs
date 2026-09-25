@@ -1,0 +1,636 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using MediaBrowser.Controller;
+using MediaBrowser.Controller.Api;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Net;
+using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Services;
+
+namespace LLM_AI
+{
+    /// <summary>
+    /// Endpoints HTTP « file de régularisation cross-kind » (page de config,
+    /// admin uniquement) :
+    /// <list type="bullet">
+    /// <item><c>GET /Plugins/LLMAI/CrossKindQueue</c> — la file d'attente :
+    /// tous les items bibliothèque taggés <c>llmai-cross-kind</c>, avec la
+    /// fiche TMDB relue (titre/année), les chemins source du/des fichiers
+    /// vidéo et la cible suggérée « Titre (Année)/Titre (Année).ext ».</item>
+    /// <item><c>GET /Plugins/LLMAI/CrossKindLibraries</c> — racines des
+    /// bibliothèques Emby (nom, type, locations) pour alimenter le dialogue
+    /// de destination.</item>
+    /// <item><c>POST /Plugins/LLMAI/CrossKindRegularize</c> — copie VÉRIFIÉE
+    /// du/des fichiers vidéo vers le dossier de destination choisi par
+    /// l'admin, item par item. Aucune suppression : l'original reste en place
+    /// (invariant du repo) — c'est l'usager qui le retire pour que Emby
+    /// nettoie l'ancien item. Un tag <c>llmai-regularized</c> évite les
+    /// re-copies.</item>
+    /// </list>
+    /// </summary>
+    /// <remarks>
+    /// Le contexte de l'exploration v1.13.31 : le fichier .ts d'un
+    /// enregistrement DVR mal typé (fiche film sur un item Série) copié dans
+    /// une bibliothèque de films avec un nommage « Titre (Année).ts » est
+    /// ré-importé nativement par Emby sous le bon type (vérifié en réel :
+    /// « France, il était une fois demain »). Ce service industrialise cette
+    /// recette. Service ServiceStack découvert par scanning d'assembly :
+    /// hérite <see cref="BaseApiService"/> ; routes portées par les DTO via
+    /// <see cref="RouteAttribute"/>. La lecture de fiche TMDB (titre/année de
+    /// la fiche croisée) réutilise <see cref="TmdbLookupTool"/> — la même
+    /// cascade que l'audit (<see cref="OrphanResolver.AuditTaggedIdsAsync"/>),
+    /// en lecture seule.
+    /// </remarks>
+    public class CrossKindApiService : BaseApiService
+    {
+        /// <summary>Taille max d'un chemin cible saisi par l'admin.</summary>
+        private const int MaxTargetPathLength = 400;
+
+        // ------------------------------------------------------------------
+        //  DTO requêtes / réponses
+        // ------------------------------------------------------------------
+
+        [Route("/Plugins/LLMAI/CrossKindQueue", "GET")]
+        public class CrossKindQueueRequest : IReturn<object> { }
+
+        /// <summary>Une entrée de la file (un item cross-kind).</summary>
+        public class CrossKindEntry
+        {
+            /// <summary>Id canonique (InternalId — id currency Emby).</summary>
+            public string ItemId { get; set; }
+            /// <summary>Nom actuel de l'item Emby.</summary>
+            public string Name { get; set; }
+            /// <summary>Type de l'item Emby ("series" | "movie") — celui posé par l'import DVR.</summary>
+            public string ItemKind { get; set; }
+            /// <summary>Type de la fiche croisée (opposé à l'item).</summary>
+            public string FicheKind { get; set; }
+            /// <summary>Titre de la fiche (peut différer du nom de l'item).</summary>
+            public string FicheTitle { get; set; }
+            /// <summary>Année de la fiche (0 si inconnue).</summary>
+            public int FicheYear { get; set; }
+            /// <summary>Id TMDB de la fiche posée (0 si absent).</summary>
+            public int TmdbId { get; set; }
+            /// <summary>True si la copie vers la cible est déjà faite (tag llmai-regularized).</summary>
+            public bool Regularized { get; set; }
+            /// <summary>Chemins des fichiers vidéo source (épisodes d'une Série, ou le fichier du Movie).</summary>
+            public string[] SourceFiles { get; set; }
+            /// <summary>Dossier cible suggéré (« Titre (Année) »).</summary>
+            public string SuggestedFolder { get; set; }
+            /// <summary>Nom de fichier cible suggéré (« Titre (Année).ext »).</summary>
+            public string SuggestedFile { get; set; }
+        }
+
+        public class CrossKindQueueResponse
+        {
+            public CrossKindEntry[] Items { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/CrossKindLibraries", "GET")]
+        public class CrossKindLibrariesRequest : IReturn<object> { }
+
+        /// <summary>Une bibliothèque Emby (pour le dialogue de destination).</summary>
+        public class CrossKindLibrary
+        {
+            public string Name { get; set; }
+            /// <summary>CollectionType Emby ("movies", "tvshows", null pour contenu mixte…).</summary>
+            public string Type { get; set; }
+            public string[] Paths { get; set; }
+        }
+
+        public class CrossKindLibrariesResponse
+        {
+            public CrossKindLibrary[] Libraries { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/CrossKindRegularize", "POST")]
+        public class CrossKindRegularizeRequest : IReturn<object>
+        {
+            /// <summary>Id de l'item taggué cross-kind (chaîne — résolu par ItemIdResolver).</summary>
+            public string ItemId { get; set; }
+            /// <summary>Dossier de destination (absolu). Ex. « /mnt/Documentaires » ou
+            /// une racine de bibliothèque. Le sous-dossier « Titre (Année) » est
+            /// créé sous ce dossier.</summary>
+            public string TargetFolder { get; set; }
+            /// <summary>Nom de fichier cible optionnel (le défaut = la suggestion
+            /// « Titre (Année).ext »). L'admin peut y écrire un nommage épisode
+            /// « Titre (2019) - S01E05.ts » pour le cas fiche-série.</summary>
+            public string TargetFile { get; set; }
+        }
+
+        public class CrossKindRegularizeResponse
+        {
+            public string[] Copied { get; set; }
+            public string[] Skipped { get; set; }
+            public string[] Failed { get; set; }
+            /// <summary>Avertissement non bloquant (destination dans le
+            /// répertoire DVR soumis à la rétention, ou hors bibliothèque).</summary>
+            public string Warning { get; set; }
+            public string Error { get; set; }
+        }
+
+        // ------------------------------------------------------------------
+        //  Auth (même pattern que AuditApiService)
+        // ------------------------------------------------------------------
+
+        private MediaBrowser.Controller.Entities.User ResolveAdmin()
+        {
+            try
+            {
+                var auth = AuthorizationContext?.GetAuthorizationInfo(Request);
+                var user = auth?.User;
+                if (user == null && auth != null && auth.UserId != 0)
+                    user = UserManager.GetUserById(auth.UserId);
+                return user;
+            }
+            catch { return null; }
+        }
+
+        private bool IsAdmin()
+        {
+            var user = ResolveAdmin();
+            var policy = user?.Policy;
+            return policy != null && policy.IsAdministrator;
+        }
+
+        private string NotAdminError() => "Réservé aux administrateurs.";
+
+        // ------------------------------------------------------------------
+        //  Helpers
+        // ------------------------------------------------------------------
+
+        /// <summary>Type de l'item tel que posé par l'import (OrphanResolver:152).</summary>
+        private static bool IsSeriesItem(BaseItem item) =>
+            item != null && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>
+        /// Assainit un titre pour usage en nom de dossier/fichier : les
+        /// caractères invalides deviennent des espaces, points finaux retirés
+        /// (Windows), espaces collées réduites. Même pattern que
+        /// <c>StrmLibraryGenerator.SanitizeName</c>.
+        /// </summary>
+        private static string SanitizeName(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+            var sb = new StringBuilder(s.Trim());
+            foreach (char c in Path.GetInvalidFileNameChars())
+                sb.Replace(c, ' ');
+            string v = sb.ToString().Trim().TrimEnd('.');
+            while (v.Contains("  ")) v = v.Replace("  ", " ");
+            return v;
+        }
+
+        /// <summary>
+        /// Relit la fiche de l'id posé sous le type OPPOSÉ à l'item (la fiche
+        /// croisée) — cascade tmdb puis imdb, identique à l'audit. Null si
+        /// illisible : l'appelant retombe sur le nom de l'item.
+        /// </summary>
+        private async Task<TmdbMeta> ReadCrossFicheAsync(BaseItem item, string otherKind, string lang, CancellationToken ct)
+        {
+            var tmdb = new TmdbLookupTool(Logger);
+            TmdbMeta meta = null;
+            int.TryParse(item.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId);
+            if (tmdbId > 0)
+                meta = await tmdb.LookupMetaByIdAsync(tmdbId, otherKind, lang, ct).ConfigureAwait(false);
+            if (meta == null)
+            {
+                string imdb = item.GetProviderId("imdb");
+                if (!string.IsNullOrWhiteSpace(imdb))
+                    meta = await tmdb.FindByExternalIdAsync(imdb.Trim(), "imdb_id", otherKind, lang, ct).ConfigureAwait(false);
+            }
+            return meta;
+        }
+
+        /// <summary>
+        /// Chemins des fichiers vidéo de l'œuvre : les épisodes d'une Série
+        /// (les fichiers d'enregistrement importés), sinon le fichier du Movie.
+        /// Les cartes .strm (bibliothèque ai_suggestions) sont exclues —
+        /// elles ne portent pas de média à copier. Déduit aussi l'extension
+        /// typique des sources (pour la suggestion de nom de fichier).
+        /// </summary>
+        private (string[] files, string ext) CollectSourceFiles(BaseItem item, bool isSeries)
+        {
+            var paths = new List<string>();
+            if (isSeries)
+            {
+                try
+                {
+                    // Épisodes sous l'item (Série) — le .ts importé vit sur
+                    // l'Episode, pas sur la Série (item.Path = dossier DVR).
+                    // AncestorIds filtre par parent (PermissionGate fait de même).
+                    var episodes = LibraryManager.GetItemList(new InternalItemsQuery
+                    {
+                        IncludeItemTypes = new[] { "Episode" },
+                        AncestorIds = new[] { item.InternalId },
+                        Recursive = true,
+                        EnableTotalRecordCount = false
+                    }) ?? Array.Empty<BaseItem>();
+                    foreach (var e in episodes)
+                    {
+                        string p = e?.Path;
+                        if (string.IsNullOrWhiteSpace(p)) continue;
+                        if (p.EndsWith(".strm", StringComparison.OrdinalIgnoreCase)) continue;
+                        paths.Add(p);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : énumération des épisodes de « {0} » échouée ({1}).",
+                        item?.Name, ex.Message);
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(item?.Path))
+            {
+                paths.Add(item.Path);
+            }
+
+            var files = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            string ext = ".ts";
+            var first = files.FirstOrDefault(p => !string.IsNullOrWhiteSpace(Path.GetExtension(p)));
+            if (first != null)
+            {
+                string e2 = Path.GetExtension(first);
+                if (!string.IsNullOrWhiteSpace(e2)) ext = e2;
+            }
+            return (files, ext);
+        }
+
+        private static string BuildBaseName(string title, int year, string ext)
+        {
+            string t = SanitizeName(title);
+            if (string.IsNullOrWhiteSpace(t)) return null;
+            string baseName = year > 0 ? t + " (" + year.ToString(CultureInfo.InvariantCulture) + ")" : t;
+            return baseName + (string.IsNullOrWhiteSpace(ext) ? ".ts" : ext.ToLowerInvariant());
+        }
+
+        // ------------------------------------------------------------------
+        //  GET Queue
+        // ------------------------------------------------------------------
+
+        public async Task<object> Get(CrossKindQueueRequest req)
+        {
+            if (!IsAdmin())
+                return new CrossKindQueueResponse { Error = NotAdminError() };
+
+            var ct = Request?.CancellationToken ?? CancellationToken.None;
+            var cfg = Plugin.Instance?.Configuration;
+            string lang = I18n.ToTmdbLang(I18n.ResolveMetaLangKey(cfg, ApplicationHost));
+
+            BaseItem[] items;
+            try
+            {
+                items = LibraryManager.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+            }
+            catch (Exception ex)
+            {
+                Logger?.ErrorException("[LLM_AI] CrossKind : GetItemList a échoué.", ex, ex.Message);
+                return new CrossKindQueueResponse { Error = "Lecture bibliothèque échouée : " + ex.Message };
+            }
+
+            var list = new List<CrossKindEntry>();
+            foreach (var item in items)
+            {
+                if (item == null) continue;
+                if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)) continue;
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    bool isSeries = IsSeriesItem(item);
+                    string itemKind = isSeries ? "series" : "movie";
+                    string otherKind = isSeries ? "movie" : "series";
+
+                    // Fiche croisée (lecture seule) : titre/année pour la
+                    // suggestion de nommage. Illisible → nom de l'item.
+                    string ficheTitle = item.Name;
+                    int ficheYear = 0;
+                    string ficheKind = otherKind;
+                    var meta = await ReadCrossFicheAsync(item, otherKind, lang, ct).ConfigureAwait(false);
+                    if (meta != null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(meta.Title)) ficheTitle = meta.Title;
+                        ficheYear = meta.Year ?? 0;
+                        if (!string.IsNullOrWhiteSpace(meta.Kind)) ficheKind = meta.Kind;
+                    }
+
+                    var (files, ext) = CollectSourceFiles(item, isSeries);
+                    int tmdbId = 0;
+                    int.TryParse(item.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out tmdbId);
+
+                    list.Add(new CrossKindEntry
+                    {
+                        ItemId = item.InternalId.ToString(CultureInfo.InvariantCulture),
+                        Name = item.Name,
+                        ItemKind = itemKind,
+                        FicheKind = ficheKind,
+                        FicheTitle = ficheTitle,
+                        FicheYear = ficheYear,
+                        TmdbId = tmdbId,
+                        Regularized = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagRegularized),
+                        SourceFiles = files,
+                        SuggestedFolder = SanitizeName(ficheTitle) +
+                            (ficheYear > 0 ? " (" + ficheYear.ToString(CultureInfo.InvariantCulture) + ")" : ""),
+                        SuggestedFile = BuildBaseName(ficheTitle, ficheYear, ext)
+                    });
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : file — erreur sur « {0} » ({1}) — item ignoré.",
+                        item?.Name, ex.Message);
+                }
+            }
+
+            // Tri stable : non régularisés d'abord, puis par nom.
+            return new CrossKindQueueResponse
+            {
+                Items = list
+                    .OrderBy(e => e.Regularized ? 1 : 0)
+                    .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToArray()
+            };
+        }
+
+        // ------------------------------------------------------------------
+        //  GET Libraries (alimente le dialogue de destination)
+        // ------------------------------------------------------------------
+
+        public object Get(CrossKindLibrariesRequest req)
+        {
+            if (!IsAdmin())
+                return new CrossKindLibrariesResponse { Error = NotAdminError() };
+
+            var cfg = Plugin.Instance?.Configuration;
+            var libs = new List<CrossKindLibrary>();
+            try
+            {
+                // Exclusions : la bibliothèque de cartes .strm du plugin et le
+                // répertoire des enregistrements DVR (soumis à la rétention)
+                // ne sont pas des cibles de copie. Seules les bibliothèques de
+                // films/séries et à contenu mixte sont suggérées (playlists,
+                // boxsets, musique… exclus par le filtre de type).
+                string strmRoot = null;
+                try { strmRoot = StrmLibraryGenerator.ResolveLibraryRoot(LibraryManager, cfg?.StrmLibraryName, Logger); }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : racine .strm illisible ({0}).", ex.Message);
+                }
+                string dvrRoot = null;
+                try
+                {
+                    if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string d))
+                        dvrRoot = d;
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : racine DVR illisible ({0}).", ex.Message);
+                }
+
+                var folders = LibraryManager.GetVirtualFolders() ?? new List<MediaBrowser.Model.Entities.VirtualFolderInfo>();
+                foreach (var f in folders)
+                {
+                    if (f == null) continue;
+                    string ctype = f.CollectionType;
+                    bool videoish = string.IsNullOrWhiteSpace(ctype)
+                        || string.Equals(ctype, "movies", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(ctype, "tvshows", StringComparison.OrdinalIgnoreCase);
+                    if (!videoish) continue;
+
+                    var kept = new List<string>();
+                    foreach (var loc in f.Locations ?? Array.Empty<string>())
+                    {
+                        if (string.IsNullOrWhiteSpace(loc)) continue;
+                        if (!string.IsNullOrWhiteSpace(strmRoot) && IsUnderPath(loc, strmRoot)) continue;
+                        if (!string.IsNullOrWhiteSpace(dvrRoot) && IsUnderPath(loc, dvrRoot)) continue;
+                        kept.Add(loc);
+                    }
+                    if (kept.Count == 0) continue;
+
+                    libs.Add(new CrossKindLibrary
+                    {
+                        Name = f.Name,
+                        Type = ctype,
+                        Paths = kept.ToArray()
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : GetVirtualFolders échoué ({0}).", ex.Message);
+            }
+            return new CrossKindLibrariesResponse { Libraries = libs.ToArray() };
+        }
+
+        // ------------------------------------------------------------------
+        //  POST Regularize — copie vérifiée, JAMAIS de suppression
+        // ------------------------------------------------------------------
+
+        public async Task<object> Post(CrossKindRegularizeRequest req)
+        {
+            if (!IsAdmin())
+                return new CrossKindRegularizeResponse { Error = NotAdminError() };
+
+            string itemId = (req?.ItemId ?? "").Trim();
+            if (itemId.Length == 0)
+                return new CrossKindRegularizeResponse { Error = "ItemId requis." };
+
+            var item = ItemIdResolver.Resolve(LibraryManager, itemId);
+            if (item == null)
+                return new CrossKindRegularizeResponse { Error = "Item introuvable (id : " + itemId + ")." };
+
+            // Garde : la régularisation ne s'applique qu'à un item taggué
+            // cross-kind — pas d'usage détourné comme outil de copie générique.
+            if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
+                return new CrossKindRegularizeResponse
+                {
+                    Error = "Item non taggué « " + OrphanIdentifyTask.TagCrossKind + " » — rien à régulariser."
+                };
+
+            string folder = (req?.TargetFolder ?? "").Trim();
+            if (folder.Length == 0)
+                return new CrossKindRegularizeResponse { Error = "Dossier de destination requis." };
+            if (!Path.IsPathRooted(folder) || folder.Length > 400)
+                return new CrossKindRegularizeResponse { Error = "Chemin de destination invalide (absolu, ≤ 400 caractères)." };
+
+            var ct = Request?.CancellationToken ?? CancellationToken.None;
+            var cfg = Plugin.Instance?.Configuration;
+            string lang = I18n.ToTmdbLang(I18n.ResolveMetaLangKey(cfg, ApplicationHost));
+
+            bool isSeries = IsSeriesItem(item);
+            string otherKind = isSeries ? "movie" : "series";
+            var meta = await ReadCrossFicheAsync(item, otherKind, lang, ct).ConfigureAwait(false);
+            string ficheTitle = meta != null && !string.IsNullOrWhiteSpace(meta.Title) ? meta.Title : item.Name;
+            int ficheYear = meta?.Year ?? 0;
+
+            var (files, ext) = CollectSourceFiles(item, isSeries);
+            if (files.Length == 0)
+                return new CrossKindRegularizeResponse
+                {
+                    Error = "Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues)."
+                };
+
+            // Avertissements non bloquants sur la destination (le dossier reste
+            // libre — cas fiche-série « Season 01 » — mais l'admin est prévenu).
+            string warning = BuildDestinationWarning(folder);
+
+            string baseFile = (req?.TargetFile ?? "").Trim();
+            if (baseFile.Length == 0)
+                baseFile = BuildBaseName(ficheTitle, ficheYear, ext) ?? SanitizeName(item.Name) + ext;
+            baseFile = SanitizeName(baseFile);
+            if (string.IsNullOrWhiteSpace(baseFile))
+                return new CrossKindRegularizeResponse { Error = "Nom de fichier cible invalide." };
+
+            var copied = new List<string>();
+            var skipped = new List<string>();
+            var failed = new List<string>();
+            for (int i = 0; i < files.Length; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                string src = files[i];
+
+                // Plusieurs enregistrements de la même œuvre : suffixe numérique.
+                string fileName = baseFile;
+                if (i > 0)
+                {
+                    string stem = Path.GetFileNameWithoutExtension(baseFile);
+                    string extension = Path.GetExtension(baseFile);
+                    fileName = stem + " (" + (i + 1).ToString(CultureInfo.InvariantCulture) + ")" + extension;
+                }
+                string dest = Path.Combine(folder, fileName);
+
+                try
+                {
+                    long srcSize = new FileInfo(src).Length;
+                    var di = new FileInfo(dest);
+                    if (di.Exists && di.Length == srcSize)
+                    {
+                        skipped.Add(src + " → " + dest + " (déjà copié)");
+                        continue;
+                    }
+
+                    Directory.CreateDirectory(folder);
+                    if (di.Exists) di.Delete(); // taille différente : copie périmée, on la remplace
+                    File.Copy(src, dest);
+
+                    // Vérification de la copie (taille égale) avant de la déclarer.
+                    if (new FileInfo(dest).Length != srcSize)
+                        throw new IOException("taille de la copie divergente");
+                    copied.Add(src + " → " + dest);
+                    Logger?.Info("[LLM_AI] CrossKind : copie « {0} » → « {1} » ({2} octets).",
+                        src, dest, srcSize);
+                }
+                catch (UnauthorizedAccessException ua)
+                {
+                    failed.Add(src + " → " + dest + " (" + ua.Message
+                        + " — permissions : l'utilisateur « emby » doit pouvoir écrire dans le dossier cible)");
+                    Logger?.Warn("[LLM_AI] CrossKind : accès refusé « {0} » → « {1} » ({2}).",
+                        src, dest, ua.Message);
+                }
+                catch (Exception ex)
+                {
+                    failed.Add(src + " → " + dest + " (" + ex.Message + ")");
+                    Logger?.Warn("[LLM_AI] CrossKind : échec de copie « {0} » → « {1} » ({2}).",
+                        src, dest, ex.Message);
+                }
+            }
+
+            // Tag « copie faite » UNIQUEMENT si au moins un fichier a été
+            // copié ou était déjà en place : l'item reste dans la file
+            // (statut distinct) tant que l'original existe.
+            if ((copied.Count + skipped.Count) > 0 && failed.Count == 0 &&
+                !OrphanResolver.HasTag(item, OrphanIdentifyTask.TagRegularized))
+            {
+                OrphanResolver.AddTag(item, OrphanIdentifyTask.TagRegularized);
+                try { item.UpdateToRepository(ItemUpdateType.MetadataEdit); }
+                catch (Exception ex) { Logger?.Warn("[LLM_AI] CrossKind : UpdateToRepository échoué ({0}).", ex.Message); }
+            }
+
+            Logger?.Info("[LLM_AI] CrossKind : « {0} » régularisé — copiés={1} sautés={2} échoués={3} (original non supprimé).",
+                item.Name, copied.Count, skipped.Count, failed.Count);
+
+            return new CrossKindRegularizeResponse
+            {
+                Copied = copied.ToArray(),
+                Skipped = skipped.ToArray(),
+                Failed = failed.ToArray(),
+                Warning = warning
+            };
+        }
+
+        /// <summary>
+        /// Avertissements sur le dossier de destination, sans bloquer la copie :
+        /// (1) sous le répertoire des enregistrements Live TV — Emby peut y
+        /// purger les fichiers selon la rétention DVR ; (2) sous aucune
+        /// bibliothèque — le fichier copié ne serait pas importé du tout.
+        /// Renvoie null si rien à signaler.
+        /// </summary>
+        private string BuildDestinationWarning(string folder)
+        {
+            var parts = new List<string>();
+
+            try
+            {
+                if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string dvrRoot)
+                    && !string.IsNullOrWhiteSpace(dvrRoot)
+                    && IsUnderPath(folder, dvrRoot))
+                {
+                    parts.Add("la destination est dans le répertoire des enregistrements Live TV "
+                        + "(« " + dvrRoot + " »), soumis à la rétention DVR d'Emby — "
+                        + "préférez une racine de bibliothèque films/séries");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : contrôle du répertoire DVR impossible ({0}).", ex.Message);
+            }
+
+            try
+            {
+                bool inLibrary = false;
+                foreach (var vf in LibraryManager.GetVirtualFolders())
+                {
+                    foreach (var loc in vf.Locations ?? Array.Empty<string>())
+                    {
+                        if (IsUnderPath(folder, loc)) { inLibrary = true; break; }
+                    }
+                    if (inLibrary) break;
+                }
+                if (!inLibrary)
+                    parts.Add("la destination n'est sous aucune bibliothèque Emby : le fichier copié n'y sera pas importé");
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : contrôle des bibliothèques impossible ({0}).", ex.Message);
+            }
+
+            if (parts.Count == 0) return null;
+            return "Attention : " + string.Join(" ; ", parts) + ".";
+        }
+
+        /// <summary>True si <paramref name="candidate"/> est <paramref name="root"/>
+        /// ou un sous-chemin de <paramref name="root"/> (insensible à la casse,
+        /// séparateurs normalisés sur '/').</summary>
+        private static bool IsUnderPath(string candidate, string root)
+        {
+            if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
+            string a = candidate.TrimEnd('/', '\\');
+            string b = root.TrimEnd('/', '\\');
+            if (a.Length == 0 || b.Length == 0) return false;
+            return a.Equals(b, StringComparison.OrdinalIgnoreCase)
+                || a.StartsWith(b + "/", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+}

@@ -678,6 +678,36 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   TMDB** ids from result URLs; S2 accepts a **TVDB** id (series), validated via
   `TMDB /find tvdb_id`.
 
+### Cross-kind regularization queue (admin)
+
+**Admin** panel on the config page (v1.13.31) that industrializes the
+field-verified recipe: a DVR recording typed the wrong way (movie fiche on a
+**series** item, or the reverse — tagged `llmai-cross-kind` by the orphan pass)
+cannot be re-typed in place; instead, **copying** its video file into a library of
+the wanted type with a "Title (Year)" name makes Emby natively re-import it under
+the correct type (direct identification, no series/episode shell).
+
+The queue lists items tagged `llmai-cross-kind` (cross TMDB fiche re-read at every
+opening — title/year —, source video files, suggested target, "copy done" status).
+For each of them, a destination dialog lets you pick the library (movie/TV or
+mixed-content ones; the plugin's `.strm` card library and the DVR recordings folder
+are not offered), the folder (pre-filled "Title (Year)") and the copied file name
+(editable — "SxxExx" episode naming for the series-fiche case). The copy is
+**size-verified, idempotent** (already copied = skipped; multiple recordings =
+"(2)…" suffix) and **never destructive**: the original stays in place (repo
+invariant) — the `llmai-regularized` tag marks success and the library scan is
+triggered client-side automatically. **Then**: delete the original file(s) from
+the recording folder yourself — Emby removes the old item at the next scan (the
+instruction is only shown on full success). No config flag: the endpoints are
+admin-only.
+
+Field notes: the copy runs as the `emby` user — the target library must be
+**writable by it** (`chgrp emby <folder> && chmod g+w <folder>` or
+`setfacl -m u:emby:rwx` + default ACL for inheritance of new subfolders); a
+non-blocking warning flags a destination inside the DVR recordings folder (subject
+to Emby's retention) or outside any library. See [Components](#components)
+(`CrossKindApiService.cs`).
+
 ### AI genre translation (GenreCleaner)
 
 **Admin** section of the config page (**Analyze** button → proposals → **Apply**).
@@ -808,6 +838,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
 | `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (internal static) | Persistence of the **last audit report** (`audit_report.json`, plugin configuration folder, `ChatMemoryStore` convention): date, mode, focus, Markdown report. Best-effort fail-open; a single record overwritten at each successful run. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}], Session}` (the page keeps the history; `Session` = conversation-memory id), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities, memory block appended). The system prompt (tool docs + directives) is built server-side, once per conversation. Also carries the **conversation memory**: session resolution, turn journaling (`ChatMemoryStore`), lazy condensation of past sessions (one LLM call as a background task, continuity note + `SIGNALS:` line → decisions `kind="chat"`), and the `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget` endpoints. |
+| `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | **Admin** endpoints of the cross-kind regularization queue (v1.13.31): `GET /Plugins/LLMAI/CrossKindQueue` (items tagged `llmai-cross-kind`: cross TMDB fiche re-read read-only via the tmdb→imdb cascade, item/fiche kind, source video files — `.strm` cards excluded —, suggested "Title (Year)" target, "copy done" status), `GET /Plugins/LLMAI/CrossKindLibraries` (target libraries: movie/TV/mixed-content only — the plugin's `.strm` library and the DVR folder are not offered) and `POST /Plugins/LLMAI/CrossKindRegularize` (**size-verified** copy, idempotent, "(2)…" suffix, add-only `llmai-regularized` tag on full success, DVR/out-of-library destination warnings, dedicated message on access denied, **never deletes** — the original stays in place). See [Cross-kind regularization queue](#cross-kind-regularization-queue-admin). |
 | `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | **Admin** utility endpoints for the config page: `POST /Plugins/LLMAI/TestLlm` (test a backend **as edited** — provider/url/model posted, API keys re-read server-side from saved config, reply carries OK/failure + latency + excerpt, 30 s timeout) and `GET /Plugins/LLMAI/DefaultPrompts` (the five default prompts in the resolved language: `?Lang=` → `ResponseLanguage` → Emby display language — deliberately NOT the metadata/TmdbLanguage cascade) and `GET`/`POST /Plugins/LLMAI/MemoryCard` (admin view/edit of the memory card — version and history unchanged). See [Config page helpers](#config-page-helpers). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (internal static) | **Single source** of the five default prompts/directives (FR + EN): the `RagDirectives` baseline (verify via tools before asserting, never recommend an owned/scheduled title, slight preference for recent productions without penalizing a missing year), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Feeds both the `PluginConfiguration` initializers (fresh installs) and the **Reset** button content. |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | **AI genre translation** endpoints (admin): `GET /Plugins/LLMAI/GenreProposals` (collects EPG genres of **upcoming** programs not covered by GenreCleaner, per movie/series section, capped at 60/section, then a one-shot LLM call via `ChatWithFallbackAsync` proposes for each a curated-vocabulary target, a new genre, or nothing) and `POST /Plugins/LLMAI/GenreApply` (re-validates then writes into `GenreCleaner.xml` via `GenreCleanerMap`, records into `GenreAliasApplied`, triggers `NotifyPendingRestart`). Suggestion language = `ResolveMetaLangKey` cascade (`ResponseLanguage`). See [AI genre translation](#ai-genre-translation-genrecleaner). |
@@ -856,7 +887,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `tmdb_lookup` | TMDB search / details (rating, poster, overview, cast) via `TmdbApiKey`. |
 | `tvdb_search` | TVDB search (series) via `TvdbApiKey`. |
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
-| `web_fetch` | Fetch/read a web page (`WebFetchDirect` for raw read). |
+| `web_fetch` | Fetch/read a web page: **self-hosted local** structured extraction (`WebFetchDirect`, no key — title, og:/twitter + canonical metadata, schema.org JSON-LD, Readability-lite main content with boilerplate stripped, h1–h6 headings and tables as markdown, final URL after redirects) with Ollama Cloud fallback for anti-bot pages. |
 | `new_releases` | TV new releases from the `NewReleaseSources` web sources (one per line): bare URL = auto-detected RSS/Atom feed; `URL :: @showbizz` = built-in Showbizz.net extractor ("Saison 1" blocks); `URL :: .NET regex` = custom extraction (required `title` group, optional `url`/`date`). Alias `showbizz_new_releases` (existing prompts). 24h cache invalidated by any source change (no restart). |
 | `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 20 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `ratings_check` (rating hygiene); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
 

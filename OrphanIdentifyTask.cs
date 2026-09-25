@@ -85,6 +85,16 @@ namespace LLM_AI
         /// alors l'œuvre avec le bon type et le plugin la ré-identifie).</summary>
         public const string TagCrossKind = "llmai-cross-kind";
 
+        /// <summary>
+        /// Posé par le service de régularisation (<see cref="CrossKindApiService"/>)
+        /// quand la copie du/des fichiers vidéo vers la bibliothèque cible a réussi
+        /// (ou était déjà faite). Add-only, comme les autres tags : il marque
+        /// durablement l'item pour (a) éviter les re-copies à chaque ouverture de
+        /// la file et (b) distinguer « copie faite — original encore en place »
+        /// dans la file d'attente. La suppression de l'original reste une action
+        /// de l'usager (invariant du repo).</summary>
+        public const string TagRegularized = "llmai-regularized";
+
         public OrphanIdentifyTask(
             ILogger logger,
             IJsonSerializer jsonSerializer,

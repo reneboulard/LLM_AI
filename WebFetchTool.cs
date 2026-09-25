@@ -19,8 +19,10 @@ namespace LLM_AI
     /// <list type="bullet">
     /// <item><b>Direct auto-hébergé</b> (défaut, <see cref="PluginConfiguration.WebFetchDirect"/>)
     ///   : <c>HttpClient</c> côté plugin + extraction locale de la page en JSON
-    ///   structuré (titre, métadonnées og:/twitter, <b>JSON-LD schema.org</b>,
-    ///   texte, titres h1–h6 en markdown, tableaux en markdown). Aucune clé
+    ///   structuré (titre, métadonnées og:/twitter + canonical, <b>JSON-LD
+    ///   schema.org</b>, texte du contenu principal — Readability-lite,
+    ///   boilerplate nav/aside/form retiré, repli body sans header/footer —
+    ///   titres h1–h6 en markdown, tableaux en markdown). Aucune clé
     ///   requise — fonctionne pour la communauté dès l'installation. Portage C#
     ///   de la logique d'extraction de
     ///   <c>/var/www/llm_core/tools/fetch_web_page.php</c> (sans ses dépendances
@@ -73,7 +75,8 @@ namespace LLM_AI
 
         public string Description =>
             "Récupère le contenu d'une URL et l'extrait en JSON structuré " +
-            "(titre, métadonnées, JSON-LD schema.org, texte, titres, tableaux). " +
+            "(titre, métadonnées, JSON-LD schema.org, texte du contenu " +
+            "principal nettoyé du boilerplate, titres, tableaux). " +
             "Backend direct auto-hébergé par défaut (sans clé) ; repli sur " +
             "l'API cloud Ollama si configuré. L'URL doit être un domaine public " +
             "(pas d'IP, pas de réseau local). Paramètre detail_level : \"full\" " +
@@ -146,10 +149,10 @@ namespace LLM_AI
 
                 if (direct)
                 {
-                    var (html, fetchErr) = await FetchDirect(url, ct).ConfigureAwait(false);
+                    var (html, fetchErr, finalUrl) = await FetchDirect(url, ct).ConfigureAwait(false);
                     if (html != null && !LooksBlocked(html))
                     {
-                        result = BuildStructured(url, html, detail);
+                        result = BuildStructured(url, html, detail, finalUrl);
                         valid = true;
                         _logger?.Info("[LLM_AI] web_fetch direct url={0} -> {1} (caché 24h)",
                             url, Truncate(result, 200));
@@ -200,9 +203,12 @@ namespace LLM_AI
 
         /// <summary>
         /// Récupère le HTML via HttpClient (UA navigateur). Retourne
-        /// (html, erreur) : html non null si la requête a abouti (HTTP 2xx).
+        /// (html, erreur, urlFinale) : html non null si la requête a abouti
+        /// (HTTP 2xx) ; urlFinale est l'adresse du DERNIER échange après les
+        /// redirections suivies (null si identique à l'URL demandée) — le LLM
+        /// doit savoir où il se trouve réellement (liens courts, miroirs).
         /// </summary>
-        private async Task<(string html, string error)> FetchDirect(string url, CancellationToken ct)
+        private async Task<(string html, string error, string finalUrl)> FetchDirect(string url, CancellationToken ct)
         {
             try
             {
@@ -210,17 +216,27 @@ namespace LLM_AI
                 using (var resp = await _direct.SendAsync(req, ct).ConfigureAwait(false))
                 {
                     var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    string finalUrl = resp.RequestMessage?.RequestUri?.ToString();
                     if (!resp.IsSuccessStatusCode)
-                        return (null, $"HTTP {(int)resp.StatusCode}");
+                        return (null, $"HTTP {(int)resp.StatusCode}", null);
                     if (string.IsNullOrWhiteSpace(text))
-                        return (null, "corps vide");
-                    return (text, null);
+                        return (null, "corps vide", null);
+                    bool redirected = !string.IsNullOrEmpty(finalUrl)
+                        && !string.Equals(finalUrl, url, StringComparison.OrdinalIgnoreCase);
+                    return (text, null, redirected ? finalUrl : null);
                 }
+            }
+            // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
+            // PAS annulé (gotcha AGENTS.md) : ne PAS rethrow, sinon l'erreur
+            // brute .NET part au LLM et le repli cloud ne s'exécute jamais.
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return (null, "délai dépassé (20 s)", null);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                return (null, ex.Message);
+                return (null, ex.Message, null);
             }
         }
 
@@ -241,24 +257,46 @@ namespace LLM_AI
 
         /// <summary>
         /// Construit le JSON structuré à partir du HTML, fidèle à la sortie de
-        /// fetch_web_page.php : {url, backend, title, meta, json_ld,
-        /// detail_level, content|content_preview, headings, tables}. Les liens
-        /// et images du PHP sont omis (bruit pour le LLM ; économie de tokens).
+        /// fetch_web_page.php : {url, backend, title, meta (+ canonical),
+        /// json_ld (≤5), content_source, detail_level,
+        /// content|content_preview, headings (≤100), tables}. Le texte vient
+        /// du conteneur principal détecté (Readability-lite) ou, à défaut, du
+        /// body amputé de header/footer ; links et images du PHP sont omis
+        /// (bruit pour le LLM ; économie de tokens). <paramref
+        /// name="finalUrl"/> (redirections suivies, non null si différente) est
+        /// exposé en <c>final_url</c>.
         /// </summary>
-        private static string BuildStructured(string url, string html, string detail)
+        private static string BuildStructured(string url, string html, string detail, string finalUrl)
         {
+            // JSON-LD d'abord : les blocs vivent dans des <script>, retirés
+            // ensuite par la préparation du HTML.
+            var jsonLd = ExtractJsonLd(html);
             string title = ExtractTitle(html);
             var meta = ExtractMeta(html);
-            var jsonLd = ExtractJsonLd(html);
-            string text = ExtractText(html);
+            if (string.IsNullOrEmpty(title) && meta.TryGetValue("og:title", out var ogTitle))
+                title = ogTitle;
+
+            // Préparation structurelle : contenus morts (script/style/noscript)
+            // puis boilerplate nav/aside/form retirés du document entier — le
+            // PHP fait de même avant la détection du conteneur principal.
+            string prepared = StripDeadTags(html);
+            prepared = RemoveTagContainers(prepared, "nav");
+            prepared = RemoveTagContainers(prepared, "aside");
+            prepared = RemoveTagContainers(prepared, "form");
+
+            string frag = PickMainFragment(prepared, out string source, out string headingsSource);
+            string text = ExtractText(frag);
 
             var obj = new JsonObject
             {
                 ["backend"] = "direct",
                 ["url"] = url,
                 ["title"] = title,
-                ["detail_level"] = detail
+                ["detail_level"] = detail,
+                ["content_source"] = source
             };
+            if (!string.IsNullOrEmpty(finalUrl))
+                obj["final_url"] = finalUrl;
 
             var metaObj = new JsonObject();
             foreach (var kv in meta) metaObj[kv.Key] = kv.Value;
@@ -273,8 +311,8 @@ namespace LLM_AI
                 if (content.Length > max)
                     content = content.Substring(0, max) + "... [Contenu tronqué]";
                 obj["content"] = content;
-                obj["headings"] = ExtractHeadings(html);
-                obj["tables"] = ExtractTables(html);
+                obj["headings"] = ExtractHeadings(headingsSource);
+                obj["tables"] = ExtractTables(headingsSource);
             }
             else
             {
@@ -301,6 +339,8 @@ namespace LLM_AI
             RegexTimeout);
         private static readonly Regex s_rxMeta = new Regex(
             @"<meta\b[^>]*>", RegexOptions.IgnoreCase);
+        private static readonly Regex s_rxLink = new Regex(
+            @"<link\b[^>]*>", RegexOptions.IgnoreCase);
         private static readonly Regex s_rxJsonLd = new Regex(
             @"<script\b[^>]*type\s*=\s*[""']application/ld\+json[""'][^>]*>(.*?)</script>",
             RegexOptions.IgnoreCase | RegexOptions.Singleline, RegexTimeout);
@@ -329,6 +369,7 @@ namespace LLM_AI
         private static readonly HashSet<string> s_usefulMeta = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "og:title", "og:description", "og:image", "og:type", "og:url",
+            "og:site_name", "og:locale",
             "description", "author", "article:published_time", "article:modified_time",
             "twitter:title", "twitter:description", "twitter:image"
         };
@@ -347,6 +388,22 @@ namespace LLM_AI
                 if (string.IsNullOrWhiteSpace(val)) continue;
                 meta[key] = WebUtility.HtmlDecode(val).Trim();
             }
+
+            // URL canonique (link rel="canonical") — adresse officielle de la
+            // page, utile au LLM pour croiser une fiche (parité PHP).
+            foreach (Match lm in s_rxLink.Matches(html))
+            {
+                string rel = GetAttr(lm.Value, "rel");
+                if (string.Equals(rel, "canonical", StringComparison.OrdinalIgnoreCase))
+                {
+                    string href = GetAttr(lm.Value, "href");
+                    if (!string.IsNullOrWhiteSpace(href))
+                    {
+                        meta["canonical"] = href.Trim();
+                        break;
+                    }
+                }
+            }
             return meta;
         }
 
@@ -355,6 +412,7 @@ namespace LLM_AI
             var arr = new JsonArray();
             foreach (Match m in s_rxJsonLd.Matches(html))
             {
+                if (arr.Count >= 5) break; // parité PHP : au plus 5 blocs
                 string inner = m.Groups[1].Value;
                 if (string.IsNullOrWhiteSpace(inner)) continue;
                 try
@@ -372,6 +430,7 @@ namespace LLM_AI
             var arr = new JsonArray();
             foreach (Match m in s_rxHeadings.Matches(html))
             {
+                if (arr.Count >= 100) break; // parité PHP : au plus 100 titres
                 int level = int.Parse(m.Groups[1].Value);
                 string text = CleanText(m.Groups[2].Value);
                 if (!string.IsNullOrEmpty(text))
@@ -440,6 +499,161 @@ namespace LLM_AI
             if (m.Groups[1].Success) return m.Groups[1].Value;
             if (m.Groups[2].Success) return m.Groups[2].Value;
             return m.Groups[3].Value;
+        }
+
+        // ------------------------------------------------------------------
+        //  Readability-lite (parité fetch_web_page.php) : détection du
+        //  conteneur principal et retrait structurel par scan équilibré.
+        //  Les regex ne sachent pas compter les imbrications (<div id=…>
+        //  contient d'autres <div>), d'où un petit scanner par nom de balise.
+        // ------------------------------------------------------------------
+
+        /// <summary>Retire les balises script/style/noscript AVEC leur
+        /// contenu, avant toute analyse structurelle. Le JSON-LD doit être
+        /// extrait AVANT cet appel (il vit dans des &lt;script&gt;).</summary>
+        private static string StripDeadTags(string html)
+        {
+            return Regex.Replace(html, @"<(script|style|noscript)\b[^>]*>.*?</\1>", " ",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline, RegexTimeout);
+        }
+
+        /// <summary>Retourne l'index juste après la balise fermante
+        /// correspondant à la balise ouvrante située en
+        /// <paramref name="openEnd"/>-1 pour le nom <paramref name="tag"/>, en
+        /// comptant la profondeur des balises homonymes. -1 si jamais fermée
+        /// (malformation) — l'appelant retombe alors sur la fin du document.</summary>
+        private static int BalancedClose(string html, int openEnd, string tag)
+        {
+            var open = new Regex("<" + tag + @"\b[^>]*>", RegexOptions.IgnoreCase, RegexTimeout);
+            var close = new Regex("</" + tag + @"\s*>", RegexOptions.IgnoreCase, RegexTimeout);
+            int depth = 1;
+            int pos = openEnd;
+            while (pos < html.Length)
+            {
+                var io = open.Match(html, pos);
+                var ic = close.Match(html, pos);
+                if (!ic.Success) return -1;
+                if (io.Success && io.Index < ic.Index)
+                {
+                    depth++;
+                    pos = io.Index + io.Length;
+                }
+                else
+                {
+                    depth--;
+                    pos = ic.Index + ic.Length;
+                    if (depth == 0) return pos;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>Retire TOUTES les occurrences d'un conteneur balise (avec
+        /// son contenu), en respectant l'imbrication des balises homonymes.
+        /// Utilisé pour nav/aside/form (toujours) et header/footer (repli
+        /// body) — le boilerplate structurel est du bruit pour le LLM.</summary>
+        private static string RemoveTagContainers(string html, string tag)
+        {
+            var open = new Regex("<" + tag + @"\b[^>]*>", RegexOptions.IgnoreCase, RegexTimeout);
+            while (true)
+            {
+                var om = open.Match(html);
+                if (!om.Success) return html;
+                int end = BalancedClose(html, om.Index + om.Length, tag);
+                int stop = end < 0 ? html.Length : end;
+                html = html.Substring(0, om.Index) + " " + html.Substring(stop);
+            }
+        }
+
+        /// <summary>Choisit, parmi les conteneurs correspondant à un sélecteur
+        /// d'ouverture (nom de balise en groupe 1), celui dont le texte nettoyé
+        /// est le plus long ; retourne le fragment équilibré et sa longueur de
+        /// texte (0 si aucun match).</summary>
+        private static string BestContainerFragment(string html, Regex selector, out int textLen)
+        {
+            string best = null;
+            textLen = 0;
+            foreach (Match om in selector.Matches(html))
+            {
+                string tag = om.Groups[1].Value;
+                int end = BalancedClose(html, om.Index + om.Length, tag);
+                string frag = end < 0 ? html.Substring(om.Index)
+                                      : html.Substring(om.Index, end - om.Index);
+                int len = CleanText(frag).Length;
+                if (len > textLen)
+                {
+                    textLen = len;
+                    best = frag;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>Fragment du &lt;body&gt; (équilibré), ou tout le document
+        /// préparé si aucune balise body (HTML partiel).</summary>
+        private static string BodyFragment(string prepared)
+        {
+            var om = Regex.Match(prepared, @"<body\b[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout);
+            if (!om.Success) return prepared;
+            int end = BalancedClose(prepared, om.Index + om.Length, "body");
+            return end < 0 ? prepared.Substring(om.Index)
+                           : prepared.Substring(om.Index, end - om.Index);
+        }
+
+        // Familles de conteneurs candidats, dans l'ordre de priorité du PHP
+        // (article, main, [role=main], #content, #main, .entry-content,
+        // .post-content, .article-content). Le premier sélecteur qui donne un
+        // conteneur de texte > 200 caractères gagne (le plus long de sa
+        // famille). Chaque regex capture le nom de balise (groupe 1) pour le
+        // scan équilibré ; les sélecteurs par attribut sont en valeur exacte
+        // (XPath [@role="main"] / [@id="…"]) ou en contains sur class
+        // (XPath contains()) — lookbehind pour ne pas matcher data-id=… etc.
+        private static readonly Regex[] s_mainSelectors =
+        {
+            new Regex(@"<(article)\b[^>]*>", RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<(main)\b[^>]*>", RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])role\s*=\s*(?:""main""|'main')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])id\s*=\s*(?:""content""|'content')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])id\s*=\s*(?:""main""|'main')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])class\s*=\s*(?:""[^""]*entry-content[^""]*""|'[^']*entry-content[^']*')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])class\s*=\s*(?:""[^""]*post-content[^""]*""|'[^']*post-content[^']*')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+            new Regex(@"<([a-zA-Z][a-zA-Z0-9]*)\b[^>]*(?<![a-zA-Z-])class\s*=\s*(?:""[^""]*article-content[^""]*""|'[^']*article-content[^']*')[^>]*>",
+                RegexOptions.IgnoreCase, RegexTimeout),
+        };
+
+        /// <summary>
+        /// Readability-lite : retourne le fragment HTML du conteneur principal
+        /// (article, main, [role=main], #content, #main, .entry-content, …) —
+        /// le plus long de la première famille de sélecteurs qui en produit un
+        /// de plus de 200 caractères — sinon le body amputé de header/footer
+        /// (parité PHP). <paramref name="source"/> vaut "main" ou "body" ;
+        /// <paramref name="headingsSource"/> est le HTML d'où extraire titres
+        /// et tableaux (document préparé entier en mode main, body nettoyé en
+        /// repli — même sélectivité que le DOM du PHP).
+        /// </summary>
+        private static string PickMainFragment(string prepared, out string source, out string headingsSource)
+        {
+            foreach (var rx in s_mainSelectors)
+            {
+                string frag = BestContainerFragment(prepared, rx, out int len);
+                if (frag != null && len > 200)
+                {
+                    source = "main";
+                    headingsSource = prepared;
+                    return frag;
+                }
+            }
+            source = "body";
+            string body = RemoveTagContainers(BodyFragment(prepared), "header");
+            body = RemoveTagContainers(body, "footer");
+            headingsSource = body;
+            return body;
         }
 
         // ------------------------------------------------------------------
@@ -517,6 +731,13 @@ namespace LLM_AI
 
         private static readonly JsonSerializerOptions s_json = new JsonSerializerOptions
         {
+            // Résolveur explicite OBLIGATOIRE : la sérialisation d'un JsonNode
+            // issu de JsonNode.Parse (blocs JSON-LD) passe par
+            // JsonValueCustomized.WriteTo, qui exige des options configurées —
+            // sans résolveur, .NET 8 lève « must specify a TypeInfoResolver
+            // setting before being marked as read-only » sur toute page
+            // contenant un bloc application/ld+json.
+            TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 

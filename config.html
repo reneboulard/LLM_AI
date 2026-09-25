@@ -1005,6 +1005,105 @@
                             du pipeline S1→S2→S3. Respecte le dry-run. <b>Opt-in</b> : modifie des métadonnées.
                         </div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.crosskind.h">File de régularisation « cross-kind »</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.crosskind.desc">
+                            Œuvres enregistrées par Emby sous le mauvais type (tag <b>llmai-cross-kind</b> : fiche
+                            film sur un item série, ou l'inverse). Pour chacune, le plugin peut <b>copier</b> le
+                            fichier vidéo vers la bibliothèque de son type avec un nommage « Titre (Année).ts » :
+                            Emby le ré-importe nativement sous le bon type (identification directe, plus de
+                            coquille série/épisode). La copie est <b>vérifiée</b> et <b>jamais destructive</b> —
+                            l'original reste en place ; supprimez-le vous-même ensuite pour qu'Emby retire
+                            l'ancien item au scan suivant.
+                        </div>
+                        <div style="max-width:420px;margin:0.4em 0;">
+                            <button is="emby-button" type="button" class="raised block" id="btnCrossKindRefresh"
+                                    data-i18n="cfg.crosskind.refresh">
+                                Recharger la file
+                            </button>
+                        </div>
+                        <style>
+                            .LLMAIConfigPage .ckItem {
+                                margin: 0.6em 0; padding: 0.8em 1em;
+                                background: rgba(0,0,0,0.18); border-radius: 6px; font-size: 13px;
+                            }
+                            .LLMAIConfigPage .ckItem .ckBadge {
+                                display: inline-block; padding: 0.05em 0.5em; margin-left: 0.4em;
+                                border-radius: 4px; font-size: 11px;
+                                background: rgba(0,0,0,0.25); color: #ccc;
+                            }
+                            .LLMAIConfigPage .ckItem .ckDone {
+                                background: rgba(46,125,50,0.35); color: #c8e6c9;
+                            }
+                            .LLMAIConfigPage .ckItem .ckPaths {
+                                font-family: monospace; font-size: 11px; color: #999;
+                                margin-top: 0.35em; word-break: break-all;
+                            }
+                            .LLMAIConfigPage #dlgCrossKind {
+                                border: 1px solid #444; border-radius: 8px;
+                                background: #242424; color: #eee;
+                                max-width: 620px; width: 92vw; padding: 1em 1.2em;
+                            }
+                            .LLMAIConfigPage #dlgCrossKind::backdrop { background: rgba(0,0,0,0.6); }
+                            /* Couleurs explicites dans le dialogue : le thème du
+                               dashboard peut poser une couleur directe sur .emby-button
+                               (texte sombre sur fond sombre = invisible) ; on force. */
+                            .LLMAIConfigPage #dlgCrossKind .emby-button {
+                                color: #eee;
+                                background: rgba(255,255,255,0.08);
+                                border-radius: 100em;
+                            }
+                            .LLMAIConfigPage #dlgCrossKind .emby-button.raised {
+                                background: #2f6db3;
+                                color: #fff;
+                            }
+                            .LLMAIConfigPage #dlgCrossKind .fieldDescription { color: #aaa; }
+                            .LLMAIConfigPage #dlgCrossKind input,
+                            .LLMAIConfigPage #dlgCrossKind select { color: #eee; }
+                            .LLMAIConfigPage .ckResult {
+                                margin-top: 0.8em; padding: 0.6em 0.8em; border-radius: 4px;
+                                background: rgba(0,0,0,0.25); font-size: 12px; white-space: pre-wrap;
+                                font-family: monospace; word-break: break-all; display: none;
+                            }
+                        </style>
+                        <div id="crossKindList"></div>
+                        <dialog id="dlgCrossKind">
+                            <h3 id="ckDlgTitle" style="margin:0 0 0.6em;font-size:1.05em;"></h3>
+                            <div class="fieldDescription" id="ckDlgSources" style="margin-bottom:0.8em;word-break:break-all;"></div>
+                            <div class="selectContainer" style="margin:0.4em 0;">
+                                <select is="emby-select" id="ckDlgLib" label="Bibliothèque cible"
+                                        data-i18n-label="cfg.crosskind.dialog.lib"></select>
+                                <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.lib.desc">
+                                    Les racines des bibliothèques Emby. Choisir une bibliothèque préremplit le
+                                    dossier de destination avec la cible suggérée « Titre (Année) ».
+                                </div>
+                            </div>
+                            <div class="inputContainer" style="margin:0.4em 0;">
+                                <input is="emby-input" type="text" id="ckDlgFolder"
+                                       label="Dossier de destination" data-i18n-label="cfg.crosskind.dialog.folder" />
+                                <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.folder.desc">
+                                    Dossier cible complet ; le fichier y est copié sous le nom ci-dessous.
+                                    Modifiable : vous pouvez pointer directement un dossier « Season 01 » pour
+                                    le cas fiche-série.
+                                </div>
+                            </div>
+                            <div class="inputContainer" style="margin:0.4em 0;">
+                                <input is="emby-input" type="text" id="ckDlgFile"
+                                       label="Nom du fichier copié" data-i18n-label="cfg.crosskind.dialog.file" />
+                                <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.file.desc">
+                                    Suggestion « Titre (Année).ext » dérivée de la fiche. Pour le cas fiche-série
+                                    (un épisode d'une série), écrivez le nommage complet, ex.
+                                    « Série (2019) - S01E05.ts ».
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:0.6em;margin-top:0.8em;">
+                                <button is="emby-button" type="button" class="raised" id="ckDlgGo"
+                                        data-i18n="cfg.crosskind.dialog.go">Copier (l'original reste en place)</button>
+                                <button is="emby-button" type="button" id="ckDlgCancel"
+                                        data-i18n="cfg.crosskind.dialog.cancel">Annuler</button>
+                            </div>
+                            <div id="ckDlgResult" class="ckResult"></div>
+                        </dialog>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.desc">
                             Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches
