@@ -102,6 +102,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   kind targeted by the entry (movie fiche → movies/mixed, series fiche →
   tvshows/mixed) and the pre-selection follows the targeted kind.
 
+### Fixed (FR)
+- **La copie refusait les suspects** : la garde du `POST CrossKindRegularize`
+  exigeait le tag `llmai-cross-kind` seul — un suspect (not-found) était
+  rejeté en 10 ms avec « Item non taggué… » (vérifié en réel à la première
+  tentative sur « Les couleurs du passé » ; le refus est désormais loggé).
+  La copie accepte les items de la file — confirmés comme suspects.
+- **Année de diffusion absente pour les œuvres sans fiche** : un item DVR
+  importé par la coquille n'a souvent PAS de ProductionYear (vérifié en réel)
+  — la suggestion « Titre (Année) » sortait sans année. Repli en cascade :
+  ProductionYear de l'item → PremiereDate du premier épisode (donnée EPG) →
+  horodatage DVR du nom de fichier (« Titre 2026_09_26_20_00_00.ts »). Appliqué
+  à la file (suggestions) et au nommage de repli de la copie.
+
+### Fixed (EN)
+- **The copy rejected suspects**: the `POST CrossKindRegularize` guard required
+  the `llmai-cross-kind` tag alone — a suspect (not-found) item was rejected in
+  10 ms with "Item non taggué…" (field-verified on the first attempt against
+  "Les couleurs du passé"; the rejection is now logged). The copy accepts every
+  queue item — confirmed and suspects alike.
+- **Missing air year for works without a fiche**: a DVR-shell-imported item
+  often has NO ProductionYear (field-verified) — the "Title (Year)" suggestion
+  came out without a year. Fallback chain: item ProductionYear → first
+  episode's PremiereDate (EPG data) → the DVR timestamp in the file name
+  ("Title 2026_09_26_20_00_00.ts"). Applied to the queue suggestions and to
+  the copy's server-side fallback naming.
+
 ---
 
 ## [1.13.31.0] — 2026-09-24

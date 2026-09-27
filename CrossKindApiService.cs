@@ -389,6 +389,55 @@ namespace LLM_AI
             return baseName + (string.IsNullOrWhiteSpace(ext) ? ".ts" : ext.ToLowerInvariant());
         }
 
+        /// <summary>
+        /// Année de diffusion de repli pour un enregistrement sans fiche TMDB
+        /// (l'item DVR importé par la coquille n'a souvent PAS de ProductionYear
+        /// — vérifié en réel sur « Les couleurs du passé ») : ProductionYear de
+        /// l'item si plausible, sinon PremiereDate du premier épisode (donnée
+        /// EPG), sinon l'horodatage DVR du nom de fichier (« Titre
+        /// 2026_09_26_20_00_00.ts » — dernier segment « aaaa_ » ou « aaaa- » du
+        /// nom, l'horodatage étant toujours suffixé). 0 si rien de fiable.
+        /// </summary>
+        private int DvrAirYear(BaseItem item, bool isSeries, string[] files)
+        {
+            if (item?.ProductionYear.HasValue == true && item.ProductionYear.Value >= 1900)
+                return item.ProductionYear.Value;
+
+            if (isSeries)
+            {
+                try
+                {
+                    var episodes = LibraryManager.GetItemList(new InternalItemsQuery
+                    {
+                        IncludeItemTypes = new[] { "Episode" },
+                        AncestorIds = new[] { item.InternalId },
+                        Recursive = true,
+                        EnableTotalRecordCount = false
+                    }) ?? Array.Empty<BaseItem>();
+                    foreach (var e in episodes)
+                    {
+                        if (e?.PremiereDate.HasValue == true && e.PremiereDate.Value.Year >= 1900)
+                            return e.PremiereDate.Value.Year;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : lecture PremiereDate des épisodes échouée ({0}).", ex.Message);
+                }
+            }
+
+            foreach (var f in files ?? Array.Empty<string>())
+            {
+                string name = Path.GetFileName(f);
+                var ms = System.Text.RegularExpressions.Regex.Matches(name, @"(?:^|[^0-9])((?:19|20)\d{2})[_\-]");
+                if (ms.Count > 0
+                    && int.TryParse(ms[ms.Count - 1].Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int y)
+                    && y >= 1900 && y <= 2100)
+                    return y;
+            }
+            return 0;
+        }
+
         // ------------------------------------------------------------------
         //  GET Queue
         // ------------------------------------------------------------------
@@ -489,16 +538,16 @@ namespace LLM_AI
                         }
                     }
 
-                    // Année par défaut (conversion sans fiche) : année de la fiche,
-                    // sinon ProductionYear de l'item (date de diffusion d'un DVR —
-                    // indicative mais la seule disponible pour une œuvre absente
-                    // de TMDB).
-                    int defaultYear = ficheYear;
-                    if (defaultYear <= 0 && item.ProductionYear.HasValue && item.ProductionYear.Value >= 1900)
-                        defaultYear = item.ProductionYear.Value;
-                    int suggestYear = ficheYear > 0 ? ficheYear : defaultYear;
-
                     var (files, ext) = CollectSourceFiles(item, isSeries);
+
+                    // Année par défaut (œuvre sans fiche) : année de la fiche,
+                    // sinon année de diffusion dérivée de l'item (ProductionYear,
+                    // PremiereDate du premier épisode, horodatage DVR du nom de
+                    // fichier) — la suggestion reste éditable dans le dialogue.
+                    int defaultYear = ficheYear;
+                    if (defaultYear <= 0)
+                        defaultYear = DvrAirYear(item, isSeries, files);
+                    int suggestYear = ficheYear > 0 ? ficheYear : defaultYear;
 
                     // Dossier source unique + ancre série (tvshow.nfo) : les
                     // prérequis de la conversion sur place (le .ts d'un item
@@ -654,13 +703,21 @@ namespace LLM_AI
             if (item == null)
                 return new CrossKindRegularizeResponse { Error = "Item introuvable (id : " + itemId + ")." };
 
-            // Garde : la régularisation ne s'applique qu'à un item taggué
-            // cross-kind — pas d'usage détourné comme outil de copie générique.
-            if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
+            // Garde : la régularisation s'applique aux items de la file — tag
+            // croisé « confirmé », ou not-found « suspect » (dossier DVR).
+            // Pas d'usage détourné comme outil de copie générique. (Le refus
+            // est loggé : un rejet silencieux a coûté une session de debug.)
+            if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)
+                && !OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound))
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : copie refusée pour « {0} » — ni « {1} » ni « {2} ».",
+                    item.Name, OrphanIdentifyTask.TagCrossKind, OrphanIdentifyTask.TagNotFound);
                 return new CrossKindRegularizeResponse
                 {
-                    Error = "Item non taggué « " + OrphanIdentifyTask.TagCrossKind + " » — rien à régulariser."
+                    Error = "Item non taggué « " + OrphanIdentifyTask.TagCrossKind + " » ni « "
+                        + OrphanIdentifyTask.TagNotFound + " » — rien à régulariser."
                 };
+            }
 
             string folder = (req?.TargetFolder ?? "").Trim();
             if (folder.Length == 0)
@@ -674,11 +731,15 @@ namespace LLM_AI
 
             bool isSeries = IsSeriesItem(item);
             string otherKind = isSeries ? "movie" : "series";
+            var (files, ext) = CollectSourceFiles(item, isSeries);
+
+            // Fiche croisée relue (lecture seule) pour le nommage de repli ;
+            // sans fiche (suspect), l'année de diffusion DVR sert de repli.
             var meta = await ReadCrossFicheAsync(item, otherKind, lang, ct).ConfigureAwait(false);
             string ficheTitle = meta != null && !string.IsNullOrWhiteSpace(meta.Title) ? meta.Title : item.Name;
             int ficheYear = meta?.Year ?? 0;
-
-            var (files, ext) = CollectSourceFiles(item, isSeries);
+            if (ficheYear <= 0)
+                ficheYear = DvrAirYear(item, isSeries, files);
             if (files.Length == 0)
                 return new CrossKindRegularizeResponse
                 {
