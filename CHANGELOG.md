@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.4] — 2026-09-27
+
+### Fixed (FR)
+- **Le re-import après conversion ne se déclenchait pas.** Le RealtimeMonitor
+  réagit à un fichier ajouté (copie — vérifié en réel) mais PAS au renommage
+  d'un dossier DVR (vérifié en réel : l'ancien item restait pointé sur un
+  chemin disparu, le nouveau jamais importé). La conversion — et la copie,
+  pour un import déterministe — déclenchent désormais explicitement le scan
+  bibliothèque (« Scan media library ») via `ServerRemediation.TriggerTask`
+  (best-effort, loggé ; un échec ne bloque pas l'opération).
+- **Le poster canonique échouait en 404 après conversion.** L'endpoint image
+  d'Emby re-résout le fichier par le chemin stocké dans l'item — qui ne
+  pointe plus rien après le renommage du dossier (vérifié en réel). Les
+  octets de l'image sont désormais **préchargés avant le renommage** puis
+  écrits en `poster.jpg` après succès (le repli endpoint image reste pour la
+  copie, où le chemin source existe toujours).
+- **Une copie interrompue laissait un fichier partiel au chemin final** — le
+  scan suivant l'importerait comme œuvre corrompue. La copie passe désormais
+  par un nom temporaire `.llmai_tmp`, **vérifié (taille) puis renommé** ; le
+  temporaire incomplet — notre artefact, pas un média — est supprimé en cas
+  d'échec (la doctrine « jamais de suppression de média » n'est pas entamée).
+
+### Fixed (EN)
+- **The re-import after conversion never triggered.** The RealtimeMonitor
+  reacts to an added file (copy — field-verified) but NOT to a DVR folder
+  rename (field-verified: the old item stayed pointed at a vanished path, the
+  new one never imported). Conversion — and the copy, for a deterministic
+  import — now explicitly trigger the library scan ("Scan media library") via
+  `ServerRemediation.TriggerTask` (best-effort, logged; a failure never
+  blocks the operation).
+- **The canonical poster failed with a 404 after conversion.** Emby's image
+  endpoint re-resolves the file by the path stored on the item — which
+  pointed nowhere after the folder rename (field-verified). The image bytes
+  are now **pre-loaded before the rename** and written as `poster.jpg` after
+  success (the image-endpoint fallback stays for the copy, where the source
+  path still exists).
+- **An interrupted copy left a partial file at the final path** — the next
+  scan would import it as a corrupt work. The copy now goes through a
+  `.llmai_tmp` temporary name, **size-verified then renamed**; the incomplete
+  temporary — our artifact, not media — is deleted on failure (the "never
+  delete media" doctrine is untouched).
+
 ## [1.14.0.3] — 2026-09-27
 
 ### Added (FR)

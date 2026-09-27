@@ -807,11 +807,31 @@ namespace LLM_AI
                     }
 
                     Directory.CreateDirectory(folder);
-                    File.Copy(src, dest);
+                    // Copie vers un nom temporaire puis renommage : un échec en
+                    // cours de copie ne laisse JAMAIS de fichier partiel au
+                    // chemin final (le scan l'importerait comme œuvre
+                    // corrompue). Le .llmai_tmp incomplet est notre artefact —
+                    // le supprimer n'est pas une suppression de média.
+                    string tmp = dest + ".llmai_tmp";
+                    try
+                    {
+                        File.Copy(src, tmp);
 
-                    // Vérification de la copie (taille égale) avant de la déclarer.
-                    if (new FileInfo(dest).Length != srcSize)
-                        throw new IOException("taille de la copie divergente");
+                        // Vérification de la copie (taille égale) avant de la déclarer.
+                        if (new FileInfo(tmp).Length != srcSize)
+                            throw new IOException("taille de la copie divergente");
+                        File.Move(tmp, dest);
+                    }
+                    catch
+                    {
+                        try { if (File.Exists(tmp)) File.Delete(tmp); }
+                        catch (Exception delEx)
+                        {
+                            Logger?.Warn("[LLM_AI] CrossKind : suppression du temporaire « {0} » échouée ({1}).",
+                                tmp, delEx.Message);
+                        }
+                        throw;
+                    }
                     copied.Add(src + " → " + dest);
                     Logger?.Info("[LLM_AI] CrossKind : copie « {0} » → « {1} » ({2} octets).",
                         src, dest, srcSize);
@@ -848,6 +868,12 @@ namespace LLM_AI
                 try { item.UpdateToRepository(ItemUpdateType.MetadataEdit); }
                 catch (Exception ex) { Logger?.Warn("[LLM_AI] CrossKind : UpdateToRepository échoué ({0}).", ex.Message); }
             }
+
+            // Re-import immédiat et déterministe : le RealtimeMonitor réagit à
+            // un fichier ajouté (vérifié en réel) mais le scan explicite
+            // garantit l'import sans attendre le débounce.
+            if ((copied.Count + skipped.Count) > 0)
+                TryTriggerLibraryScan();
 
             Logger?.Info("[LLM_AI] CrossKind : « {0} » régularisé — copiés={1} sautés={2} échoués={3} (original non supprimé).",
                 item.Name, copied.Count, skipped.Count, failed.Count);
@@ -1044,6 +1070,11 @@ namespace LLM_AI
                 }
             }
 
+            // Image du poster préchargée AVANT tout renommage : après
+            // Directory.Move, le chemin d'image de l'item ne pointe plus le
+            // fichier (Emby renvoie 404 à l'endpoint image — vérifié en réel).
+            byte[] posterBytes = TryReadItemPosterBytes(item);
+
             // Exécution + journal de rollback : dossier d'abord (une seule
             // opération atomique qui détache les anciens items Emby), fichiers
             // ensuite, réécriture des .nfo, tvshow.nfo en DERNIER (il ne peut
@@ -1144,12 +1175,17 @@ namespace LLM_AI
 
             if (done)
             {
-                // Poster canonique : l'image EPG de l'item est écrite en
-                // poster.jpg du dossier converti (le renommage a déjà déplacé
-                // le poster d'origine en « <base>-poster.jpg »). Best-effort :
-                // le chemin d'image de l'item pointe l'ancien dossier (renommé)
-                // → repli naturel sur l'endpoint image d'Emby (cache local).
-                await TrySaveItemPosterAsync(item, newFolder, ct).ConfigureAwait(false);
+                // Poster canonique : l'image EPG de l'item (préchargée avant le
+                // renommage) est écrite en poster.jpg du dossier converti, en
+                // complément du poster d'origine renommé (« <base>-poster.jpg »).
+                // Best-effort : un échec n'invalide pas la conversion.
+                await TrySaveItemPosterAsync(item, newFolder, ct, posterBytes).ConfigureAwait(false);
+
+                // Re-import immédiat : le RealtimeMonitor ne réagit PAS au
+                // renommage d'un dossier DVR (vérifié en réel) — le scan
+                // bibliothèque retire l'ancien item (chemin disparu) et
+                // importe l'œuvre sous le bon type.
+                TryTriggerLibraryScan();
             }
 
             Logger?.Info("[LLM_AI] CrossKind : « {0} » {1} — renommés={2} supprimés={3} (aucun média supprimé).",
@@ -1221,13 +1257,25 @@ namespace LLM_AI
         /// (poster.jpg déjà présent → no-op), ne lève jamais (hors annulation
         /// réelle — timeout HttpClient : TaskCanceledException sans annulation).
         /// </summary>
-        private async Task<bool> TrySaveItemPosterAsync(BaseItem item, string destFolder, CancellationToken ct)
+        private async Task<bool> TrySaveItemPosterAsync(BaseItem item, string destFolder, CancellationToken ct,
+            byte[] preloaded = null)
         {
             try
             {
                 if (item == null || string.IsNullOrWhiteSpace(destFolder)) return false;
                 string dst = Path.Combine(destFolder, "poster.jpg");
                 if (File.Exists(dst)) return false; // déjà là : idempotent
+
+                // 1) Octets préchargés AVANT un renommage (conversion) : après
+                // Directory.Move, le chemin d'image de l'item pointe l'ancien
+                // dossier — l'endpoint image d'Emby renvoie alors 404 (vérifié
+                // en réel : il re-résout le fichier par son chemin stocké).
+                if (preloaded != null && preloaded.Length > 0)
+                {
+                    await File.WriteAllBytesAsync(dst, preloaded, ct).ConfigureAwait(false);
+                    Logger?.Info("[LLM_AI] CrossKind : poster écrit depuis l'image préchargée → « {0} ».", dst);
+                    return true;
+                }
 
                 if (!item.HasImage(ImageType.Primary, 0))
                 {
@@ -1276,6 +1324,57 @@ namespace LLM_AI
             {
                 Logger?.Info("[LLM_AI] CrossKind : poster de « {0} » non écrit ({1}) — best-effort.", item?.Name, ex.Message);
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Lit les octets de l'image <see cref="ImageType.Primary"/> de l'item
+        /// — à appeler AVANT tout renommage du dossier (la conversion déplace
+        /// le fichier que le chemin d'image de l'item référence ; après coup,
+        /// Emby ne peut plus servir l'image). Null si absente ou illisible
+        /// (best-effort : le renommage du poster reste la protection première).
+        /// </summary>
+        private byte[] TryReadItemPosterBytes(BaseItem item)
+        {
+            try
+            {
+                if (item == null || !item.HasImage(ImageType.Primary, 0)) return null;
+                string src = item.GetImageInfo(ImageType.Primary, 0)?.Path;
+                if (string.IsNullOrWhiteSpace(src) || !File.Exists(src)) return null;
+                return File.ReadAllBytes(src);
+            }
+            catch (Exception ex)
+            {
+                Logger?.Info("[LLM_AI] CrossKind : lecture de l'image de « {0} » impossible ({1}) — poster non préchargé.",
+                    item?.Name, ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Déclenche le scan bibliothèque d'Emby (tâche « Scan media library »,
+        /// clé <c>RefreshLibrary</c>) après une copie ou une conversion : le
+        /// re-import doit être immédiat et déterministe. Vérifié en réel : le
+        /// RealtimeMonitor réagit à un fichier ajouté (copie) mais PAS au
+        /// renommage d'un dossier DVR (conversion — l'ancien item restait
+        /// pointé sur un chemin disparu, le nouveau jamais importé). Réutilise
+        /// <see cref="ServerRemediation.TriggerTask"/> ; best-effort : un échec
+        /// est logué, jamais bloquant (le scan planifié suivra).
+        /// </summary>
+        private void TryTriggerLibraryScan()
+        {
+            try
+            {
+                var tasks = ApplicationHost?.TryResolve<MediaBrowser.Model.Tasks.ITaskManager>();
+                var r = ServerRemediation.TriggerTask(tasks, null, "RefreshLibrary", excludeHidden: false);
+                if (r.Error != null)
+                    Logger?.Warn("[LLM_AI] CrossKind : déclenchement du scan bibliothèque échoué ({0}).", r.Error);
+                else
+                    Logger?.Info("[LLM_AI] CrossKind : scan bibliothèque déclenché pour le re-import.");
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : déclenchement du scan bibliothèque impossible ({0}).", ex.Message);
             }
         }
 
