@@ -792,9 +792,20 @@ namespace LLM_AI
                         skipped.Add(src + " → " + dest + " (déjà copié)");
                         continue;
                     }
+                    if (di.Exists)
+                    {
+                        // Jamais d'écrasement : une cible de taille différente
+                        // (copie périmée interrompue OU fichier sans rapport de
+                        // même nom) est refusée — l'admin la supprime lui-même.
+                        // Doctrine : le plugin ne supprime jamais de média.
+                        failed.Add(src + " → " + dest
+                            + " (cible existante de taille différente — non remplacée)");
+                        Logger?.Warn("[LLM_AI] CrossKind : copie refusée « {0} » → « {1} » — cible existante de taille différente ({2} ≠ {3} octets).",
+                            src, dest, di.Length, srcSize);
+                        continue;
+                    }
 
                     Directory.CreateDirectory(folder);
-                    if (di.Exists) di.Delete(); // taille différente : copie périmée, on la remplace
                     File.Copy(src, dest);
 
                     // Vérification de la copie (taille égale) avant de la déclarer.

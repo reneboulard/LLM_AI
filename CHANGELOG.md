@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.2] — 2026-09-27
+
+### Changed (FR)
+- **La copie n'écrase plus jamais un fichier existant.** Une cible déjà
+  présente de même taille reste sautée (« déjà copié », ré-copie idempotente)
+  ; une cible de **taille différente** est désormais **refusée** et signalée
+  (fichier listé en échec, refus loggé) au lieu d'être supprimée et
+  remplacée — un fichier sans rapport portant le même nom ne peut plus être
+  écrasé, et la doctrine « le plugin ne supprime jamais de média » est
+  respectée de bout en bout. Conséquence : la reprise d'une copie interrompue
+  (fichier partiel de taille différente) demande la suppression manuelle du
+  fichier périmé — le message d'échec l'indique. La conversion sur place
+  refusait déjà toute collision cible (dossier ou fichier).
+
+### Changed (EN)
+- **The copy never overwrites an existing file anymore.** An existing target
+  of the same size is still skipped ("déjà copié", idempotent re-copy); a
+  target of **a different size** is now **refused** and reported (file listed
+  as failed, rejection logged) instead of being deleted and replaced — an
+  unrelated file sharing the same name can no longer be overwritten, and the
+  "the plugin never deletes media itself" doctrine holds end to end.
+  Consequence: resuming an interrupted copy (partial file of a different
+  size) requires deleting the stale file manually — the failure message says
+  so. In-place conversion already refused any target collision (folder or
+  file).
+
 ## [1.14.0.1] — 2026-09-27
 
 ### Added (FR)
