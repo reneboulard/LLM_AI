@@ -700,16 +700,25 @@ namespace LLM_AI
 
         public async Task<object> Post(CrossKindRegularizeRequest req)
         {
+            // Tout refus est loggé (Warn) : l'admin voit la cause dans la
+            // réponse ET au journal Emby — un rejet invisible au journal a
+            // déjà coûté une session de debug.
+            CrossKindRegularizeResponse Refuse(string msg)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : copie refusée — {0}", msg);
+                return new CrossKindRegularizeResponse { Error = msg };
+            }
+
             if (!IsAdmin())
-                return new CrossKindRegularizeResponse { Error = NotAdminError() };
+                return Refuse(NotAdminError());
 
             string itemId = (req?.ItemId ?? "").Trim();
             if (itemId.Length == 0)
-                return new CrossKindRegularizeResponse { Error = "ItemId requis." };
+                return Refuse("ItemId requis.");
 
             var item = ItemIdResolver.Resolve(LibraryManager, itemId);
             if (item == null)
-                return new CrossKindRegularizeResponse { Error = "Item introuvable (id : " + itemId + ")." };
+                return Refuse("Item introuvable (id : " + itemId + ").");
 
             // Garde : la régularisation s'applique aux items de la file — tag
             // croisé « confirmé », ou not-found « suspect » (dossier DVR).
@@ -718,20 +727,15 @@ namespace LLM_AI
             if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)
                 && !OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound))
             {
-                Logger?.Warn("[LLM_AI] CrossKind : copie refusée pour « {0} » — ni « {1} » ni « {2} ».",
-                    item.Name, OrphanIdentifyTask.TagCrossKind, OrphanIdentifyTask.TagNotFound);
-                return new CrossKindRegularizeResponse
-                {
-                    Error = "Item non taggué « " + OrphanIdentifyTask.TagCrossKind + " » ni « "
-                        + OrphanIdentifyTask.TagNotFound + " » — rien à régulariser."
-                };
+                return Refuse("Item non taggué « " + OrphanIdentifyTask.TagCrossKind + " » ni « "
+                    + OrphanIdentifyTask.TagNotFound + " » — rien à régulariser (« " + item.Name + " »).");
             }
 
             string folder = (req?.TargetFolder ?? "").Trim();
             if (folder.Length == 0)
-                return new CrossKindRegularizeResponse { Error = "Dossier de destination requis." };
+                return Refuse("Dossier de destination requis.");
             if (!Path.IsPathRooted(folder) || folder.Length > 400)
-                return new CrossKindRegularizeResponse { Error = "Chemin de destination invalide (absolu, ≤ 400 caractères)." };
+                return Refuse("Chemin de destination invalide (absolu, ≤ 400 caractères).");
 
             var ct = Request?.CancellationToken ?? CancellationToken.None;
             var cfg = Plugin.Instance?.Configuration;
@@ -749,10 +753,7 @@ namespace LLM_AI
             if (ficheYear <= 0)
                 ficheYear = DvrAirYear(item, isSeries, files);
             if (files.Length == 0)
-                return new CrossKindRegularizeResponse
-                {
-                    Error = "Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues)."
-                };
+                return Refuse("Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues).");
 
             // Avertissements non bloquants sur la destination (le dossier reste
             // libre — cas fiche-série « Season 01 » — mais l'admin est prévenu).
@@ -763,7 +764,7 @@ namespace LLM_AI
                 baseFile = BuildBaseName(ficheTitle, ficheYear, ext) ?? SanitizeName(item.Name) + ext;
             baseFile = SanitizeName(baseFile);
             if (string.IsNullOrWhiteSpace(baseFile))
-                return new CrossKindRegularizeResponse { Error = "Nom de fichier cible invalide." };
+                return Refuse("Nom de fichier cible invalide.");
 
             var copied = new List<string>();
             var skipped = new List<string>();
@@ -871,50 +872,51 @@ namespace LLM_AI
         public async Task<object> Post(CrossKindConvertRequest req)
         {
             var ct = Request?.CancellationToken ?? CancellationToken.None;
+
+            // Tout refus est loggé (Warn) : l'admin voit la cause dans la
+            // réponse ET au journal Emby — un rejet invisible au journal a
+            // déjà coûté une session de debug.
+            CrossKindConvertResponse Refuse(string msg)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : conversion refusée — {0}", msg);
+                return new CrossKindConvertResponse { Error = msg };
+            }
+
             if (!IsAdmin())
-                return new CrossKindConvertResponse { Error = NotAdminError() };
+                return Refuse(NotAdminError());
 
             string itemId = (req?.ItemId ?? "").Trim();
             if (itemId.Length == 0)
-                return new CrossKindConvertResponse { Error = "ItemId requis." };
+                return Refuse("ItemId requis.");
 
             var item = ItemIdResolver.Resolve(LibraryManager, itemId);
             if (item == null)
-                return new CrossKindConvertResponse { Error = "Item introuvable (id : " + itemId + ")." };
+                return Refuse("Item introuvable (id : " + itemId + ").");
 
             // Garde : la conversion s'applique aux items de la file (tag
             // croisé, ou not-found suspect DVR) — pas d'usage détourné.
             bool eligible = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)
                 || OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound);
             if (!eligible)
-                return new CrossKindConvertResponse
-                {
-                    Error = "Item non éligible : ni « " + OrphanIdentifyTask.TagCrossKind
-                        + " » ni « " + OrphanIdentifyTask.TagNotFound + " »."
-                };
+                return Refuse("Item non éligible : ni « " + OrphanIdentifyTask.TagCrossKind
+                    + " » ni « " + OrphanIdentifyTask.TagNotFound + " ».");
 
             // v1 : Série → Film (le cas dominant du DVR). Le sens inverse
             // (Movie → Série) demanderait un nommage épisode — voir la copie.
             bool isSeries = IsSeriesItem(item);
             if (!isSeries)
-                return new CrossKindConvertResponse
-                {
-                    Error = "Conversion sur place réservée à un item série portant une œuvre film (cas inverse : utilisez la copie)."
-                };
+                return Refuse("Conversion sur place réservée à un item série portant une œuvre film (cas inverse : utilisez la copie).");
 
             var (files, _) = CollectSourceFiles(item, isSeries);
             if (files.Length == 0)
-                return new CrossKindConvertResponse { Error = "Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues)." };
+                return Refuse("Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues).");
 
             // Dossier source unique (le dossier DVR de l'œuvre).
             string srcFolder = Path.GetDirectoryName(files[0]);
             for (int i = 1; i < files.Length; i++)
             {
                 if (!string.Equals(Path.GetDirectoryName(files[i]), srcFolder, StringComparison.OrdinalIgnoreCase))
-                    return new CrossKindConvertResponse
-                    {
-                        Error = "Les fichiers de l'œuvre vivent dans plusieurs dossiers — conversion sur place impossible (utilisez la copie)."
-                    };
+                    return Refuse("Les fichiers de l'œuvre vivent dans plusieurs dossiers — conversion sur place impossible (utilisez la copie).");
             }
 
             // Borne : le dossier doit être sous la racine des enregistrements
@@ -924,10 +926,7 @@ namespace LLM_AI
                 || string.IsNullOrWhiteSpace(dvrRoot)
                 || !IsUnderPath(srcFolder, dvrRoot))
             {
-                return new CrossKindConvertResponse
-                {
-                    Error = "La conversion sur place ne s'applique qu'aux dossiers du répertoire des enregistrements Live TV (ailleurs : utilisez la copie)."
-                };
+                return Refuse("La conversion sur place ne s'applique qu'aux dossiers du répertoire des enregistrements Live TV (ailleurs : utilisez la copie).");
             }
 
             // Garde « enregistrement en cours » : le DVR tient le .ts ouvert
@@ -941,18 +940,12 @@ namespace LLM_AI
                 }
                 catch (IOException io)
                 {
-                    return new CrossKindConvertResponse
-                    {
-                        Error = "« " + Path.GetFileName(f) + " » est encore en cours d'utilisation "
-                            + "(enregistrement actif ou sonde média — réessayez dans quelques minutes). Détail : " + io.Message
-                    };
+                    return Refuse("« " + Path.GetFileName(f) + " » est encore en cours d'utilisation "
+                        + "(enregistrement actif ou sonde média — réessayez dans quelques minutes). Détail : " + io.Message);
                 }
                 catch (UnauthorizedAccessException ua)
                 {
-                    return new CrossKindConvertResponse
-                    {
-                        Error = "Accès refusé sur « " + Path.GetFileName(f) + " » (" + ua.Message + ")."
-                    };
+                    return Refuse("Accès refusé sur « " + Path.GetFileName(f) + " » (" + ua.Message + ").");
                 }
             }
 
@@ -960,25 +953,19 @@ namespace LLM_AI
             // (les séparateurs sont des caractères invalides : pas d'évasion).
             string target = SanitizeName(req.TargetName ?? "");
             if (string.IsNullOrWhiteSpace(target))
-                return new CrossKindConvertResponse { Error = "Nom cible requis (format « Titre (Année) »)." };
+                return Refuse("Nom cible requis (format « Titre (Année) »).");
             if (target.Length > 200)
-                return new CrossKindConvertResponse { Error = "Nom cible trop long (≤ 200 caractères)." };
+                return Refuse("Nom cible trop long (≤ 200 caractères).");
             string curFolderName = Path.GetFileName(srcFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             if (string.Equals(target, curFolderName, StringComparison.OrdinalIgnoreCase))
-                return new CrossKindConvertResponse
-                {
-                    Error = "Le nom cible est identique au dossier actuel (« " + curFolderName + " ») — rien à convertir."
-                };
+                return Refuse("Le nom cible est identique au dossier actuel (« " + curFolderName + " ») — rien à convertir.");
 
             string parent = Path.GetDirectoryName(srcFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             if (string.IsNullOrWhiteSpace(parent))
-                return new CrossKindConvertResponse { Error = "Dossier source sans parent — conversion impossible." };
+                return Refuse("Dossier source sans parent — conversion impossible.");
             string newFolder = Path.Combine(parent, target);
             if (Directory.Exists(newFolder) || File.Exists(newFolder))
-                return new CrossKindConvertResponse
-                {
-                    Error = "La cible existe déjà : « " + newFolder + " »."
-                };
+                return Refuse("La cible existe déjà : « " + newFolder + " ».");
 
             // Découpe « Titre (Année) » (année optionnelle) : alimente le .nfo
             // réécrit (titre + year) et le message de résultat.
@@ -995,7 +982,7 @@ namespace LLM_AI
                 }
             }
             if (string.IsNullOrWhiteSpace(titlePart))
-                return new CrossKindConvertResponse { Error = "Nom cible invalide (titre vide)." };
+                return Refuse("Nom cible invalide (titre vide).");
 
             // Plan de renommage : vidéo → « nom.ext » (suffixe numérique si
             // plusieurs), .nfo voisin à l'identique, poster.jpg → « nom-poster.jpg ».
@@ -1021,10 +1008,7 @@ namespace LLM_AI
             // se faire dans le dossier actuel (mêmes noms).
             var collisions = plan.Where(p => File.Exists(p.to)).Select(p => p.to).ToList();
             if (collisions.Count > 0)
-                return new CrossKindConvertResponse
-                {
-                    Error = "Conflit : des fichiers cibles existent déjà — " + string.Join(" ; ", collisions)
-                };
+                return Refuse("Conflit : des fichiers cibles existent déjà — " + string.Join(" ; ", collisions));
 
             string tvshowNfo = Path.Combine(srcFolder, "tvshow.nfo");
             bool hasTvshow = File.Exists(tvshowNfo);
@@ -1304,16 +1288,24 @@ namespace LLM_AI
 
         public object Post(CrossKindIgnoreRequest req)
         {
+            // Tout refus est loggé (Warn) : l'admin voit la cause dans la
+            // réponse ET au journal Emby.
+            CrossKindIgnoreResponse Refuse(string msg)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : ignore refusé — {0}", msg);
+                return new CrossKindIgnoreResponse { Error = msg };
+            }
+
             if (!IsAdmin())
-                return new CrossKindIgnoreResponse { Error = NotAdminError() };
+                return Refuse(NotAdminError());
 
             string itemId = (req?.ItemId ?? "").Trim();
             if (itemId.Length == 0)
-                return new CrossKindIgnoreResponse { Error = "ItemId requis." };
+                return Refuse("ItemId requis.");
 
             var item = ItemIdResolver.Resolve(LibraryManager, itemId);
             if (item == null)
-                return new CrossKindIgnoreResponse { Error = "Item introuvable (id : " + itemId + ")." };
+                return Refuse("Item introuvable (id : " + itemId + ").");
 
             if (req.Ignored) OrphanResolver.AddTag(item, OrphanIdentifyTask.TagCrossKindIgnored);
             else OrphanResolver.RemoveTag(item, OrphanIdentifyTask.TagCrossKindIgnored);

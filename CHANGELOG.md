@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.3] — 2026-09-27
+
+### Added (FR)
+- **Tout refus des endpoints cross-kind est loggé.** Les refus pré-exécution
+  de la conversion sur place (item non éligible, type non série, fichiers
+  introuvables ou multi-dossiers, hors racine DVR, enregistrement en cours,
+  accès refusé, nom cible invalide, cible existante, collisions), les
+  validations d'entrée de la copie et les refus de l'oubli écrivaient la cause
+  uniquement dans la réponse HTTP — invisibles au journal Emby (la
+  vérification documentée passe par `grep [LLM_AI]` ; un rejet silencieux a
+  déjà coûté une session de debug). Désormais un refus porte la cause
+  explicite à l'admin **et** une ligne `Warn` au journal, via un helper local
+  `Refuse` par handler. Les GET (file, bibliothèques) restent sans log :
+  lectures pures, rien de destructif.
+
+### Added (EN)
+- **Every cross-kind endpoint refusal is now logged.** The in-place
+  conversion's pre-execution refusals (ineligible item, non-series kind,
+  missing or multi-folder files, outside the DVR root, recording in progress,
+  access denied, invalid target name, existing target, collisions), the
+  copy's input validations and the ignore endpoint's refusals wrote the cause
+  only to the HTTP response — invisible in the Emby log (the documented
+  verification path greps `[LLM_AI]`; a silent rejection already cost a
+  debugging session). A refusal now carries an explicit cause for the admin
+  **and** a `Warn` line in the log, via a local `Refuse` helper per handler.
+  The GET endpoints (queue, libraries) stay log-free: pure reads, nothing
+  destructive.
+
 ## [1.14.0.2] — 2026-09-27
 
 ### Changed (FR)
