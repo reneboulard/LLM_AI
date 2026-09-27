@@ -22,6 +22,9 @@ CLAUDE.md
 ## OpenCode local instructions
 AGENTS.md
 
+## Local planning (projects to come, private — library structure, analysis results)
+TODO.md
+
 ## Generated at build (LLM_AI.csproj target GenerateAssetVersionJs)
 asset_version.js
 
