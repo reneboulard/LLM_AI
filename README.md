@@ -704,34 +704,61 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
 
 ### Régularisation cross-kind (file d'attente admin)
 
-Panneau **admin** de la page de configuration (v1.13.31) qui industrialise la
-recette vérifiée en réel : un enregistrement DVR mal typé (fiche film posée sur un
-item **série**, ou l'inverse — taggé `llmai-cross-kind` par la passe orphelins) ne
-peut pas être re-typé sur place ; en revanche, **copier** son fichier vidéo vers
-une bibliothèque du type voulu avec un nommage « Titre (Année) » fait ré-importer
-nativement par Emby sous le bon type (identification directe, plus de coquille
-série/épisode).
+Panneau **admin** de la page de configuration (v1.13.31, étendu v1.14.0) qui
+industrialise la recette vérifiée en réel : un enregistrement DVR mal typé (fiche
+film posée sur un item **série**, ou l'inverse — taggé `llmai-cross-kind` par la
+passe orphelins) ne peut pas être re-typé sur place par Emby ; en revanche,
+**copier** son fichier vidéo vers une bibliothèque du type voulu avec un nommage
+« Titre (Année) » fait ré-importer nativement par Emby sous le bon type
+(identification directe, plus de coquille série/épisode).
 
-La file liste les items taggés `llmai-cross-kind` (fiche TMDB croisée relue à
-chaque ouverture — titre/année —, fichiers source vidéo, cible suggérée, statut
-« copie faite »). Pour chacun, un dialogue de destination permet de choisir la
-bibliothèque (films/séries ou contenu mixte ; la bibliothèque de cartes `.strm` du
-plugin et le répertoire des enregistrements DVR ne sont pas suggérés), le dossier
-(prérempli « Titre (Année) ») et le nom du fichier copié (éditable — nommage
-épisode « SxxExx » pour le cas fiche-série). La copie est **vérifiée par taille,
-idempotente** (déjà copié = ignoré ; enregistrements multiples = suffixe « (2)… »)
-et **jamais destructive** : l'original reste en place (invariant du repo) — le tag
-`llmai-regularized` marque le succès et le scan bibliothèque est déclenché
-automatiquement côté client. **Ensuite** : supprimez vous-même le(s) fichier(s)
-original(aux) du répertoire d'enregistrement — Emby retire l'ancien item au scan
-suivant (la consigne n'est affichée qu'en cas de succès complet). Aucun flag de
-config : les endpoints sont réservés aux administrateurs.
+La file liste deux populations :
+- les items taggés `llmai-cross-kind` (« confirmés » — fiche TMDB croisée relue à
+  chaque ouverture — titre/année —, fichiers source vidéo, cible suggérée, statut
+  « copie faite ») ;
+- les **suspects** : items taggés `llmai-not-found` dont le dossier vit sous la
+  racine des enregistrements DVR (œuvre absente de TMDB — un documentaire importé
+  en série par la coquille DVR ; une sonde TMDB du type opposé, acceptée sur
+  **égalité exacte du titre** sans filtre d'année, peut accrocher une fiche jamais
+  testée par la passe nocturne).
+
+Pour chacun, le dialogue propose deux voies :
+- **Copier** vers une bibliothèque du type visé (films/séries ou contenu mixte ;
+  la bibliothèque de cartes `.strm` du plugin n'est jamais suggérée, celle qui
+  contient la racine DVR l'est si elle supporte le type visé — rétention à
+  considérer), dossier prérempli « Titre (Année) », nom de fichier éditable
+  (nommage épisode « SxxExx » pour le cas fiche-série). La copie est **vérifiée
+  par taille, idempotente** (déjà copié = ignoré ; enregistrements multiples =
+  suffixe « (2)… ») et **jamais destructive** : l'original reste en place
+  (invariant du repo) — le tag `llmai-regularized` marque le succès et le scan
+  bibliothèque est déclenché automatiquement côté client. **Ensuite** : supprimez
+  vous-même le(s) fichier(s) original(aux) du répertoire d'enregistrement — Emby
+  retire l'ancien item au scan suivant (la consigne n'est affichée qu'en cas de
+  succès complet).
+- **Convertir sur place** (items série du répertoire DVR dont le dossier porte
+  `tvshow.nfo`) : renommage du dossier en « Titre (Année) » (nom/année éditables —
+  défaut : fiche, sinon année de diffusion), de la vidéo et du `.nfo` à
+  l'identique (suffixe « (2)… » si plusieurs enregistrements), de `poster.jpg` en
+  « Titre (Année)-poster.jpg », **réécriture du `.nfo` en racine `<movie>`** (un
+  `<episodedetails>` relirait l'œuvre comme Épisode au re-import — la réécriture
+  conserve aussi les métadonnées EPG, souvent la seule source pour une œuvre
+  absente de TMDB) et suppression **opt-in** de `tvshow.nfo` (l'ancre série — la
+  seule suppression du flux, jamais le média). Garde « enregistrement en cours »
+  (ouverture exclusive) et **journal de rollback** : tout échec restaure l'état
+  initial ; le tag `llmai-regularized` est posé et le scan bibliothèque déclenché.
+
+Le bouton **Ignorer** pose le tag `llmai-cross-kind-ignored` (l'entrée sort de la
+file ; case « Afficher les entrées ignorées » pour les revoir, « Ne plus ignorer »
+pour les réafficher) — utile pour une vraie série pas encore dans TVDB/TMDB (ex.
+« Le téléjournal », nouvelle mouture de quelques semaines). Aucun flag de config :
+les endpoints sont réservés aux administrateurs.
 
 Notes de terrain : la copie s'exécute sous l'utilisateur `emby` — la bibliothèque
 cible doit lui être **inscriptible** (`chgrp emby <dossier> && chmod g+w <dossier>`
 ou `setfacl -m u:emby:rwx` + ACL par défaut pour l'héritage des nouveaux
 sous-dossiers) ; un avertissement non bloquant signale une destination dans le
-répertoire DVR (soumis à la rétention Emby) ou hors de toute bibliothèque. Voir
+répertoire DVR (soumis à la rétention Emby) ou hors de toute bibliothèque ; la
+conversion sur place reste sous la rétention DVR (avertissement affiché). Voir
 [Composants](#composants) (`CrossKindApiService.cs`).
 
 ### Traduction IA des genres EPG (GenreCleaner)
@@ -866,7 +893,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
 | `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (statique interne) | Persistance du **dernier rapport d'audit** (`audit_report.json`, dossier de configuration du plugin, convention `ChatMemoryStore`) : date, mode, focus, rapport Markdown. Best-effort fail-open ; un seul enregistrement écrasé à chaque run réussi. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}], Session}` (la page garde l'historique ; `Session` = identifiant de mémoire de conversation), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager, bloc mémoire accolé). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. Porte aussi la **mémoire de conversation** : résolution de session, journalisation des tours (`ChatMemoryStore`), condensation paresseuse des sessions passées (un appel LLM en tâche de fond, note de continuité + ligne `SIGNALS:` → décisions `kind="chat"`), et les endpoints `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget`. |
-| `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | Endpoints **admin** de la file de régularisation cross-kind (v1.13.31) : `GET /Plugins/LLMAI/CrossKindQueue` (items taggés `llmai-cross-kind` : fiche TMDB croisée relue en lecture seule via la cascade tmdb→imdb, kind item/fiche, fichiers source vidéo — cartes `.strm` exclues —, cible suggérée « Titre (Année) », statut « copie faite »), `GET /Plugins/LLMAI/CrossKindLibraries` (bibliothèques cibles : films/séries/contenu mixte seulement — la bibliothèque `.strm` du plugin et le répertoire DVR ne sont pas suggérés) et `POST /Plugins/LLMAI/CrossKindRegularize` (copie **vérifiée par taille**, idempotente, suffixe « (2)… », tag `llmai-regularized` add-only posé sur succès complet, avertissements destination DVR/hors-bibliothèque, message dédié en cas d'accès refusé, **jamais de suppression** — l'original reste en place). Voir [Régularisation cross-kind](#régularisation-cross-kind-file-dattente-admin). |
+| `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | Endpoints **admin** de la file de régularisation cross-kind (v1.13.31, étendue v1.14.0) : `GET /Plugins/LLMAI/CrossKindQueue` (items taggés `llmai-cross-kind` « confirmés » + items `llmai-not-found` sous la racine DVR « suspects » — sonde du type opposé à égalité exacte de titre ; fiche TMDB relue en lecture seule via la cascade tmdb→imdb, kind item/fiche, fichiers source vidéo — cartes `.strm` exclues —, cible suggérée « Titre (Année) », statuts copie faite/ignoré ; `IncludeIgnored=true` réaffiche les taggés `llmai-cross-kind-ignored`), `GET /Plugins/LLMAI/CrossKindLibraries` (bibliothèques cibles : films/séries/contenu mixte — la bibliothèque `.strm` du plugin jamais suggérée ; celle contenant la racine DVR proposée si elle supporte le type visé, flag `IsDvr`), `POST /Plugins/LLMAI/CrossKindRegularize` (copie **vérifiée par taille**, idempotente, suffixe « (2)… », tag `llmai-regularized` add-only posé sur succès complet, avertissements destination DVR/hors-bibliothèque, message dédié en cas d'accès refusé, **jamais de suppression** — l'original reste en place), `POST /Plugins/LLMAI/CrossKindConvert` (conversion sur place d'un enregistrement DVR mal typé : renommage dossier/vidéo/.nfo/poster « Titre (Année) », réécriture des .nfo en racine `<movie>`, suppression opt-in de tvshow.nfo, garde « enregistrement en cours », **journal de rollback** — le .ts n'est jamais supprimé) et `POST /Plugins/LLMAI/CrossKindIgnore` (pose/retire le tag d'oubli). Voir [Régularisation cross-kind](#régularisation-cross-kind-file-dattente-admin). |
 | `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les cinq prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des cinq prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | Endpoints **traduction IA des genres** (admin) : `GET /Plugins/LLMAI/GenreProposals` (collecte les genres EPG des programmes **à venir** non couverts par GenreCleaner, par section films/séries, plafonnés à 60/section, puis un appel LLM one-shot via `ChatWithFallbackAsync` propose pour chacun une cible du vocabulaire curaté, un nouveau genre, ou rien) et `POST /Plugins/LLMAI/GenreApply` (re-valide puis écrit dans `GenreCleaner.xml` via `GenreCleanerMap`, enregistre dans `GenreAliasApplied`, déclenche `NotifyPendingRestart`). Langue des suggestions = cascade `ResolveMetaLangKey` (`ResponseLanguage`). Voir [Traduction IA des genres](#traduction-ia-des-genres-epg-genrecleaner). |

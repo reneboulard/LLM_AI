@@ -10,6 +10,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.0] — 2026-09-27
+
+### Added (FR)
+- **File cross-kind étendue aux `llmai-not-found` « suspects » (DVR) et
+  conversion sur place.** Les derniers enregistrements ont montré des œuvres
+  taggées `llmai-not-found` alors qu'elles sont structurellement cross-kind :
+  l'import DVR type l'item d'après le guide (`tvshow.nfo` → Series) alors que
+  l'œuvre est un film **absent de TMDB** (cas « Les couleurs du passé », « Du
+  zéro à l'infini ») — la passe nocturne, repli de type compris, ne trouve
+  rien et l'item finit not-found, invisible de la file cross-kind qui ne
+  listait que les items taggés. Trois ajouts :
+  1. **File élargie** : `GET CrossKindQueue` liste désormais aussi les
+     « suspects » — items `llmai-not-found` dont le dossier vit sous la racine
+     des enregistrements DVR — avec une **sonde TMDB du type opposé** acceptée
+     sur **égalité exacte du titre** (sans filtre d'année — doctrine des items
+     sans année fiable). Les entrées portent un statut (`confirmed` /
+     `suspected`) et une preuve affichée (fiche opposée « Titre (Année) » ou
+     « aucune fiche TMDB »). Aucun nouveau tag de pipeline : la suspicion est
+     calculée à la volée, le sémantisme des tags intact.
+  2. **Conversion sur place** (`POST CrossKindConvert`, dialogue dédié dans la
+     boîte cross-kind) : pour un item série du répertoire DVR dont le dossier
+     porte `tvshow.nfo` — renommage du dossier en « Titre (Année) » (nom/année
+     éditables, défaut : fiche sinon année de diffusion), de la vidéo et du
+     `.nfo` à l'identique (suffixe « (2)… » si plusieurs enregistrements), de
+     `poster.jpg` en « Titre (Année)-poster.jpg », **réécriture du `.nfo` en
+     racine `<movie>`** (un `<episodedetails>` relirait l'œuvre comme Épisode
+     au re-import ; la réécriture conserve aussi les métadonnées EPG — souvent
+     la seule source pour une œuvre sans fiche) et suppression **opt-in** de
+     `tvshow.nfo` (l'ancre série — la seule suppression du flux, jamais le
+     média : le `.ts` n'est jamais supprimé). Garde « enregistrement en cours »
+     (ouverture exclusive du .ts), collisions cibles refusées, **journal de
+     rollback** : tout échec restaure l'état initial (contenus .nfo compris).
+     Tag `llmai-regularized` posé et scan bibliothèque déclenché après succès ;
+     Emby ré-importe l'œuvre sous le bon type au scan suivant.
+  3. **Option d'oubli** (`POST CrossKindIgnore`, bouton « Ignorer ») : tag
+     `llmai-cross-kind-ignored` add-only — l'entrée sort de la file (confirmée
+     comme suspecte). Utile pour une vraie série pas encore dans TVDB/TMDB
+     (« Le téléjournal avec Azeb Wolde-Giorghis », nouvelle mouture de quelques
+     semaines). Case « Afficher les entrées ignorées » pour les revoir,
+     « Ne plus ignorer » pour réafficher.
+- **Bibliothèque d'origine dans les choix de destination** : `GET
+  CrossKindLibraries` propose désormais la bibliothèque contenant la racine des
+  enregistrements DVR quand elle supporte le type visé (mixte ou films/séries —
+  flag `IsDvr`, étiquette « DVR » dans le dialogue) ; l'avertissement rétention
+  DVR reste, non bloquant. La liste est filtrée selon le type visé par l'entrée
+  (fiche film → movies/mixte, fiche série → tvshows/mixte) et la présélection
+  suit le type visé.
+
+### Added (EN)
+- **Cross-kind queue extended to "suspect" `llmai-not-found` items (DVR) and
+  in-place conversion.** Recent recordings showed works tagged
+  `llmai-not-found` while being structurally cross-kind: the DVR import types
+  the item from the guide (`tvshow.nfo` → Series) although the work is a movie
+  **absent from TMDB** (cases "Les couleurs du passé", "Du zéro à l'infini") —
+  the nightly pass, type fallback included, finds nothing and the item ends
+  not-found, invisible to the cross-kind queue which only listed tagged items.
+  Three additions:
+  1. **Extended queue**: `GET CrossKindQueue` now also lists "suspects" —
+     `llmai-not-found` items whose folder lives under the DVR recordings root —
+     with an **opposite-kind TMDB probe** accepted on **exact title equality**
+     (no year filter — the no-reliable-year doctrine). Entries carry a status
+     (`confirmed` / `suspected`) and displayed evidence (opposite fiche "Title
+     (Year)" or "no TMDB fiche"). No new pipeline tag: suspicion is computed on
+     the fly, tag semantics untouched.
+  2. **In-place conversion** (`POST CrossKindConvert`, dedicated box in the
+     cross-kind dialog): for a series item in the DVR recordings path whose
+     folder carries `tvshow.nfo` — rename the folder to "Title (Year)"
+     (editable name/year, default: fiche else air year), the video and the
+     `.nfo` alike ("(2)…" suffix for multiple recordings), `poster.jpg` to
+     "Title (Year)-poster.jpg", **rewrite the `.nfo` with a `<movie>` root**
+     (an `<episodedetails>` root would make the work re-import as an Episode;
+     the rewrite also preserves the EPG metadata — often the only source for a
+     work without a fiche) and **opt-in** deletion of `tvshow.nfo` (the series
+     anchor — the only deletion in the flow, never the media: the `.ts` is
+     never deleted). "Recording in progress" guard (exclusive open of the .ts),
+     target collisions rejected, **rollback journal**: any failure restores the
+     initial state (.nfo contents included). `llmai-regularized` tag set and
+     library scan triggered after success; Emby re-imports the work under the
+     right kind at the next scan.
+  3. **Ignore option** (`POST CrossKindIgnore`, "Ignore" button): add-only
+     `llmai-cross-kind-ignored` tag — the entry leaves the queue (confirmed as
+     suspect alike). Useful for a genuine series not yet in TVDB/TMDB ("Le
+     téléjournal avec Azeb Wolde-Giorghis", a new edition a few weeks old). A
+     "Show ignored entries" checkbox lists them again, "Stop ignoring"
+     restores.
+- **Origin library among destination choices**: `GET CrossKindLibraries` now
+  offers the library containing the DVR recordings root when it supports the
+  targeted kind (mixed or movie/TV — `IsDvr` flag, "DVR" label in the dialog);
+  the DVR retention warning stays, non-blocking. The list is filtered by the
+  kind targeted by the entry (movie fiche → movies/mixed, series fiche →
+  tvshows/mixed) and the pre-selection follows the targeted kind.
+
+---
+
 ## [1.13.31.0] — 2026-09-24
 
 ### Added (FR)

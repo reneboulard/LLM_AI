@@ -22,18 +22,37 @@ namespace LLM_AI
     /// admin uniquement) :
     /// <list type="bullet">
     /// <item><c>GET /Plugins/LLMAI/CrossKindQueue</c> — la file d'attente :
-    /// tous les items bibliothèque taggés <c>llmai-cross-kind</c>, avec la
-    /// fiche TMDB relue (titre/année), les chemins source du/des fichiers
-    /// vidéo et la cible suggérée « Titre (Année)/Titre (Année).ext ».</item>
+    /// (a) les items bibliothèque taggés <c>llmai-cross-kind</c> (« confirmés »),
+    /// (b) les items taggés <c>llmai-not-found</c> dont le dossier vit sous la
+    /// racine DVR (« suspects » — import DVR typé par le guide, œuvre absente
+    /// de TMDB : la sonde du type opposé n'accroche que l'égalité exacte du
+    /// titre), avec la fiche relue (titre/année), les chemins source du/des
+    /// fichiers vidéo et la cible suggérée « Titre (Année)/Titre (Année).ext ».
+    /// Les items taggés <c>llmai-cross-kind-ignored</c> sont masqués sauf
+    /// <c>IncludeIgnored=true</c>.</item>
     /// <item><c>GET /Plugins/LLMAI/CrossKindLibraries</c> — racines des
     /// bibliothèques Emby (nom, type, locations) pour alimenter le dialogue
-    /// de destination.</item>
+    /// de destination. La bibliothèque contenant la racine DVR est proposée
+    /// quand elle supporte le type visé (mixte ou films/séries) — flag
+    /// <c>IsDvr</c> + avertissement rétention côté client.</item>
     /// <item><c>POST /Plugins/LLMAI/CrossKindRegularize</c> — copie VÉRIFIÉE
     /// du/des fichiers vidéo vers le dossier de destination choisi par
     /// l'admin, item par item. Aucune suppression : l'original reste en place
     /// (invariant du repo) — c'est l'usager qui le retire pour que Emby
     /// nettoie l'ancien item. Un tag <c>llmai-regularized</c> évite les
     /// re-copies.</item>
+    /// <item><c>POST /Plugins/LLMAI/CrossKindConvert</c> — conversion sur
+    /// place d'un enregistrement DVR mal typé : renommage du dossier en
+    /// « Titre (Année) », de la vidéo et du .nfo à l'identique, de
+    /// poster.jpg en « Titre (Année)-poster.jpg », réécriture du .nfo en
+    /// racine <c>&lt;movie&gt;</c> (un <c>&lt;episodedetails&gt;</c> relirait
+    /// l'œuvre comme Épisode au re-import) et suppression opt-in de
+    /// tvshow.nfo (l'ancre série) — Emby ré-importe alors l'œuvre sous le
+    /// bon type au scan suivant. Journal de rollback : tout renommage est
+    /// annulé en cas d'échec ; le .ts n'est JAMAIS supprimé (invariant).</item>
+    /// <item><c>POST /Plugins/LLMAI/CrossKindIgnore</c> — pose/retire le tag
+    /// <c>llmai-cross-kind-ignored</c> : l'item sort de la file (cas d'une
+    /// vraie série pas encore dans TVDB/TMDB — « Le téléjournal »).</item>
     /// </list>
     /// </summary>
     /// <remarks>
@@ -59,27 +78,47 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         [Route("/Plugins/LLMAI/CrossKindQueue", "GET")]
-        public class CrossKindQueueRequest : IReturn<object> { }
+        public class CrossKindQueueRequest : IReturn<object>
+        {
+            /// <summary>Réafficher les items taggés llmai-cross-kind-ignored
+            /// (masqués par défaut).</summary>
+            public bool IncludeIgnored { get; set; }
+        }
 
-        /// <summary>Une entrée de la file (un item cross-kind).</summary>
+        /// <summary>Une entrée de la file (un item cross-kind ou suspect).</summary>
         public class CrossKindEntry
         {
             /// <summary>Id canonique (InternalId — id currency Emby).</summary>
             public string ItemId { get; set; }
             /// <summary>Nom actuel de l'item Emby.</summary>
             public string Name { get; set; }
+            /// <summary>« confirmed » (tag llmai-cross-kind) ou « suspected »
+            /// (not-found dont le dossier vit sous la racine DVR).</summary>
+            public string Status { get; set; }
+            /// <summary>True si l'item est un suspect (not-found + DVR), pas un item confirmé.</summary>
+            public bool Suspected { get; set; }
+            /// <summary>True si l'admin a posé le tag llmai-cross-kind-ignored.</summary>
+            public bool Ignored { get; set; }
             /// <summary>Type de l'item Emby ("series" | "movie") — celui posé par l'import DVR.</summary>
             public string ItemKind { get; set; }
             /// <summary>Type de la fiche croisée (opposé à l'item).</summary>
             public string FicheKind { get; set; }
-            /// <summary>Titre de la fiche (peut différer du nom de l'item).</summary>
+            /// <summary>Titre de la fiche (peut différer du nom de l'item ; défaut = nom de l'item).</summary>
             public string FicheTitle { get; set; }
             /// <summary>Année de la fiche (0 si inconnue).</summary>
             public int FicheYear { get; set; }
+            /// <summary>Année par défaut pour la conversion sans fiche : année de la fiche,
+            /// sinon ProductionYear de l'item (année de diffusion d'un DVR) si plausible.</summary>
+            public int DefaultYear { get; set; }
             /// <summary>Id TMDB de la fiche posée (0 si absent).</summary>
             public int TmdbId { get; set; }
             /// <summary>True si la copie vers la cible est déjà faite (tag llmai-regularized).</summary>
             public bool Regularized { get; set; }
+            /// <summary>True si la conversion sur place est applicable : item série
+            /// dans le répertoire DVR dont le dossier porte tvshow.nfo.</summary>
+            public bool Convertible { get; set; }
+            /// <summary>Dossier source unique des fichiers (le dossier DVR de l'œuvre) — null si inconnu.</summary>
+            public string SourceFolder { get; set; }
             /// <summary>Chemins des fichiers vidéo source (épisodes d'une Série, ou le fichier du Movie).</summary>
             public string[] SourceFiles { get; set; }
             /// <summary>Dossier cible suggéré (« Titre (Année) »).</summary>
@@ -104,6 +143,10 @@ namespace LLM_AI
             /// <summary>CollectionType Emby ("movies", "tvshows", null pour contenu mixte…).</summary>
             public string Type { get; set; }
             public string[] Paths { get; set; }
+            /// <summary>True si la bibliothèque contient la racine des enregistrements
+            /// DVR — destination possible quand elle supporte le type visé, mais
+            /// soumise à la rétention DVR (avertissement côté client).</summary>
+            public bool IsDvr { get; set; }
         }
 
         public class CrossKindLibrariesResponse
@@ -135,6 +178,47 @@ namespace LLM_AI
             /// <summary>Avertissement non bloquant (destination dans le
             /// répertoire DVR soumis à la rétention, ou hors bibliothèque).</summary>
             public string Warning { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/CrossKindConvert", "POST")]
+        public class CrossKindConvertRequest : IReturn<object>
+        {
+            /// <summary>Id de l'item (chaîne — résolu par ItemIdResolver).</summary>
+            public string ItemId { get; set; }
+            /// <summary>Nom de base cible « Titre (Année) » : le dossier, la vidéo
+            /// et le .nfo sont renommés dessus ; poster.jpg devient
+            /// « &lt;nom&gt;-poster.jpg ». Le titre (sans l'année) et l'année
+            /// alimentent le .nfo réécrit.</summary>
+            public string TargetName { get; set; }
+            /// <summary>Supprimer tvshow.nfo — l'ancre série qui maintient
+            /// l'import en Series. Opt-in explicite : c'est la SEULE suppression
+            /// du flux (métadonnées, jamais le média).</summary>
+            public bool DeleteTvshowNfo { get; set; }
+        }
+
+        public class CrossKindConvertResponse
+        {
+            public string[] Renamed { get; set; }
+            public string[] Deleted { get; set; }
+            public string[] Failed { get; set; }
+            /// <summary>Avertissement non bloquant (rétention DVR, tvshow.nfo absent…).</summary>
+            public string Warning { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/CrossKindIgnore", "POST")]
+        public class CrossKindIgnoreRequest : IReturn<object>
+        {
+            /// <summary>Id de l'item (chaîne — résolu par ItemIdResolver).</summary>
+            public string ItemId { get; set; }
+            /// <summary>True = ignorer (tag posé, sort de la file) ; false = réafficher.</summary>
+            public bool Ignored { get; set; }
+        }
+
+        public class CrossKindIgnoreResponse
+        {
+            public bool Ignored { get; set; }
             public string Error { get; set; }
         }
 
@@ -208,6 +292,39 @@ namespace LLM_AI
                     meta = await tmdb.FindByExternalIdAsync(imdb.Trim(), "imdb_id", otherKind, lang, ct).ConfigureAwait(false);
             }
             return meta;
+        }
+
+        /// <summary>
+        /// Sonde TMDB du type OPPOSÉ pour un item not-found « suspect » (la
+        /// passe nocturne n'y a trouvé AUCUNE fiche du type de l'item — dont
+        /// le repli de type series→movie ; mais un item taggé not-found AVANT
+        /// l'ajout du repli, ou avec une configuration différente depuis, peut
+        /// avoir une fiche opposée jamais testée). N'accepte que l'ÉGALITÉ
+        /// EXACTE du titre normalisé, sans filtre d'année — doctrine des items
+        /// sans année fiable : un match lâche ici validerait une hallucination.
+        /// Null si aucune fiche exacte.
+        /// </summary>
+        private async Task<TmdbMeta> ProbeOppositeFicheAsync(BaseItem item, string otherKind,
+            string[] langs, CancellationToken ct)
+        {
+            string clean = TmdbLookupTool.CleanEpgTitle(item?.Name);
+            if (string.IsNullOrWhiteSpace(clean)) clean = item?.Name;
+            if (string.IsNullOrWhiteSpace(clean)) return null;
+            try
+            {
+                var tmdb = new TmdbLookupTool(Logger);
+                var meta = await tmdb.LookupMetaMultiLangAsync(clean, otherKind, null, langs, ct).ConfigureAwait(false);
+                if (meta == null || meta.TmdbId <= 0) return null;
+                if (OrphanResolver.NormalizeTitle(clean) != OrphanResolver.NormalizeTitle(meta.Title))
+                    return null;
+                return meta;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Logger?.Info("[LLM_AI] CrossKind : sonde type opposé « {0} » échouée ({1}).", item?.Name, ex.Message);
+                return null;
+            }
         }
 
         /// <summary>
@@ -301,32 +418,106 @@ namespace LLM_AI
                 return new CrossKindQueueResponse { Error = "Lecture bibliothèque échouée : " + ex.Message };
             }
 
+            // Racine des enregistrements DVR : le signal « suspect » (not-found
+            // dont le dossier vit sous la racine DVR) et la borne de la
+            // conversion sur place.
+            string dvrRoot = null;
+            try
+            {
+                if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string d))
+                    dvrRoot = d;
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : racine DVR illisible ({0}).", ex.Message);
+            }
+
+            // Langues de sonde : même trio que la passe orphelins (en/fr + lang TMDB).
+            var langs = new[] { "en-US", "fr-FR", lang }
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
             var list = new List<CrossKindEntry>();
             foreach (var item in items)
             {
                 if (item == null) continue;
-                if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)) continue;
                 ct.ThrowIfCancellationRequested();
                 try
                 {
+                    bool cross = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind);
+                    bool ignored = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKindIgnored);
+                    if (ignored && !req.IncludeIgnored) continue;
+
+                    // Suspect = not-found dont le dossier vit sous la racine DVR :
+                    // l'import DVR type l'item d'après le guide (tvshow.nfo →
+                    // Series) alors que l'œuvre peut être un film absent de TMDB
+                    // (cas « Les couleurs du passé », « Du zéro à l'infini »).
+                    bool underDvr = !string.IsNullOrWhiteSpace(dvrRoot)
+                        && !string.IsNullOrWhiteSpace(item.Path)
+                        && IsUnderPath(item.Path, dvrRoot);
+                    bool suspected = !cross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound) && underDvr;
+                    if (!cross && !suspected) continue;
+
                     bool isSeries = IsSeriesItem(item);
                     string itemKind = isSeries ? "series" : "movie";
                     string otherKind = isSeries ? "movie" : "series";
 
-                    // Fiche croisée (lecture seule) : titre/année pour la
-                    // suggestion de nommage. Illisible → nom de l'item.
+                    // Fiche (lecture seule) : titre/année pour la suggestion de
+                    // nommage. Item confirmé → la fiche croisée posée est relue
+                    // par ids (cascade audit). Suspect → sonde du type opposé,
+                    // acceptée sur égalité exacte du titre uniquement. Illisible
+                    // → nom de l'item.
                     string ficheTitle = item.Name;
                     int ficheYear = 0;
                     string ficheKind = otherKind;
-                    var meta = await ReadCrossFicheAsync(item, otherKind, lang, ct).ConfigureAwait(false);
-                    if (meta != null)
+                    if (cross)
                     {
-                        if (!string.IsNullOrWhiteSpace(meta.Title)) ficheTitle = meta.Title;
-                        ficheYear = meta.Year ?? 0;
-                        if (!string.IsNullOrWhiteSpace(meta.Kind)) ficheKind = meta.Kind;
+                        var meta = await ReadCrossFicheAsync(item, otherKind, lang, ct).ConfigureAwait(false);
+                        if (meta != null)
+                        {
+                            if (!string.IsNullOrWhiteSpace(meta.Title)) ficheTitle = meta.Title;
+                            ficheYear = meta.Year ?? 0;
+                            if (!string.IsNullOrWhiteSpace(meta.Kind)) ficheKind = meta.Kind;
+                        }
+                    }
+                    else
+                    {
+                        var probe = await ProbeOppositeFicheAsync(item, otherKind, langs, ct).ConfigureAwait(false);
+                        if (probe != null)
+                        {
+                            ficheTitle = probe.Title;
+                            ficheYear = probe.Year ?? 0;
+                        }
                     }
 
+                    // Année par défaut (conversion sans fiche) : année de la fiche,
+                    // sinon ProductionYear de l'item (date de diffusion d'un DVR —
+                    // indicative mais la seule disponible pour une œuvre absente
+                    // de TMDB).
+                    int defaultYear = ficheYear;
+                    if (defaultYear <= 0 && item.ProductionYear.HasValue && item.ProductionYear.Value >= 1900)
+                        defaultYear = item.ProductionYear.Value;
+                    int suggestYear = ficheYear > 0 ? ficheYear : defaultYear;
+
                     var (files, ext) = CollectSourceFiles(item, isSeries);
+
+                    // Dossier source unique + ancre série (tvshow.nfo) : les
+                    // prérequis de la conversion sur place (le .ts d'un item
+                    // Série vit sur l'Episode — item.Path = dossier DVR).
+                    string srcFolder = null;
+                    var firstFile = files.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p));
+                    if (firstFile != null) srcFolder = Path.GetDirectoryName(firstFile);
+                    bool tvshowNfo = false;
+                    if (!string.IsNullOrWhiteSpace(srcFolder))
+                    {
+                        try { tvshowNfo = File.Exists(Path.Combine(srcFolder, "tvshow.nfo")); }
+                        catch { /* lecteur indisponible : non bloquant */ }
+                    }
+                    bool convertible = isSeries && files.Length > 0
+                        && !string.IsNullOrWhiteSpace(srcFolder)
+                        && !string.IsNullOrWhiteSpace(dvrRoot)
+                        && IsUnderPath(srcFolder, dvrRoot)
+                        && tvshowNfo;
+
                     int tmdbId = 0;
                     int.TryParse(item.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out tmdbId);
 
@@ -334,16 +525,22 @@ namespace LLM_AI
                     {
                         ItemId = item.InternalId.ToString(CultureInfo.InvariantCulture),
                         Name = item.Name,
+                        Status = suspected ? "suspected" : "confirmed",
+                        Suspected = suspected,
+                        Ignored = ignored,
                         ItemKind = itemKind,
                         FicheKind = ficheKind,
                         FicheTitle = ficheTitle,
                         FicheYear = ficheYear,
+                        DefaultYear = defaultYear,
                         TmdbId = tmdbId,
                         Regularized = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagRegularized),
+                        Convertible = convertible,
+                        SourceFolder = srcFolder,
                         SourceFiles = files,
                         SuggestedFolder = SanitizeName(ficheTitle) +
-                            (ficheYear > 0 ? " (" + ficheYear.ToString(CultureInfo.InvariantCulture) + ")" : ""),
-                        SuggestedFile = BuildBaseName(ficheTitle, ficheYear, ext)
+                            (suggestYear > 0 ? " (" + suggestYear.ToString(CultureInfo.InvariantCulture) + ")" : ""),
+                        SuggestedFile = BuildBaseName(ficheTitle, suggestYear, ext)
                     });
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -354,11 +551,12 @@ namespace LLM_AI
                 }
             }
 
-            // Tri stable : non régularisés d'abord, puis par nom.
+            // Tri stable : à traiter d'abord (confirmés puis suspects), puis
+            // régularisés, puis ignorés (réaffichés sur demande) ; par nom.
             return new CrossKindQueueResponse
             {
                 Items = list
-                    .OrderBy(e => e.Regularized ? 1 : 0)
+                    .OrderBy(e => e.Ignored ? 3 : e.Regularized ? 2 : e.Suspected ? 1 : 0)
                     .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
                     .ToArray()
             };
@@ -377,11 +575,13 @@ namespace LLM_AI
             var libs = new List<CrossKindLibrary>();
             try
             {
-                // Exclusions : la bibliothèque de cartes .strm du plugin et le
-                // répertoire des enregistrements DVR (soumis à la rétention)
-                // ne sont pas des cibles de copie. Seules les bibliothèques de
-                // films/séries et à contenu mixte sont suggérées (playlists,
-                // boxsets, musique… exclus par le filtre de type).
+                // Exclusions : la bibliothèque de cartes .strm du plugin n'est
+                // pas une cible de copie (pas de média réel). Les bibliothèques
+                // de films/séries et à contenu mixte sont proposées — y compris
+                // celle qui contient la racine des enregistrements DVR (flag
+                // IsDvr + avertissement rétention côté client : l'admin peut y
+                // régulariser une œuvre si la bibliothèque supporte le type
+                // visé ; playlists, boxsets, musique… exclus par le filtre).
                 string strmRoot = null;
                 try { strmRoot = StrmLibraryGenerator.ResolveLibraryRoot(LibraryManager, cfg?.StrmLibraryName, Logger); }
                 catch (Exception ex)
@@ -410,11 +610,13 @@ namespace LLM_AI
                     if (!videoish) continue;
 
                     var kept = new List<string>();
+                    bool isDvr = false;
                     foreach (var loc in f.Locations ?? Array.Empty<string>())
                     {
                         if (string.IsNullOrWhiteSpace(loc)) continue;
                         if (!string.IsNullOrWhiteSpace(strmRoot) && IsUnderPath(loc, strmRoot)) continue;
-                        if (!string.IsNullOrWhiteSpace(dvrRoot) && IsUnderPath(loc, dvrRoot)) continue;
+                        if (!string.IsNullOrWhiteSpace(dvrRoot) && IsUnderPath(loc, dvrRoot))
+                            isDvr = true;
                         kept.Add(loc);
                     }
                     if (kept.Count == 0) continue;
@@ -423,7 +625,8 @@ namespace LLM_AI
                     {
                         Name = f.Name,
                         Type = ctype,
-                        Paths = kept.ToArray()
+                        Paths = kept.ToArray(),
+                        IsDvr = isDvr
                     });
                 }
             }
@@ -568,6 +771,390 @@ namespace LLM_AI
                 Failed = failed.ToArray(),
                 Warning = warning
             };
+        }
+
+        // ------------------------------------------------------------------
+        //  POST Convert — conversion sur place d'un enregistrement DVR mal
+        //  typé. Renommage du dossier + fichiers (JAMAIS de suppression de
+        //  média), réécriture du .nfo en racine <movie>, suppression opt-in
+        //  de tvshow.nfo. Journal de rollback : tout échec restaure l'état
+        //  initial. Emby ré-importe l'œuvre sous le bon type au scan suivant.
+        // ------------------------------------------------------------------
+
+        public object Post(CrossKindConvertRequest req)
+        {
+            if (!IsAdmin())
+                return new CrossKindConvertResponse { Error = NotAdminError() };
+
+            string itemId = (req?.ItemId ?? "").Trim();
+            if (itemId.Length == 0)
+                return new CrossKindConvertResponse { Error = "ItemId requis." };
+
+            var item = ItemIdResolver.Resolve(LibraryManager, itemId);
+            if (item == null)
+                return new CrossKindConvertResponse { Error = "Item introuvable (id : " + itemId + ")." };
+
+            // Garde : la conversion s'applique aux items de la file (tag
+            // croisé, ou not-found suspect DVR) — pas d'usage détourné.
+            bool eligible = OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)
+                || OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound);
+            if (!eligible)
+                return new CrossKindConvertResponse
+                {
+                    Error = "Item non éligible : ni « " + OrphanIdentifyTask.TagCrossKind
+                        + " » ni « " + OrphanIdentifyTask.TagNotFound + " »."
+                };
+
+            // v1 : Série → Film (le cas dominant du DVR). Le sens inverse
+            // (Movie → Série) demanderait un nommage épisode — voir la copie.
+            bool isSeries = IsSeriesItem(item);
+            if (!isSeries)
+                return new CrossKindConvertResponse
+                {
+                    Error = "Conversion sur place réservée à un item série portant une œuvre film (cas inverse : utilisez la copie)."
+                };
+
+            var (files, _) = CollectSourceFiles(item, isSeries);
+            if (files.Length == 0)
+                return new CrossKindConvertResponse { Error = "Aucun fichier vidéo trouvé sur cet item (cartes .strm exclues)." };
+
+            // Dossier source unique (le dossier DVR de l'œuvre).
+            string srcFolder = Path.GetDirectoryName(files[0]);
+            for (int i = 1; i < files.Length; i++)
+            {
+                if (!string.Equals(Path.GetDirectoryName(files[i]), srcFolder, StringComparison.OrdinalIgnoreCase))
+                    return new CrossKindConvertResponse
+                    {
+                        Error = "Les fichiers de l'œuvre vivent dans plusieurs dossiers — conversion sur place impossible (utilisez la copie)."
+                    };
+            }
+
+            // Borne : le dossier doit être sous la racine des enregistrements
+            // DVR — ailleurs, la forme du dossier n'est pas un import DVR et
+            // la copie reste l'outil adapté.
+            if (!RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string dvrRoot)
+                || string.IsNullOrWhiteSpace(dvrRoot)
+                || !IsUnderPath(srcFolder, dvrRoot))
+            {
+                return new CrossKindConvertResponse
+                {
+                    Error = "La conversion sur place ne s'applique qu'aux dossiers du répertoire des enregistrements Live TV (ailleurs : utilisez la copie)."
+                };
+            }
+
+            // Garde « enregistrement en cours » : le DVR tient le .ts ouvert
+            // en écriture — l'ouverture exclusive échoue. Testé AVANT tout
+            // renommage (le handle est relâché à l'issue du test).
+            foreach (string f in files)
+            {
+                try
+                {
+                    using (new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.None)) { }
+                }
+                catch (IOException io)
+                {
+                    return new CrossKindConvertResponse
+                    {
+                        Error = "« " + Path.GetFileName(f) + " » est encore en cours d'utilisation "
+                            + "(enregistrement actif ou sonde média — réessayez dans quelques minutes). Détail : " + io.Message
+                    };
+                }
+                catch (UnauthorizedAccessException ua)
+                {
+                    return new CrossKindConvertResponse
+                    {
+                        Error = "Accès refusé sur « " + Path.GetFileName(f) + " » (" + ua.Message + ")."
+                    };
+                }
+            }
+
+            // Nom cible « Titre (Année) » — assaini comme un nom de fichier
+            // (les séparateurs sont des caractères invalides : pas d'évasion).
+            string target = SanitizeName(req.TargetName ?? "");
+            if (string.IsNullOrWhiteSpace(target))
+                return new CrossKindConvertResponse { Error = "Nom cible requis (format « Titre (Année) »)." };
+            if (target.Length > 200)
+                return new CrossKindConvertResponse { Error = "Nom cible trop long (≤ 200 caractères)." };
+            string curFolderName = Path.GetFileName(srcFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.Equals(target, curFolderName, StringComparison.OrdinalIgnoreCase))
+                return new CrossKindConvertResponse
+                {
+                    Error = "Le nom cible est identique au dossier actuel (« " + curFolderName + " ») — rien à convertir."
+                };
+
+            string parent = Path.GetDirectoryName(srcFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (string.IsNullOrWhiteSpace(parent))
+                return new CrossKindConvertResponse { Error = "Dossier source sans parent — conversion impossible." };
+            string newFolder = Path.Combine(parent, target);
+            if (Directory.Exists(newFolder) || File.Exists(newFolder))
+                return new CrossKindConvertResponse
+                {
+                    Error = "La cible existe déjà : « " + newFolder + " »."
+                };
+
+            // Découpe « Titre (Année) » (année optionnelle) : alimente le .nfo
+            // réécrit (titre + year) et le message de résultat.
+            string titlePart = target;
+            int yearPart = 0;
+            int open = target.LastIndexOf('(');
+            if (open > 0 && target.EndsWith(")", StringComparison.Ordinal))
+            {
+                string inner = target.Substring(open + 1, target.Length - open - 2).Trim();
+                if (int.TryParse(inner, NumberStyles.Integer, CultureInfo.InvariantCulture, out int y) && y >= 1900)
+                {
+                    yearPart = y;
+                    titlePart = target.Substring(0, open).Trim();
+                }
+            }
+            if (string.IsNullOrWhiteSpace(titlePart))
+                return new CrossKindConvertResponse { Error = "Nom cible invalide (titre vide)." };
+
+            // Plan de renommage : vidéo → « nom.ext » (suffixe numérique si
+            // plusieurs), .nfo voisin à l'identique, poster.jpg → « nom-poster.jpg ».
+            var ordered = files.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
+            var plan = new List<(string from, string to)>();
+            for (int i = 0; i < ordered.Length; i++)
+            {
+                string stem = i > 0
+                    ? target + " (" + (i + 1).ToString(CultureInfo.InvariantCulture) + ")"
+                    : target;
+                string srcExt = Path.GetExtension(ordered[i]);
+                plan.Add((ordered[i],
+                    Path.Combine(srcFolder, stem + (string.IsNullOrWhiteSpace(srcExt) ? ".ts" : srcExt.ToLowerInvariant()))));
+                string nfoSrc = Path.ChangeExtension(ordered[i], ".nfo");
+                if (File.Exists(nfoSrc))
+                    plan.Add((nfoSrc, Path.Combine(srcFolder, stem + ".nfo")));
+            }
+            string posterSrc = Path.Combine(srcFolder, "poster.jpg");
+            if (File.Exists(posterSrc))
+                plan.Add((posterSrc, Path.Combine(srcFolder, target + "-poster.jpg")));
+
+            // Collisions cibles : le contenu suit le dossier, le contrôle peut
+            // se faire dans le dossier actuel (mêmes noms).
+            var collisions = plan.Where(p => File.Exists(p.to)).Select(p => p.to).ToList();
+            if (collisions.Count > 0)
+                return new CrossKindConvertResponse
+                {
+                    Error = "Conflit : des fichiers cibles existent déjà — " + string.Join(" ; ", collisions)
+                };
+
+            string tvshowNfo = Path.Combine(srcFolder, "tvshow.nfo");
+            bool hasTvshow = File.Exists(tvshowNfo);
+
+            // Avertissements non bloquants : rétention DVR ; tvshow.nfo absent
+            // alors que demandé (le basculement de type dépend d'une autre
+            // ancre — à vérifier dans l'éditeur Emby).
+            var warn = new List<string>
+            {
+                "le dossier converti reste dans le répertoire des enregistrements Live TV (« " + dvrRoot
+                    + " »), soumis à la rétention DVR d'Emby"
+            };
+            if (req.DeleteTvshowNfo && !hasTvshow)
+                warn.Add("aucun tvshow.nfo à supprimer dans ce dossier");
+            string warning = "Attention : " + string.Join(" ; ", warn) + ".";
+
+            // Contenu des .nfo relu AVANT tout : plot/genres EPG sont réécrits
+            // en racine <movie> — un <episodedetails> relirait l'œuvre comme
+            // Épisode au re-import, et les métadonnées EPG (souvent la seule
+            // source : aucune fiche TMDB) seraient perdues.
+            var nfoTrees = new Dictionary<string, System.Xml.Linq.XElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in plan)
+            {
+                if (!p.to.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    nfoTrees[p.from] = System.Xml.Linq.XElement.Load(p.from);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : lecture du .nfo « {0} » impossible ({1}) — réécriture depuis l'item seul.",
+                        p.from, ex.Message);
+                }
+            }
+
+            // Exécution + journal de rollback : dossier d'abord (une seule
+            // opération atomique qui détache les anciens items Emby), fichiers
+            // ensuite, réécriture des .nfo, tvshow.nfo en DERNIER (il ne peut
+            // pas être restauré : jamais supprimé avant un renommage complet).
+            var renamed = new List<string>();
+            var deleted = new List<string>();
+            var failed = new List<string>();
+            var journal = new List<(string to, string from)>(); // (nouveau chemin, chemin d'origine)
+            var rewritten = new List<(string path, System.Xml.Linq.XElement tree)>(); // restauration du contenu
+            bool done = false;
+            try
+            {
+                Directory.Move(srcFolder, newFolder);
+                journal.Add((newFolder, srcFolder));
+
+                foreach (var p in plan)
+                {
+                    string src = Path.Combine(newFolder, Path.GetFileName(p.from));
+                    string dst = Path.Combine(newFolder, Path.GetFileName(p.to));
+                    if (string.Equals(src, dst, StringComparison.OrdinalIgnoreCase)) continue;
+                    File.Move(src, dst);
+                    journal.Add((dst, src));
+                    renamed.Add(src + " → " + dst);
+                }
+
+                // Réécriture des .nfo (nouveaux chemins) : racine <movie>, avec
+                // les ids de l'item quand l'œuvre est identifiée (fiche croisée).
+                foreach (var p in plan)
+                {
+                    if (!p.to.EndsWith(".nfo", StringComparison.OrdinalIgnoreCase)) continue;
+                    string dst = Path.Combine(newFolder, Path.GetFileName(p.to));
+                    nfoTrees.TryGetValue(p.from, out var tree);
+                    string xml = BuildMovieNfo(titlePart, yearPart, tree, item);
+                    System.IO.File.WriteAllText(dst, xml, new UTF8Encoding(true));
+                    if (tree != null) rewritten.Add((dst, tree));
+                }
+
+                if (req.DeleteTvshowNfo && hasTvshow)
+                {
+                    string tv = Path.Combine(newFolder, "tvshow.nfo");
+                    File.Delete(tv);
+                    deleted.Add(tv);
+                }
+                done = true;
+            }
+            catch (Exception ex)
+            {
+                failed.Add("opération : " + ex.Message);
+                Logger?.Warn("[LLM_AI] CrossKind : échec de conversion « {0} » ({1}) — rollback.",
+                    item?.Name, ex.Message);
+            }
+
+            if (!done)
+            {
+                // Rollback en ordre inverse : contenus .nfo réécrits, puis
+                // renommages, puis le dossier (journal = ordre d'exécution).
+                for (int i = rewritten.Count - 1; i >= 0; i--)
+                {
+                    try { System.IO.File.WriteAllText(rewritten[i].path, rewritten[i].tree.ToString(), new UTF8Encoding(true)); }
+                    catch (Exception ex)
+                    {
+                        Logger?.Error("[LLM_AI] CrossKind : rollback du contenu « {0} » échoué ({1}).",
+                            rewritten[i].path, ex.Message);
+                        failed.Add("rollback : " + rewritten[i].path);
+                    }
+                }
+                for (int i = journal.Count - 1; i >= 0; i--)
+                {
+                    try
+                    {
+                        if (Directory.Exists(journal[i].to)) Directory.Move(journal[i].to, journal[i].from);
+                        else if (File.Exists(journal[i].to)) File.Move(journal[i].to, journal[i].from);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger?.Error("[LLM_AI] CrossKind : rollback « {0} » → « {1} » échoué ({2}) — état à vérifier.",
+                            journal[i].to, journal[i].from, ex.Message);
+                        failed.Add("rollback : " + journal[i].to);
+                    }
+                }
+            }
+
+            if (done && (renamed.Count + deleted.Count) > 0)
+            {
+                // Tag « conversion faite » (add-only, même sémantique que la
+                // copie) — l'item d'origine disparaîtra au rescan de Emby.
+                try
+                {
+                    if (!OrphanResolver.HasTag(item, OrphanIdentifyTask.TagRegularized))
+                        OrphanResolver.AddTag(item, OrphanIdentifyTask.TagRegularized);
+                    item.UpdateToRepository(ItemUpdateType.MetadataEdit);
+                }
+                catch (Exception ex)
+                {
+                    Logger?.Warn("[LLM_AI] CrossKind : UpdateToRepository échoué ({0}).", ex.Message);
+                }
+            }
+
+            Logger?.Info("[LLM_AI] CrossKind : « {0} » {1} — renommés={2} supprimés={3} (aucun média supprimé).",
+                item?.Name, done ? "converti sur place" : "conversion ÉCHOUÉE (état restauré)",
+                renamed.Count, deleted.Count);
+
+            return new CrossKindConvertResponse
+            {
+                Renamed = renamed.ToArray(),
+                Deleted = deleted.ToArray(),
+                Failed = failed.ToArray(),
+                Warning = warning
+            };
+        }
+
+        /// <summary>
+        /// Construit le contenu d'un nfo « movie » : titre/année cibles, plot
+        /// et genres repris de l'ancien nfo (repli : l'item, qui porte les
+        /// champs EPG verrouillés), ids de l'item quand présents. XDocument
+        /// garantit l'échappement XML (les titres contiennent « &amp; », « &lt; »…).
+        /// </summary>
+        private string BuildMovieNfo(string title, int year, System.Xml.Linq.XElement oldDoc, BaseItem item)
+        {
+            string plot = oldDoc?.Element("plot")?.Value;
+            if (string.IsNullOrWhiteSpace(plot)) plot = item?.Overview;
+            var genres = (oldDoc?.Elements("genre") ?? Enumerable.Empty<System.Xml.Linq.XElement>())
+                .Select(g => g.Value)
+                .Where(g => !string.IsNullOrWhiteSpace(g))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (genres.Count == 0 && (item?.Genres?.Length ?? 0) > 0)
+                genres = item.Genres.Where(g => !string.IsNullOrWhiteSpace(g)).ToList();
+
+            var root = new System.Xml.Linq.XElement("movie");
+            root.Add(new System.Xml.Linq.XElement("title", (title ?? string.Empty).Trim()));
+            if (year > 0)
+                root.Add(new System.Xml.Linq.XElement("year", year.ToString(CultureInfo.InvariantCulture)));
+            if (!string.IsNullOrWhiteSpace(plot))
+                root.Add(new System.Xml.Linq.XElement("plot", plot.Trim()));
+            foreach (var g in genres)
+                root.Add(new System.Xml.Linq.XElement("genre", g.Trim()));
+            int.TryParse(item?.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId);
+            if (tmdbId > 0)
+                root.Add(new System.Xml.Linq.XElement("uniqueid",
+                    new System.Xml.Linq.XAttribute("type", "tmdb"),
+                    tmdbId.ToString(CultureInfo.InvariantCulture)));
+            string imdb = item?.GetProviderId("imdb");
+            if (!string.IsNullOrWhiteSpace(imdb))
+                root.Add(new System.Xml.Linq.XElement("uniqueid",
+                    new System.Xml.Linq.XAttribute("type", "imdb"), imdb.Trim()));
+
+            var sb = new StringBuilder();
+            sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>");
+            sb.Append(root.ToString());
+            return sb.ToString();
+        }
+
+        // ------------------------------------------------------------------
+        //  POST Ignore — pose/retire le tag llmai-cross-kind-ignored :
+        //  l'item sort (ou revient) de la file. Cas d'usage : une vraie série
+        //  pas encore dans TVDB/TMDB (« Le téléjournal », nouvelle mouture)
+        //  que la file proposerait à chaque rafraîchissement.
+        // ------------------------------------------------------------------
+
+        public object Post(CrossKindIgnoreRequest req)
+        {
+            if (!IsAdmin())
+                return new CrossKindIgnoreResponse { Error = NotAdminError() };
+
+            string itemId = (req?.ItemId ?? "").Trim();
+            if (itemId.Length == 0)
+                return new CrossKindIgnoreResponse { Error = "ItemId requis." };
+
+            var item = ItemIdResolver.Resolve(LibraryManager, itemId);
+            if (item == null)
+                return new CrossKindIgnoreResponse { Error = "Item introuvable (id : " + itemId + ")." };
+
+            if (req.Ignored) OrphanResolver.AddTag(item, OrphanIdentifyTask.TagCrossKindIgnored);
+            else OrphanResolver.RemoveTag(item, OrphanIdentifyTask.TagCrossKindIgnored);
+            try { item.UpdateToRepository(ItemUpdateType.MetadataEdit); }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : UpdateToRepository (ignore) échoué ({0}).", ex.Message);
+            }
+
+            Logger?.Info("[LLM_AI] CrossKind : « {0} » {1} la file cross-kind.",
+                item?.Name, req.Ignored ? "ignoré — retiré de" : "réaffiché dans");
+            return new CrossKindIgnoreResponse { Ignored = req.Ignored };
         }
 
         /// <summary>

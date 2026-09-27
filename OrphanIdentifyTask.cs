@@ -95,6 +95,18 @@ namespace LLM_AI
         /// de l'usager (invariant du repo).</summary>
         public const string TagRegularized = "llmai-regularized";
 
+        /// <summary>
+        /// Posé par la file cross-kind (page de configuration) sur demande de
+        /// l'admin : l'item ne doit plus être listé dans la file — ni confirmé
+        /// (tag croisé), ni suspect (not-found dont le dossier vit sous la
+        /// racine DVR, cas des œuvres absentes de TMDB). Cas d'usage : une
+        /// vraie série pas encore dans TVDB/TMDB (ex. « Le téléjournal avec
+        /// Azeb Wolde-Giorghis », nouvelle mouture de quelques semaines) que
+        /// la file proposerait à chaque rafraîchissement sans jamais être
+        /// régularisable. Retirable (« Ne plus ignorer ») ; l'item reste
+        /// trouvable par ses tags dans Emby.</summary>
+        public const string TagCrossKindIgnored = "llmai-cross-kind-ignored";
+
         public OrphanIdentifyTask(
             ILogger logger,
             IJsonSerializer jsonSerializer,

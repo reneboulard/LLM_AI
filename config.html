@@ -1007,13 +1007,18 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.crosskind.h">File de régularisation « cross-kind »</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.crosskind.desc">
-                            Œuvres enregistrées par Emby sous le mauvais type (tag <b>llmai-cross-kind</b> : fiche
-                            film sur un item série, ou l'inverse). Pour chacune, le plugin peut <b>copier</b> le
-                            fichier vidéo vers la bibliothèque de son type avec un nommage « Titre (Année).ts » :
-                            Emby le ré-importe nativement sous le bon type (identification directe, plus de
-                            coquille série/épisode). La copie est <b>vérifiée</b> et <b>jamais destructive</b> —
-                            l'original reste en place ; supprimez-le vous-même ensuite pour qu'Emby retire
-                            l'ancien item au scan suivant.
+                            Œuvres enregistrées par Emby sous le mauvais type. Deux sources dans la file : les
+                            items taggés <b>llmai-cross-kind</b> (fiche film sur un item série, ou l'inverse) et
+                            les <b>suspects</b> — items taggés <b>llmai-not-found</b> dont le dossier vit dans le
+                            répertoire des enregistrements DVR (œuvre absente de TMDB : documentaire importé en
+                            série). Pour chacune : <b>copier</b> le fichier vidéo vers la bibliothèque de son
+                            type avec un nommage « Titre (Année).ts » (copie vérifiée, jamais destructive —
+                            l'original reste en place, supprimez-le ensuite pour qu'Emby retire l'ancien item),
+                            ou <b>convertir sur place</b> le dossier DVR : renommage du dossier, de la vidéo, du
+                            .nfo et du poster « Titre (Année) », réécriture du .nfo en racine &lt;movie&gt;,
+                            retrait de tvshow.nfo — Emby ré-importe alors l'œuvre sous le bon type (rollback
+                            complet en cas d'échec). « Ignorer » retire une entrée de la file (tag
+                            <b>llmai-cross-kind-ignored</b>), réaffichable à la demande.
                         </div>
                         <div style="max-width:420px;margin:0.4em 0;">
                             <button is="emby-button" type="button" class="raised block" id="btnCrossKindRefresh"
@@ -1021,6 +1026,10 @@
                                 Recharger la file
                             </button>
                         </div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.4em 0;max-width:420px;">
+                            <input type="checkbox" is="emby-checkbox" id="chkCkShowIgnored" />
+                            <span data-i18n="cfg.crosskind.showignored">Afficher les entrées ignorées</span>
+                        </label>
                         <style>
                             .LLMAIConfigPage .ckItem {
                                 margin: 0.6em 0; padding: 0.8em 1em;
@@ -1033,6 +1042,12 @@
                             }
                             .LLMAIConfigPage .ckItem .ckDone {
                                 background: rgba(46,125,50,0.35); color: #c8e6c9;
+                            }
+                            .LLMAIConfigPage .ckItem .ckSuspect {
+                                background: rgba(230,126,34,0.35); color: #ffe0b2;
+                            }
+                            .LLMAIConfigPage .ckItem .ckIgnored {
+                                background: rgba(0,0,0,0.4); color: #999;
                             }
                             .LLMAIConfigPage .ckItem .ckPaths {
                                 font-family: monospace; font-size: 11px; color: #999;
@@ -1073,7 +1088,10 @@
                                 <select is="emby-select" id="ckDlgLib" label="Bibliothèque cible"
                                         data-i18n-label="cfg.crosskind.dialog.lib"></select>
                                 <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.lib.desc">
-                                    Les racines des bibliothèques Emby. Choisir une bibliothèque préremplit le
+                                    Bibliothèques de films/séries ou à contenu mixte, filtrées selon le type
+                                    visé par l'entrée — la bibliothèque de cartes .strm n'est jamais proposée ;
+                                    celle qui contient les enregistrements DVR l'est si elle supporte le type
+                                    visé (rétention DVR à considérer). Choisir une bibliothèque préremplit le
                                     dossier de destination avec la cible suggérée « Titre (Année) ».
                                 </div>
                             </div>
@@ -1093,6 +1111,32 @@
                                     Suggestion « Titre (Année).ext » dérivée de la fiche. Pour le cas fiche-série
                                     (un épisode d'une série), écrivez le nommage complet, ex.
                                     « Série (2019) - S01E05.ts ».
+                                </div>
+                            </div>
+                            <div id="ckConvertBox" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid #3a3a3a;">
+                                <b data-i18n="cfg.crosskind.convert.title">Convertir sur place (dossier DVR)</b>
+                                <div class="fieldDescription" data-i18n-html="cfg.crosskind.convert.hint">
+                                    Renomme le dossier en « Titre (Année) », la vidéo et le .nfo à l'identique,
+                                    poster.jpg en « Titre (Année)-poster.jpg », réécrit le .nfo en racine
+                                    &lt;movie&gt; (sinon l'œuvre serait relue comme Épisode) puis Emby ré-importe
+                                    l'œuvre sous le bon type au scan suivant. La vidéo n'est jamais supprimée ;
+                                    tout échec restaure l'état initial (rollback).
+                                </div>
+                                <div class="inputContainer" style="margin:0.4em 0;">
+                                    <input is="emby-input" type="text" id="ckDlgName"
+                                           label="Nom cible « Titre (Année) »" data-i18n-label="cfg.crosskind.convert.name" />
+                                    <div class="fieldDescription" data-i18n-html="cfg.crosskind.convert.name.desc">
+                                        Suggestion dérivée de la fiche, sinon du nom de l'item et de son année
+                                        de diffusion. Plusieurs enregistrements : suffixe « (2) », « (3) »…
+                                    </div>
+                                </div>
+                                <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.4em 0;">
+                                    <input type="checkbox" is="emby-checkbox" id="ckDlgTvshow" checked="checked" />
+                                    <span data-i18n="cfg.crosskind.convert.tvshow">Supprimer tvshow.nfo (requis pour le basculement de type)</span>
+                                </label>
+                                <div style="margin-top:0.6em;">
+                                    <button is="emby-button" type="button" class="raised" id="ckDlgConvert"
+                                            data-i18n="cfg.crosskind.convert.go">Convertir sur place</button>
                                 </div>
                             </div>
                             <div style="display:flex;gap:0.6em;margin-top:0.8em;">

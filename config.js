@@ -1124,40 +1124,69 @@ define(["loading"], function (loading) {
 
             // File de régularisation cross-kind : GET /Plugins/LLMAI/CrossKindQueue
             // (chargée au viewshow + bouton), dialogue natif <dialog> pour
-            // choisir la destination, POST /Plugins/LLMAI/CrossKindRegularize
-            // (copie vérifiée SANS suppression — l'original reste en place,
-            // l'usager le retire ensuite), puis scan bibliothèque Emby
-            // déclenché côté client après un succès. La file relit la fiche
-            // TMDB de chaque item (titre/année pour le nommage) : quelques
-            // requêtes par item, la zone affiche un état de chargement.
+            // choisir la destination ou convertir sur place, POST
+            // /Plugins/LLMAI/CrossKindRegularize (copie vérifiée SANS
+            // suppression — l'original reste en place, l'usager le retire
+            // ensuite) ou POST /Plugins/LLMAI/CrossKindConvert (renommage sur
+            // place du dossier DVR), puis scan bibliothèque Emby déclenché
+            // côté client après un succès. La file relit la fiche TMDB de
+            // chaque item (titre/année pour le nommage) : quelques requêtes
+            // par item, la zone affiche un état de chargement.
             var ckListEl = view.querySelector("#crossKindList");
             if (ckListEl) {
                 var ckLibs = [];
                 var ckEntry = null;
                 var ckDlg = view.querySelector("#dlgCrossKind");
+                var ckShowIgnoredEl = view.querySelector("#chkCkShowIgnored");
 
                 var ckKindLabel = function (kind) {
                     return kind === "movie" ? i18n.t("cfg.crosskind.kind.movie")
                                             : i18n.t("cfg.crosskind.kind.series");
                 };
                 var ckStatusHtml = function (e) {
-                    return e.Regularized
-                        ? '<span class="ckBadge ckDone">' + esc(i18n.t("cfg.crosskind.status.done")) + '</span>'
-                        : '<span class="ckBadge">' + esc(i18n.t("cfg.crosskind.status.pending")) + '</span>';
+                    var badges = "";
+                    if (e.Suspected)
+                        badges += '<span class="ckBadge ckSuspect">' +
+                            esc(i18n.t("cfg.crosskind.status.suspect")) + '</span>';
+                    if (e.Regularized)
+                        badges += '<span class="ckBadge ckDone">' +
+                            esc(i18n.t("cfg.crosskind.status.done")) + '</span>';
+                    if (e.Ignored)
+                        badges += '<span class="ckBadge ckIgnored">' +
+                            esc(i18n.t("cfg.crosskind.status.ignored")) + '</span>';
+                    return badges || ('<span class="ckBadge">' +
+                        esc(i18n.t("cfg.crosskind.status.pending")) + '</span>');
+                };
+                // Suspect : tag not-found + dossier dans le répertoire DVR —
+                // la sonde du type opposé (égalité exacte du titre) peut avoir
+                // accroché une fiche ; sinon œuvre absente de TMDB.
+                var ckEvidence = function (e) {
+                    var base = i18n.t("cfg.crosskind.evidence.base");
+                    if ((e.FicheYear || 0) > 0)
+                        return base + " " + i18n.t("cfg.crosskind.evidence.fiche",
+                            ckKindLabel(e.FicheKind), e.FicheTitle || "?", e.FicheYear);
+                    return base + " " + i18n.t("cfg.crosskind.evidence.nofiche");
                 };
                 var ckRowHtml = function (e) {
-                    var cross = esc(i18n.t("cfg.crosskind.cross",
-                        ckKindLabel(e.FicheKind), ckKindLabel(e.ItemKind)));
+                    var line = e.Suspected
+                        ? esc(ckEvidence(e))
+                        : esc(i18n.t("cfg.crosskind.cross",
+                            ckKindLabel(e.FicheKind), ckKindLabel(e.ItemKind)));
                     var target = esc(i18n.t("cfg.crosskind.target",
                         e.SuggestedFolder || "?", e.SuggestedFile || "?"));
                     var paths = (e.SourceFiles || []).map(esc).join("<br>");
                     return '<div class="ckItem">' +
                         '<b>' + esc(e.Name || "?") + '</b>' + ckStatusHtml(e) +
-                        '<div class="fieldDescription">' + cross + '<br>' + target + '</div>' +
+                        '<div class="fieldDescription">' + line + '<br>' + target + '</div>' +
                         (paths ? '<div class="ckPaths">' + paths + '</div>' : '') +
                         '<div style="margin-top:0.5em;">' +
                         '<button is="emby-button" type="button" class="raised btnCkRegularize" data-ck="' +
                         esc(e.ItemId) + '">' + esc(i18n.t("cfg.crosskind.regularize")) + '</button>' +
+                        '<button is="emby-button" type="button" class="btnCkIgnore" data-ck="' +
+                        esc(e.ItemId) + '" data-ignore="' + (e.Ignored ? "0" : "1") + '">' +
+                        esc(e.Ignored ? i18n.t("cfg.crosskind.unignore")
+                                      : i18n.t("cfg.crosskind.ignore")) +
+                        '</button>' +
                         '</div></div>';
                 };
                 var ckLastItems = [];
@@ -1174,7 +1203,9 @@ define(["loading"], function (loading) {
                     ckListEl.innerHTML = '<div class="fieldDescription">' +
                         esc(i18n.t("cfg.crosskind.queue.loading")) + '</div>';
                     ApiClient.ajax({
-                        url: ApiClient.getUrl("Plugins/LLMAI/CrossKindQueue"),
+                        url: ApiClient.getUrl("Plugins/LLMAI/CrossKindQueue", {
+                            IncludeIgnored: ckShowIgnoredEl ? !!ckShowIgnoredEl.checked : false
+                        }),
                         type: "GET"
                     }).then(function (resp) { return resp.json(); }).then(function (data) {
                         if (data && data.Error) {
@@ -1191,6 +1222,7 @@ define(["loading"], function (loading) {
 
                 var ckBtn = view.querySelector("#btnCrossKindRefresh");
                 if (ckBtn) ckBtn.addEventListener("click", ckLoad);
+                if (ckShowIgnoredEl) ckShowIgnoredEl.addEventListener("change", ckLoad);
 
                 // Bibliothèques (une fois par affichage de la page) — le
                 // dialogue les liste, triées : films d'abord (cas principal),
@@ -1215,16 +1247,29 @@ define(["loading"], function (loading) {
                     var ckLibEl = ckDlg.querySelector("#ckDlgLib");
                     var ckResultEl = ckDlg.querySelector("#ckDlgResult");
                     var ckGoBtn = ckDlg.querySelector("#ckDlgGo");
+                    var ckConvertBoxEl = ckDlg.querySelector("#ckConvertBox");
+                    var ckNameEl = ckDlg.querySelector("#ckDlgName");
+                    var ckTvshowEl = ckDlg.querySelector("#ckDlgTvshow");
+                    var ckConvertBtn = ckDlg.querySelector("#ckDlgConvert");
 
                     // La liste des bibliothèques : « Nom (type) » — la valeur
-                    // porte l'indice dans ckLibs. Films en tête (tri au fetch).
+                    // porte l'indice dans ckLibs. Filtrées selon le type visé
+                    // par l'entrée (movies / tvshows / mixte). La bibliothèque
+                    // contenant la racine DVR est étiquetée « DVR » (rétention).
                     var ckFillLibs = function () {
                         if (!ckLibEl) return;
+                        var kind = ckEntry ? ckEntry.FicheKind : "movie";
                         var opts = ['<option value="">—</option>'];
                         for (var i = 0; i < ckLibs.length; i++) {
                             var l = ckLibs[i];
+                            var ok = !l.Type ||
+                                (kind === "movie" && l.Type === "movies") ||
+                                (kind === "series" && l.Type === "tvshows");
+                            if (!ok) continue;
                             opts.push('<option value="' + i + '">' +
-                                esc(l.Name || "?") + (l.Type ? " (" + esc(l.Type) + ")" : "") +
+                                esc(l.Name || "?") +
+                                (l.Type ? " (" + esc(l.Type) + ")" : " (mixte)") +
+                                (l.IsDvr ? " — DVR" : "") +
                                 " — " + esc(l.Paths[0]) + '</option>');
                         }
                         ckLibEl.innerHTML = opts.join("");
@@ -1241,13 +1286,26 @@ define(["loading"], function (loading) {
                                 ' <span style="font-family:monospace;">' + list + '</span>';
                         }
                         if (ckFileEl) ckFileEl.value = entry.SuggestedFile || "";
+                        // Conversion sur place : boîte affichée seulement si
+                        // l'entrée est convertible (série DVR avec tvshow.nfo).
+                        // Nom cible prérempli avec la suggestion « Titre (Année) ».
+                        if (ckConvertBoxEl) ckConvertBoxEl.style.display = entry.Convertible ? "block" : "none";
+                        if (ckNameEl) ckNameEl.value = entry.SuggestedFolder || "";
+                        if (ckTvshowEl) ckTvshowEl.checked = true;
                         if (ckResultEl) { ckResultEl.style.display = "none"; ckResultEl.textContent = ""; }
 
-                        // Suggestion de dossier : première bibliothèque Films
-                        // (ou la première quelle qu'elle soit) + « Titre (Année) ».
+                        // Suggestion de dossier : la première bibliothèque du
+                        // type visé (fiche film → movies, fiche série →
+                        // tvshows), sinon la première mixte, sinon la première.
+                        var want = (ckEntry && ckEntry.FicheKind === "series") ? "tvshows" : "movies";
                         var sel = -1;
                         for (var i = 0; i < ckLibs.length; i++) {
-                            if (ckLibs[i].Type === "movies") { sel = i; break; }
+                            if (ckLibs[i].Type === want) { sel = i; break; }
+                        }
+                        if (sel < 0) {
+                            for (var j = 0; j < ckLibs.length; j++) {
+                                if (!ckLibs[j].Type) { sel = j; break; } // mixte
+                            }
                         }
                         if (sel < 0 && ckLibs.length > 0) sel = 0;
                         ckFillLibs();
@@ -1337,18 +1395,109 @@ define(["loading"], function (loading) {
                             }
                         });
                     });
+
+                    // Conversion sur place : renommage du dossier DVR (dossier,
+                    // vidéo, .nfo, poster), réécriture des .nfo en racine
+                    // <movie>, suppression opt-in de tvshow.nfo. Le serveur
+                    // rollback l'état initial au moindre échec.
+                    if (ckConvertBtn) {
+                        ckConvertBtn.addEventListener("click", function () {
+                            if (!ckEntry) return;
+                            var name = ((ckNameEl && ckNameEl.value) || "").trim();
+                            if (!name) {
+                                if (ckResultEl) {
+                                    ckResultEl.style.display = "block";
+                                    ckResultEl.textContent = i18n.t("cfg.crosskind.convert.needname");
+                                }
+                                return;
+                            }
+                            ckConvertBtn.disabled = true;
+                            var prevLabel = ckConvertBtn.textContent;
+                            ckConvertBtn.textContent = i18n.t("cfg.crosskind.convert.busy");
+                            if (ckResultEl) { ckResultEl.style.display = "block"; ckResultEl.textContent = "…"; }
+
+                            ApiClient.ajax({
+                                url: ApiClient.getUrl("Plugins/LLMAI/CrossKindConvert"),
+                                type: "POST",
+                                data: JSON.stringify({
+                                    ItemId: ckEntry.ItemId,
+                                    TargetName: name,
+                                    DeleteTvshowNfo: ckTvshowEl ? !!ckTvshowEl.checked : true
+                                }),
+                                contentType: "application/json",
+                                dataType: "json"
+                            }).then(function (data) {
+                                ckConvertBtn.disabled = false;
+                                ckConvertBtn.textContent = prevLabel;
+                                if (!data) data = {};
+                                if (data.Error) {
+                                    if (ckResultEl) ckResultEl.textContent = data.Error;
+                                    return;
+                                }
+                                var nRenamed = (data.Renamed || []).length;
+                                var nDeleted = (data.Deleted || []).length;
+                                var nFailed = (data.Failed || []).length;
+                                if (ckResultEl) {
+                                    var lines = (data.Renamed || []).concat(data.Deleted || [], data.Failed || []);
+                                    ckResultEl.textContent = i18n.t("cfg.crosskind.convert.done",
+                                        nRenamed, nDeleted, nFailed) +
+                                        (lines.length ? "\n" + lines.join("\n") : "") +
+                                        (data.Warning ? "\n\n⚠ " + data.Warning : "") +
+                                        // Consigne uniquement si aucun échec (l'état
+                                        // a été restauré sinon).
+                                        (nFailed > 0
+                                            ? "\n\n⚠ " + i18n.t("cfg.crosskind.convert.failedNote")
+                                            : "\n\n" + i18n.t("cfg.crosskind.convert.finalize"));
+                                }
+                                // Scan bibliothèque : Emby ré-importe le dossier
+                                // renommé sous le bon type. Best-effort.
+                                ApiClient.ajax({
+                                    url: ApiClient.getUrl("Library/Refresh"),
+                                    type: "POST"
+                                }).then(function () { /* scan déclenché */ }, function () { /* silencieux */ });
+                                ckLoad(); // rafraîchit la file (l'item disparaîtra au rescan)
+                            }, function (err) {
+                                ckConvertBtn.disabled = false;
+                                ckConvertBtn.textContent = prevLabel;
+                                if (ckResultEl) {
+                                    ckResultEl.textContent = i18n.t("cfg.crosskind.convert.err",
+                                        (err && err.statusText ? err.statusText : err));
+                                }
+                            });
+                        });
+                    }
                 }
 
-                // Délégation des clics « Régulariser… » → ouvre le dialogue
-                // avec l'entrée correspondante.
+                // Ignorer / réafficher une entrée (tag llmai-cross-kind-ignored)
+                // puis recharger la file.
+                var ckToggleIgnore = function (id, ignore) {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/CrossKindIgnore"),
+                        type: "POST",
+                        data: JSON.stringify({ ItemId: id, Ignored: ignore }),
+                        contentType: "application/json",
+                        dataType: "json"
+                    }).then(function () { ckLoad(); }, function () { ckLoad(); });
+                };
+
+                // Délégation des clics : « Régulariser… » ouvre le dialogue avec
+                // l'entrée correspondante ; « Ignorer / Ne plus ignorer » bascule
+                // le tag et recharge la file.
                 ckListEl.addEventListener("click", function (e) {
                     var btn = e.target && e.target.closest ? e.target.closest(".btnCkRegularize") : null;
-                    if (!btn || !ckDlg) return;
-                    var id = btn.getAttribute("data-ck");
-                    var entry = (ckLastItems || []).filter(function (x) {
-                        return x.ItemId === id;
-                    })[0];
-                    if (entry) ckOpen(entry);
+                    if (btn && ckDlg) {
+                        var id = btn.getAttribute("data-ck");
+                        var entry = (ckLastItems || []).filter(function (x) {
+                            return x.ItemId === id;
+                        })[0];
+                        if (entry) ckOpen(entry);
+                        return;
+                    }
+                    var ig = e.target && e.target.closest ? e.target.closest(".btnCkIgnore") : null;
+                    if (ig) {
+                        ckToggleIgnore(ig.getAttribute("data-ck"),
+                            ig.getAttribute("data-ignore") === "1");
+                    }
                 });
 
                 // Chargement au viewshow : la file se lit d'elle-même (quelques
