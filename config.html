@@ -1119,8 +1119,10 @@
                                     Renomme le dossier en « Titre (Année) », la vidéo et le .nfo à l'identique,
                                     poster.jpg en « Titre (Année)-poster.jpg », réécrit le .nfo en racine
                                     &lt;movie&gt; (sinon l'œuvre serait relue comme Épisode) puis Emby ré-importe
-                                    l'œuvre sous le bon type au scan suivant. La vidéo n'est jamais supprimée ;
-                                    tout échec restaure l'état initial (rollback).
+                                    l'œuvre sous le bon type au scan suivant. L'image EPG de l'œuvre est en outre
+                                    écrite en poster.jpg canonique dans le dossier converti — l'affiche est
+                                    conservée au ré-import. La vidéo n'est jamais supprimée ; tout échec
+                                    restaure l'état initial (rollback).
                                 </div>
                                 <div class="inputContainer" style="margin:0.4em 0;">
                                     <input is="emby-input" type="text" id="ckDlgName"

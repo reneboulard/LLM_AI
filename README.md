@@ -745,7 +745,12 @@ Pour chacun, le dialogue propose deux voies :
   absente de TMDB) et suppression **opt-in** de `tvshow.nfo` (l'ancre série — la
   seule suppression du flux, jamais le média). Garde « enregistrement en cours »
   (ouverture exclusive) et **journal de rollback** : tout échec restaure l'état
-  initial ; le tag `llmai-regularized` est posé et le scan bibliothèque déclenché.
+  initial ; le tag `llmai-regularized` est posé et le scan bibliothèque
+  déclenché. Dans les deux flux (copie et conversion), l'image principale de
+  l'item (l'affiche EPG d'un enregistrement DVR) est en outre écrite en
+  `poster.jpg` canonique du dossier cible — l'œuvre ré-importée garde son
+  affiche (best-effort, idempotent ; URL distante demandée à l'endpoint image
+  d'Emby, jamais à l'hôte du guide).
 
 Le bouton **Ignorer** pose le tag `llmai-cross-kind-ignored` (l'entrée sort de la
 file ; case « Afficher les entrées ignorées » pour les revoir, « Ne plus ignorer »

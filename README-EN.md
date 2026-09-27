@@ -720,7 +720,11 @@ For each entry, the dialog offers two routes:
   deletion of `tvshow.nfo` (the series anchor — the only deletion in the flow,
   never the media). "Recording in progress" guard (exclusive open) and a
   **rollback journal**: any failure restores the initial state; the
-  `llmai-regularized` tag is set and the library scan triggered.
+  `llmai-regularized` tag is set and the library scan triggered. In both flows
+  (copy and conversion), the item's primary image (a DVR recording's EPG
+  poster) is also written as a canonical `poster.jpg` in the target folder —
+  the re-imported work keeps its poster (best-effort, idempotent; a remote
+  URL is requested from Emby's own image endpoint, never the guide's host).
 
 The **Ignore** button sets the `llmai-cross-kind-ignored` tag (the entry leaves
 the queue; a "Show ignored entries" checkbox lists them again, "Stop ignoring"

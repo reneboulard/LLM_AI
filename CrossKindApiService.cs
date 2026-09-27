@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,6 +73,13 @@ namespace LLM_AI
     {
         /// <summary>Taille max d'un chemin cible saisi par l'admin.</summary>
         private const int MaxTargetPathLength = 400;
+
+        // HttpClient partagé (repli poster via l'endpoint image Emby — jamais
+        // l'hôte distant de l'image). Pas de credentials, timeout court.
+        private static readonly HttpClient s_http = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(20)
+        };
 
         // ------------------------------------------------------------------
         //  DTO requêtes / réponses
@@ -811,6 +819,13 @@ namespace LLM_AI
                 }
             }
 
+            // Poster canonique dans le dossier cible : l'image de l'item (EPG
+            // pour un DVR, fiche TMDB pour un confirmé) accompagne la copie —
+            // l'œuvre ré-importée garde son affiche. Idempotent (poster.jpg
+            // déjà présent → no-op), best-effort.
+            if ((copied.Count + skipped.Count) > 0)
+                await TrySaveItemPosterAsync(item, folder, ct).ConfigureAwait(false);
+
             // Tag « copie faite » UNIQUEMENT si au moins un fichier a été
             // copié ou était déjà en place : l'item reste dans la file
             // (statut distinct) tant que l'original existe.
@@ -842,8 +857,9 @@ namespace LLM_AI
         //  initial. Emby ré-importe l'œuvre sous le bon type au scan suivant.
         // ------------------------------------------------------------------
 
-        public object Post(CrossKindConvertRequest req)
+        public async Task<object> Post(CrossKindConvertRequest req)
         {
+            var ct = Request?.CancellationToken ?? CancellationToken.None;
             if (!IsAdmin())
                 return new CrossKindConvertResponse { Error = NotAdminError() };
 
@@ -1131,6 +1147,16 @@ namespace LLM_AI
                 }
             }
 
+            if (done)
+            {
+                // Poster canonique : l'image EPG de l'item est écrite en
+                // poster.jpg du dossier converti (le renommage a déjà déplacé
+                // le poster d'origine en « <base>-poster.jpg »). Best-effort :
+                // le chemin d'image de l'item pointe l'ancien dossier (renommé)
+                // → repli naturel sur l'endpoint image d'Emby (cache local).
+                await TrySaveItemPosterAsync(item, newFolder, ct).ConfigureAwait(false);
+            }
+
             Logger?.Info("[LLM_AI] CrossKind : « {0} » {1} — renommés={2} supprimés={3} (aucun média supprimé).",
                 item?.Name, done ? "converti sur place" : "conversion ÉCHOUÉE (état restauré)",
                 renamed.Count, deleted.Count);
@@ -1183,6 +1209,79 @@ namespace LLM_AI
             sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>");
             sb.Append(root.ToString());
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Écrit l'image principale de l'item (l'affiche EPG d'un enregistrement
+        /// DVR — vérifié en réel : le poster.jpg du dossier EST cette image, md5
+        /// identique) en <c>poster.jpg</c> du dossier cible, en complément du
+        /// renommage du poster d'origine (« &lt;base&gt;-poster.jpg ») : le nom
+        /// canonique garantit que l'œuvre ré-importée garde une affiche même si
+        /// le dossier n'en avait pas (ou seulement un logo de chaîne). Pattern
+        /// de <see cref="StrmLibraryGenerator"/> : image en cache local → copie ;
+        /// URL distante → JAMAIS l'hôte de l'image (donnée facturée du guide) —
+        /// l'affiche est demandée à l'endpoint image d'Emby
+        /// (<c>/emby/Items/{id}/Images/Primary</c>, le même chemin que
+        /// l'affichage EPG, servi depuis son cache). Best-effort, idempotent
+        /// (poster.jpg déjà présent → no-op), ne lève jamais (hors annulation
+        /// réelle — timeout HttpClient : TaskCanceledException sans annulation).
+        /// </summary>
+        private async Task<bool> TrySaveItemPosterAsync(BaseItem item, string destFolder, CancellationToken ct)
+        {
+            try
+            {
+                if (item == null || string.IsNullOrWhiteSpace(destFolder)) return false;
+                string dst = Path.Combine(destFolder, "poster.jpg");
+                if (File.Exists(dst)) return false; // déjà là : idempotent
+
+                if (!item.HasImage(ImageType.Primary, 0))
+                {
+                    Logger?.Info("[LLM_AI] CrossKind : pas d'image Primary sur « {0} » — poster non écrit.", item.Name);
+                    return false;
+                }
+                string src = item.GetImageInfo(ImageType.Primary, 0)?.Path;
+                if (string.IsNullOrWhiteSpace(src))
+                {
+                    Logger?.Info("[LLM_AI] CrossKind : chemin d'image indisponible pour « {0} » — poster non écrit.", item.Name);
+                    return false;
+                }
+
+                // Image en cache local côté Emby : simple copie.
+                if (File.Exists(src))
+                {
+                    File.Copy(src, dst, overwrite: true);
+                    Logger?.Info("[LLM_AI] CrossKind : poster EPG copié → « {0} » (depuis {1}).", dst, src);
+                    return true;
+                }
+
+                // URL distante : on ne contacte JAMAIS l'hôte de l'image — la
+                // demande va à Emby lui-même (endpoint image, cache local).
+                string baseApi = null;
+                try { baseApi = ApplicationHost?.GetLocalHostApiUrl(); }
+                catch (Exception ex)
+                {
+                    Logger?.Info("[LLM_AI] CrossKind : GetLocalHostApiUrl indisponible ({0}).", ex.Message);
+                }
+                if (string.IsNullOrWhiteSpace(baseApi)) return false;
+
+                string url = baseApi.TrimEnd('/') + "/Items/"
+                    + item.InternalId.ToString(CultureInfo.InvariantCulture) + "/Images/Primary?maxWidth=400";
+                using (var resp = await s_http.GetAsync(url, ct).ConfigureAwait(false))
+                {
+                    resp.EnsureSuccessStatusCode();
+                    using (var fs = File.Create(dst))
+                        await (await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false))
+                            .CopyToAsync(fs, 81920, ct).ConfigureAwait(false);
+                }
+                Logger?.Info("[LLM_AI] CrossKind : poster récupéré via l'endpoint image Emby → « {0} ».", dst);
+                return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Logger?.Info("[LLM_AI] CrossKind : poster de « {0} » non écrit ({1}) — best-effort.", item?.Name, ex.Message);
+                return false;
+            }
         }
 
         // ------------------------------------------------------------------

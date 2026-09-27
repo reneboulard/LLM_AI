@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.1] — 2026-09-27
+
+### Added (FR)
+- **Poster canonique conservé lors de la copie et de la conversion cross-kind.**
+  L'image principale de l'item (l'affiche EPG d'un enregistrement DVR — vérifié
+  en réel : le `poster.jpg` du dossier EST cette image, md5 identique) est
+  écrite en `poster.jpg` du dossier cible, en complément du renommage du poster
+  d'origine (« Titre (Année)-poster.jpg ») : le nom canonique garantit que
+  l'œuvre ré-importée garde une affiche même si le dossier n'en avait pas (ou
+  seulement un logo de chaîne). Image en cache local → simple copie ; URL
+  distante → la demande va à l'endpoint image d'Emby (le plugin ne contacte
+  jamais l'hôte distant de l'image, donnée facturée du guide). Best-effort et
+  idempotent : un échec ne bloque pas la copie/conversion, un `poster.jpg`
+  déjà présent n'est jamais écrasé.
+
+### Added (EN)
+- **Canonical poster preserved during cross-kind copy and conversion.** The
+  item's primary image (a DVR recording's EPG poster — field-verified: the
+  folder's `poster.jpg` IS that image, identical md5) is written as
+  `poster.jpg` in the target folder, in addition to the original poster
+  rename ("Title (Year)-poster.jpg"): the canonical name guarantees the
+  re-imported work keeps a poster even if the folder had none (or only a
+  channel logo). Local cached image → plain copy; remote URL → the request
+  goes to Emby's own image endpoint (the plugin never contacts the image's
+  remote host — billing-sensitive guide data). Best-effort and idempotent: a
+  failure never blocks the copy/conversion, an existing `poster.jpg` is never
+  overwritten.
+
 ## [1.14.0.0] — 2026-09-27
 
 ### Added (FR)
