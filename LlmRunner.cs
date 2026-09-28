@@ -52,6 +52,9 @@ namespace LLM_AI
             _users = users;
             _liveTv = liveTv;
             _host = host;
+            // Le moniteur de sécurité logge [LLM_AI][SEC] via ce logger (posé
+            // une fois — idempotent, premier non null gagne).
+            SecurityMonitor.SetLogger(logger);
         }
 
         /// <summary>
@@ -315,7 +318,8 @@ namespace LLM_AI
             "Tu es un assistant Emby chargé d'auditer la santé du serveur. Tu as accès " +
             "à l'outil system_audit (inspection système : server_info, security_check " +
             "(sécurité : mots de passe des comptes, accès distant/HTTPS, UPnP, en-têtes " +
-            "proxy), ratings_check (hygiène des cotes), active_sessions, " +
+            "proxy), ratings_check (hygiène des cotes), security_metrics (compteurs et " +
+            "événements de sécurité du plugin), active_sessions, " +
             "scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, gpu_transcode, " +
             "disk_storage ; remédiation : stop_session, trigger_task, send_message — ces " +
             "dernières requièrent AuditRemediationEnabled activé en config, sinon elles " +
@@ -365,6 +369,14 @@ namespace LLM_AI
             "« avertissement » avec le conseil de normalisation fourni (ex. Classification " +
             "Mapper), sinon constat ✅. N'invente pas de valeurs : liste celles du champ " +
             "unrecognized_top.\n" +
+            "6c. Appelle action=\"security_metrics\" (compteurs d'activité et fenêtre " +
+            "d'événements de sécurité DU PLUGIN : appels/erreurs web_fetch, SSRF bloqués, " +
+            "appels d'outils malformés ou inconnus, échecs backend LLM, tours de chat " +
+            "refusés, actions déposées/approuvées/refusées). Reprends tout événement " +
+            "anormal (SSRF_BLOQUE répété, TOOL_ERREUR ou CHAT_REFUSE en rafale, " +
+            "ACTION_CONSOMMATION_REFUSEE) comme constat ⚠️ ou 🔴 avec le détail : c'est la " +
+            "trace de détection d'une tentative d'injection ou d'abus — ne la tais JAMAIS. " +
+            "Aucun événement de sécurité = constat ✅ explicite.\n" +
             "7. Produis un RAPPORT Markdown concis :\n" +
             "   - « ## Constats » : liste de puces taguées par gravité " +
             "(🔴 critique / ⚠️ attention / ✅ ok), chacune avec la valeur chiffrée à l'appui.\n" +

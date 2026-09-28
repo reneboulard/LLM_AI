@@ -10,6 +10,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.7] — 2026-09-28
+
+### Fixed (FR)
+- **Dialogue cross-kind : le répertoire suggéré mélangeait les séparateurs sur
+  Windows** (« F:\Documentaires/Le blé, l'autre arme de Poutine (2024) » au
+  lieu de « F:\Documentaires\Le blé, l'autre arme de Poutine (2024) »). Trois
+  corrections : (1) l'endpoint `CrossKindLibraries` expose désormais
+  `Separator` (le `Path.DirectorySeparatorChar` de l'HÔTE — serveur Windows ou
+  Linux), et `config.js` assemble « racine + sous-dossier » avec CE séparateur
+  (déduit du chemin en repli, slash final de racine retiré) ; (2) le POST
+  `CrossKindRegularize` normalise la destination postée : sur Windows,
+  tout '/' est unifié vers le séparateur natif (dossier créé, toasts et
+  avertissements cohérents ; sur Linux '\' est un caractère de nom légal —
+  inchangé) ; (3) `IsUnderPath` normalise les séparateurs DES DEUX CÔTÉS —
+  l'ancienne forme n'ajoutait '/' qu'à droite et ratait tout sous-chemin
+  backslash : bug latent Windows (classification « suspect » des not-found
+  sous la racine DVR, éligibilité conversion, avertissement hors bibliothèque
+  sur une bibliothèque imbriquée). Fonctionnellement, le mélange passait
+  (Win32 tolère les deux) — mais le dossier suggéré était faux et les
+  gardes de containment restaient fragile.
+
+### Fixed (EN)
+- **Cross-kind dialogue: the suggested folder mixed separators on Windows**
+  ("F:\Documentaires/Le blé, l'autre arme de Poutine (2024)" instead of
+  "F:\Documentaires\Le blé, l'autre arme de Poutine (2024)"). Three fixes:
+  (1) the `CrossKindLibraries` endpoint now exposes `Separator` (the HOST's
+  `Path.DirectorySeparatorChar` — Windows or Linux server), and `config.js`
+  joins "root + subfolder" with THAT separator (inferred from the path as
+  fallback, trailing slash stripped); (2) the `CrossKindRegularize` POST
+  normalizes the posted destination: on Windows every '/' is unified to the
+  native separator (created folder, toasts and warnings consistent; on Linux
+  '\' is a legal filename character — untouched); (3) `IsUnderPath` normalizes
+  separators on BOTH sides — the old form only appended '/' on the right and
+  missed every backslash subpath: latent Windows bug (not-found "suspected"
+  classification under the DVR root, conversion eligibility, out-of-library
+  warning on a nested library). Functionally the mix worked (Win32 tolerates
+  both) — but the suggested folder was wrong and the containment guards
+  stayed fragile.
+
+## [1.14.0.6] — 2026-09-28
+
+### Added (FR)
+- **Monitoring de sécurité du plugin (détection) — `SecurityMonitor`.** Après la
+  prévention (garde SSRF au connect v1.14.0.5, confirmation deux phases
+  v1.13.29), le volet « savoir si on est attaqué / compromis » : compteurs
+  in-process (appels/erreurs `web_fetch`, hits de cache, **SSRF_BLOQUE**
+  pré-contrôle et garde au connect, appels d'outils malformés ou inconnus,
+  échecs backend LLM, tours de chat refusés du rate limiter, actions
+  déposées/approuvées/refusées/consommations refusées) + journal borné de 200
+  événements de sécurité. Sans configuration, en mémoire (reset au restart) —
+  la trace DURABLE est le journal Emby : chaque événement trace une ligne
+  `[LLM_AI][SEC] <kind> : <detail>` (grep externe, rotation incluse). Lecture
+  par la sonde `system_audit action="security_metrics"` (intégrée au rapport
+  d'audit — workflow 6c : tout SSRF bloqué répété, erreur d'outil ou refus en
+  rafale, consommation d'action refusée devient un constat signalé, jamais
+  tu) et par l'endpoint admin `GET /Plugins/LLMAI/SecurityMetrics` (calqué
+  `AuditApiService`, résolution admin par token). Instrumentation aux points
+  de décision : `WebFetchTool` (pré-contrôle + garde au connect), boucle agent
+  (`LlmAgentService` : outil inconnu, outil en erreur, appel malformé, échecs
+  backend), `ChatRateLimiter` (refus par usager), `ChatActionStore` (cycle de
+  vie complet des actions — l'anti-injection est désormais observable).
+  Validé par sonde : les 6 refus SSRF (5 pré-contrôle + 1 connect via
+  redirection) remontent dans compteurs et fenêtre d'événements.
+
+### Added (EN)
+- **Plugin security monitoring (detection) — `SecurityMonitor`.** After
+  prevention (connect-level SSRF guard v1.14.0.5, two-phase confirmation
+  v1.13.29), the "know we're under attack" side: in-process counters
+  (`web_fetch` calls/errors, cache hits, **SSRF_BLOQUE** at pre-check and
+  connect-level guard, malformed or unknown tool calls, LLM backend failures,
+  rate-limiter refused chat turns, deposited/approved/refused actions/refused
+  consumptions) + bounded journal of 200 security events. Zero configuration,
+  in-memory (reset on restart) — the DURABLE trace is the Emby log: every
+  event logs a `[LLM_AI][SEC] <kind> : <detail>` line (external grep, rotation
+  included). Read through the `system_audit action="security_metrics"` probe
+  (integrated into the audit report — workflow 6c: any repeated blocked SSRF,
+  tool error or refusal burst, refused action consumption becomes a reported
+  finding, never hidden) and through the admin endpoint
+  `GET /Plugins/LLMAI/SecurityMetrics` (modeled on `AuditApiService`, admin
+  resolution by token). Instrumented at the decision points: `WebFetchTool`
+  (pre-check + connect guard), agent loop (`LlmAgentService`: unknown tool,
+  tool error, malformed call, backend failures), `ChatRateLimiter` (refusals
+  per user), `ChatActionStore` (full action lifecycle — the anti-injection is
+  now observable). Probe-validated: all 6 SSRF refusals (5 pre-check + 1
+  connect-level via redirect) show up in counters and events.
+
+## [1.14.0.5] — 2026-09-28
+
+### Fixed (FR)
+- **`web_fetch` : le garde SSRF était contournable par redirection (et par
+  rebinding DNS) — fermé au niveau connexion.** Sonde hors-repo validée en
+  réel : le pré-contrôle ne voit que le premier saut, or `HttpClient` suit
+  les redirections `http`→`http` sans le rappeler — une page publique qui
+  302 vers `http://127.0.0.1:8899/…` faisait **retourner le contenu du
+  service interne au LLM** (titre, contenu, `final_url` ; le cas `https`→`http`
+  était bloqué par accident par la règle anti-downgrade de SocketsHttpHandler,
+  pas par le plugin). Le handler direct porte désormais un
+  `SocketsHttpHandler.ConnectCallback` (posé par réflexion avec dégradation
+  propre sur les hôtes antérieurs à .NET 5 — jamais de référence compilée,
+  gotcha MissingMethodException) : chaque connexion est revalidée au moment
+  exact du connect — toute IP privée/réservée/boucle locale est refusée, et
+  le DNS n'est résolu qu'une fois, dans le callback, la socket se connectant
+  à l'IP validée (ferme le rebinding DNS TOCTOU). Le client direct passe en
+  création `Lazy` (une API absente ne doit jamais tuer la classe dans le
+  constructeur statique). Re-testé : redirection vers 127.0.0.1 refusée
+  (« adresses privées/locales bloquées »), redirection publique toujours
+  suivie (`final_url` conservé), les 5 gardes du premier saut inchangées.
+
+### Fixed (EN)
+- **`web_fetch`: the SSRF guard was bypassable via redirect (and DNS
+  rebinding) — closed at the connection level.** Out-of-repo probe,
+  field-verified: the pre-check only sees the first hop, while `HttpClient`
+  follows `http`→`http` redirects without re-running it — a public page 302-ing
+  to `http://127.0.0.1:8899/…` had the **internal service's content returned
+  to the LLM** (title, content, `final_url`; the `https`→`http` case was
+  blocked by accident via SocketsHttpHandler's anti-downgrade rule, not by
+  the plugin). The direct client's handler now carries a
+  `SocketsHttpHandler.ConnectCallback` (set via reflection with graceful
+  degradation on pre-.NET 5 hosts — never a compiled reference,
+  MissingMethodException gotcha): every connection is validated at the exact
+  connect moment — any private/reserved/loopback IP is refused, and DNS is
+  resolved once, inside the callback, the socket connecting to the validated
+  IP (closes DNS rebinding TOCTOU). The direct client is now `Lazy`-created
+  (a missing API must never kill the class from the static constructor).
+  Re-tested: redirect to 127.0.0.1 refused ("private/local addresses
+  blocked"), public redirect still followed (`final_url` preserved), the 5
+  first-hop guards unchanged.
+
 ## [1.14.0.4] — 2026-09-27
 
 ### Fixed (FR)

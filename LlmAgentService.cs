@@ -218,6 +218,7 @@ namespace LLM_AI
                         // continue la boucle. Borné par MaxIterations.
                         _logger?.Warn("[LLM_AI] Itération {0} — tableau d'appels d'outils malformé ({1}). Demande de renvoi.",
                             iter, parsed.Error);
+                        SecurityMonitor.Record("APPEL_TOOL_MALFORME", parsed.Error);
                         messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
                         // Message de réparation : le format de sortie final dépend du
                         // mode. En mode recommandation (_formatSection == null), on
@@ -343,6 +344,7 @@ namespace LLM_AI
                         }
                         catch (Exception ex)
                         {
+                            SecurityMonitor.Record("TOOL_ERREUR", call.Tool + " : " + ex.Message);
                             _logger?.ErrorException("[LLM_AI] Outil {0} a levé : {1}", ex, call.Tool, ex.Message);
                             res = "{\"error\":\"" + JsonEscape(ex.Message) + "\"}";
                         }
@@ -355,6 +357,7 @@ namespace LLM_AI
                     }
                     else
                     {
+                        SecurityMonitor.Record("TOOL_INCONNU", call.Tool);
                         sb.Append("{\"tool\":\"").Append(JsonEscape(call.Tool))
                           .Append("\",\"error\":\"outil inconnu\"}");
                     }
@@ -402,6 +405,7 @@ namespace LLM_AI
                     var b = _backends[_activeIndex];
                     _logger?.Warn("[LLM_AI] Backend actif {0}/{1} a échoué ({2}) — re-scanne les backends.",
                         b.Url, b.Model, ex.Message);
+                    SecurityMonitor.Record("LLM_BACKEND_ECHEC", "actif " + b.Url + " / " + b.Model + " : " + ex.Message);
                     _activeIndex = -1; // on relève la sélection
                 }
             }
@@ -427,6 +431,7 @@ namespace LLM_AI
                     last = ex;
                     _logger?.Warn("[LLM_AI] Backend {0} / {1} indisponible ({2}) — passe au suivant.",
                         b.Url, b.Model, ex.Message);
+                    SecurityMonitor.Record("LLM_BACKEND_ECHEC", b.Url + " / " + b.Model + " : " + ex.Message);
                 }
             }
 

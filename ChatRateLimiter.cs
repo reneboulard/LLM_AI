@@ -107,12 +107,14 @@ namespace LLM_AI
                     int wait = SecondsUntilFree(window, minuteCutoff, MinuteSeconds, now);
                     error = "Trop de messages — patientez " + Math.Max(1, wait)
                             + " s (limite : " + maxPerMinute + " par minute).";
+                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
                     return false;
                 }
                 if (!unlimitedDay && lastDay >= maxPerDay)
                 {
                     error = "Quota du jour atteint (" + lastDay + " messages) — "
                             + "réessayez plus tard.";
+                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
                     return false;
                 }
 
@@ -137,7 +139,10 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(user)) return false;
             var sem = s_inflight.GetOrAdd(user, _ => new SemaphoreSlim(1, 1));
             if (!sem.Wait(0))
+            {
+                SecurityMonitor.Record("CHAT_REFUSE", user + " — tour déjà en vol (verrou de concurrence).");
                 return false;
+            }
             release = new TurnRelease(sem);
             return true;
         }
@@ -179,6 +184,7 @@ namespace LLM_AI
                     int wait = SecondsUntilFree(window, cutoff, MinuteSeconds, now);
                     error = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                         errorFormat, Math.Max(1, wait));
+                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
                     return false;
                 }
                 window.Add(now.UtcTicks);

@@ -161,6 +161,13 @@ namespace LLM_AI
         {
             public CrossKindLibrary[] Libraries { get; set; }
             public string Error { get; set; }
+            /// <summary>Séparateur natif de l'HÔTE (plugin side,
+            /// Path.DirectorySeparatorChar) — le dialogue de destination
+            /// assemble « racine + sous-dossier » avec CE séparateur, pas un
+            /// « / » codé en dur (un serveur Windows préremplissait
+            /// « F:\Documentaires/Le blé… » — mélange fonctionnel mais faux,
+            /// corrigé v1.14.0.7).</summary>
+            public string Separator { get; set; }
         }
 
         [Route("/Plugins/LLMAI/CrossKindRegularize", "POST")]
@@ -691,7 +698,11 @@ namespace LLM_AI
             {
                 Logger?.Warn("[LLM_AI] CrossKind : GetVirtualFolders échoué ({0}).", ex.Message);
             }
-            return new CrossKindLibrariesResponse { Libraries = libs.ToArray() };
+            return new CrossKindLibrariesResponse
+            {
+                Libraries = libs.ToArray(),
+                Separator = Path.DirectorySeparatorChar.ToString()
+            };
         }
 
         // ------------------------------------------------------------------
@@ -734,6 +745,13 @@ namespace LLM_AI
             string folder = (req?.TargetFolder ?? "").Trim();
             if (folder.Length == 0)
                 return Refuse("Dossier de destination requis.");
+            // Séparateurs mélangés possibles (préremplissage du dialogue, ou
+            // une saisie collée) : sur Windows '/' n'est PAS le séparateur
+            // natif — on les unifie pour que le dossier créé, les toasts et
+            // les contrôles de containment soient natifs. Sur Linux '\' est
+            // un caractère légal de nom de fichier : on ne touche pas.
+            if (Path.DirectorySeparatorChar != '/' && folder.IndexOf('/') >= 0)
+                folder = folder.Replace('/', Path.DirectorySeparatorChar);
             if (!Path.IsPathRooted(folder) || folder.Length > 400)
                 return Refuse("Chemin de destination invalide (absolu, ≤ 400 caractères).");
 
@@ -1471,12 +1489,15 @@ namespace LLM_AI
 
         /// <summary>True si <paramref name="candidate"/> est <paramref name="root"/>
         /// ou un sous-chemin de <paramref name="root"/> (insensible à la casse,
-        /// séparateurs normalisés sur '/').</summary>
+        /// séparateurs normalisés sur '/' DES DEUX CÔTÉS — un chemin Windows
+        /// backslash contre une racine backslash doit matcher : l'ancienne
+        /// forme n'ajoutait '/' qu'à droite et ratait tout sous-chemin
+        /// backslash, bug latent Windows v1.14.0.7).</summary>
         private static bool IsUnderPath(string candidate, string root)
         {
             if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
-            string a = candidate.TrimEnd('/', '\\');
-            string b = root.TrimEnd('/', '\\');
+            string a = candidate.Replace('\\', '/').TrimEnd('/');
+            string b = root.Replace('\\', '/').TrimEnd('/');
             if (a.Length == 0 || b.Length == 0) return false;
             return a.Equals(b, StringComparison.OrdinalIgnoreCase)
                 || a.StartsWith(b + "/", StringComparison.OrdinalIgnoreCase);

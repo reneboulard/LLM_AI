@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -39,7 +41,13 @@ namespace LLM_AI
     /// <b>SSRF</b> : l'URL provient du LLM, on valide donc côté client (comme le
     /// PHP) avant tout fetch — refus des hôtes IP littéraux et des noms qui
     /// résolvent vers une adresse privée/réservée/boucle locale. La garde
-    /// s'applique aux deux backends (direct et cloud).
+    /// s'applique aux deux backends (direct et cloud), ET est revalidée au
+    /// moment de CHAQUE connexion via <see cref="GuardedConnectAsync"/>
+    /// (ConnectCallback du handler direct) : une redirection suivie vers un
+    /// hôte privé est refusée, et le DNS n'est résolu qu'au connect (l'IP
+    /// connectée est celle validée) — ferme le rebinding. Validé par sonde
+    /// 2026-09-28 : une redirection http→http publique→127.0.0.1 retournait
+    /// le contenu interne au LLM avant le garde au connect.
     /// </remarks>
     public class WebFetchTool : ILlmTool
     {
@@ -49,18 +57,26 @@ namespace LLM_AI
         // TLS Chrome) — non portable en .NET ; ce UA est le meilleur équivalent
         // zéro-dépendance. Repli Ollama cloud sur les sites qui bloquent quand
         // même.
-        private static readonly HttpClient _direct = new HttpClient
+        // Lazy : la création du handler (ConnectCallback) doit rester HORS du
+        // constructeur statique — une API absente sur un hôte ancien ne doit
+        // jamais tuer la classe entière à l'init (TypeInitializationException
+        // rendrait tout run LLM mort, gotcha AGENTS.md).
+        private static readonly Lazy<HttpClient> _direct =
+            new Lazy<HttpClient>(CreateDirectClient);
+
+        private static HttpClient CreateDirectClient()
         {
-            Timeout = TimeSpan.FromSeconds(20)
-        };
-        static WebFetchTool()
-        {
-            _direct.DefaultRequestHeaders.UserAgent.ParseAdd(
+            var client = new HttpClient(BuildDirectHandler())
+            {
+                Timeout = TimeSpan.FromSeconds(20)
+            };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
                 "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
-            _direct.DefaultRequestHeaders.Accept.ParseAdd(
+            client.DefaultRequestHeaders.Accept.ParseAdd(
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-            _direct.DefaultRequestHeaders.AcceptLanguage.ParseAdd("fr,en;q=0.9");
+            client.DefaultRequestHeaders.AcceptLanguage.ParseAdd("fr,en;q=0.9");
+            return client;
         }
 
         // Client pour le repli Ollama cloud (timeout plus long, pas de UA).
@@ -91,6 +107,9 @@ namespace LLM_AI
         public WebFetchTool(ILogger logger)
         {
             _logger = logger;
+            // Le moniteur de sécurité partage le logger du chemin (la ligne
+            // [LLM_AI][SEC] doit vivre dans le journal Emby).
+            SecurityMonitor.SetLogger(logger);
         }
 
         public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
@@ -99,6 +118,7 @@ namespace LLM_AI
             string url = OptString(args, "url");
             if (string.IsNullOrWhiteSpace(url))
                 return Err("paramètre 'url' requis pour web_fetch");
+            SecurityMonitor.Count("web_fetch_appels");
 
             string detail = OptString(args, "detail_level");
             if (string.IsNullOrWhiteSpace(detail)) detail = "full";
@@ -108,13 +128,19 @@ namespace LLM_AI
             // --- SSRF : validation côté client avant tout fetch ---
             if (Uri.TryCreate(url, UriKind.Absolute, out var uri) == false
                 || (uri.Scheme != "http" && uri.Scheme != "https"))
+            {
+                SecurityMonitor.Record("WEB_FETCH_ERREUR", "URL invalide (non http(s)) : " + Truncate(url, 120));
                 return Err("URL invalide (doit être http(s) absolu).");
+            }
 
             string host = uri.Host;
             if (string.IsNullOrEmpty(host))
                 return Err("URL sans hôte.");
             if (IPAddress.TryParse(host, out _))
+            {
+                SecurityMonitor.Record("SSRF_BLOQUE", "pré-contrôle : IP littérale " + host);
                 return Err("Requêtes vers une IP littérale bloquées (fournir un nom de domaine).");
+            }
 
             try
             {
@@ -123,7 +149,10 @@ namespace LLM_AI
                     return Err($"hôte introuvable : {host}");
                 foreach (var a in addrs)
                     if (IsPrivateOrReserved(a))
+                    {
+                        SecurityMonitor.Record("SSRF_BLOQUE", "pré-contrôle : " + host + " → " + a.ToString());
                         return Err("Requêtes vers des adresses privées/locales bloquées.");
+                    }
             }
             catch (Exception ex)
             {
@@ -135,6 +164,7 @@ namespace LLM_AI
             string cacheKey = "fetch:" + detail + ":" + WebResultCache.NormalizeUrl(url);
             if (WebResultCache.TryGet(cacheKey, out var cached))
             {
+                SecurityMonitor.Count("web_fetch_cache_hits");
                 _logger?.Info("[LLM_AI] web_fetch cache hit url={0}", url);
                 return cached;
             }
@@ -188,10 +218,13 @@ namespace LLM_AI
                 // Ne cache QUE les résultats valides (pas les erreurs).
                 if (valid)
                     WebResultCache.Set(cacheKey, result);
+                else
+                    SecurityMonitor.Record("WEB_FETCH_ERREUR", Truncate(result, 200));
                 return result;
             }
             catch (Exception ex)
             {
+                SecurityMonitor.Record("WEB_FETCH_ERREUR", ex.Message);
                 _logger?.ErrorException("[LLM_AI] web_fetch a levé : {0}", ex, ex.Message);
                 return Err(ex.Message);
             }
@@ -213,7 +246,7 @@ namespace LLM_AI
             try
             {
                 using (var req = new HttpRequestMessage(HttpMethod.Get, url))
-                using (var resp = await _direct.SendAsync(req, ct).ConfigureAwait(false))
+                using (var resp = await _direct.Value.SendAsync(req, ct).ConfigureAwait(false))
                 {
                     var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                     string finalUrl = resp.RequestMessage?.RequestUri?.ToString();
@@ -695,6 +728,152 @@ namespace LLM_AI
         // ------------------------------------------------------------------
         //  SSRF : détection des adresses privées / réservées / boucle locale
         // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Handler du client direct avec garde SSRF au niveau connexion.
+        /// <see cref="SocketsHttpHandler.ConnectCallback"/> (API .NET 5+) est
+        /// posé par réflexion (voir <see cref="TrySetConnectCallback"/>) :
+        /// chaque connexion — hop 1 comme hop N des redirections suivies —
+        /// repasse par <see cref="GuardedConnectAsync"/>, qui valide l'IP
+        /// au moment exact du connect. Ferme les deux contournements du
+        /// pré-contrôle d'<see cref="ExecuteAsync"/> : redirections vers un
+        /// hôte privé (le pré-contrôle ne voit que le premier saut ;
+        /// HttpClient suit les redirections http→http sans le rappeler) et
+        /// DNS rebinding TOCTOU (la résolution n'a lieu qu'une fois, dans le
+        /// callback, et la socket se connecte à l'IP validée). Validé par
+        /// sonde 2026-09-28 (redirection publique→127.0.0.1 : contenu interne
+        /// remis au LLM avant garde ; bloqué après).
+        /// </summary>
+        private static HttpMessageHandler BuildDirectHandler()
+        {
+            var handler = new SocketsHttpHandler
+            {
+                // Redirections suivies (liens courts, miroirs — final_url
+                // exposé au LLM) : sûres car chaque connexion repasse par le
+                // garde au connect. https→http est de toute façon refusé par
+                // SocketsHttpHandler (règle interne anti-downgrade).
+                AllowAutoRedirect = true,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10)
+            };
+            TrySetConnectCallback(handler);
+            return handler;
+        }
+
+        /// <summary>
+        /// Pose <see cref="GuardedConnectAsync"/> sur
+        /// <c>SocketsHttpHandler.ConnectCallback</c> via réflexion — jamais de
+        /// référence compilée : sur un hôte antérieur à .NET 5 l'API absente
+        /// lèverait une <c>MissingMethodException</c> AU JIT de la méthode qui
+        /// la référence, tuant toute la chaîne web_fetch (le repli, dans la
+        /// même méthode, ne s'exécuterait jamais — gotcha AGENTS.md). Ici le
+        /// seul accès JIT est dans <see cref="TrySetConnectCallback"/>, dont
+        /// l'échec est catché : on dégrade à l'ancien comportement (garde au
+        /// premier saut uniquement) plutôt qu'à un crash.
+        /// </summary>
+        private static void TrySetConnectCallback(SocketsHttpHandler handler)
+        {
+            try
+            {
+                var prop = typeof(SocketsHttpHandler).GetProperty("ConnectCallback");
+                if (prop == null || !prop.CanWrite) return;
+                var method = typeof(WebFetchTool).GetMethod(nameof(GuardedConnectAsync),
+                    BindingFlags.NonPublic | BindingFlags.Static);
+                if (method == null) return;
+                prop.SetValue(handler, Delegate.CreateDelegate(prop.PropertyType, method));
+            }
+            catch
+            {
+                // Hôte sans ConnectCallback : handler sans garde au connect —
+                // le pré-contrôle du premier saut (ExecuteAsync) reste actif.
+            }
+        }
+
+        /// <summary>
+        /// ConnectCallback : résout le nom de <paramref name="ctx"/> puis
+        /// refuse toute adresse privée/réservée/boucle locale, et connecte la
+        /// socket à une IP VALIDÉE. SocketsHttpHandler ne résout pas le DNS
+        /// lui-même quand ConnectCallback est posé — la résolution n'a donc
+        /// lieu qu'ICI, une seule fois par connexion. Lève
+        /// <see cref="HttpRequestException"/> avec un message clair (surfacer
+        /// par FetchDirect vers le LLM / le repli cloud).
+        /// </summary>
+        private static async ValueTask<Stream> GuardedConnectAsync(
+            SocketsHttpConnectionContext ctx, CancellationToken ct)
+        {
+            string host = ctx.DnsEndPoint.Host;
+            // Littéral IPv6 bracketé "[::1]" → "::1" (le pré-contrôle
+            // d'ExecuteAsync bloque déjà les littéraux ; ce garde est la
+            // seconde couche, il doit donc aussi les analyser).
+            if (host.Length > 1 && host[0] == '[' && host[host.Length - 1] == ']')
+                host = host.Substring(1, host.Length - 2);
+
+            List<IPAddress> candidates;
+            if (IPAddress.TryParse(host, out var literal))
+            {
+                // IP littérale (y compris les formes décimale "2130706433" et
+                // hexa "0x7f000001" acceptées par le parseur .NET, et la
+                // bracketée IPv6) : pas de DNS, validation directe.
+                candidates = new List<IPAddress> { literal };
+            }
+            else
+            {
+                try
+                {
+                    var addrs = await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false);
+                    candidates = addrs == null
+                        ? new List<IPAddress>()
+                        : new List<IPAddress>(addrs);
+                }
+                catch (Exception ex)
+                {
+                    throw new HttpRequestException(
+                        $"résolution DNS échouée pour {host} : {ex.Message}", ex);
+                }
+            }
+
+            var valid = new List<IPAddress>();
+            foreach (var a in candidates)
+                if (!IsPrivateOrReserved(a)) valid.Add(a);
+            if (valid.Count == 0)
+            {
+                // Garde au connect (redirection suivie, rebinding, hop N) :
+                // c'est ici que le contournement du pré-contrôle se termine.
+                SecurityMonitor.Record("SSRF_BLOQUE", "connect : " + host + " (" + ctx.DnsEndPoint.Port + ")");
+                throw new HttpRequestException(
+                    "Requêtes vers des adresses privées/locales bloquées.");
+            }
+
+            Exception last = null;
+            foreach (var a in valid)
+            {
+                var socket = new Socket(a.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                {
+                    NoDelay = true
+                };
+                try
+                {
+                    using (ct.Register(static s => ((Socket)s).Dispose(), socket))
+                    {
+                        await socket.ConnectAsync(new IPEndPoint(a, ctx.DnsEndPoint.Port), ct)
+                            .ConfigureAwait(false);
+                    }
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch (Exception ex) when (ex is SocketException
+                    || (ex is OperationCanceledException && !ct.IsCancellationRequested))
+                {
+                    last = ex;
+                    socket.Dispose();
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            }
+            throw new HttpRequestException(
+                $"connexion impossible à {host} : {last?.Message ?? "aucune adresse joignable"}", last);
+        }
 
         private static bool IsPrivateOrReserved(IPAddress ip)
         {

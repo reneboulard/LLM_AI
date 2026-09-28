@@ -896,6 +896,8 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
+| `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs backend LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
+| `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | Endpoint HTTP **admin** `GET /Plugins/LLMAI/SecurityMetrics` : relevé des compteurs + fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`). Lecture seule, zéro LLM. |
 | `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (statique interne) | Persistance du **dernier rapport d'audit** (`audit_report.json`, dossier de configuration du plugin, convention `ChatMemoryStore`) : date, mode, focus, rapport Markdown. Best-effort fail-open ; un seul enregistrement écrasé à chaque run réussi. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}], Session}` (la page garde l'historique ; `Session` = identifiant de mémoire de conversation), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager, bloc mémoire accolé). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. Porte aussi la **mémoire de conversation** : résolution de session, journalisation des tours (`ChatMemoryStore`), condensation paresseuse des sessions passées (un appel LLM en tâche de fond, note de continuité + ligne `SIGNALS:` → décisions `kind="chat"`), et les endpoints `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget`. |
 | `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | Endpoints **admin** de la file de régularisation cross-kind (v1.13.31, étendue v1.14.0) : `GET /Plugins/LLMAI/CrossKindQueue` (items taggés `llmai-cross-kind` « confirmés » + items `llmai-not-found` sous la racine DVR « suspects » — sonde du type opposé à égalité exacte de titre ; fiche TMDB relue en lecture seule via la cascade tmdb→imdb, kind item/fiche, fichiers source vidéo — cartes `.strm` exclues —, cible suggérée « Titre (Année) », statuts copie faite/ignoré ; `IncludeIgnored=true` réaffiche les taggés `llmai-cross-kind-ignored`), `GET /Plugins/LLMAI/CrossKindLibraries` (bibliothèques cibles : films/séries/contenu mixte — la bibliothèque `.strm` du plugin jamais suggérée ; celle contenant la racine DVR proposée si elle supporte le type visé, flag `IsDvr`), `POST /Plugins/LLMAI/CrossKindRegularize` (copie **vérifiée par taille**, idempotente, suffixe « (2)… », tag `llmai-regularized` add-only posé sur succès complet, avertissements destination DVR/hors-bibliothèque, message dédié en cas d'accès refusé, **jamais de suppression** — l'original reste en place), `POST /Plugins/LLMAI/CrossKindConvert` (conversion sur place d'un enregistrement DVR mal typé : renommage dossier/vidéo/.nfo/poster « Titre (Année) », réécriture des .nfo en racine `<movie>`, suppression opt-in de tvshow.nfo, garde « enregistrement en cours », **journal de rollback** — le .ts n'est jamais supprimé) et `POST /Plugins/LLMAI/CrossKindIgnore` (pose/retire le tag d'oubli). Voir [Régularisation cross-kind](#régularisation-cross-kind-file-dattente-admin). |
@@ -906,7 +908,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `ClassificationMap.cs` | `ClassificationMap` (statique interne) | **Pont Classification Mapper** (lecture seule) : lecteur paresseux de `classification_mapper_config.json` (dossier de configuration du **serveur**, pas des plugins ; re-stat mtime throttlé 30 s — les mappings édités dans l'UI de Classification Mapper sont suivis sans redémarrage) ; normalise les classifications officielles hétérogènes (« PG-13 », « TV-14 », « 13+ »…) vers les valeurs canoniques de l'UI (« CA-G », « CA-14A »…). Neutre si le plugin est absent (passthrough en casse). Utilisé par l'action `find` de `get_emby_info`. Voir [Classifications officielles](#classifications-officielles-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | Endpoints **usager** de la page Recommandations : `GET /Plugins/LLMAI/Recos` (dernières recommandations de la tâche planifiée + date, tout usager authentifié — la page ne lit plus la config plugin via l'endpoint hôte admin `/Configuration`, qui renvoyait 403 aux non-admin) et `POST /Plugins/LLMAI/Forget {Title}` (bouton **Oublier** : ajoute à `DroppedTitles` serveur-side via `SaveConfiguration`). Répond en plus `CanRecord`/`CanLiveTv` (v1.13.12.0 : droits de l'appelant, policy lue à chaud). Ne sert **que** ces champs — jamais la config complète (clés API, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | Endpoint `GET /Plugins/LLMAI/Update` : compare le tag de la dernière release GitHub (`releases/latest`, workflow `release.yml`) à la version d'assembly installée → bannière de mise à jour sur la page de config. Lecture seule (aucun téléchargement), cache 1 h sous verrou (limite API GitHub), `Force=1` pour bypasser, ne lève jamais (`Error` → pas de bannière). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 17 actions d'inspection (télémétrie, config, sessions, tâches, journaux, transcodage, matériel/OS, disques, bibliothèque, sécurité, hygiène des cotes et des marquages) + 3 actions de remédiation gated par `AuditRemediationEnabled` — primitives partagées avec les tools d'action chat via `ServerRemediation` (v1.13.30). Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | Outil `system_audit` (voir [Outils](#outils-llm)) — 18 actions d'inspection (télémétrie, config, sessions, tâches, journaux, transcodage, matériel/OS, disques, bibliothèque, sécurité, hygiène des cotes et des marquages, monitoring de sécurité du plugin) + 3 actions de remédiation gated par `AuditRemediationEnabled` — primitives partagées avec les tools d'action chat via `ServerRemediation` (v1.13.30). Confinement FS des journaux (nom seul + whitelist extension + containment canonique). |
 | `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary` (rapprochement bibliothèque : titre exact/flou, **repli par id IMDb** via `AnyProviderIdEquals` — reco possédée → `library_id`, exclue du record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (pliage d'accents partagé `FoldAscii` : « leçons » ≡ « lecons »), résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Filet de formatage `SanitizeReport` (flèches LaTeX → « → », balises HTML dénudées) appliqué aux sorties audit et chat. Path chat : `RunChatAsync` (multi-tours, tous les outils existants, priorités LLM usager). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService` **et** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (statique interne) | Résolution bilingue des ids Emby : longs (InternalId — forme canonique du plugin, la seule que la couche REST/UI accepte) **et** Guids historiques (input legacy seulement, jamais émis). Corriger la devise d'ids qui faisait échouer toutes les validations Tonight. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour les paths audit et chat (sans toucher aux appelants recommandation). `RunChatAsync` : entrée multi-tours qui rejoue l'historique (user/assistant, borné) entre le system prompt et le nouveau message — même boucle partagée (`RunLoopAsync`). |
@@ -949,7 +951,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web : extraction structurée **locale auto-hébergée** (`WebFetchDirect`, aucune clé — titre, métadonnées og:/twitter + canonical, JSON-LD schema.org, contenu principal Readability-lite nettoyé du boilerplate, titres h1–h6 et tableaux en markdown, URL finale après redirections) avec repli Ollama Cloud sur les pages anti-bot. |
 | `new_releases` | Nouveautés TV depuis les sources web de `NewReleaseSources` (une par ligne) : URL seule = flux RSS/Atom auto-détecté ; `URL :: @showbizz` = extracteur Showbizz.net intégré (blocs « Saison 1 ») ; `URL :: regex .NET` = extraction personnalisée (groupe `title` requis, `url`/`date` optionnels). Alias `showbizz_new_releases` (prompts existants). Cache 24h invalidé par tout changement de sources (sans redémarrage). |
-| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 20 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (mots de passe, HTTPS, accès externe, IP publiques), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin), `ratings_check` (hygiène des cotes) ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
+| `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 21 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (mots de passe, HTTPS, accès externe, IP publiques), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin), `ratings_check` (hygiène des cotes), `security_metrics` (compteurs + événements de sécurité du plugin — détection) ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---
 
@@ -1324,7 +1326,7 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
 | Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `transcode`, `gpu_transcode` |
 | Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
 | Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres) |
-| Sécurité & hygiène | `security_check` (mots de passe manquants, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous) |
+| Sécurité & hygiène | `security_check` (mots de passe manquants, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous), `security_metrics` (compteurs d'activité + fenêtre d'événements de sécurité **du plugin** : SSRF bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés, actions déposées/approuvées/refusées — détection, voir ci-dessous) |
 
 | Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1367,6 +1369,25 @@ l'exécuter.
   tools DÉDIÉS sont la voie normale, l'erreur de gate redirige vers eux.
 - **Processus : BCL pure** — `Process.GetProcesses()` n'expose que noms/temps CPU/âge,
   **jamais** les arguments ni le contenu : aucune fuite de secret.
+
+### Monitoring de sécurité (détection)
+
+À côté de la prévention (garde SSRF au connect, confirmation deux phases), le plugin
+**se surveille lui-même** (`SecurityMonitor`, sans configuration) :
+
+- **Compteurs** : appels/erreurs de `web_fetch`, hits de cache, SSRF bloqués
+  (pré-contrôle et garde au connect), appels d'outils malformés ou inconnus,
+  échecs backend LLM, tours de chat refusés (rate limiter), actions déposées /
+  approuvées / refusées / consommations refusées.
+- **Journal borné** : les 200 derniers événements de sécurité (en mémoire, reset au
+  restart). Chaque événement est **tracé durablement** dans le journal Emby sous la
+  forme `LLM_AI[SEC] <kind> : <detail>` — un grep externe (`grep '\[LLM_AI\]\[SEC\]'`)
+  conserve l'historique complet, rotation incluse.
+- **Lecture** : sonde `system_audit action="security_metrics"` (intégrée au rapport
+  d'audit, workflow 6c) et endpoint admin `GET /Plugins/LLMAI/SecurityMetrics`.
+- **Signaux d'alerte** : `SSRF_BLOQUE` répété (tentative d'injection/SSRF),
+  `TOOL_ERREUR`/`CHAT_REFUSE` en rafale, `ACTION_CONSOMMATION_REFUSEE` (un compte
+  tente d'approuver une action d'un autre), `APPEL_TOOL_MALFORME` répété.
 
 ### Paramètre `Focus`
 
@@ -2098,6 +2119,23 @@ non-admin reçoit `Error` (pas de run LLM).
 ```bash
 curl -H "X-Emby-Token: <token-admin>" \
   "http://localhost:8096/emby/Plugins/LLMAI/Audit?focus=transcoding"
+```
+
+```
+GET /Plugins/LLMAI/SecurityMetrics
+```
+
+**Relevé de sécurité (admin, lecture seule, zéro LLM)** : compteurs d'activité et
+fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`) — SSRF
+bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés,
+actions déposées/approuvées/refusées. Volatile (en mémoire, reset au restart) ; la
+trace durable est le journal Emby (`LLM_AI[SEC]`). Voir [Monitoring de
+sécurité](#monitoring-de-sécurité-détection).
+
+**Test :**
+```bash
+curl -H "X-Emby-Token: <token-admin>" \
+  "http://localhost:8096/emby/Plugins/LLMAI/SecurityMetrics"
 ```
 
 ```

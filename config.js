@@ -1135,6 +1135,14 @@ define(["loading"], function (loading) {
             var ckListEl = view.querySelector("#crossKindList");
             if (ckListEl) {
                 var ckLibs = [];
+                // Séparateur natif de l'HÔTE (fourni par l'endpoint Libraries —
+                // le serveur peut être Windows : '\' n'est PAS '/' ; un serveur
+                // Linux reste '/'). Repli : déduit du chemin lui-même.
+                var ckSep = "";
+                var ckJoin = function (libPath, folder) {
+                    var sep = ckSep || ((libPath || "").indexOf("\\") >= 0 ? "\\" : "/");
+                    return String(libPath || "").replace(/[\/\\]+$/, "") + sep + (folder || "");
+                };
                 var ckEntry = null;
                 var ckDlg = view.querySelector("#dlgCrossKind");
                 var ckShowIgnoredEl = view.querySelector("#chkCkShowIgnored");
@@ -1232,6 +1240,7 @@ define(["loading"], function (loading) {
                     type: "GET"
                 }).then(function (resp) { return resp.json(); }).then(function (data) {
                     if (!data || data.Error) return;
+                    ckSep = data.Separator || "";
                     ckLibs = (data.Libraries || []).filter(function (l) {
                         return l && l.Paths && l.Paths.length > 0;
                     }).sort(function (a, b) {
@@ -1311,7 +1320,7 @@ define(["loading"], function (loading) {
                         ckFillLibs();
                         if (ckLibEl) ckLibEl.value = sel >= 0 ? String(sel) : "";
                         if (ckFolderEl && sel >= 0) {
-                            ckFolderEl.value = ckLibs[sel].Paths[0] + "/" + (entry.SuggestedFolder || "");
+                            ckFolderEl.value = ckJoin(ckLibs[sel].Paths[0], entry.SuggestedFolder);
                         }
                         ckDlg.showModal();
                     };
@@ -1321,7 +1330,7 @@ define(["loading"], function (loading) {
                             if (!ckEntry) return;
                             var idx = parseInt(ckLibEl.value, 10);
                             if (isNaN(idx) || !ckLibs[idx]) return;
-                            ckFolderEl.value = ckLibs[idx].Paths[0] + "/" + (ckEntry.SuggestedFolder || "");
+                            ckFolderEl.value = ckJoin(ckLibs[idx].Paths[0], ckEntry.SuggestedFolder);
                         });
                     }
 

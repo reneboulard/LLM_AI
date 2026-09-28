@@ -100,12 +100,22 @@ namespace LLM_AI
             {
                 var list = _store.GetOrAdd(action.Session, _ => new List<ChatPendingEmbyAction>());
                 Prune(list);
-                if (list.Count >= MaxPerSession) return null;
+                if (list.Count >= MaxPerSession)
+                {
+                    // Plafond atteint : refuse le dépôt (anti-inondation) —
+                    // événement de sécurité : un dépôt en masse est un signal.
+                    SecurityMonitor.Record("ACTION_DEPOT_REFUSE",
+                        tool + " [session " + action.Session + "] — plafond " + MaxPerSession + " atteint");
+                    return null;
+                }
                 list.Add(action);
                 var page = _pageNotified.GetOrAdd(action.Session, _ => new List<ChatPendingEmbyAction>());
                 Prune(page);
                 page.Add(action);
             }
+            SecurityMonitor.Record("ACTION_PROPOSEE",
+                tool + " [" + action.ActionId + "] session=" + action.Session
+                + (string.IsNullOrWhiteSpace(label) ? "" : " — " + label));
             return action;
         }
 
@@ -145,14 +155,27 @@ namespace LLM_AI
                     if (IsExpired(action))
                     {
                         list.Remove(action);
+                        SecurityMonitor.Record("ACTION_CONSOMMATION_REFUSEE", actionId + " — expirée");
                         return null;
                     }
                     if (!string.IsNullOrWhiteSpace(sessionId) &&
                         !string.Equals(action.Session, sessionId.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Pas la session émettrice : rien à exécuter (probe
+                        // d'un autre compte/session — événement à surveiller).
+                        SecurityMonitor.Record("ACTION_CONSOMMATION_REFUSEE",
+                            actionId + " — session non émettrice");
                         return null; // pas la session émettrice : rien à exécuter
+                    }
                     if (!string.Equals(action.User, userId ?? "", StringComparison.Ordinal))
+                    {
+                        SecurityMonitor.Record("ACTION_CONSOMMATION_REFUSEE",
+                            actionId + " — usager non propriétaire");
                         return null; // pas le propriétaire : rien à exécuter
+                    }
                     list.Remove(action);
+                    SecurityMonitor.Record("ACTION_APPROUVEE",
+                        action.Tool + " [" + action.ActionId + "] par " + userId);
                     return action;
                 }
                 return null;
@@ -174,6 +197,7 @@ namespace LLM_AI
                     kv.Value.RemoveAll(a => a == null || IsExpired(a) ||
                         string.Equals(a.ActionId, actionId.Trim(), StringComparison.Ordinal));
             }
+            SecurityMonitor.Record("ACTION_REFUSEE", actionId);
         }
 
         private static void Prune(List<ChatPendingEmbyAction> list)

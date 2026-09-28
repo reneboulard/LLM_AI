@@ -868,6 +868,8 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
+| `SecurityMonitor.cs` | `SecurityMonitor` (internal static) | **Security monitor** (detection, v1.14.0.6): in-process counters (web_fetch/web_search calls, blocked SSRF, malformed/unknown tool calls, LLM backend failures, refused chat turns, deposited/approved/refused actions) + bounded security event journal (200 events). Zero configuration, in-memory (reset on restart); every event is durably logged as `LLM_AI[SEC]` in the Emby log. Never throws. |
+| `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | **Admin** HTTP endpoint `GET /Plugins/LLMAI/SecurityMetrics`: snapshot of the counters + window of the latest plugin security events (`SecurityMonitor`). Read-only, zero LLM. |
 | `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (internal static) | Persistence of the **last audit report** (`audit_report.json`, plugin configuration folder, `ChatMemoryStore` convention): date, mode, focus, Markdown report. Best-effort fail-open; a single record overwritten at each successful run. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | **Interactive admin chat** HTTP endpoint `POST /Plugins/LLMAI/Chat`: body `{Message, History:[{role,content}], Session}` (the page keeps the history; `Session` = conversation-memory id), filters user/assistant roles, delegates the turn to `LlmRunner.RunChatAsync` (all existing tools, user-configured LLM priorities, memory block appended). The system prompt (tool docs + directives) is built server-side, once per conversation. Also carries the **conversation memory**: session resolution, turn journaling (`ChatMemoryStore`), lazy condensation of past sessions (one LLM call as a background task, continuity note + `SIGNALS:` line → decisions `kind="chat"`), and the `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget` endpoints. |
 | `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | **Admin** endpoints of the cross-kind regularization queue (v1.13.31, extended in v1.14.0): `GET /Plugins/LLMAI/CrossKindQueue` (items tagged `llmai-cross-kind` "confirmed" + `llmai-not-found` items under the DVR root "suspects" — opposite-kind probe on exact title equality; cross TMDB fiche re-read read-only via the tmdb→imdb cascade, item/fiche kind, source video files — `.strm` cards excluded —, suggested "Title (Year)" target, copy-done/ignored statuses; `IncludeIgnored=true` re-shows entries tagged `llmai-cross-kind-ignored`), `GET /Plugins/LLMAI/CrossKindLibraries` (target libraries: movie/TV/mixed-content — the plugin's `.strm` library is never offered; the library containing the DVR root is offered when it supports the targeted kind, `IsDvr` flag), `POST /Plugins/LLMAI/CrossKindRegularize` (**size-verified** copy, idempotent, "(2)…" suffix, add-only `llmai-regularized` tag on full success, DVR/out-of-library destination warnings, dedicated message on access denied, **never deletes** — the original stays in place), `POST /Plugins/LLMAI/CrossKindConvert` (in-place conversion of a mistyped DVR recording: folder/video/.nfo/poster rename to "Title (Year)", .nfo rewrite with a `<movie>` root, opt-in tvshow.nfo deletion, "recording in progress" guard, **rollback journal** — the .ts is never deleted) and `POST /Plugins/LLMAI/CrossKindIgnore` (sets/removes the ignore tag). See [Cross-kind regularization queue](#cross-kind-regularization-queue-admin). |
@@ -878,7 +880,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Also answers `CanRecord`/`CanLiveTv` (v1.13.12.0: caller's permissions, policy read live). Serves **only** those fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 17 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene) + 3 remediation actions gated by `AuditRemediationEnabled` — primitives shared with the chat action tools via `ServerRemediation` (v1.13.30). Log FS confinement (name-only + extension whitelist + canonical containment). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 18 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene, plugin security monitoring) + 3 remediation actions gated by `AuditRemediationEnabled` — primitives shared with the chat action tools via `ServerRemediation` (v1.13.30). Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). |
@@ -921,7 +923,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
 | `web_fetch` | Fetch/read a web page: **self-hosted local** structured extraction (`WebFetchDirect`, no key — title, og:/twitter + canonical metadata, schema.org JSON-LD, Readability-lite main content with boilerplate stripped, h1–h6 headings and tables as markdown, final URL after redirects) with Ollama Cloud fallback for anti-bot pages. |
 | `new_releases` | TV new releases from the `NewReleaseSources` web sources (one per line): bare URL = auto-detected RSS/Atom feed; `URL :: @showbizz` = built-in Showbizz.net extractor ("Saison 1" blocks); `URL :: .NET regex` = custom extraction (required `title` group, optional `url`/`date`). Alias `showbizz_new_releases` (existing prompts). 24h cache invalidated by any source change (no restart). |
-| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 20 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `ratings_check` (rating hygiene); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 21 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `ratings_check` (rating hygiene), `security_metrics` (plugin activity counters + security events — detection); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
 
 ---
 
@@ -1294,7 +1296,7 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 | Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `transcode`, `gpu_transcode` |
 | Hardware & OS | `host_metrics` (BCL: process, GC, runtime, uptime, scan running, aggregate transcode CPU — GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters) |
 | Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres) |
-| Security & hygiene | `security_check` (missing passwords, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below) |
+| Security & hygiene | `security_check` (missing passwords, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below), `security_metrics` (plugin activity counters + window of the plugin's **security events**: blocked SSRF, malformed/unknown tool calls, backend failures, refused chat turns, deposited/approved/refused actions — detection, see below) |
 
 | Family | **Remediation** actions (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1333,6 +1335,25 @@ must then **recommend** the action in its report instead of executing it.
   are the normal path, and the gate error redirects to them.
 - **Processes: pure BCL** — `Process.GetProcesses()` exposes only names/CPU time/age,
   **never** arguments or content: no secret leakage.
+
+### Security monitoring (detection)
+
+Next to prevention (connect-level SSRF guard, two-phase confirmation), the plugin
+**watches itself** (`SecurityMonitor`, zero configuration):
+
+- **Counters**: `web_fetch` calls/errors, cache hits, blocked SSRF (pre-check and
+  connect-level guard), malformed or unknown tool calls, LLM backend failures,
+  refused chat turns (rate limiter), deposited / approved / refused actions /
+  refused consumptions.
+- **Bounded journal**: the last 200 security events (in-memory, reset on restart).
+  Every event is **durably logged** in the Emby log as `LLM_AI[SEC] <kind>:
+  <detail>` — an external grep (`grep '\[LLM_AI\]\[SEC\]'`) keeps the full history,
+  log rotation included.
+- **Reading**: `system_audit action="security_metrics"` probe (integrated into the
+  audit report, workflow step 6c) and admin endpoint `GET /Plugins/LLMAI/SecurityMetrics`.
+- **Alert signals**: repeated `SSRF_BLOQUE` (injection/SSRF attempt), bursts of
+  `TOOL_ERREUR`/`CHAT_REFUSE`, `ACTION_CONSOMMATION_REFUSEE` (an account tries to
+  approve someone else's action), repeated `APPEL_TOOL_MALFORME`.
 
 ### `Focus` parameter
 
@@ -2028,6 +2049,22 @@ receives `Error` (no LLM run).
 ```bash
 curl -H "X-Emby-Token: <admin-token>" \
   "http://localhost:8096/emby/Plugins/LLMAI/Audit?focus=transcoding"
+```
+
+```
+GET /Plugins/LLMAI/SecurityMetrics
+```
+
+**Security snapshot (admin, read-only, zero LLM)**: plugin activity counters and
+window of the latest security events (`SecurityMonitor`) — blocked SSRF, malformed/
+unknown tool calls, backend failures, refused chat turns, deposited/approved/refused
+actions. Volatile (in-memory, reset on restart); the durable trace is the Emby log
+(`LLM_AI[SEC]`). See [Security monitoring](#security-monitoring-detection).
+
+**Test:**
+```bash
+curl -H "X-Emby-Token: <admin-token>" \
+  "http://localhost:8096/emby/Plugins/LLMAI/SecurityMetrics"
 ```
 
 ```

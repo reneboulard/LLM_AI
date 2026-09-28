@@ -50,7 +50,9 @@ namespace LLM_AI
     ///   <c>host_metrics</c>, <c>gpu_transcode</c>, <c>disk_storage</c>,
     ///   <c>processes</c> (orphelins ffmpeg + top processus RAM/CPU),
     ///   <c>library_stats</c>, <c>missing_metadata</c> (bibliothèque, via
-    ///   <see cref="ILibraryManager"/> — couche DB, pas FS brut).</item>
+    ///   <see cref="ILibraryManager"/> — couche DB, pas FS brut),
+    ///   <c>security_metrics</c> (compteurs + événements de sécurité du
+    ///   plugin, <see cref="SecurityMonitor"/>).</item>
     /// <item><b>Remédiation (écriture, GATE par config
     ///   <see cref="PluginConfiguration.AuditRemediationEnabled"/>)</b> :
     ///   <c>stop_session</c>, <c>trigger_task</c>, <c>send_message</c>.
@@ -106,6 +108,10 @@ namespace LLM_AI
                     "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
                     "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
                     "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
+                    "security_metrics (compteurs d'activité et fenêtre d'événements de sécurité DU PLUGIN : " +
+                    "appels/erreurs web_fetch, SSRF bloqués, appels d'outils malformés ou inconnus, échecs backend " +
+                    "LLM, tours de chat refusés, actions déposées/approuvées/refusées — en mémoire, reset au " +
+                    "restart ; signal d'alerte : SSRF bloqué répété ou refus en rafale). " +
                     (RemediationEnabled
                         ? "Actions de REMÉDIATION (écriture, chemin DIRECT de l'audit, gated AuditRemediationEnabled) : " +
                           "stop_session, trigger_task, send_message. IMPORTANT : dans le chat admin, PRÉFÉREZ TOUJOURS " +
@@ -127,7 +133,7 @@ namespace LLM_AI
             string actions =
                 "server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | " +
                 "list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
-                "library_stats | missing_metadata | metadata_health | ratings_check";
+                "library_stats | missing_metadata | metadata_health | ratings_check | security_metrics";
             string remediationParams = "";
             if (remediation)
             {
@@ -222,6 +228,7 @@ namespace LLM_AI
                     case "missing_metadata": result = MissingMetadata(args); break;
                     case "metadata_health":  result = MetadataHealth(); break;
                     case "ratings_check":    result = RatingsCheck(); break;
+                    case "security_metrics": result = SecurityMonitor.SnapshotJson(); break;
                     case "stop_session":      result = await StopSessionAsync(args, ct).ConfigureAwait(false); break;
                     case "trigger_task":      result = TriggerTask(args); break;
                     case "send_message":      result = await SendMessageAsync(args, ct).ConfigureAwait(false); break;
@@ -2537,6 +2544,7 @@ namespace LLM_AI
             SectionSync("metadata_health", () => MetadataHealth());
             SectionSync("ratings_check", () => RatingsCheck());
             SectionSync("security_check", () => SecurityCheck());
+            SectionSync("security_metrics", () => SecurityMonitor.SnapshotJson());
             await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);
 
             string logs = null;
