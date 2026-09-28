@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.14.0.7] — 2026-09-28
 
+### Added (FR)
+- **Poster par défaut (400×600) sur les playlists « AI Tonight »** — la
+  publique foyer ET les privées par usager : chaque coquille (re)créée reçoit
+  le poster embarqué (`default_poster.jpg`, même ressource que le BoxSet, via
+  `DefaultImageApplier` — idempotent, best-effort). La coquille étant
+  détruite/recréée à chaque run, elle est toujours sans image au moment de
+  l'appel → le poster est (re)posé à chaque recréation. Trois sites couverts :
+  recréation run privée (`EnsureUserAsync`), recréation run publique
+  (`EnsurePublicAsync`), création chat (`AddItemsAsync` — sur simple ajout,
+  no-op immédiat : la coquille existante a déjà son image). Stable face au
+  collage Emby : `PlaylistDynamicImageProvider` (décompilé 4.10.0.40, même
+  famille `BaseCollageImageProvider`) ne régénère que sur image absente ou
+  nommée `auto_poster_*` — un `poster.jpg` standard n'est jamais remplacé.
+
 ### Fixed (FR)
 - **Dialogue cross-kind : le répertoire suggéré mélangeait les séparateurs sur
   Windows** (« F:\Documentaires/Le blé, l'autre arme de Poutine (2024) » au
@@ -30,6 +44,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   sur une bibliothèque imbriquée). Fonctionnellement, le mélange passait
   (Win32 tolère les deux) — mais le dossier suggéré était faux et les
   gardes de containment restaient fragile.
+- **`DefaultImageApplier` + poster d'orphelin : NRE sur `SaveImage` avec Emby
+  4.10** — les deux appels `SaveImage` du plugin passaient `null` pour
+  `generatedFromItemIds`, que l'`ImageSaver` de 4.10 déréférence sans garde
+  (`generatedFromItemIds.Length`, décompilé `Emby.Providers.dll` 4.10.0.40) :
+  NRE à chaque pose du poster par défaut (collection « AI Tonight » fraîche ou
+  image effacée — les Warn `DefaultImage : échec` des runs 09:24/09:28) et sur
+  chaque poster d'orphelin ; le poster n'était jamais posé. Fix :
+  `Array.Empty<long>()` (neutre — pas de suffixe auto_poster_), garde null sur
+  `GetLibraryOptions` (`LibraryOptions` vierge — `libraryOptions` est aussi
+  déréférencé sans garde par `IsSaveLocalImagesEnabled`), et le Warn de
+  `DefaultImageApplier` logge désormais la stack complète.
+- **Images par défaut aux bons formats : BoxSet 400×600 (portrait 2:3),
+  bibliothèque .strm 640×360 (16:9)** — l'unique artwork embarqué 704×384
+  (paysage) ne correspondait à aucun des deux formats ; `default_poster.jpg`
+  devient un portrait 400×600 pour le BoxSet et un nouveau
+  `default_library.jpg` 640×360 (l'ancien artwork recadré) cible la racine de
+  la bibliothèque — `ApplyPrimaryIfMissingAsync` prend désormais le nom de
+  ressource en paramètre.
+- **Image par défaut de la bibliothèque .strm posée sur le MAUVAIS item** —
+  `FindByPath` retourne un des DEUX items portant le chemin racine (VirtualFolder
+  affiché par l'UI vs Folder physique interne, même `Path`, tri `DateCreated
+  DESC` limit 1) : le poster par défaut partait sur le Folder interne
+  (`metadata/library/11/…`) pendant que la tuile de bibliothèque (VirtualFolder,
+  `metadata/library/3f/…`) gardait l'ancienne image — remplie ensuite par le
+  collage Emby après effacement. Fix : résolution via
+  `GetVirtualFolders → ItemId → GetItemById` (nouveau helper
+  `ResolveVirtualFolderItem`, nom normalisé comme `ResolveLibraryRoot`) —
+  cible = l'item affiché par l'UI, identique à l'ItemId de la tuile.
+
+### Added (EN)
+- **Default poster (400×600) on the "AI Tonight" playlists** — the household
+  public one AND the per-user private ones: every (re)created shell receives
+  the embedded poster (`default_poster.jpg`, same resource as the BoxSet, via
+  `DefaultImageApplier` — idempotent, best-effort). Since the shell is
+  destroyed/recreated on every run, it is always imageless when the applier
+  runs → the poster is (re)applied on every recreation. Three creation sites
+  covered: private run recreation (`EnsureUserAsync`), public run recreation
+  (`EnsurePublicAsync`), chat creation (`AddItemsAsync` — on a plain add,
+  immediate no-op: the existing shell already has its image). Stable against
+  Emby's collage: `PlaylistDynamicImageProvider` (decompiled 4.10.0.40, same
+  `BaseCollageImageProvider` family) only regenerates on a missing image or
+  an `auto_poster_*`-named one — a standard `poster.jpg` is never replaced.
 
 ### Fixed (EN)
 - **Cross-kind dialogue: the suggested folder mixed separators on Windows**
@@ -48,6 +104,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   warning on a nested library). Functionally the mix worked (Win32 tolerates
   both) — but the suggested folder was wrong and the containment guards
   stayed fragile.
+- **`DefaultImageApplier` + orphan poster: NRE on `SaveImage` with Emby 4.10**
+  — both plugin `SaveImage` calls passed `null` for `generatedFromItemIds`,
+  which 4.10's `ImageSaver` dereferences without a guard
+  (`generatedFromItemIds.Length`, decompiled `Emby.Providers.dll` 4.10.0.40):
+  NRE on every default-poster application (fresh "AI Tonight" collection or
+  erased image — the `DefaultImage : échec` warns from the 09:24/09:28 runs)
+  and on every orphan poster; the poster was never applied. Fix:
+  `Array.Empty<long>()` (neutral — no auto_poster_ filename suffix), null
+  guard on `GetLibraryOptions` (blank `LibraryOptions` — `libraryOptions` is
+  also dereferenced unguarded by `IsSaveLocalImagesEnabled`), and the
+  `DefaultImageApplier` warning now logs the full stack.
+- **Default images at the right formats: BoxSet 400×600 (2:3 portrait),
+  .strm library 640×360 (16:9)** — the single embedded 704×384 (landscape)
+  artwork matched neither format; `default_poster.jpg` becomes a 400×600
+  portrait for the BoxSet and a new `default_library.jpg` 640×360 (the old
+  artwork, cropped) targets the library root —
+  `ApplyPrimaryIfMissingAsync` now takes the resource name as a parameter.
+- **Default `.strm` library image applied to the WRONG item** — `FindByPath`
+  returns one of the TWO items sharing the root path (the UI's VirtualFolder vs
+  the physical inner Folder, same `Path`, `DateCreated DESC` limit 1): the
+  default poster landed on the inner Folder (`metadata/library/11/…`) while the
+  library tile (VirtualFolder, `metadata/library/3f/…`) kept the old image —
+  later filled by Emby's collage after erasure. Fix: resolve via
+  `GetVirtualFolders → ItemId → GetItemById` (new helper
+  `ResolveVirtualFolderItem`, name normalized like `ResolveLibraryRoot`) —
+  target = the item the UI displays, same ItemId as the tile.
+
+### Security (FR)
+- **`web_fetch` : trois gardes de taille.** (1) Plafond explicite de la
+  longueur d'URL fournie par le LLM — refus au-delà de 2048 caractères (avant,
+  seul le plafond implicite du parser `Uri` de .NET, ~32 ko, s'appliquait) :
+  borne la clé de cache et le journal, et le LLM est informé de la limite dans
+  la description de l'outil ; (2) les lignes de journal Info tronquent l'URL à
+  120 caractères (cohérence avec les chemins d'erreur — une URL géante ne peut
+  plus gonfler ni forger des lignes du journal Emby) ; (3)
+  `MaxResponseContentBufferSize = 5 Mo` sur le client direct : une page
+  géante/hostile ne peut plus être aspirée intégralement en mémoire (l'excès
+  lève `HttpRequestException` → repli cloud comme tout échec direct) ;
+  (4) symétrie sur le chemin repli cloud : `MaxResponseContentBufferSize` 5 Mo
+  sur le client cloud et plafond structurel du JSON reçu (chaînes ≤ 15000 car.
+  alignées sur le chemin direct, tableaux ≤ 50 entrées) avant cache/retour au
+  LLM — la réponse cloud repartait entière dans le prompt de l'itération
+  suivante (non échantillonnée par la boucle agent) et dans le cache 24h.
+
+### Security (EN)
+- **`web_fetch`: three size guards.** (1) Explicit cap on the URL length
+  supplied by the LLM — rejected beyond 2048 characters (before, only .NET's
+  implicit `Uri` parser limit of ~32 KB applied): bounds the cache key and the
+  journal, and the LLM is told the limit in the tool description; (2) Info log
+  lines truncate the URL to 120 characters (consistent with the error paths —
+  a giant URL can no longer bloat or forge Emby log lines); (3)
+  `MaxResponseContentBufferSize = 5 MB` on the direct client: a giant/hostile
+  page can no longer be fully buffered into memory (the excess raises
+  `HttpRequestException` → cloud fallback like any direct failure);
+  (4) symmetry on the cloud fallback path: 5 MB `MaxResponseContentBufferSize`
+  on the cloud client and structural cap of the received JSON (strings ≤ 15000
+  chars, aligned with the direct path; arrays ≤ 50 entries) before
+  cache/return to the LLM — the cloud response previously went whole into the
+  next iteration's prompt (unsampled by the agent loop) and the 24h cache.
 
 ## [1.14.0.6] — 2026-09-28
 

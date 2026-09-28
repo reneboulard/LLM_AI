@@ -150,6 +150,10 @@ namespace LLM_AI
             {
                 logger?.Warn("[LLM_AI] Playlist « {0} » : échec CreatePlaylist : {1}", name, ex.Message);
             }
+
+            // 3) Poster par défaut (400×600) sur la coquille neuve — best-effort
+            //    (la coquille est toujours sans image : recréée à chaque run).
+            await ApplyDefaultPosterAsync(library, name, false, host, logger, ct).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -225,6 +229,9 @@ namespace LLM_AI
             {
                 logger?.Warn("[LLM_AI] Playlist « {0} » : échec CreatePlaylist : {1}", PlaylistName, ex.Message);
             }
+
+            // 3) Poster par défaut (400×600) sur la coquille neuve — best-effort.
+            await ApplyDefaultPosterAsync(library, PlaylistName, true, host, logger, ct).ConfigureAwait(false);
         }
 
         // ------------------------------------------------------------------
@@ -309,6 +316,15 @@ namespace LLM_AI
             {
                 logger?.Warn("[LLM_AI] Playlist « {0} » : échec ajout (chat) : {1}", name, ex.Message);
                 return new List<long>();
+            }
+            finally
+            {
+                // Poster par défaut (400×600) sur une coquille NEUVE seulement
+                // (création chat) — idempotent : une coquille existante avec
+                // une image est épargnée, et le try ci-dessus ne re-pose rien
+                // sur un simple ajout. Sur simple ajout (coquille existante),
+                // HasImage est déjà vrai → no-op immédiat.
+                await ApplyDefaultPosterAsync(library, name, false, host, logger, ct).ConfigureAwait(false);
             }
         }
 
@@ -452,6 +468,44 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 logger?.Warn("[LLM_AI] Playlist « {0} » : échec suppression coquille : {1}", name, ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Pose le <b>poster par défaut</b> (400×600, ressource embedded
+        /// <c>default_poster.jpg</c> via <see cref="DefaultImageApplier"/>) sur
+        /// la coquille <see cref="Playlist"/> du nom donné — best-effort,
+        /// ne lève jamais. La coquille étant <b>détruite puis recréée</b> à
+        /// chaque run, elle est toujours sans image au moment de l'appel :
+        /// le poster est (re)posé à chaque recréation, une image posée
+        /// manuellement dans « Edit Images » entre deux runs serait elle
+        /// détruite avec la coquille (comportement intrinsèque du reset).
+        /// <para><b>Stabilité face au collage Emby</b> (décompilé
+        /// <c>PlaylistDynamicImageProvider</c> 4.10.0.40, même famille
+        /// <c>BaseCollageImageProvider</c> que le collage des collections) :
+        /// <c>HasChanged</c> ne régénère le collage que sur image <b>absente</b>
+        /// ou nommée <c>auto_poster_*</c> — un poster sauvegardé sous un nom
+        /// standard (<c>poster.jpg</c>, pas de suffixe
+        /// <c>generatedFromItemIds</c>) n'est jamais remplacé par le collage
+        /// dynamique de la playlist.</para>
+        /// </summary>
+        /// <param name="publicOnly">Vrai pour la publique foyer (ne viser que
+        /// <c>Playlist.IsPublic</c>, cf. <see cref="FindPlaylist"/>) ; faux pour
+        /// une privée (nom suffixé usager, sans ambiguïté).</param>
+        private static async Task ApplyDefaultPosterAsync(
+            ILibraryManager library, string name, bool publicOnly,
+            IServerApplicationHost host, ILogger logger, CancellationToken ct)
+        {
+            try
+            {
+                var pl = FindPlaylist(library, name, publicOnly);
+                if (pl != null)
+                    await DefaultImageApplier.ApplyPrimaryIfMissingAsync(pl, host, library, logger, ct)
+                        .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Playlist « {0} » : image par défaut échouée : {1}", name, ex.Message);
             }
         }
 

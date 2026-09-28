@@ -116,11 +116,20 @@ namespace LLM_AI
             // 1b) Image par défaut standardisée sur la bibliothèque .strm (idempotent).
             //     Posée tôt, avant l'écriture des cartes, pour qu'elle s'applique même si
             //     la génération échoue plus loin. Best-effort.
+            //     Cible = le VirtualFolder (Item affiché par l'UI, même ItemId que la
+            //     tuile) — PAS FindByPath : le chemin racine porte DEUX items
+            //     (VirtualFolder + Folder physique interne au même Path) et
+            //     FindByPath (DateCreated DESC, limit 1) retourne le mauvais —
+            //     l'image posée sur le Folder interne n'apparaît pas sur la tuile
+            //     (vécu 2026-09-28 : poster posé sur le Folder interne pendant que
+            //     la tuile gardait l'ancien artwork, puis remplie par le collage
+            //     Emby après effacement).
             try
             {
-                var libItem = _library.FindByPath(root, true);
+                var libItem = ResolveVirtualFolderItem(_library, cfg.StrmLibraryName, _logger);
                 if (libItem != null)
-                    await DefaultImageApplier.ApplyPrimaryIfMissingAsync(libItem, _host, _library, _logger, ct)
+                    await DefaultImageApplier.ApplyPrimaryIfMissingAsync(libItem, _host, _library, _logger, ct,
+                        DefaultImageApplier.LibraryResourceName)
                         .ConfigureAwait(false);
             }
             catch (Exception ex) { _logger?.Warn("[LLM_AI] Strm library : image par défaut échouée : {0}", ex.Message); }
@@ -461,6 +470,42 @@ namespace LLM_AI
                 }
             }
             catch (Exception ex) { logger?.Warn("[LLM_AI] ResolveLibraryRoot : GetVirtualFolders a échoué : {0}", ex.Message); }
+            return null;
+        }
+
+        /// <summary>
+        /// Résout l'item <b>VirtualFolder</b> d'une bibliothèque nommée — l'item
+        /// affiché par l'UI (même ItemId que la tuile de bibliothèque), via
+        /// <see cref="ILibraryManager.GetVirtualFolders"/> →
+        /// <c>VirtualFolderInfo.ItemId</c> → <see cref="ILibraryManager.GetItemById(long)"/>.
+        /// <para><b>Pourquoi pas FindByPath</b> : le chemin racine d'une
+        /// bibliothèque porte DEUX items (le VirtualFolder et le Folder
+        /// physique interne, même Path) ; FindByPath trie DateCreated DESC et
+        /// limite à 1 — résultat instable, souvent le Folder interne, sur
+        /// lequel une image posée n'apparaît jamais sur la tuile (vécu
+        /// 2026-09-28).</para> Comparaison de nom normalisée
+        /// (<see cref="NormLibName"/>, cf. ResolveLibraryRoot). Null si
+        /// introuvable.
+        /// </summary>
+        internal static BaseItem ResolveVirtualFolderItem(ILibraryManager library, string name, ILogger logger)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            try
+            {
+                var folders = library.GetVirtualFolders();
+                if (folders == null) return null;
+                var key = NormLibName(name);
+                foreach (var f in folders)
+                {
+                    if (f == null) continue;
+                    if (!string.Equals(NormLibName(f.Name), key, StringComparison.Ordinal)) continue;
+                    if (!long.TryParse(f.ItemId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                        continue;
+                    var item = library.GetItemById(id);
+                    if (item != null) return item;
+                }
+            }
+            catch (Exception ex) { logger?.Warn("[LLM_AI] ResolveVirtualFolderItem : échec : {0}", ex.Message); }
             return null;
         }
 

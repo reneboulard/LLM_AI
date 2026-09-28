@@ -13,9 +13,13 @@ namespace LLM_AI
 {
     /// <summary>
     /// Pose une <b>image par défaut standardisée</b> (poster <see cref="ImageType.Primary"/>)
-    /// sur un <see cref="BaseItem"/> — la collection « AI Tonight » (BoxSet) et la racine de la
-    /// bibliothèque <c>.strm</c> (CollectionFolder). L'image est embarquée comme ressource
-    /// (<see cref="ResourceName"/>) : aucune fichier externe à livrer, présentation identique
+    /// sur un <see cref="BaseItem"/> — la collection « AI Tonight » (BoxSet), la racine de la
+    /// bibliothèque <c>.strm</c> (CollectionFolder) et les playlists « AI Tonight » (publique
+    /// foyer + privées par usager, recréées sans image à chaque run). Deux ressources embarquées
+    /// selon la cible :
+    /// <see cref="ResourceName"/> (400×600 portrait, BoxSet + playlists) et
+    /// <see cref="LibraryResourceName"/>
+    /// (640×360 16:9, bibliothèque) — aucun fichier externe à livrer, présentation identique
     /// partout. <b>Idempotent</b> : ne pose l'image que si l'item n'en a pas déjà une
     /// (<see cref="BaseItem.HasImage"/> == false) — une attribution manuelle ultérieure dans
     /// « Edit Images » est respectée (jamais écrasée au run suivant).
@@ -45,6 +49,13 @@ namespace LLM_AI
         private const string ResourceName = "LLM_AI.default_poster.jpg";
 
         /// <summary>
+        /// Ressource embedded pour la racine de la bibliothèque <c>.strm</c>
+        /// (CollectionFolder) : 640×360 16:9 — format tuile de bibliothèque
+        /// (le poster BoxSet portrait ne conviendrait pas à cette cible).
+        /// </summary>
+        internal const string LibraryResourceName = "LLM_AI.default_library.jpg";
+
+        /// <summary>
         /// Type MIME du poster embarqué (JPEG). <see cref="SaveImage"/> attend un
         /// <see cref="ReadOnlyMemory{T}"/> de caractères — <see cref="MemoryExtensions.AsMemory"/>
         /// fait la conversion.
@@ -64,12 +75,18 @@ namespace LLM_AI
         /// Null → no-op.</param>
         /// <param name="library"><see cref="ILibraryManager"/> pour
         /// <see cref="ILibraryManager.GetLibraryOptions(BaseItem)"/> (passé à
-        /// <see cref="IProviderManager.SaveImage"/> ; peut être null pour un BoxSet).</param>
+        /// <see cref="IProviderManager.SaveImage"/> ; un null éventuel est
+        /// remplacé par un <see cref="LibraryOptions"/> vierge — le paramètre
+        /// est déréférencé sans garde par Emby).</param>
+        /// <param name="resourceName">Ressource embedded à poser — null (défaut)
+        /// → poster BoxSet (<see cref="ResourceName"/>) ;
+        /// <see cref="LibraryResourceName"/> pour la racine de bibliothèque.</param>
         internal static async Task ApplyPrimaryIfMissingAsync(
             BaseItem item, IServerApplicationHost host, ILibraryManager library,
-            ILogger logger, CancellationToken ct)
+            ILogger logger, CancellationToken ct, string resourceName = null)
         {
             if (item == null || host == null || library == null) return;
+            string resName = string.IsNullOrEmpty(resourceName) ? ResourceName : resourceName;
 
             try
             {
@@ -87,28 +104,41 @@ namespace LLM_AI
 
                 // Ressource embedded : un Stream frais à chaque appel. N'arrive qu'à la
                 // création d'une cible sans image (rare) → pas de mise en cache des octets.
-                using var stream = typeof(DefaultImageApplier).Assembly.GetManifestResourceStream(ResourceName);
+                using var stream = typeof(DefaultImageApplier).Assembly.GetManifestResourceStream(resName);
                 if (stream == null)
                 {
-                    logger?.Warn("[LLM_AI] DefaultImage : ressource « {0} » introuvable dans l'assembly → image par défaut ignorée.", ResourceName);
+                    logger?.Warn("[LLM_AI] DefaultImage : ressource « {0} » introuvable dans l'assembly → image par défaut ignorée.", resName);
                     return;
                 }
 
-                // DirectoryService éphémère (lecture FS cache par opération) ; GetLibraryOptions
-                // peut renvoyer null (BoxSet non rattaché à une bibliothèque typée) — SaveImage
-                // le tolère côté Emby.
+                // DirectoryService éphémère (lecture FS cache par opération).
+                // Deux pièges Emby 4.10 (décompilé Emby.Providers/ImageSaver
+                // 4.10.0.40 ; NRE terrain aux runs 09:24/09:28) :
+                // - generatedFromItemIds est déréférencé SANS garde
+                //   (« generatedFromItemIds.Length », ImageSaver.SaveImage) :
+                //   null y est fatal → Array.Empty<long>() (neutre : pas de
+                //   suffixe auto_poster_ dans le nom de fichier).
+                // - libraryOptions est déréférencé sans garde au premier appel
+                //   (BaseItem.IsSaveLocalImagesEnabled →
+                //   libraryOptions.SaveLocalMetadata) : garde null →
+                //   LibraryOptions vierge (4.10 fabrique des défauts même pour
+                //   un BoxSet, mais on ne parie pas sur les builds voisins).
                 var dirSvc = new DirectoryService(fs);
-                var libOpts = library.GetLibraryOptions(item);
+                var libOpts = library.GetLibraryOptions(item)
+                    ?? new MediaBrowser.Model.Configuration.LibraryOptions();
 
                 await providers.SaveImage(item, libOpts, stream, MimeType.AsMemory(),
-                    ImageType.Primary, null, null, dirSvc, true, ct).ConfigureAwait(false);
+                    ImageType.Primary, null, Array.Empty<long>(), dirSvc, true, ct).ConfigureAwait(false);
 
                 item.UpdateToRepository(ItemUpdateType.ImageUpdate);
                 logger?.Info("[LLM_AI] DefaultImage : poster Primary posé sur « {0} ».", item.Name);
             }
             catch (Exception ex)
             {
-                logger?.Warn("[LLM_AI] DefaultImage : échec sur « {0} » : {1}", item?.Name, ex.Message);
+                // Stack complète (ex.ToString) : le Message seul a coûté une
+                // séance de décompilation pour diagnostiquer la NRE SaveImage
+                // du 2026-09-28 — ne pas régresser là-dessus.
+                logger?.Warn("[LLM_AI] DefaultImage : échec sur « {0} » : {1}", item?.Name, ex.ToString());
             }
         }
     }

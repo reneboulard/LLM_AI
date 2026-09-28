@@ -68,7 +68,13 @@ namespace LLM_AI
         {
             var client = new HttpClient(BuildDirectHandler())
             {
-                Timeout = TimeSpan.FromSeconds(20)
+                Timeout = TimeSpan.FromSeconds(20),
+                // Plafond mémoire de la réponse : SendAsync bufferise le corps
+                // et lève HttpRequestException au-delà (FetchDirect le route
+                // vers le repli cloud comme tout échec direct). 5 Mo ≫ une
+                // page fiche/article légitime ; ce que le LLM reçoit reste de
+                // toute façon plafonné à 15000 car. par l'extraction.
+                MaxResponseContentBufferSize = 5 * 1024 * 1024
             };
             client.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -80,10 +86,24 @@ namespace LLM_AI
         }
 
         // Client pour le repli Ollama cloud (timeout plus long, pas de UA).
+        // Plafond mémoire : symétrie avec le client direct — une réponse cloud
+        // au-delà lève HttpRequestException, routée par le catch final
+        // d'ExecuteAsync vers un résultat d'erreur propre.
         private static readonly HttpClient _http = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(30)
+            Timeout = TimeSpan.FromSeconds(30),
+            MaxResponseContentBufferSize = 5 * 1024 * 1024
         };
+
+        /// <summary>
+        /// Plafond de longueur d'URL acceptée du LLM (caractères). Cap
+        /// conservateur standard (navigateurs ~2 ko ; la RFC 9110 recommande
+        /// aux serveurs d'accepter au moins 8000 octets) : une URL de fiche ou
+        /// d'article légitime n'approche jamais cette taille. Borne aussi la
+        /// clé de cache (NormalizeUrl) et les lignes de journal. Le LLM est
+        /// informé de la limite via la description de l'outil (ArgumentsSchema).
+        /// </summary>
+        private const int MaxUrlLength = 2048;
 
         private readonly ILogger _logger;
 
@@ -95,12 +115,13 @@ namespace LLM_AI
             "principal nettoyé du boilerplate, titres, tableaux). " +
             "Backend direct auto-hébergé par défaut (sans clé) ; repli sur " +
             "l'API cloud Ollama si configuré. L'URL doit être un domaine public " +
-            "(pas d'IP, pas de réseau local). Paramètre detail_level : \"full\" " +
+            "(pas d'IP, pas de réseau local), 2048 caractères maximum. " +
+            "Paramètre detail_level : \"full\" " +
             "(défaut, contenu complet 15000 car.) ou \"preview\" (extrait 500 car.). " +
             "Utilise-le pour lire une page identifiée par web_search.";
 
         public string ArgumentsSchema => @"{
-  ""url"": ""URL absolue à récupérer (obligatoire)"",
+  ""url"": ""URL absolue à récupérer (obligatoire, 2048 caractères maximum)"",
   ""detail_level"": ""full (défaut) ou preview""
 }";
 
@@ -119,6 +140,17 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(url))
                 return Err("paramètre 'url' requis pour web_fetch");
             SecurityMonitor.Count("web_fetch_appels");
+
+            // Plafond de longueur : le garde SSRF fonctionne quelle que soit la
+            // taille (host extrait du Uri), mais une URL de 20 ko n'a aucun
+            // usage légitime ici — refus avant tout fetch, borne la clé de
+            // cache et le journal.
+            if (url.Length > MaxUrlLength)
+            {
+                SecurityMonitor.Record("WEB_FETCH_ERREUR",
+                    "URL trop longue (" + url.Length + " > " + MaxUrlLength + ") : " + Truncate(url, 120));
+                return Err("URL trop longue (" + url.Length + " caractères ; maximum " + MaxUrlLength + ").");
+            }
 
             string detail = OptString(args, "detail_level");
             if (string.IsNullOrWhiteSpace(detail)) detail = "full";
@@ -165,7 +197,7 @@ namespace LLM_AI
             if (WebResultCache.TryGet(cacheKey, out var cached))
             {
                 SecurityMonitor.Count("web_fetch_cache_hits");
-                _logger?.Info("[LLM_AI] web_fetch cache hit url={0}", url);
+                _logger?.Info("[LLM_AI] web_fetch cache hit url={0}", Truncate(url, 120));
                 return cached;
             }
 
@@ -185,7 +217,7 @@ namespace LLM_AI
                         result = BuildStructured(url, html, detail, finalUrl);
                         valid = true;
                         _logger?.Info("[LLM_AI] web_fetch direct url={0} -> {1} (caché 24h)",
-                            url, Truncate(result, 200));
+                            Truncate(url, 120), Truncate(result, 200));
                     }
                     else
                     {
@@ -194,7 +226,7 @@ namespace LLM_AI
                         string why = html != null ? "anti-bot/blocage" : (fetchErr ?? "échec fetch");
                         if (!string.IsNullOrWhiteSpace(cloudKey))
                         {
-                            _logger?.Info("[LLM_AI] web_fetch direct KO ({0}) url={1} -> repli Ollama cloud", why, url);
+                            _logger?.Info("[LLM_AI] web_fetch direct KO ({0}) url={1} -> repli Ollama cloud", why, Truncate(url, 120));
                             result = await FetchCloud(url, cloudKey, ct).ConfigureAwait(false);
                             valid = !IsErrorResult(result);
                         }
@@ -212,7 +244,7 @@ namespace LLM_AI
                     result = await FetchCloud(url, cloudKey, ct).ConfigureAwait(false);
                     valid = !IsErrorResult(result);
                     _logger?.Info("[LLM_AI] web_fetch cloud url={0} -> {1}",
-                        url, Truncate(result, 200));
+                        Truncate(url, 120), Truncate(result, 200));
                 }
 
                 // Ne cache QUE les résultats valides (pas les erreurs).
@@ -711,9 +743,87 @@ namespace LLM_AI
                     // avant de le réinjecter dans la boucle agent.
                     try { using (JsonDocument.Parse(text)) { } }
                     catch { return JsonSerializer.Serialize(new { error = "réponse non-JSON", raw = Truncate(text, 500) }, s_json); }
-                    return text;
+                    return CapCloudResult(text);
                 }
             }
+        }
+
+        /// <summary>
+        /// Plafonne le JSON renvoyé par le repli cloud avant cache/retour au
+        /// LLM. Le chemin direct borne déjà son extraction (15000 car. de
+        /// contenu) ; le chemin cloud renvoyait la réponse brute — qui repart
+        /// ENTIÈRE dans le prompt de l'itération suivante (LlmAgentService
+        /// n'échantillonne pas les résultats d'outils) et dans le cache 24h,
+        /// sans borne. Plafonnement via JsonNode (tronquer le texte brut
+        /// casserait le JSON) : toute chaîne à 15000 car. (aligné sur le chemin
+        /// direct) et tout tableau à 50 entrées (les links des réponses cloud
+        /// peuvent être très longs — on garde les premières). Échec de
+        /// re-lecture : le texte validé JSON est renvoyé tel quel (taille de
+        /// toute façon contrôlée par ollama.com).
+        /// </summary>
+        private static string CapCloudResult(string text)
+        {
+            try
+            {
+                var node = JsonNode.Parse(text);
+                if (node == null) return text;
+                CapNodeChildren(node, 15000, 50);
+                return node.ToJsonString(s_json);
+            }
+            catch
+            {
+                return text;
+            }
+        }
+
+        /// <summary>Récursion de CapCloudResult : coupe les tableaux au-delà
+        /// de <paramref name="maxArray"/> entrées et plafonne les chaînes via
+        /// le PARENT (JsonValue est immuable — on ne peut remplacer une valeur
+        /// que par affectation chez son porteur). Descend récursivement dans
+        /// les objets/tableaux non plafonnés.</summary>
+        private static void CapNodeChildren(JsonNode parent, int maxString, int maxArray)
+        {
+            if (parent == null) return;
+            if (parent is JsonObject obj)
+            {
+                var keys = new List<string>();
+                foreach (var p in obj) keys.Add(p.Key); // copie : mutation ensuite
+                foreach (var key in keys)
+                {
+                    var val = obj[key];
+                    if (IsLongString(val, maxString, out var s))
+                        obj[key] = JsonValue.Create(s.Substring(0, maxString) + "… [tronqué]");
+                    else
+                        CapNodeChildren(val, maxString, maxArray);
+                }
+            }
+            else if (parent is JsonArray arr)
+            {
+                for (int i = arr.Count - 1; i >= maxArray; i--) arr.RemoveAt(i);
+                for (int i = arr.Count - 1; i >= 0; i--)
+                {
+                    var val = arr[i];
+                    if (IsLongString(val, maxString, out var s))
+                        arr[i] = JsonValue.Create(s.Substring(0, maxString) + "… [tronqué]");
+                    else
+                        CapNodeChildren(val, maxString, maxArray);
+                }
+            }
+        }
+
+        /// <summary>Vrai si <paramref name="node"/> est une valeur chaîne
+        /// dépassant <paramref name="maxString"/> (extraite dans
+        /// <paramref name="s"/>) — un JSON null ou un nombre ne compte pas.</summary>
+        private static bool IsLongString(JsonNode node, int maxString, out string s)
+        {
+            s = null;
+            if (node is JsonValue v && v.TryGetValue<string>(out var str)
+                && !string.IsNullOrEmpty(str) && str.Length > maxString)
+            {
+                s = str;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>Détecte un résultat d'erreur (JSON contenant un champ

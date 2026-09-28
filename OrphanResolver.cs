@@ -1214,9 +1214,15 @@ namespace LLM_AI
 
                         string mime = MimeFromUrl(posterUrl);
                         var dirSvc = new DirectoryService(fs);
-                        var libOpts = _library.GetLibraryOptions(item);
+                        // Même piège 4.10 que DefaultImageApplier :
+                        // generatedFromItemIds déréférencé sans garde
+                        // (ImageSaver.SaveImage → .Length) et libraryOptions
+                        // déréférencé sans garde (IsSaveLocalImagesEnabled) —
+                        // Array.Empty + garde null obligatoires.
+                        var libOpts = _library.GetLibraryOptions(item)
+                            ?? new MediaBrowser.Model.Configuration.LibraryOptions();
                         await _providers.SaveImage(item, libOpts, ms, mime.AsMemory(),
-                            ImageType.Primary, null, null, dirSvc, true, ct).ConfigureAwait(false);
+                            ImageType.Primary, null, Array.Empty<long>(), dirSvc, true, ct).ConfigureAwait(false);
                         return true;
                     }
                 }
