@@ -495,8 +495,27 @@ namespace LLM_AI
             }
             catch { /* payload non-JSON : traité tel quel */ }
 
-            // 2) Neutralisation des délimiteurs spoofés.
-            payload = s_rxDelimiter.Replace(payload, "[DELIM_SUPPRIME]");
+            // 2) Neutralisation des délimiteurs spoofés — télémétrie fail-open
+            //    (le moniteur ne lève jamais, ne casse jamais le chemin) :
+            //    compteur par occurrence, et un événement par payload touché
+            //    (trace durable [LLM_AI][SEC] + journal borné, consultables via
+            //    /Plugins/LLMAI/SecurityMetrics et la sonde security_metrics).
+            int spoofed = 0;
+            payload = s_rxDelimiter.Replace(payload, m =>
+            {
+                spoofed++;
+                SecurityMonitor.Count("delimiters_neutralized");
+                return "[DELIM_SUPPRIME]";
+            });
+            if (spoofed > 0)
+            {
+                // Détail SANS écho du contenu de la page (une injection pourrait
+                // forger des lignes de log via \n) : volume + source seulement,
+                // tronqués — même hygiène que les autres événements.
+                SecurityMonitor.Record("DELIM_NEUTRALISE",
+                    spoofed + " balise(s) spoofée(s) dans un résultat — source: "
+                    + Truncate((sourceUrl ?? "").Replace('\n', ' ').Replace('\r', ' '), 120));
+            }
 
             // 3) Encadrement avec nonce. GetHexString compte des OCTETS :
             //    4 octets → 8 caractères hex, équivalent bin2hex(random_bytes(4)).

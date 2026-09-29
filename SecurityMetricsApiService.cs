@@ -15,8 +15,9 @@ namespace LLM_AI
     /// <c>GET /Plugins/LLMAI/SecurityMetrics</c> (admin uniquement) — compteurs
     /// d'activité + fenêtre d'événements de sécurité du plugin
     /// (<see cref="SecurityMonitor"/>) : appels web_fetch/web_search, SSRF
-    /// bloqués, appels d'outils malformés/inconnus, échecs backend, tours de
-    /// chat refusés, actions déposées/approuvées/refusées. Lecture seule,
+    /// bloqués, balises spoofées neutralisées, appels d'outils
+    /// malformés/inconnus, échecs backend, tours de chat refusés, actions
+    /// déposées/approuvées/refusées. Lecture seule,
     /// zéro LLM : c'est l'instrument de DÉTECTION à côté des sondes
     /// système de <c>system_audit</c>. Volatile (mémoire) — la trace durable
     /// est le journal Emby (lignes <c>[LLM_AI][SEC]</c>).

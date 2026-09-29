@@ -14,7 +14,8 @@ namespace LLM_AI
     /// prévention SSRF/deux-phases) : compteurs d'activité (appels des outils
     /// web, erreurs, tours de chat refusés, actions déposées/approuvées,
     /// échecs backend) + journal borné des événements de sécurité (SSRF
-    /// bloqué, outil inconnu, appel d'outil malformé, consommation refusée…).
+    /// bloqué, neutralisation de balise spoofée dans un payload web, outil
+    /// inconnu, appel d'outil malformé, consommation refusée…).
     /// <para>Volontairement SANS configuration et purement en mémoire
     /// (pattern <see cref="ChatRateLimiter"/>) : zéro coût, remise à zéro au
     /// redémarrage d'Emby. La trace DURABLE est le journal Emby : chaque
