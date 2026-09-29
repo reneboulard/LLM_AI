@@ -517,9 +517,12 @@ namespace LLM_AI
                     + Truncate((sourceUrl ?? "").Replace('\n', ' ').Replace('\r', ' '), 120));
             }
 
-            // 3) Encadrement avec nonce. GetHexString compte des OCTETS :
-            //    4 octets → 8 caractères hex, équivalent bin2hex(random_bytes(4)).
-            string nonce = RandomNumberGenerator.GetHexString(4, true);
+            // 3) Encadrement avec nonce. 8 caractères hex = équivalent
+            //    bin2hex(random_bytes(4)) — VÉRIFIÉ in situ : sur ce runtime
+            //    (8.0.31, idem host Emby) GetHexString(n) renvoie n caractères
+            //    hex (et NON 2×n octets) ; GetHexString(8) est donc la forme
+            //    8 caractères voulue.
+            string nonce = RandomNumberGenerator.GetHexString(8, true);
             string safeUrl = WebUtility.HtmlEncode(sourceUrl ?? string.Empty);
             return "<external_web_content source=\"" + safeUrl + "\" untrusted=\"true\" nonce=\"" + nonce + "\">\n"
                  + payload
