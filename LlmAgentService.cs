@@ -1,8 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Logging;
@@ -352,8 +356,35 @@ namespace LLM_AI
                         toolResults.Add((call.Tool, res));
                         if (_verbose)
                             _logger?.Info("[LLM_AI] Résultat outil {0}: {1}", call.Tool, Truncate(res, 1500));
+                        // Défense prompt-injection : les résultats des outils web
+                        // partent au LLM encadrés <external_web_content nonce=…>
+                        // (cf. WrapExternalPayload) ; la sortie BRUTE reste dans
+                        // toolResults (enrichissement post-boucle) et dans
+                        // WebResultCache (côté tools). Test sur le nom CANONIQUE
+                        // (tool.Name) : le nom émis par le LLM peut être mésallé
+                        // (espaces/contrôles) — le test sur call.Tool laisserait
+                        // passer un web_fetch non encadré.
+                        string wire;
+                        if (IsUntrustedTool(tool.Name))
+                        {
+                            // Sérialisation en chaîne JSON : le payload garde la
+                            // forme du tableau [{\"tool\":…,\"result\":…}] (contrat
+                            // de format fragile pour les petits modèles) — le
+                            // délimiteur devient une valeur string visible du
+                            // modèle une fois le JSON décodé.
+                            wire = JsonSerializer.Serialize(
+                                WrapExternalPayload(res, ExternalPayloadSource(res, tool.Name)),
+                                RelaxedJsonOpts);
+                            if (_verbose)
+                                _logger?.Info("[LLM_AI] Résultat outil {0} encadré nonce: {1}",
+                                    tool.Name, Truncate(wire, 400));
+                        }
+                        else
+                        {
+                            wire = res;
+                        }
                         sb.Append("{\"tool\":\"").Append(JsonEscape(call.Tool)).Append("\",\"result\":")
-                          .Append(res).Append('}');
+                          .Append(wire).Append('}');
                     }
                     else
                     {
@@ -370,6 +401,140 @@ namespace LLM_AI
 
             _logger?.Warn("[LLM_AI] Limite de {0} itérations atteinte sans réponse finale.", MaxIterations);
             return ("Limite d'itérations atteinte sans réponse finale.", toolResults);
+        }
+
+        // ------------------------------------------------------------------
+        //  Défense prompt-injection — « delimiting + nonce » des payloads web
+        // ------------------------------------------------------------------
+
+        //  Les résultats des outils web (web_fetch, web_search, new_releases /
+        //  alias showbizz_new_releases) sont du texte NON FIABLE : une page
+        //  malveillante peut y glisser des injections de prompt (« ignore tes
+        //  consignes », faux marqueurs de dialogue, instructions système).
+        //  Avant réinjection au LLM, la sortie du tool est encadrée par des
+        //  balises porteuses d'un nonce inconnu de la page au moment du fetch :
+        //      <external_web_content source="…" untrusted="true" nonce="…">
+        //      { payload JSON du tool }
+        //      </external_web_content nonce="…">
+        //  La règle miroir — appendue SERVEUR-SIDE en fin de BuildSystemPrompt
+        //  (non éditable par l'usager) — apprend au modèle à traiter ce bloc
+        //  comme donnée passive et à n'accepter qu'UNE balise fermante : celle
+        //  portant le même nonce.
+        //  Le wrap opère ICI, au niveau de la boucle — PAS dans les tools :
+        //  leur sortie brute reste disponible pour les consommateurs hors
+        //  filaire (toolResults → EnrichRecommendations, WebResultCache).
+
+        /// <summary>
+        /// Outils dont la sortie provient (au moins en partie) du web non
+        /// fiable : leur résultat est encadré par <see cref="WrapExternalPayload"/>
+        /// avant réinjection au LLM. new_releases scrape des sources web
+        /// configurées (HTML/RSS) : contenu externe au même titre que les
+        /// fetchs/recherches explicites. Le test porte sur le nom canonique
+        /// résolu côté serveur (jamais le nom émis par le LLM).
+        /// </summary>
+        private static readonly HashSet<string> s_untrustedTools =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "web_fetch", "web_search", "new_releases", "showbizz_new_releases"
+            };
+
+        /// <summary>
+        /// Options de sérialisation « relaxées » : garde les « &lt; » littéraux
+        /// (au lieu de \u003c par défaut) pour que les balises spoofées par une
+        /// page restent détectables par le neutraliseur — et pour que le LLM
+        /// voie les délimiteurs en clair sur le fil. Résolveur explicite
+        /// .NET 8 obligatoire pour sérialiser un JsonElement (même gotcha que
+        /// WebFetchTool, commenté ligne 1021).
+        /// </summary>
+        private static readonly System.Text.Json.JsonSerializerOptions RelaxedJsonOpts = new System.Text.Json.JsonSerializerOptions
+        {
+            TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+
+        // Doit être déclaré AVANT s_rxDelimiter : l'initialiseur statique des
+        // champs s'exécute dans l'ordre textuel (même règle que WebFetchTool,
+        // commentée devant son RegexTimeout).
+        private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>Début de balise external_web_content (ouvrante OU fermante,
+        /// casse et espaces indifférents) présent DANS un payload — neutralisé.</summary>
+        private static readonly Regex s_rxDelimiter = new Regex(
+            @"</?\s*external_web_content", RegexOptions.IgnoreCase, RegexTimeout);
+
+        private static bool IsUntrustedTool(string name) =>
+            !string.IsNullOrEmpty(name) && s_untrustedTools.Contains(name);
+
+        /// <summary>
+        /// Encadre un payload d'outil web pour réinjection au LLM (défense en
+        /// profondeur « delimiting + nonce ») :
+        /// 1. NORMALISATION : les tools sérialisent avec l'encoder System.Text
+        ///    .Json par défaut (les « &lt; » y deviennent \u003c, indétectables
+        ///    par le regex) — ré-sérialisation avec <see cref="RelaxedJsonOpts"/>
+        ///    pour que les balises spoofées redeviennent littéralement visibles ;
+        /// 2. NEUTRALISATION : tout début de balise external_web_content présent
+        ///    DANS le payload (façonné par la page) est remplacé par
+        ///    [DELIM_SUPPRIME] — le modèle ne peut pas sortir de l'encadrement
+        ///    par injection textuelle ;
+        /// 3. ENCADREMENT : balise ouvrante <c>source=… untrusted=true nonce=…</c>
+        ///    et balise FERMANTE portant le MÊME nonce (inconnu de la page au
+        ///    moment du scraping — généré après le fetch).
+        /// Fail-open : payload non-JSON traité tel quel, la fonction ne lève
+        /// jamais (le chemin doit continuer même sur un payload bizarre).
+        /// </summary>
+        internal static string WrapExternalPayload(string payload, string sourceUrl)
+        {
+            if (string.IsNullOrEmpty(payload)) payload = string.Empty;
+            try
+            {
+                // 1) Normalisation du JSON (\u003c → « < » littéral).
+                using (var doc = JsonDocument.Parse(payload))
+                {
+                    payload = JsonSerializer.Serialize(doc.RootElement, RelaxedJsonOpts);
+                }
+            }
+            catch { /* payload non-JSON : traité tel quel */ }
+
+            // 2) Neutralisation des délimiteurs spoofés.
+            payload = s_rxDelimiter.Replace(payload, "[DELIM_SUPPRIME]");
+
+            // 3) Encadrement avec nonce. GetHexString compte des OCTETS :
+            //    4 octets → 8 caractères hex, équivalent bin2hex(random_bytes(4)).
+            string nonce = RandomNumberGenerator.GetHexString(4, true);
+            string safeUrl = WebUtility.HtmlEncode(sourceUrl ?? string.Empty);
+            return "<external_web_content source=\"" + safeUrl + "\" untrusted=\"true\" nonce=\"" + nonce + "\">\n"
+                 + payload
+                 + "\n</external_web_content nonce=\"" + nonce + "\">";
+        }
+
+        /// <summary>
+        /// Étiquette pour l'attribut source= : champ final_url/url (web_fetch —
+        /// l'URL réellement lue, redirections suivies) ou query (web_search,
+        /// préfixée du nom de l'outil) du payload si présent, sinon le nom de
+        /// l'outil (new_releases, stubs d'erreur, payload non-JSON…).
+        /// Ne lève jamais.
+        /// </summary>
+        private static string ExternalPayloadSource(string payload, string toolName)
+        {
+            try
+            {
+                using (var doc = JsonDocument.Parse(payload))
+                {
+                    var root = doc.RootElement;
+                    foreach (var field in new[] { "final_url", "url", "query" })
+                    {
+                        if (root.TryGetProperty(field, out var p) &&
+                            p.ValueKind == JsonValueKind.String)
+                        {
+                            string v = p.GetString();
+                            if (string.IsNullOrWhiteSpace(v)) continue;
+                            return field == "query" ? toolName + ":" + v : v;
+                        }
+                    }
+                }
+            }
+            catch { /* fallback toolName */ }
+            return toolName ?? string.Empty;
         }
 
         // ------------------------------------------------------------------
