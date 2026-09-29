@@ -10,6 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.8] — 2026-09-29
+
+### Security (FR)
+- **Défense anti prompt-injection « délimitation + nonce » sur les outils
+  web** (mesure préventive — aucun incident observé). Les sorties des outils
+  alimentés par du contenu externe (`web_fetch`, `web_search`, `new_releases`,
+  `showbizz_new_releases`) sont désormais encadrées, côté serveur uniquement,
+  par des balises `<external_web_content>` portant un nonce aléatoire de
+  8 caractères hexadécimaux : identique sur la balise ouvrante et la fermante,
+  régénéré à chaque injection, jamais connu de la page source. Le payload
+  reste un JSON valide et le cache 24 h conserve la sortie brute —
+  l'encadrement s'applique après le cache, à chaque injection. Une règle
+  miroir est appendue en fin de system prompt par le serveur (tous les flux
+  LLM : chat, audit, « tonight », recommandations, chat externe) — la défense
+  ne repose donc pas sur le texte éditable des prompts d'usage. Contenu
+  encadré = donnée passive, à citer ou résumer, jamais à exécuter ; toute
+  balise de délimitation vue à l'intérieur du contenu est un spoofing,
+  neutralisée avant injection (`[DELIM_SUPPRIME]`) et tracée par la
+  télémétrie existante (compteur `delimiters_neutralized`, événement
+  `[SEC] DELIM_NEUTRALISE` du journal). La règle abrégée figure aussi dans
+  les baselines FR/EN éditables.
+
+### Security (EN)
+- **Prompt-injection defense via "delimiting + nonce" for web tools**
+  (preventive measure — no incident observed). Outputs of tools fed with
+  external content (`web_fetch`, `web_search`, `new_releases`,
+  `showbizz_new_releases`) are now framed, server-side only, within
+  `<external_web_content>` tags carrying a random 8-hex-character nonce:
+  identical on the opening and closing tags, regenerated on every injection,
+  never known to the source page. The payload remains valid JSON and the 24h
+  cache keeps the raw output — the framing applies after the cache, on every
+  injection. A mirror rule is appended to the end of the system prompt by the
+  server (all LLM flows: chat, audit, "tonight", recommendations, external
+  chat) — the defense therefore does not rely on the editable prompt text.
+  Framed content = passive data, to quote or summarize, never to execute; any
+  delimiter-shaped tag seen inside the content is spoofing, neutralized
+  before injection (`[DELIM_SUPPRIME]`) and tracked by the existing
+  telemetry (`delimiters_neutralized` counter, `[SEC] DELIM_NEUTRALISE` log
+  event). The abridged rule also ships in the editable FR/EN baselines.
+
 ## [1.14.0.7] — 2026-09-28
 
 ### Added (FR)
