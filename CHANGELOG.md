@@ -10,6 +10,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.0.9] — 2026-09-30
+
+### Changed (FR)
+- **`num_ctx` Ollama : politique « instance chargée d'abord »** — le plugin n'impose
+  plus un contexte fixe et peut désormais cohabiter avec une instance que vous
+  gardez exprès chargée. Avant chaque appel Ollama **local**, le plugin interroge
+  `GET /api/ps` (lecture d'état léger, aucune opération modèle). Si le modèle
+  demandé est déjà chargé avec un `context_length` ≥ **32 768** (seuil du
+  plugin), l'appel part avec **exactement** le ctx de l'instance chargée :
+  Ollama conserve le runner (aucun rechargement entre deux « shots »). Si
+  l'instance est trop courte (ou le modèle absent), l'appel part avec le seuil
+  requis : un rechargement a lieu, puis l'instance demeure chaude aux appels
+  suivants. Si `/api/ps` est indisponible (Ollama très ancien, hiccup réseau),
+  repli sur les valeurs historiques par modèle (jamais de dégradation risquée
+  d'une instance inconnue). Le seuil **32 768** est fondé sur des **mesures
+  réelles** (replay `/api/chat` sur `gemma4:latest`, 2026-09-30) : boucle
+  Tonight ≈ 3,2k tokens (≈ 5–6 car./token en français), boucle agent lourde
+  7 messages ≈ 13,9k, pic historique 18 messages ≈ 25k extrapolés — 32768
+  couvre le pire observé avec ≈ 30 % de marge. Autre mesure clé : le
+  `num_ctx` **n'affecte pas la vitesse** quand le KV tient en VRAM (préfill
+  mesuré identique 65536 ↔ 16384 sur un même prompt) ; la pente du KV cache
+  est de **9 216 octets/token** sur ce modèle (64k ≈ 0,6 Go, 32k ≈ 0,3 Go).
+- **Instrumentation d'usage** — chaque appel Ollama logge désormais les
+  compteurs que le serveur renvoie déjà (`prompt_eval_count`/`eval_count`) :
+  `[LLM_AI] Ollama usage : prompt=N tok (M car., ≈R ch/tok), généré=G tok…`.
+  Sert à surveiller les pics réels de contexte dans les journaux Emby et à
+  recalibrer le seuil si un run réel approche ~28k tokens (constante
+  `MinNumCtx` de `LlmClient`). Les appels Gemini et Ollama Cloud ne sont pas
+  affectés (le serveur distant gère son propre contexte).
+
+### Changed (EN)
+- **Ollama `num_ctx`: loaded-instance-first policy** — the plugin no longer
+  forces a fixed context and can now coexist with an instance you deliberately
+  keep loaded. Before every **local** Ollama call, the plugin queries
+  `GET /api/ps` (light status read, no model operation). If the requested model
+  is already loaded with a `context_length` ≥ **32 768** (the plugin's
+  threshold), the call goes out with **exactly** the loaded instance's ctx:
+  Ollama keeps the runner (no reload between calls). If the instance is too
+  short (or the model absent), the call goes out with the required threshold:
+  one reload happens, then the instance stays warm for later calls. If
+  `/api/ps` is unavailable (very old Ollama, network hiccup), the plugin falls
+  back to the historical per-model values (never risks degrading an unknown
+  warm instance). The **32 768** threshold is grounded in **real
+  measurements** (replayed `/api/chat` on `gemma4:latest`, 2026-09-30): Tonight
+  loop ≈ 3.2k tokens (≈ 5–6 chars/token in French), heavy 7-message agent
+  loop ≈ 13.9k, historical worst of 18 messages ≈ 25k extrapolated — 32768
+  covers the observed worst with ≈ 30 % headroom. Another key measurement:
+  `num_ctx` **does not affect speed** while the KV fits in VRAM (identical
+  measured prefill at 65536 ↔ 16384 on the same prompt); the KV cache slope is
+  **9,216 bytes/token** on that model (64k ≈ 0.6 GB, 32k ≈ 0.3 GB).
+- **Usage instrumentation** — every Ollama call now logs the counters the
+  server already returns (`prompt_eval_count`/`eval_count`):
+  `[LLM_AI] Ollama usage: prompt=N tok (M chars, ≈R ch/tok), gen=G tok…`. Use
+  it to watch real context peaks in the Emby logs and to recalibrate the
+  threshold if a real run approaches ~28k tokens (`MinNumCtx` constant in
+  `LlmClient`). Gemini and Ollama Cloud calls are unaffected (the remote
+  server manages its own context).
+
 ## [1.14.0.8] — 2026-09-29
 
 ### Security (FR)

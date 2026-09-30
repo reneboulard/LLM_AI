@@ -25,10 +25,24 @@ namespace LLM_AI
         };
 
         /// <summary>
-        /// Longueur de contexte (num_ctx) par modèle Ollama, transmise via
-        /// <c>options.num_ctx</c>. La boucle agent accumule les messages (appels
-        /// d'outils + résultats réinjectés) : un ctx trop court tronque l'historique.
-        /// Inconnu -> 65536 (valeur prudente par défaut).
+        /// Longueur de contexte (num_ctx) : politique « instance chargée d'abord ».
+        /// Avant chaque appel <i>local</i>, on interroge <c>GET /api/ps</c> (léger,
+        /// aucune opération modèle) : si le modèle demandé est déjà chargé avec un
+        /// context_length ≥ <see cref="MinNumCtx"/>, on réutilise ce ctx EXACTEMENT
+        /// tel que chargé — Ollama conserve l'instance (aucun rechargement, mesuré
+        /// 2026-09-30) ; sinon, l'appel part avec le seuil requis et devient
+        /// l'instance chaude pour les appels suivants.
+        ///
+        /// Seuil fondé sur des mesures réelles (replay /api/chat, gemma4:latest 8B,
+        /// 2026-09-30) : boucle Tonight système+EPG ≈ 3,2k tok, boucle agent lourde
+        /// 7 msgs ≈ 13,9k tok, pic historique 18 messages ≈ 25k tok extrapolés,
+        /// ratio ≈ 5–6 car./token. 32768 couvre le pire observé avec ≈ 30 % de
+        /// marge. Pente KV mesurée : 9 216 o/token sur ce modèle (64k ≈ 0,6 Go).
+        ///
+        /// <see cref="_modelCtx"/> n'est plus qu'un repli : si <c>/api/ps</c> est
+        /// indisponible (Ollama très ancien, hiccup réseau), on repart sur les
+        /// valeurs par modèle historiques — elles matchent l'instance généralement
+        /// chargée, évitant un rechargement accidentel par dégradation.
         /// </summary>
         private static readonly Dictionary<string, int> _modelCtx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
@@ -40,10 +54,101 @@ namespace LLM_AI
 
         private const int DefaultNumCtx = 65536;
 
+        /// <summary>
+        /// Seuil minimal de contexte requis pour les tâches du plugin (voir
+        /// docstring de la classe). Demander moins tronquerait l'historique de
+        /// boucle ; demander plus gaspille en permanence un KV jamais rempli.
+        /// </summary>
+        private const int MinNumCtx = 32768;
+
         private static int GetNumCtx(string model)
         {
             int ctx;
             return !string.IsNullOrEmpty(model) && _modelCtx.TryGetValue(model, out ctx) ? ctx : DefaultNumCtx;
+        }
+
+        /// <summary>
+        /// Instance Ollama actuellement chargée pour <paramref name="model"/> :
+        /// context_length, ou -1 si le modèle n'est pas chargé (les deux cas sont
+        /// distincts !), ou null si <c>/api/ps</c> est indisponible (requête en
+        /// erreur, très vieil Ollama). GET /api/ps : lecture d'état pur — pas de
+        /// création ni d'éviction de runner côté serveur.
+        /// </summary>
+        private static async System.Threading.Tasks.Task<int?> GetLoadedCtxAsync(
+            string url, string model, ILogger logger, CancellationToken ct)
+        {
+            try
+            {
+                using (var req = new HttpRequestMessage(HttpMethod.Get, url.TrimEnd('/') + "/api/ps"))
+                using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                {
+                    // Modèle pas dans la liste = non chargé ; autre statut = état
+                    // inconnu (null → repli par modèle).
+                    if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return -1;
+                    if (!resp.IsSuccessStatusCode) return null;
+                    var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    using (var doc = System.Text.Json.JsonDocument.Parse(text))
+                    {
+                        foreach (var m in doc.RootElement.GetProperty("models").EnumerateArray())
+                        {
+                            // Tolérant aux variantes de nom : "gemma4", "gemma4:latest",
+                            // ou le champ "model" (nom réel) plutôt que "name" (alias).
+                            string name = m.TryGetProperty("model", out var mdl) ? mdl.GetString() : null;
+                            bool match = string.Equals(name, model, StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(name, model + ":latest", StringComparison.OrdinalIgnoreCase);
+                            if (!match) continue;
+                            if (!m.TryGetProperty("context_length", out var ctxEl)) return null;
+                            return ctxEl.TryGetInt64(out var v) ? (int)v : -1;
+                        }
+                        return -1;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // HttpClient.Timeout jette TaskCanceledException avec un ct NON
+                // annulé (gotcha connu) : la vraie annulation se propage seule.
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] GET /api/ps indisponible ({0}) : repli num_ctx par modèle", ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Choix du num_ctx d'un appel Ollama local. Instance chargée adéquate ->
+        /// ctx strictement identique (zéro reload, mesuré) ; chargée mais trop
+        /// courte -> seuil requis (reload attendu, puis instance chaude) ; absente
+        /// -> seuil requis (instance minimale fraîche, petit système friendly) ;
+        /// /api/ps indisponible -> repli dict/défaut historique (ne pas risquer
+        /// de dégrader une instance chaude de longueur inconnue). Cloud (clé
+        /// présente) : le serveur impose le sien, comportement inchangé.
+        /// </summary>
+        private static async System.Threading.Tasks.Task<int> ResolveNumCtxAsync(
+            string url, string model, string apiKey, ILogger logger, CancellationToken ct)
+        {
+            if (!string.IsNullOrEmpty(apiKey))
+                return GetNumCtx(model);
+
+            int? loaded = await GetLoadedCtxAsync(url, model, logger, ct).ConfigureAwait(false);
+            if (loaded == null)
+                return GetNumCtx(model);
+            if (loaded.Value < 0)
+            {
+                logger?.Info("[LLM_AI] Ollama : {0} non chargé -> appel avec num_ctx requis {1} (instance minimale)", model, MinNumCtx);
+                return MinNumCtx;
+            }
+            if (loaded.Value >= MinNumCtx)
+            {
+                logger?.Info("[LLM_AI] Ollama instance chargée : {0} ctx={1} ≥ seuil {2} -> num_ctx={1}, instance conservée (zéro reload)",
+                    model, loaded.Value, MinNumCtx);
+                return loaded.Value;
+            }
+            logger?.Info("[LLM_AI] Ollama instance chargée : {0} ctx={1} < seuil {2} -> appel avec num_ctx requis {2} (reload attendu)",
+                model, loaded.Value, MinNumCtx);
+            return MinNumCtx;
         }
 
         /// <summary>
@@ -134,10 +239,13 @@ namespace LLM_AI
                 throw new ArgumentException("Modèle non configuré.", nameof(model));
 
             var endpoint = url.TrimEnd('/') + "/api/chat";
-            var body = BuildRequestBody(model, messages);
+            // Local : réutiliser l'instance chargée si elle couvre le seuil
+            // (zéro reload), sinon demander le seuil requis ; cloud : historique.
+            var numCtx = await ResolveNumCtxAsync(url, model, apiKey, logger, ct).ConfigureAwait(false);
+            var body = BuildRequestBody(model, numCtx, messages);
 
             logger?.Info("[LLM_AI] Appel Ollama : {0} (modèle={1}, messages={2}, num_ctx={3}, auth={4})",
-                endpoint, model, messages.Count, GetNumCtx(model), apiKey != null ? "Bearer" : "non");
+                endpoint, model, messages.Count, numCtx, apiKey != null ? "Bearer" : "non");
 
             using (var req = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
@@ -153,6 +261,22 @@ namespace LLM_AI
                     if (!resp.IsSuccessStatusCode)
                         throw new HttpRequestException(
                             $"Ollama a répondu HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(respText, 500)}");
+
+                    // Compteurs d'usage réels renvoyés par Ollama (tokens réellement
+                    // évalués par l'appel) : mesure du contexte consommé par la boucle
+                    // agent. Extraction manuelle (noms snake_case non mappés par le
+                    // IJsonSerializer hôte). chars = car. du contenu envoyé — le ratio
+                    // ch/tok observé sert au dimensionnement des défauts de num_ctx.
+                    var promptTok = ExtractIntField(respText, "prompt_eval_count");
+                    var genTok = ExtractIntField(respText, "eval_count");
+                    if (promptTok > 0)
+                    {
+                        int chars = 0;
+                        foreach (var m in messages) chars += m.Content?.Length ?? 0;
+                        logger?.Info("[LLM_AI] Ollama usage : prompt={0} tok ({1} car., ≈{2} ch/tok), généré={3} tok (modèle={4}, num_ctx={5})",
+                            promptTok, chars, Math.Round((double)chars / promptTok, 1),
+                            genTok >= 0 ? genTok.ToString() : "?", model, numCtx);
+                    }
 
                     return ExtractContent(respText, json, logger);
                 }
@@ -205,7 +329,7 @@ namespace LLM_AI
 
         // --- Construction de la requête (camelCase garanti) -----------------
 
-        private static string BuildRequestBody(string model, IReadOnlyList<ChatMessage> messages)
+        private static string BuildRequestBody(string model, int numCtx, IReadOnlyList<ChatMessage> messages)
         {
             var sb = new StringBuilder();
             sb.Append('{');
@@ -218,7 +342,7 @@ namespace LLM_AI
                 sb.Append("\"content\":\"").Append(JsonEscape(messages[i].Content ?? string.Empty)).Append("\"}");
             }
             sb.Append("],");
-            sb.Append("\"options\":{\"num_ctx\":").Append(GetNumCtx(model)).Append("},");
+            sb.Append("\"options\":{\"num_ctx\":").Append(numCtx).Append("},");
             sb.Append("\"stream\":false");
             sb.Append('}');
             return sb.ToString();
@@ -347,6 +471,24 @@ namespace LLM_AI
                 .Replace("\\n", "\n")
                 .Replace("\\r", "\r")
                 .Replace("\\t", "\t");
+        }
+
+        // Recherche de l'entier qui suit la clé <fieldName> (ex. prompt_eval_count).
+        // Renvoie -1 si absente ou non numérique — les compteurs d'usage sont
+        // purement indicatifs, jamais la base d'une décision du plugin.
+        private static int ExtractIntField(string json, string fieldName)
+        {
+            if (string.IsNullOrEmpty(json)) return -1;
+            var key = "\"" + fieldName + "\"";
+            int idx = json.IndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return -1;
+            int colon = json.IndexOf(':', idx + key.Length);
+            if (colon < 0) return -1;
+            int i = colon + 1;
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+            int start = i;
+            while (i < json.Length && json[i] >= '0' && json[i] <= '9') i++;
+            return i > start && int.TryParse(json.Substring(start, i - start), out var v) ? v : -1;
         }
 
         private static string Truncate(string s, int max) =>
