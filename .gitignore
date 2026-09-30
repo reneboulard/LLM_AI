@@ -25,6 +25,9 @@ AGENTS.md
 ## Local planning (projects to come, private — library structure, analysis results)
 TODO.md
 
+## Local script (offline validation of NewReleaseSources lines — python port of NewReleasesTool)
+validate_source.sh
+
 ## Generated at build (LLM_AI.csproj target GenerateAssetVersionJs)
 asset_version.js
 
