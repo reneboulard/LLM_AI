@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -21,6 +22,11 @@ namespace LLM_AI
     /// LLM (provider/url/modèle postés par la page, donc testables AVANT
     /// enregistrement) pour vérifier qu'il répond ; renvoie OK/échec +
     /// latence. Réservé aux administrateurs.</item>
+    /// <item><c>POST /Plugins/LLMAI/TestNewReleaseSources</c> — scrappe les
+    /// lignes ÉDITÉES du champ « Sources nouveautés » (sans enregistrement,
+    /// sans toucher au cache du run) et renvoie, par source : mode détecté,
+    /// décompte d'items, 3 titres d'aperçu ou l'erreur (HTTP/timeout/regex).
+    /// Réservé aux administrateurs.</item>
     /// <item><c>GET /Plugins/LLMAI/DefaultPrompts</c> — les cinq
     /// prompts/directives par défaut dans la langue configurée, pour le
     /// bouton « Réinitialiser » de la page (usager qui a modifié une
@@ -158,6 +164,109 @@ namespace LLM_AI
         {
             if (string.IsNullOrEmpty(s) || s.Length <= max) return s;
             return s.Substring(0, max) + "…";
+        }
+
+        // ------------------------------------------------------------------
+        //  Test des sources new_releases (bouton « Tester les sources »)
+        // ------------------------------------------------------------------
+
+        /// <summary>Résultat du test d'UNE ligne de sources (média centre : les
+        /// chaînes et aperçus viennent du web — l'UI doit les rendre en
+        /// textContent, jamais en innerHTML).</summary>
+        public class TestSourceResultItem
+        {
+            public string Source { get; set; }
+            public string Mode { get; set; }
+            public int Count { get; set; }
+            public List<string> Samples { get; set; }
+            public string Error { get; set; }
+            public int Ms { get; set; }
+        }
+
+        /// <summary>Réponse du test : un entrée par ligne testée, plus le
+        /// total consolidé. <c>Ok</c> : la requête a abouti (les échecs
+        /// individuels sont dans <c>Results[].Error</c>).</summary>
+        public class TestNewReleaseSourcesResponse
+        {
+            public bool Ok { get; set; }
+            public int SourcesChecked { get; set; }
+            public int TotalItems { get; set; }
+            public List<TestSourceResultItem> Results { get; set; }
+            public string Note { get; set; }
+            public string Error { get; set; }
+        }
+
+        /// <summary>
+        /// Requête POST <c>/Plugins/LLMAI/TestNewReleaseSources</c>.
+        /// <c>Sources</c> : le CONTENU ÉDITÉ du champ sources de la page —
+        /// donc non encore enregistré —, une ligne par source au même format
+        /// que la config (URL seule = flux RSS/Atom auto-détecté ;
+        /// <c>URL :: @showbizz</c> ; <c>URL :: regex .NET</c>). Chaque ligne
+        /// est scrapée en direct (aucune écriture de config, aucun impact sur
+        /// le cache 24h du run) ; jusqu'à 8 lignes, 8 s par source.
+        /// </summary>
+        [Route("/Plugins/LLMAI/TestNewReleaseSources", "POST")]
+        public class TestNewReleaseSourcesRequest : IReturn<object>
+        {
+            public string Sources { get; set; }
+        }
+
+        public async Task<object> Post(TestNewReleaseSourcesRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new TestNewReleaseSourcesResponse
+                    { Ok = false, Error = "Réservé aux administrateurs." };
+
+            var specs = NewReleasesTool.ParseSources(req?.Sources);
+            if (specs.Count == 0)
+                return new TestNewReleaseSourcesResponse
+                {
+                    Ok = false,
+                    Error = "Aucune URL — collez une ligne « URL » (ou « URL :: @showbizz » / « URL :: <regex> »)."
+                };
+
+            // Filet de temps : chaque ligne coûte au plus 8 s de scraping —
+            // un test reste raisonnable même sur une liste volontairement
+            // longue. Au-delà de 8 lignes on teste les 8 premières (note).
+            string note = null;
+            const int maxProbe = 8;
+            if (specs.Count > maxProbe)
+            {
+                note = specs.Count + " lignes détectées, " + maxProbe + " testées max.";
+                specs = specs.Take(maxProbe).ToList();
+            }
+
+            var items = new List<TestSourceResultItem>(specs.Count);
+            int total = 0;
+            foreach (var spec in specs)
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8)))
+                {
+                    var probe = await NewReleasesTool.ProbeAsync(spec, cts.Token)
+                        .ConfigureAwait(false);
+                    total += probe.Count;
+                    items.Add(new TestSourceResultItem
+                    {
+                        Source = probe.Url,
+                        Mode = probe.Mode,
+                        Count = probe.Count,
+                        Samples = probe.Samples,
+                        Error = probe.Error,
+                        Ms = probe.Ms
+                    });
+                }
+            }
+
+            return new TestNewReleaseSourcesResponse
+            {
+                Ok = true,
+                SourcesChecked = items.Count,
+                TotalItems = total,
+                Results = items,
+                Note = note
+            };
         }
 
         // ------------------------------------------------------------------

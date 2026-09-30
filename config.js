@@ -445,6 +445,59 @@ define(["loading"], function (loading) {
         });
     }
 
+    // Test des sources new_releases : POST /Plugins/LLMAI/TestNewReleaseSources
+    // avec le CONTENU ÉDITÉ du champ (testable avant enregistrement — aucune
+    // écriture de config, aucun impact sur le cache 24h du run). Une ligne
+    // par résultat : OK + décompte + aperçu, 0 item (ligne inadaptée), ou
+    // l'erreur exacte. Les aperçus viennent du web : TEXTCONTENT uniquement.
+    // NB : fonction module-scope comme les autres helpers ci-dessus — `view`
+    // est passé explicitement par le caller (pas dans cette portée).
+    function testNewReleaseSources(view, btn, resultEl) {
+        var text = (view.querySelector("#txtNewReleaseSources") || {}).value || "";
+
+        btn.disabled = true;
+        var prevLabel = btn.textContent;
+        btn.textContent = i18n.t("cfg.newreleases.testing");
+        if (resultEl) {
+            resultEl.style.display = "block";
+            resultEl.textContent = i18n.t("cfg.newreleases.testing");
+        }
+
+        ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/TestNewReleaseSources"),
+            type: "POST",
+            data: JSON.stringify({ Sources: text }),
+            contentType: "application/json",
+            dataType: "json"
+        }).then(function (data) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            data = data || {};
+            if (!resultEl) return;
+            if (data.Error) {
+                resultEl.textContent = i18n.t("cfg.newreleases.test.fail", data.Error);
+                return;
+            }
+            var lines = (data.Results || []).map(function (r) {
+                if (r.Error) return i18n.t("cfg.newreleases.test.line_err", r.Source || "?", r.Error || "?");
+                if (!r.Count) return i18n.t("cfg.newreleases.test.line_zero", r.Source || "?", r.Mode || "?");
+                var samples = (r.Samples || []).filter(function (s) { return s; })
+                    .map(function (s) { return "« " + s + " »"; }).join(", ");
+                return i18n.t("cfg.newreleases.test.line_ok",
+                    r.Source || "?", r.Mode || "?", r.Count, samples ? " — " + samples : "");
+            });
+            if (data.Note) lines.push(data.Note);
+            resultEl.textContent = lines.join("\n");
+        }, function (err) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            if (resultEl) {
+                resultEl.textContent = i18n.t("cfg.newreleases.test.fail",
+                    (err && err.statusText ? err.statusText : err));
+            }
+        });
+    }
+
     // ----------------------------------------------------------------
     //  Bouton « Réinitialiser » des prompts/directives
     // ----------------------------------------------------------------
@@ -1513,6 +1566,19 @@ define(["loading"], function (loading) {
                 // requêtes TMDB par item côté serveur — l'état de chargement
                 // s'affiche d'abord). Le bouton la recharge à la demande.
                 ckLoad();
+            }
+
+            // Sources nouveautés : bouton « Tester les sources » — scrappe
+            // les lignes ÉDITÉES du champ (non enregistrées) via le service
+            // TestNewReleaseSources (admin côté serveur) et affiche une
+            // ligne de diagnostic par source. textContent seul : le contenu
+            // vient du web.
+            var testSourcesBtn = view.querySelector("#btnTestNewReleases");
+            if (testSourcesBtn) {
+                testSourcesBtn.addEventListener("click", function () {
+                    testNewReleaseSources(view, testSourcesBtn,
+                        view.querySelector("#newReleaseTestResult"));
+                });
             }
 
             // Traduction des genres (IA) : GET /Plugins/LLMAI/GenreProposals

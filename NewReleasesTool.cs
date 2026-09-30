@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -183,6 +184,7 @@ namespace LLM_AI
             int okSources = 0;
             foreach (var spec in _sources)
             {
+                int before = shows.Count;
                 string html;
                 try { html = await FetchAsync(spec.Url, ct).ConfigureAwait(false); }
                 catch (Exception ex)
@@ -191,9 +193,17 @@ namespace LLM_AI
                         spec.Url, ex.Message);
                     continue;
                 }
-                if (string.IsNullOrEmpty(html)) continue;
+                if (string.IsNullOrEmpty(html))
+                {
+                    _logger?.Warn("[LLM_AI] new_releases source {0} : réponse vide — source ignorée",
+                        spec.Url);
+                    continue;
+                }
                 okSources++;
 
+                // `explained` : une autre ligne de log explique déjà le 0 item
+                // (source sans motif, regex invalide) — pas de Warn redondant.
+                bool explained = false;
                 if (spec.Extractor == "@showbizz")
                 {
                     ExtractEmissions(html, shows, limit);
@@ -211,6 +221,7 @@ namespace LLM_AI
                     {
                         _logger?.Warn("[LLM_AI] new_releases regex invalide pour {0} : {1} — source ignorée",
                             spec.Url, ex.Message);
+                        explained = true;
                         continue;
                     }
                     ExtractWithPattern(html, rx, shows, limit, spec.Url);
@@ -224,6 +235,23 @@ namespace LLM_AI
                     _logger?.Warn("[LLM_AI] new_releases source {0} : HTML sans motif " +
                         "d'extraction — ajoutez « :: @showbizz » ou « :: <regex> » sur la ligne",
                         spec.Url);
+                    explained = true;
+                }
+
+                // Décompte PAR SOURCE : ferme le seul cas resté silencieux
+                // (regex valide mais qui ne matche plus — 0 item sans log).
+                int added = shows.Count - before;
+                string mode = DescribeMode(spec);
+                if (added == 0 && !explained)
+                {
+                    _logger?.Warn("[LLM_AI] new_releases source {0} : 0 item extrait (mode {1}) — " +
+                        "regex dépassée ou page inadaptée ; testez la ligne depuis la page de configuration",
+                        spec.Url, mode);
+                }
+                else
+                {
+                    _logger?.Info("[LLM_AI] new_releases source {0} -> {1} item(s) (mode {2})",
+                        spec.Url, added, mode);
                 }
             }
 
@@ -271,7 +299,7 @@ namespace LLM_AI
             @"Dès le\s*(?<date>.*?)<",
             RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromSeconds(1));
 
-        private void ExtractEmissions(string html, Dictionary<string, object> shows, int limit)
+        internal static void ExtractEmissions(string html, Dictionary<string, object> shows, int limit)
         {
             foreach (Match m in AnchorRx.Matches(html))
             {
@@ -308,7 +336,7 @@ namespace LLM_AI
         //  Extraction par regex utilisateur (une par source)
         // ------------------------------------------------------------------
 
-        private void ExtractWithPattern(string html, Regex rx,
+        internal static void ExtractWithPattern(string html, Regex rx,
             Dictionary<string, object> shows, int limit, string sourceUrl)
         {
             foreach (Match m in rx.Matches(html ?? string.Empty))
@@ -338,7 +366,7 @@ namespace LLM_AI
 
         /// <summary>Tente de lire le contenu comme un flux RSS/Atom.
         /// Retourne false (sans lever) si ce n'est pas un flux valide.</summary>
-        private bool ExtractFeed(string html, Dictionary<string, object> shows,
+        internal static bool ExtractFeed(string html, Dictionary<string, object> shows,
             int limit, string sourceUrl)
         {
             XDocument doc;
@@ -394,6 +422,101 @@ namespace LLM_AI
                 };
             }
             return true;
+        }
+
+        // ------------------------------------------------------------------
+        //  Test d'UNE source (endpoint « Tester les sources » de la page de
+        //  configuration) — réutilise les mêmes extracteurs que le run, avec
+        //  une SÉMANTIQUE différente : les erreurs remontent au lieu d'être
+        //  sautées, car le but EST d'exposer le problème à l'usager.
+        // ------------------------------------------------------------------
+
+        /// <summary>Résultat du test d'une ligne : mode détecté, items
+        /// extraits (0 = ligne probablement inadaptée), 3 titres d'aperçu,
+        /// ou le message d'échec (HTTP, timeout, regex invalide…). Ne lève
+        /// jamais, SAUF si le token d'annulation de l'appelant est consommé.
+        /// </summary>
+        internal sealed class SourceProbe
+        {
+            public string Url;
+            public string Mode;
+            public int Count;
+            public List<string> Samples;
+            public string Error;
+            public int Ms;
+        }
+
+        /// <summary>Scrappe UNE source (mode d'extraction selon la ligne) et
+        /// retourne son décompte/aperçu. Aucune mutation d'état global : le
+        /// cache 24h du run n'est PAS touché.</summary>
+        internal static async Task<SourceProbe> ProbeAsync(SourceSpec spec,
+            CancellationToken ct)
+        {
+            var probe = new SourceProbe
+            {
+                Url = spec.Url,
+                Mode = DescribeMode(spec),
+                Samples = new List<string>()
+            };
+            var shows = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                string html = await FetchAsync(spec.Url, ct).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(html))
+                    probe.Error = "réponse vide";
+                else if (spec.Extractor == "@showbizz")
+                    ExtractEmissions(html, shows, 50);
+                else if (!string.IsNullOrEmpty(spec.Extractor))
+                {
+                    // Contrairement au run (Warn + source sautée), une regex
+                    // invalide est une ERREUR explicite pour l'usager.
+                    var rx = new Regex(spec.Extractor,
+                        RegexOptions.IgnoreCase | RegexOptions.Singleline,
+                        TimeSpan.FromSeconds(2));
+                    ExtractWithPattern(html, rx, shows, 50, spec.Url);
+                }
+                else if (!ExtractFeed(html, shows, 50, spec.Url))
+                    probe.Error = "ni flux RSS/Atom ni extracteur — " +
+                        "ajoutez « :: @showbizz » ou « :: <regex> » sur la ligne";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                // HttpClient.Timeout lève TaskCanceledException SANS ct annulé
+                // (gotcha HTTP du projet).
+                probe.Error = "délai dépassé (15 s)";
+            }
+            catch (ArgumentException ex)
+            {
+                probe.Error = "regex invalide : " + Truncate(ex.Message, 200);
+            }
+            catch (Exception ex)
+            {
+                probe.Error = Truncate(ex.Message, 300);
+            }
+            sw.Stop();
+            probe.Ms = (int)sw.ElapsedMilliseconds;
+            probe.Count = shows.Count;
+            // Anonymous type du même assembly : réflexion interne fiable.
+            probe.Samples = shows.Values
+                .Select(o => o?.GetType().GetProperty("title")?.GetValue(o) as string)
+                .Where(s => !string.IsNullOrEmpty(s))
+                .Take(3)
+                .ToList();
+            return probe;
+        }
+
+        /// <summary>Libellé court du mode d'extraction (logs + réponse du
+        /// test) : « @showbizz », « regex » ou « rss/atom » (auto-détecté).</summary>
+        internal static string DescribeMode(SourceSpec spec)
+        {
+            if (spec.Extractor == "@showbizz") return "@showbizz";
+            if (!string.IsNullOrEmpty(spec.Extractor)) return "regex";
+            return "rss/atom";
         }
 
         // ------------------------------------------------------------------

@@ -568,7 +568,8 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 
 `TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée — [SearXNG](https://docs.searxng.org/)), `WebFetchDirect`,
 `NewReleaseSources` (sources de l'outil `new_releases`, une par ligne — migré depuis
-l'ancienne paire `ShowbizzUrl` / `ShowbizzPattern`), `RagDirectives` (directives additionnelles injectées
+l'ancienne paire `ShowbizzUrl` / `ShowbizzPattern` — valables au premier run après
+enregistrement, et vérifiables via le bouton « Tester les sources » de la page), `RagDirectives` (directives additionnelles injectées
 dans le prompt — installée par défaut avec la directive de base localisée, réinitialisable
 en un clic, voir [Aides de la page de configuration](#aides-de-la-page-de-configuration)),
 `ResponseLanguage` (langue de sortie du LLM — voir ci-dessous),
@@ -953,7 +954,7 @@ Le LLM choisit lui-même les outils à appeler. Chaque outil implémente `ILlmTo
 | `tvdb_search` | Recherche TVDB (séries) via `TvdbApiKey`. |
 | `web_search` | Recherche web ([SearXNG](https://docs.searxng.org/) `SearXngUrl` ou fournisseur intégré). |
 | `web_fetch` | Récupération/lecture d'une page web (URL publique http(s) ≤ 2048 caractères) : extraction structurée **locale auto-hébergée** (`WebFetchDirect`, aucune clé — titre, métadonnées og:/twitter + canonical, JSON-LD schema.org, contenu principal Readability-lite nettoyé du boilerplate, titres h1–h6 et tableaux en markdown, URL finale après redirections) avec repli Ollama Cloud sur les pages anti-bot. |
-| `new_releases` | Nouveautés TV depuis les sources web de `NewReleaseSources` (une par ligne) : URL seule = flux RSS/Atom auto-détecté ; `URL :: @showbizz` = extracteur Showbizz.net intégré (blocs « Saison 1 ») ; `URL :: regex .NET` = extraction personnalisée (groupe `title` requis, `url`/`date` optionnels). Alias `showbizz_new_releases` (prompts existants). Cache 24h invalidé par tout changement de sources (sans redémarrage). |
+| `new_releases` | Nouveautés TV depuis les sources web de `NewReleaseSources` (une par ligne) : URL seule = flux RSS/Atom auto-détecté ; `URL :: @showbizz` = extracteur Showbizz.net intégré (blocs « Saison 1 ») ; `URL :: regex .NET` = extraction personnalisée (groupe `title` requis, `url`/`date` optionnels). Alias `showbizz_new_releases` (prompts existants). Cache 24h invalidé par tout changement de sources (sans redémarrage). La page de configuration fournit un bouton **« Tester les sources »** (scrappe les lignes éditées sans enregistrement : mode détecté, décompte et aperçu par source, erreurs HTTP/timeout/regex) ; chaque run loggue le décompte par source (`[LLM_AI] new_releases source … -> N item(s)`) et un Warn explicite sur une ligne qui extrait 0 item. |
 | `system_audit` | **Audit santé** (voir [Audit santé](#audit-santé)) — 21 actions sur `action` : **inspection** `server_info`, `system_config` (configuration serveur via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + contexte, confiné au dossier des journaux), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (orphelins ffmpeg + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (mots de passe, HTTPS, accès externe, IP publiques), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin), `ratings_check` (hygiène des cotes), `security_metrics` (compteurs + événements de sécurité du plugin — détection) ; **remédiation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Ne lève jamais (erreur → JSON). |
 
 ---

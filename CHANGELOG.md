@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.14.1.0] — 2026-09-30
+
+### Added (FR)
+- **Bouton « Tester les sources » pour l'outil `new_releases`** — la page de
+  configuration gagne un bouton sous le champ « Sources nouveautés web » : il
+  scappe les lignes **telles qu'éditées, sans enregistrement** (aucune écriture
+  de configuration, aucun impact sur le cache 24h des runs) et affiche, une
+  ligne par source : mode détecté (flux RSS/Atom / `@showbizz` / regex),
+  décompte d'items extraits, 3 titres d'aperçu — ou l'erreur exacte (HTTP,
+  timeout, regex invalide). Ferme le principal angle mort du workflow : une
+  mauvaise source (403 anti-bot, HTML sans flux, regex qui ne matche plus)
+  ne produisait jusque-là **aucun retour visible**. Technique : endpoint
+  `POST /Plugins/LLMAI/TestNewReleaseSources` (admin, `NewReleasesTool.ProbeAsync`
+  réutilise les extracteurs du run ; jusqu'à 8 lignes, 8 s/source). Les
+  aperçus (contenu web non fiable) sont rendus en `textContent` uniquement.
+- **Logs par source pour `new_releases`** — chaque run loggue désormais le
+  décompte par ligne (`[LLM_AI] new_releases source … -> N item(s) (mode …)`)
+  et un **Warn explicite** quand une ligne extrait 0 item (regex dépassée
+  après refonte d'un site — cas jusqu'ici totalement silencieux) ; une
+  réponse vide est aussi logguée (au lieu d'être sautée silencieusement).
+
+### Added (EN)
+- **"Test sources" button for the `new_releases` tool** — the configuration
+  page gains a button under the "Web new-releases sources" field: it scrapes
+  the lines **as edited, without saving** (no config write, no impact on the
+  24h run cache) and shows one diagnostic line per source: detected mode
+  (RSS/Atom feed / `@showbizz` / regex), extracted item count, 3 title
+  samples — or the exact error (HTTP, timeout, invalid regex). Closes the
+  main blind spot of the workflow: a bad source (anti-bot 403, non-feed HTML,
+  a regex no longer matching) used to produce **no visible feedback at all**.
+  Technical: `POST /Plugins/LLMAI/TestNewReleaseSources` endpoint (admin-only,
+  `NewReleasesTool.ProbeAsync` reuses the run's extractors; up to 8 lines,
+  8 s each). Untrusted web samples render through `textContent` only.
+- **Per-source logging for `new_releases`** — every run now logs the per-line
+  count (`[LLM_AI] new_releases source … -> N item(s) (mode …)`) and raises an
+  **explicit Warn** when a line extracts 0 items (outdated regex after a site
+  revamp — previously totally silent); an empty response is logged too
+  (instead of being skipped silently).
+
+---
+
 ## [1.14.0.9] — 2026-09-30
 
 ### Changed (FR)
