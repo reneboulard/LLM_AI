@@ -4,9 +4,9 @@ Ce dossier contient les **assemblies de référence Emby** utilisées à la comp
 `MediaBrowser.Model.dll`, `MediaBrowser.Common.dll`, `MediaBrowser.Controller.dll`
 (+ `SkiaSharp.dll`, aussi fournie par l'hôte Emby, utilisée par `AiBadgeEnhancer`).
 
-**Version vendorisée : 4.10.0.40** (alignée sur le serveur de production) —
-extraites de `/opt/emby-server/system` lors du passage du serveur en 4.10.
-Le build reste clean (0 warning) contre ce SDK ; le code garde ses replis
+**Version vendorisée : 4.10.1.0** (alignée sur le serveur local, upgradé le
+2026-09-30 ; la production DellXPS est passée en 4.10.1.0 le 2026-09-29) —
+build clean (0 warning, 0 erreur) contre ce SDK ; le code garde ses replis
 runtime pour compatibilité 4.9.x (voir les remarques de classe dans le code).
 
 This folder contains the **Emby reference assemblies** used at compile time:
@@ -41,7 +41,7 @@ These DLLs are property of Emby (closed source). They are included here **only**
 reference assemblies for compilation. If you redistribute this repository, check the
 applicable Emby terms of use.
 
-## Mettre à jour / Update
+## Mettre à jour / Update — version vendorisée actuelle : **4.10.1.0**
 
 Pour aligner sur une autre version d'Emby installée localement :
 
