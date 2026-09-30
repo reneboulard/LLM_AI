@@ -50,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   telemetry (`delimiters_neutralized` counter, `[SEC] DELIM_NEUTRALISE` log
   event). The abridged rule also ships in the editable FR/EN baselines.
 
+### Compatibilité (FR)
+- **Compilé contre le SDK Emby 4.10.1.0** (validation à l'occasion de la mise
+  à jour du serveur) — aucun changement fonctionnel du plugin. Build 0
+  avertissement vérifié contre 4.10.0.40 puis 4.10.1.0 ; tests runtime sur un
+  serveur 4.10.1.0 (chargement du plugin, pages web embarquées, tâches
+  planifiées, devise d'identifiants `InternalId`). Les replis pour serveurs
+  4.9.x restent en place — un plugin public peut tourner sur Emby plus ancien.
+
+### Compatibility (EN)
+- **Compiled against the Emby 4.10.1.0 SDK** (verified alongside a server
+  upgrade) — no functional change to the plugin. 0-warning build checked
+  against both 4.10.0.40 and 4.10.1.0; runtime checks on a 4.10.1.0 server
+  (plugin load, embedded web pages, scheduled tasks, `InternalId` id
+  currency). Fallbacks for older 4.9.x servers remain in place — this is a
+  public plugin and some users' Emby instances may be older.
+
 ## [1.14.0.7] — 2026-09-28
 
 ### Added (FR)
