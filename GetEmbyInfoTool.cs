@@ -2316,10 +2316,16 @@ namespace LLM_AI
             return e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
         }
 
+        // Args LLM : garde ValueKind AVANT TryGetInt32 (le « Try » .NET ne
+        // couvre que la conversion, il lève sinon sur une chaîne — piège
+        // documenté 2026-10-01, cf. TmdbLookupTool.IntN) + tolère "20"
+        // encodé en chaîne.
         private static int OptInt(JsonElement e, string name, int dflt)
         {
-            if (e.ValueKind != JsonValueKind.Object) return dflt;
-            return e.TryGetProperty(name, out var p) && p.TryGetInt32(out var v) ? v : dflt;
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var p)) return dflt;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v)) return v;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var vs)) return vs;
+            return dflt;
         }
 
         private static bool OptBool(JsonElement e, string name, bool dflt)
@@ -2345,10 +2351,14 @@ namespace LLM_AI
             return null;
         }
 
+        // Même garde pour les doubles : TryGetDouble lève sur une valeur non
+        // numérique (chaîne LLM incluse) ; "7.5" encodé en chaîne est accepté.
         private static double? OptDouble(JsonElement e, string name)
         {
-            if (e.ValueKind != JsonValueKind.Object) return null;
-            return e.TryGetProperty(name, out var p) && p.TryGetDouble(out var v) ? v : (double?)null;
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var p)) return null;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetDouble(out var v)) return v;
+            if (p.ValueKind == JsonValueKind.String && double.TryParse(p.GetString(), out var vs)) return vs;
+            return null;
         }
 
         private static string[] OptStringArray(JsonElement e, string name)

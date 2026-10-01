@@ -1131,7 +1131,8 @@ namespace LLM_AI
                     var r = doc.RootElement;
                     if (r.ValueKind != JsonValueKind.Object) return g;
                     g.ImdbId = StrId(r, "imdb_id");
-                    if (r.TryGetProperty("tmdb_id", out var t) && t.TryGetInt32(out int tv)) g.TmdbId = tv;
+                    int? tmdbId = IntId(r, "tmdb_id");
+                    if (tmdbId.HasValue) g.TmdbId = tmdbId.Value;
                     g.TvdbId = StrId(r, "tvdb_id");
                     g.OriginalTitle = StrId(r, "original_title");
                     // Convention du prompt : « 0 si inconnu ». 0 doit rester
@@ -1139,7 +1140,8 @@ namespace LLM_AI
                     // YearCompatible(0, 2026) rejette la vraie fiche (cas réel
                     // 2026-09-20 : « La foudre, un éclair de génie » — fiche
                     // trouvée par la recherche, rejetée par la garde d'année).
-                    if (r.TryGetProperty("year", out var y) && y.TryGetInt32(out int yv) && yv > 0) g.Year = yv;
+                    int? guessYear = IntId(r, "year");
+                    if (guessYear.HasValue && guessYear.Value > 0) g.Year = guessYear.Value;
                     g.Confidence = StrId(r, "confidence");
                 }
             }
@@ -1149,6 +1151,21 @@ namespace LLM_AI
 
         private static string StrId(JsonElement e, string name) =>
             e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+        /// <summary>
+        /// Entier tolérant depuis la sortie brute du LLM : <c>TryGetInt32</c>
+        /// LÈVE InvalidOperationException sur une valeur en chaîne (piège .NET
+        /// documenté 2026-10-01 — le « Try » ne couvre que la conversion), ce
+        /// qui jetait tout le reste du guess ; on accepte donc aussi "2026"
+        /// encodé en chaîne.
+        /// </summary>
+        private static int? IntId(JsonElement e, string name)
+        {
+            if (!e.TryGetProperty(name, out var p)) return null;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out int v)) return v;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out int vs)) return vs;
+            return null;
+        }
 
         /// <summary>
         /// Extrait un objet JSON propre depuis la réponse du LLM : retire les

@@ -345,8 +345,17 @@ namespace LLM_AI
         private static double? Num(JsonElement e, string name) =>
             e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number ? p.GetDouble() : (double?)null;
 
-        private static int? IntN(JsonElement e, string name) =>
-            e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var p) && p.TryGetInt32(out var v) ? v : (int?)null;
+        // Garde ValueKind AVANT TryGetInt32 : le « Try » .NET ne couvre que la
+        // conversion, il LÈVE InvalidOperationException sur tout autre type —
+        // cas réel 2026-09-30 (tvdb_search : « year » TVDB arrivé en chaîne).
+        // Tolère aussi un nombre encodé en chaîne (API TVDB inconstante).
+        private static int? IntN(JsonElement e, string name)
+        {
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var p)) return null;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v)) return v;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var vs)) return vs;
+            return null;
+        }
 
         private static long? Int64N(JsonElement e, string name)
         {

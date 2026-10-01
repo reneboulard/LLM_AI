@@ -196,9 +196,11 @@ namespace LLM_AI
                         Genres = GenreArr(r),
                         PosterUrl = Str(r, "poster_url")
                     };
-                    if (r.TryGetProperty("seasons", out var s) && s.TryGetInt32(out var sv)) m.Seasons = sv;
-                    if (r.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var rtv)) m.Runtime = rtv;
-                    if (r.TryGetProperty("tmdb_id", out var tid) && tid.TryGetInt32(out var tidv)) m.TmdbId = tidv;
+                    // Garde ValueKind : TryGetInt32 lève sur un champ non
+                    // numérique (piège documenté — cf. IntN ci-dessous).
+                    if (r.TryGetProperty("seasons", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv)) m.Seasons = sv;
+                    if (r.TryGetProperty("runtime", out var rt) && rt.ValueKind == JsonValueKind.Number && rt.TryGetInt32(out var rtv)) m.Runtime = rtv;
+                    if (r.TryGetProperty("tmdb_id", out var tid) && tid.ValueKind == JsonValueKind.Number && tid.TryGetInt32(out var tidv)) m.TmdbId = tidv;
                     m.ImdbId = Str(r, "imdb_id");
                     m.TvdbId = Str(r, "tvdb_id");
                     return m;
@@ -238,7 +240,7 @@ namespace LLM_AI
             var first = PickFirstResult(search, year, "first_air_date");
             if (first == null) return Err($"aucune série TMDB pour : {query}");
 
-            int id = first.Value.TryGetProperty("id", out var idp) ? idp.GetInt32() : 0;
+            int id = first.Value.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number ? idp.GetInt32() : 0;
             if (id == 0) return Err("réponse TMDB sans id");
 
             return await FetchDetailAsync(key, id, "series", lang, ct).ConfigureAwait(false);
@@ -259,7 +261,7 @@ namespace LLM_AI
             var first = PickFirstResult(search, year, "release_date");
             if (first == null) return Err($"aucun film TMDB pour : {query}");
 
-            int id = first.Value.TryGetProperty("id", out var idp) ? idp.GetInt32() : 0;
+            int id = first.Value.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number ? idp.GetInt32() : 0;
             if (id == 0) return Err("réponse TMDB sans id");
 
             return await FetchDetailAsync(key, id, "movie", lang, ct).ConfigureAwait(false);
@@ -349,7 +351,7 @@ namespace LLM_AI
             {
                 foreach (var x in arr.EnumerateArray())
                 {
-                    if (x.TryGetProperty("id", out var idp) && idp.TryGetInt32(out int id) && id > 0)
+                    if (x.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number && idp.TryGetInt32(out int id) && id > 0)
                     {
                         try
                         {
@@ -534,8 +536,19 @@ namespace LLM_AI
         private static double? Num(JsonElement e, string name) =>
             e.TryGetProperty(name, out var p) && (p.ValueKind == JsonValueKind.Number) ? p.GetDouble() : (double?)null;
 
-        private static int? IntN(JsonElement e, string name) =>
-            e.TryGetProperty(name, out var p) && p.TryGetInt32(out var v) ? v : (int?)null;
+        // Garde ValueKind AVANT TryGetInt32 : le « Try » de .NET ne couvre que
+        // la conversion numérique, il LÈVE InvalidOperationException sur tout
+        // autre type (chaîne, null, objet). Piège de terrain : « year » du LLM
+        // reçu en chaîne → 2 levées 2026-10-01 (tmdb_lookup) ; même pattern
+        // côté tvdb_search le 2026-09-30. Tolère aussi un nombre encodé en
+        // chaîne (ex. "2026") pour ne pas perdre la valeur.
+        private static int? IntN(JsonElement e, string name)
+        {
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var p)) return null;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v)) return v;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var vs)) return vs;
+            return null;
+        }
 
         private static int? YearOf(string isoDate) =>
             !string.IsNullOrEmpty(isoDate) && isoDate.Length >= 4 && int.TryParse(isoDate.Substring(0, 4), out var y) ? y : (int?)null;
@@ -546,11 +559,8 @@ namespace LLM_AI
             return e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
         }
 
-        private static int? OptInt(JsonElement e, string name)
-        {
-            if (e.ValueKind != JsonValueKind.Object) return null;
-            return e.TryGetProperty(name, out var p) && p.TryGetInt32(out var v) ? v : (int?)null;
-        }
+        // Args LLM : mêmes garanties qu'IntN (jamais d'exception, "2026" accepté).
+        private static int? OptInt(JsonElement e, string name) => IntN(e, name);
 
         private static string UrlEnc(string s) => Uri.EscapeDataString(s ?? string.Empty);
 

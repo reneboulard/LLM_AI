@@ -2979,10 +2979,15 @@ namespace LLM_AI
             return e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
         }
 
+        // Args LLM : garde ValueKind AVANT TryGetInt32 (léve sinon sur une
+        // chaîne — piège .NET documenté, cf. TmdbLookupTool.IntN) + tolère
+        // "50" encodé en chaîne.
         private static int OptInt(JsonElement e, string name, int dflt)
         {
-            if (e.ValueKind != JsonValueKind.Object) return dflt;
-            return e.TryGetProperty(name, out var p) && p.TryGetInt32(out var v) ? v : dflt;
+            if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty(name, out var p)) return dflt;
+            if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v)) return v;
+            if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var vs)) return vs;
+            return dflt;
         }
 
         private static bool OptBool(JsonElement e, string name, bool dflt)

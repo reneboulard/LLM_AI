@@ -156,9 +156,14 @@ namespace LLM_AI
         public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
         {
             int limit = 50;
-            if (args.ValueKind == JsonValueKind.Object &&
-                args.TryGetProperty("limit", out var lp) && lp.TryGetInt32(out var l))
-                limit = Math.Max(1, l);
+            if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("limit", out var lp))
+            {
+                // Garde ValueKind + tolère "50" en chaîne (args LLM) :
+                // TryGetInt32 lève sinon sur un champ non numérique (piège
+                // .NET documenté, cf. TmdbLookupTool.IntN).
+                if (lp.ValueKind == JsonValueKind.Number && lp.TryGetInt32(out var l)) limit = Math.Max(1, l);
+                else if (lp.ValueKind == JsonValueKind.String && int.TryParse(lp.GetString(), out var ls)) limit = Math.Max(1, ls);
+            }
 
             // 1) Cache 24h : renvoie la liste cached tronquée à `limit`, à
             //    condition que les sources n'aient pas changé depuis.

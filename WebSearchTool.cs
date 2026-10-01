@@ -142,7 +142,8 @@ namespace LLM_AI
                     {
                         var sorted = resEl.EnumerateArray()
                             .Where(r => r.TryGetProperty("url", out _) && r.TryGetProperty("title", out _))
-                            .OrderByDescending(r => r.TryGetProperty("score", out var sc) && sc.TryGetDouble(out var d) ? d : 0)
+                            .OrderByDescending(r => r.TryGetProperty("score", out var sc)
+                                && sc.ValueKind == JsonValueKind.Number && sc.TryGetDouble(out var d) ? d : 0)
                             .Take(8);
                         foreach (var r in sorted)
                         {

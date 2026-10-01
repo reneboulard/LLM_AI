@@ -98,7 +98,10 @@ namespace LLM_AI
                                 || string.Equals(name, model + ":latest", StringComparison.OrdinalIgnoreCase);
                             if (!match) continue;
                             if (!m.TryGetProperty("context_length", out var ctxEl)) return null;
-                            return ctxEl.TryGetInt64(out var v) ? (int)v : -1;
+                            // Garde ValueKind : TryGetInt64 lève sur null/chaîne
+                            // (piège .NET documenté) ; taille inconnue → -1.
+                            return ctxEl.ValueKind == JsonValueKind.Number && ctxEl.TryGetInt64(out var v)
+                                ? (int)v : -1;
                         }
                         return -1;
                     }
