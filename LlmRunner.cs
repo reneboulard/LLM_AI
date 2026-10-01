@@ -437,6 +437,16 @@ namespace LLM_AI
             "La ligne UPnP (section upnp_check du digest) figure TOUJOURS dans les constats : " +
             "aucun mapping trouvé = constat ✅ explicite (« UPnP désactivé / aucun mapping " +
             "routeur »), mapping vers 8096/8920 = 🔴 critique.\n" +
+            "### SECTION log_scan (COMPTAGES EXACTS)\n" +
+            "Les comptages de la section log_scan sont calculés en C# (zéro LLM) : exceptions " +
+            "groupées par classe avec première trame de stack, codes HTTP 4xx/5xx entrants et " +
+            "sortants, échecs ffmpeg, pannes de providers, santé du plugin. Reprends-les TELS " +
+            "QUELS avec leurs valeurs chiffrées — ne les recompte PAS depuis le tail brut du " +
+            "journal. L'absence d'un motif dans la fenêtre finie (3 fichiers, ≤ 7 jours) ne " +
+            "prouve pas l'absence de problème antérieur : formule l'absence comme « aucun motif " +
+            "observé dans la fenêtre de journal analysée », jamais comme « aucun problème ». " +
+            "Les 401/403 entrants répétés se croisent avec security_check (surface exposée) et " +
+            "les échecs ffmpeg avec la section processes (orphelins).\n" +
             "Markdown PUR : JAMAIS de notation math/LaTeX ($...$, \\rightarrow — écris « → » en " +
             "texte simple) ni de balises HTML (<code>, <b>…).\n" +
             "Sois factuel et précis : reprends les valeurs des sections, ne spécule pas.\n" +

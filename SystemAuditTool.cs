@@ -46,8 +46,10 @@ namespace LLM_AI
     /// <list type="bullet">
     /// <item><b>Inspection (lecture seule, toujours disponibles)</b> :
     ///   <c>server_info</c>, <c>active_sessions</c>, <c>scheduled_tasks</c>,
-    ///   <c>list_logs</c>, <c>inspect_log</c>, <c>transcode</c>,
-    ///   <c>host_metrics</c>, <c>gpu_transcode</c>, <c>disk_storage</c>,
+    ///   <c>list_logs</c>, <c>inspect_log</c>, <c>log_scan</c> (motifs
+    ///   d'anomalies des journaux, comptages C# — zéro LLM dans la détection),
+    ///   <c>transcode</c>, <c>host_metrics</c>, <c>gpu_transcode</c>,
+    ///   <c>disk_storage</c>,
     ///   <c>processes</c> (orphelins ffmpeg + top processus RAM/CPU),
     ///   <c>library_stats</c>, <c>missing_metadata</c> (bibliothèque, via
     ///   <see cref="ILibraryManager"/> — couche DB, pas FS brut),
@@ -97,7 +99,12 @@ namespace LLM_AI
                     "redirection de ports — UN MAPPING VERS LE PORT EMBY 8096/8920 EST CRITIQUE ; lecture seule, " +
                     "n'ajoute/supprime JAMAIS de mapping ; attention : les redirections manuelles du routeur sont " +
                     "invisibles pour l'UPnP, seul un test externe les voit), " +
-                    "active_sessions, scheduled_tasks, list_logs, inspect_log, transcode, host_metrics, " +
+                    "active_sessions, scheduled_tasks, list_logs, inspect_log, log_scan (scan de motifs " +
+                    "d'anomalies dans les journaux — exceptions groupées par classe avec première trame de " +
+                    "stack, codes HTTP 4xx/5xx entrants/sortants, échecs ffmpeg/ffprobe, pannes de providers, " +
+                    "Live TV/DVR, scan de bibliothèque, santé du plugin — comptages C# EXACTS sur fenêtre " +
+                    "bornée : journal courant + 2 rotatés, ≤ 5 Mo/fichier, ≤ 7 jours : reprendre les comptages " +
+                    "tels quels, zéro LLM dans la détection), transcode, host_metrics, " +
                     "gpu_transcode, disk_storage, processes (détection d'orphelins ffmpeg + top processus RAM/CPU + " +
                     "compteurs Emby), library_stats (comptes par type + liste des bibliothèques + état du scan), " +
                     "missing_metadata (échantillonnage des items sans synopsis/image/genres pour un type), " +
@@ -132,7 +139,7 @@ namespace LLM_AI
         {
             string actions =
                 "server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | " +
-                "list_logs | inspect_log | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
+                "list_logs | inspect_log | log_scan | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
                 "library_stats | missing_metadata | metadata_health | ratings_check | security_metrics";
             string remediationParams = "";
             if (remediation)
@@ -219,6 +226,7 @@ namespace LLM_AI
                     case "scheduled_tasks":   result = ScheduledTasks(args); break;
                     case "list_logs":         result = await ListLogsAsync(args, ct).ConfigureAwait(false); break;
                     case "inspect_log":       result = await InspectLogAsync(args, ct).ConfigureAwait(false); break;
+                    case "log_scan":          result = await LogScanAsync(args, ct).ConfigureAwait(false); break;
                     case "transcode":         result = Transcode(); break;
                     case "host_metrics":      result = HostMetrics(); break;
                     case "gpu_transcode":     result = GpuTranscode(); break;
@@ -649,6 +657,470 @@ namespace LLM_AI
                 total_lines = seen,
                 showing_last = arr.Length,
                 lines = arr.Select(p => new { line = p.line, content = p.content }).ToArray()
+            }, s_json);
+        }
+
+        // ------------------------------------------------------------------
+        //  Inspection : scan du journal (log_scan) — zéro LLM dans la détection
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Compteur d'un motif de journal : total exact, bornes temporelles et
+        /// lignes témoins bornées (2 max, tronquées). Les comptages sont faits
+        /// en C# pur — le LLM du rapport les reprend TELS QUELS (les petits
+        /// modèles locaux sont mauvais en comptage, documenté au design
+        /// 2026-10-01).
+        /// </summary>
+        private sealed class ScanHit
+        {
+            public int Count;
+            public string First, Last;
+            public readonly List<string> Witnesses = new List<string>();
+            public void Add(string ts, string witness)
+            {
+                Count++;
+                if (First == null) First = ts;
+                Last = ts;
+                if (!string.IsNullOrEmpty(witness) && Witnesses.Count < 2) Witnesses.Add(witness);
+            }
+        }
+
+        /// <summary>
+        /// Groupe d'incidents d'une même classe d'exception : la classe vient
+        /// du bloc « *** Error Report *** » (ligne de continuation) attaché à
+        /// la ligne Error/Fatal ; on ne garde que la PREMIÈRE trame de stack —
+        /// jamais le dump complet.
+        /// </summary>
+        private sealed class ExcHit
+        {
+            public int Count;
+            public string First, Last, Category, Frame, Witness;
+            public void Add(string ts, string category, string witness)
+            {
+                Count++;
+                if (First == null) { First = ts; Category = category; Witness = witness; }
+                Last = ts;
+            }
+        }
+
+        // Format positionnel d'une ligne de journal Emby : « <date> <Niveau>
+        // <Catégorie>: texte » (ms optionnelles selon version). Le niveau est
+        // lu sur ce CHAMP, JAMAIS dans le texte libre — leçon terrain
+        // 2026-10-01 : le titre de film « The Fatal Flaw » matchait « Fatal ».
+        // Les lignes sans horodatage (préfixe tab) sont des continuations du
+        // bloc précédent : c'est là que vivent les blocs Error Report et les
+        // stacks (sans leur attachement, le bug OptInt du 2026-10-01 était
+        // invisible — le tail 150 ne le montrait pas).
+        private static readonly Regex s_logLineRe = new(
+            @"^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?) (?<lvl>Debug|Info|Warn|Error|Fatal) (?<cat>.+?)(?:: (?<txt>.*))?$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Classe d'exception en tête d'un bloc Error Report (ligne de
+        // continuation tabulée) : « \tSystem.InvalidOperationException: … ».
+        private static readonly Regex s_excClassRe = new(
+            @"^\t(?<exc>[A-Za-z][\w.]*(?:Exception|Error))(?::|\s|$)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Première trame de stack du bloc : « \t   at Emby.Server… ».
+        private static readonly Regex s_excFrameRe = new(
+            @"^\t\s+at (?<frame>\S+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Codes HTTP observables à la verbosité par défaut — CORRECTION
+        // terrain 2026-10-01 : l'exercice python cherchait « HTTP Response »
+        // (0 hit sur 16 Mo) mais la vraie casse est « Http response NNN from
+        // <url> » (sortant, cat. HttpClient) et « http/1.1 Response NNN to
+        // <ip> » (entrant, ligne de requête). JAMAIS de nombre nu « 429 » :
+        // les horodatages « .429 » et l'id TVDB 429955 dans les URLs
+        // matchaient — le code est capté depuis le libellé, pas depuis un
+        // nombre flottant.
+        private static readonly Regex s_httpOutRe = new(
+            @"Http response (?<code>\d{3}) from (?<url>\S+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex s_httpInRe = new(
+            @"http/1\.1 Response (?<code>\d{3}) to (?<ip>\S+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Sorties de processus ffmpeg/ffprobe/ffdetect : « ProcessRun
+        // '<proc>' Process exited with code N ». Leçons terrain : code 0 =
+        // sonde de version (ignoré) ; ffdetect_* code 1 à Info = GPU absent,
+        // bénin — seul un ffmpeg/ffprobe ≠ 0 est un échec réel.
+        private static readonly Regex s_procExitRe = new(
+            @"ProcessRun '(?<proc>[^']*)' Process exited with code (?<code>\d+)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Échec d'un provider de métadonnées, message Emby « Error in X » —
+        // uniquement sur lignes Error/Fatal : un miss provider (Info, « aucune
+        // série… ») n'est PAS une panne (leçon terrain : pannes Tvdb réelles
+        // du 28 sept ≠ diagnostics de miss).
+        private static readonly Regex s_providerErrRe = new(
+            @"Error in (?<prov>[A-Za-z]\w*)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        // Vocabulaire d'échec pour les motifs à double condition (Live TV/DVR,
+        // scan de bibliothèque) — toujours testé AVEC un mot de contexte, jamais seul.
+        private static readonly Regex s_failWordRe = new(
+            @"fail|error|lost|perdu|échou|abort|timeout|unavailable|indisponible",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Emby 4.10 enrobe IP et tokens de caractères invisibles
+        /// (U+200C/U+200D — anti-copie ; constat terrain 2026-10-01 : un grep
+        /// littéral « to … » échoue sur ces lignes) : on les retire avant
+        /// d'exposer une valeur.
+        /// </summary>
+        private static string StripInvisibles(string s) =>
+            string.IsNullOrEmpty(s) ? s : s.Replace("\u200C", "").Replace("\u200D", "").Replace("\uFEFF", "");
+
+        /// <summary>
+        /// Action <c>log_scan</c> : scan de motifs d'anomalies dans les
+        /// journaux — LECTURE SEULE, ZÉRO LLM dans la détection. Sortie =
+        /// faits groupés compacts (comptages exacts, bornes temporelles,
+        /// témoins tronqués) que le LLM du rapport reprend tels quels.
+        /// Périmètre borné (design 2026-10-01) : journal courant + 2 rotatés
+        /// les plus récents (<c>embyserver*.txt</c> — exclut hardware_detection
+        /// et readme), ≤ 5 Mo par fichier lus PAR LA FIN, ≤ 7 jours d'âge : PAS
+        /// de lecture intégrale de la rétention (≈ 4 Mo/jour localement,
+        /// fenêtre ≈ 2 jours — compromis assumé, les événements plus vieux
+        /// restent consultables via inspect_log). Le tail 150 brut du journal
+        /// le plus récent continue d'être fourni par le digest pour la
+        /// citation d'évidence.
+        /// </summary>
+        private async Task<string> LogScanAsync(JsonElement args, CancellationToken ct)
+        {
+            var paths = await ResolveEmbyPathsAsync(ct).ConfigureAwait(false);
+            paths.TryGetValue("log", out string logDir);
+            if (string.IsNullOrWhiteSpace(logDir))
+                return Err("chemin des journaux introuvable : GetSystemInfo et le repli " +
+                    "IServerConfigurationManager.ApplicationPaths ont tous deux échoué.");
+            var dir = new DirectoryInfo(logDir);
+            if (!dir.Exists)
+                return Err($"dossier de logs introuvable : {logDir}");
+
+            const int MaxFiles = 3;                          // courant + 2 rotatés
+            const long MaxBytesPerFile = 5L * 1024 * 1024;   // au-delà : lecture par la fin
+            const int MaxAgeDays = 7;
+
+            var files = dir.GetFiles("embyserver*.txt")
+                          .Where(f => (DateTime.UtcNow - f.LastWriteTimeUtc).TotalDays <= MaxAgeDays)
+                          .OrderByDescending(f => f.LastWriteTimeUtc)
+                          .Take(MaxFiles)
+                          .Reverse()                        // ancien → récent
+                          .ToArray();
+            if (files.Length == 0)
+                return Err("aucun journal embyserver*.txt de moins de 7 jours — rien à scanner.");
+
+            var exc = new Dictionary<string, ExcHit>(StringComparer.Ordinal);
+            var httpOut = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var httpIn = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var ffmpegFail = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var provFail = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var llmIssues = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var liveDvr = new ScanHit();
+            var libScan = new ScanHit();
+            var tooMany = new ScanHit();
+            int benignProbes = 0;
+            int totalLines = 0, errorLines = 0, fatalLines = 0, warnLines = 0;
+            string oldest = null, newest = null;
+            var fileRows = new List<object>();
+
+            foreach (var f in files)
+            {
+                int lines = 0;
+                bool truncated = f.Length > MaxBytesPerFile;
+
+                // Bloc Error/Fatal en cours d'attachement : les blocs
+                // « *** Error Report *** » sont des lignes de continuation
+                // sans horodatage — on les rattache à la dernière ligne
+                // horodatée pour en tirer la classe + la première trame.
+                bool pending = false, pendingCounted = false;
+                string pTs = null, pCat = null, pWitness = null;
+                ExcHit pGroup = null;
+
+                void CountBare()
+                {
+                    if (!exc.TryGetValue("(sans bloc Error Report)", out var eh))
+                    { eh = new ExcHit(); exc["(sans bloc Error Report)"] = eh; }
+                    eh.Add(pTs, pCat, pWitness);
+                }
+
+                foreach (var raw in ReadLogLinesBounded(f.FullName, MaxBytesPerFile, ct))
+                {
+                    lines++;
+                    var m = s_logLineRe.Match(raw);
+                    if (!m.Success)
+                    {
+                        // Ligne de continuation : on ne capture que la classe
+                        // d'exception + la première trame du bloc en cours.
+                        if (pending)
+                        {
+                            if (pGroup == null)
+                            {
+                                var em = s_excClassRe.Match(raw);
+                                if (em.Success)
+                                {
+                                    string cls = em.Groups["exc"].Value;
+                                    if (!exc.TryGetValue(cls, out pGroup))
+                                    { pGroup = new ExcHit(); exc[cls] = pGroup; }
+                                    pGroup.Add(pTs, pCat, pWitness);
+                                    pendingCounted = true;
+                                }
+                            }
+                            else if (pGroup.Frame == null)
+                            {
+                                var fm = s_excFrameRe.Match(raw);
+                                if (fm.Success) pGroup.Frame = fm.Groups["frame"].Value;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Nouvelle ligne horodatée : finalise un bloc précédent
+                    // resté sans classe (incident compté quand même, sans détail).
+                    if (pending && !pendingCounted) CountBare();
+                    pending = false; pendingCounted = false; pGroup = null;
+
+                    string ts = m.Groups["ts"].Value;
+                    string lvl = m.Groups["lvl"].Value;
+                    string cat = m.Groups["cat"].Value;
+                    string txt = m.Groups["txt"].Value ?? "";
+                    string witness = Truncate(StripInvisibles(raw), 200);
+
+                    totalLines++;
+                    if (oldest == null) oldest = ts;
+                    newest = ts;
+                    if (lvl == "Warn") warnLines++;
+                    bool isError = lvl == "Error", isFatal = lvl == "Fatal";
+                    if (isError) errorLines++;
+                    if (isFatal) fatalLines++;
+                    bool isBad = isError || isFatal;
+
+                    // ---- Exceptions : Error/Fatal + bloc attaché ----------
+                    if (isBad)
+                    {
+                        pending = true;
+                        pTs = ts; pCat = cat; pWitness = witness;
+                    }
+
+                    // ---- Codes HTTP 4xx/5xx (entrants et sortants) ---------
+                    if (txt.StartsWith("Http response ", StringComparison.Ordinal))
+                    {
+                        var ho = s_httpOutRe.Match(txt);
+                        if (ho.Success && int.TryParse(ho.Groups["code"].Value, out int outCode) && outCode >= 400)
+                        {
+                            string host = StripInvisibles(ho.Groups["url"].Value);
+                            try { host = new Uri(host).Host; } catch { host = Truncate(host, 80); }
+                            string key = outCode.ToString(CultureInfo.InvariantCulture);
+                            if (!httpOut.TryGetValue(key, out var hh)) { hh = new ScanHit(); httpOut[key] = hh; }
+                            hh.Add(ts, "Http response " + key + " from " + host);
+                        }
+                    }
+                    else if (txt.StartsWith("http/1.1 Response ", StringComparison.Ordinal))
+                    {
+                        var hi = s_httpInRe.Match(txt);
+                        if (hi.Success && int.TryParse(hi.Groups["code"].Value, out int inCode) && inCode >= 400)
+                        {
+                            string ip = StripInvisibles(hi.Groups["ip"].Value).TrimEnd('.');
+                            string key = inCode.ToString(CultureInfo.InvariantCulture);
+                            if (!httpIn.TryGetValue(key, out var hh)) { hh = new ScanHit(); httpIn[key] = hh; }
+                            hh.Add(ts, "http/1.1 Response " + key + " to " + ip);
+                        }
+                    }
+
+                    // ---- ffmpeg / ffprobe / sondes -------------------------
+                    if (txt.Contains("Process exited with code", StringComparison.Ordinal))
+                    {
+                        var fe = s_procExitRe.Match(txt);
+                        if (fe.Success && int.TryParse(fe.Groups["code"].Value, out int code))
+                        {
+                            string proc = fe.Groups["proc"].Value;
+                            int sp = proc.IndexOf(' ');
+                            if (sp > 0) proc = proc.Substring(0, sp);
+                            if (code != 0)
+                            {
+                                if (proc.StartsWith("ffdetect_", StringComparison.Ordinal) && !isBad)
+                                    benignProbes++;           // GPU absent — bénin (leçon terrain)
+                                else
+                                {
+                                    string key = proc + " (code " + code + ")";
+                                    if (!ffmpegFail.TryGetValue(key, out var fh)) { fh = new ScanHit(); ffmpegFail[key] = fh; }
+                                    fh.Add(ts, witness);
+                                }
+                            }
+                            // code 0 : sonde de version/probe réussie — ignoré.
+                        }
+                    }
+                    if (isBad && (txt.Contains("Conversion failed", StringComparison.Ordinal)
+                              || txt.Contains("No compatible streams", StringComparison.Ordinal)))
+                    {
+                        if (!ffmpegFail.TryGetValue("conversion/transcodage", out var cf))
+                        { cf = new ScanHit(); ffmpegFail["conversion/transcodage"] = cf; }
+                        cf.Add(ts, witness);
+                    }
+
+                    // ---- Providers de métadonnées --------------------------
+                    if (isBad)
+                    {
+                        var pe = s_providerErrRe.Match(txt);
+                        if (pe.Success)
+                        {
+                            string prov = pe.Groups["prov"].Value;
+                            if (!provFail.TryGetValue(prov, out var ph)) { ph = new ScanHit(); provFail[prov] = ph; }
+                            ph.Add(ts, witness);
+                        }
+                    }
+                    if (txt.Contains("Too Many Requests", StringComparison.Ordinal))
+                        tooMany.Add(ts, witness);   // jamais « 429 » nu (leçon terrain)
+
+                    // ---- Live TV / DVR / scan de bibliothèque --------------
+                    if (isBad || lvl == "Warn")
+                    {
+                        string low = txt.ToLowerInvariant();
+                        bool failWord = s_failWordRe.IsMatch(txt);
+                        if (failWord && (low.Contains("tuner") || low.Contains("recording") || low.Contains("enregistrement")))
+                            liveDvr.Add(ts, witness);
+                        if (failWord && low.Contains("scan"))
+                            libScan.Add(ts, witness);
+                    }
+
+                    // ---- Santé du plugin lui-même --------------------------
+                    if ((isBad || lvl == "Warn") && txt.Contains("[LLM_AI]", StringComparison.Ordinal))
+                    {
+                        // Signature stable : préfixe jusqu'au premier « : »
+                        // (regroupe « Outil X a levé », « Tag cleanup », …).
+                        int cut = txt.IndexOf(" : ", StringComparison.Ordinal);
+                        string sig = cut > 0 && cut <= 60 ? txt.Substring(0, cut) : Truncate(txt, 60);
+                        if (!llmIssues.TryGetValue(sig, out var lh)) { lh = new ScanHit(); llmIssues[sig] = lh; }
+                        lh.Add(ts, witness);
+                    }
+                }
+
+                // Fin de fichier : finalise un bloc resté sans classe.
+                if (pending && !pendingCounted) CountBare();
+                fileRows.Add(new { nom = f.Name, taille_octets = f.Length, lignes_lues = lines, tronque_fin_5mo = truncated });
+            }
+
+            // ---- Assemblage : motifs groupés compacts pour le LLM --------
+            object HttpRows(Dictionary<string, ScanHit> d) =>
+                d.OrderByDescending(kv => kv.Value.Count).Take(8)
+                 .Select(kv => new { code = kv.Key, compte = kv.Value.Count, premier = kv.Value.First, dernier = kv.Value.Last, temoins = kv.Value.Witnesses.ToArray() })
+                 .ToArray();
+            object KeyRows(Dictionary<string, ScanHit> d) =>
+                d.OrderByDescending(kv => kv.Value.Count).Take(8)
+                 .Select(kv => new { cle = kv.Key, compte = kv.Value.Count, premier = kv.Value.First, dernier = kv.Value.Last, temoins = kv.Value.Witnesses.ToArray() })
+                 .ToArray();
+
+            int excTotal = exc.Values.Sum(h => h.Count);
+            var motifs = new List<object>
+            {
+                new
+                {
+                    motif = "exceptions",
+                    gravite_suggeree = excTotal == 0 ? null : (fatalLines > 0 ? "critique" : "avertissement"),
+                    comptage = excTotal,
+                    groupes = excTotal == 0 ? null : exc.OrderByDescending(kv => kv.Value.Count).Take(8).Select(kv => new
+                    {
+                        classe = kv.Key,
+                        compte = kv.Value.Count,
+                        categorie = kv.Value.Category,
+                        premiere_trame = kv.Value.Frame,
+                        premier = kv.Value.First,
+                        dernier = kv.Value.Last,
+                        temoin = kv.Value.Witness
+                    }).ToArray(),
+                    groupes_omis = exc.Count > 8 ? (int?)(exc.Count - 8) : null
+                },
+                new
+                {
+                    motif = "http_entrant_4xx_5xx",
+                    gravite_suggeree = httpIn.Count == 0 ? null
+                        : (httpIn.ContainsKey("401") || httpIn.ContainsKey("403")
+                            ? "critique si surface exposée (croiser security_check)"
+                            : (httpIn.Keys.Any(k => k.StartsWith("5", StringComparison.Ordinal)) ? "avertissement" : "info")),
+                    comptage = httpIn.Values.Sum(h => h.Count),
+                    par_code = httpIn.Count == 0 ? null : HttpRows(httpIn),
+                    note_401_403 = httpIn.ContainsKey("401") || httpIn.ContainsKey("403")
+                        ? "401/403 répétés = tentatives d'auth invalides ; l'IP figure dans la ligne témoin — croiser security_check (surface exposée)." : null
+                },
+                new
+                {
+                    motif = "http_sortant_4xx_5xx",
+                    gravite_suggeree = httpOut.Count == 0 ? null
+                        : (httpOut.Keys.Any(k => k.StartsWith("5", StringComparison.Ordinal)) ? "avertissement" : "info"),
+                    comptage = httpOut.Values.Sum(h => h.Count),
+                    par_code = httpOut.Count == 0 ? null : HttpRows(httpOut),
+                    note = httpOut.Count == 0 ? null
+                        : "404 sortant = fiche introuvable chez le provider (miss — normal pendant l'identification d'orphelins) ; 5xx sortant = panne provider réelle (ex. Tvdb le 28 sept)."
+                },
+                new
+                {
+                    motif = "ffmpeg_transcodage",
+                    gravite_suggeree = ffmpegFail.Count == 0 ? null : "avertissement",
+                    comptage = ffmpegFail.Values.Sum(h => h.Count),
+                    par_processus = ffmpegFail.Count == 0 ? null : KeyRows(ffmpegFail),
+                    sondes_benignes_ignorees = benignProbes > 0 ? (int?)benignProbes : null,
+                    note = "Codes 0 (sondes de version) ignorés ; ffdetect_* code 1 à Info = GPU absent (bénin). Un échec ffmpeg peut signaler un transcodage orphelin — croiser avec la section processes."
+                },
+                new
+                {
+                    motif = "providers_metadata",
+                    gravite_suggeree = provFail.Count == 0 && tooMany.Count == 0 ? null : "avertissement",
+                    comptage = provFail.Values.Sum(h => h.Count) + tooMany.Count,
+                    par_provider = provFail.Count == 0 ? null : KeyRows(provFail),
+                    too_many_requests = tooMany.Count == 0 ? null : (int?)tooMany.Count,
+                    temoins_tmr = tooMany.Count == 0 ? null : tooMany.Witnesses.ToArray()
+                },
+                new
+                {
+                    motif = "livetv_dvr",
+                    gravite_suggeree = liveDvr.Count == 0 ? null : "avertissement",
+                    comptage = liveDvr.Count,
+                    premier = liveDvr.First, dernier = liveDvr.Last,
+                    temoins = liveDvr.Count == 0 ? null : liveDvr.Witnesses.ToArray()
+                },
+                new
+                {
+                    motif = "scan_bibliotheque",
+                    gravite_suggeree = libScan.Count == 0 ? null : "avertissement",
+                    comptage = libScan.Count,
+                    premier = libScan.First, dernier = libScan.Last,
+                    temoins = libScan.Count == 0 ? null : libScan.Witnesses.ToArray()
+                },
+                new
+                {
+                    motif = "plugin_llmai",
+                    gravite_suggeree = llmIssues.Count == 0 ? null : "info",
+                    comptage = llmIssues.Values.Sum(h => h.Count),
+                    par_signature = llmIssues.Count == 0 ? null : llmIssues.OrderByDescending(kv => kv.Value.Count).Take(8).Select(kv => new
+                    {
+                        signature = kv.Key, compte = kv.Value.Count,
+                        premier = kv.Value.First, dernier = kv.Value.Last,
+                        temoins = kv.Value.Witnesses.ToArray()
+                    }).ToArray(),
+                    signatures_omises = llmIssues.Count > 8 ? (int?)(llmIssues.Count - 8) : null,
+                    note = llmIssues.Count == 0 ? null
+                        : "Santé du plugin lui-même (erreurs/avertissements [LLM_AI]) — croiser avec security_metrics (TOOL_ERREUR en rafale = signal d'alerte)."
+                }
+            };
+
+            return JsonSerializer.Serialize(new
+            {
+                action = "log_scan",
+                fenetre = new
+                {
+                    fichiers = fileRows,
+                    max_fichiers = MaxFiles,
+                    max_octets_par_fichier = MaxBytesPerFile,
+                    max_age_jours = MaxAgeDays,
+                    plus_ancienne_ligne = oldest,
+                    plus_recente_ligne = newest,
+                    lignes_lues = totalLines
+                },
+                profil = new { error = errorLines, fatal = fatalLines, warn = warnLines },
+                motifs,
+                note_fenetre = "Fenêtre finie : l'absence de motif dans l'échantillon ne prouve PAS l'absence de problème antérieur. Comptages exacts en C# (zéro LLM dans la détection) — reprends-les TELS QUELS, ne les recompte pas.",
+                note_http = "Codes HTTP observables à la verbosité par défaut (correction terrain : l'exercice du 2026-10-01 cherchait « HTTP Response », la vraie casse est « Http response »/« http/1.1 Response »).",
+                note_ip = "Emby 4.10 enrobe IP et tokens de caractères invisibles (U+200C/U+200D) ; les valeurs affichées ici sont nettoyées."
             }, s_json);
         }
 
@@ -2547,6 +3019,11 @@ namespace LLM_AI
             SectionSync("security_metrics", () => SecurityMonitor.SnapshotJson());
             await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);
 
+            // Scan de motifs (log_scan) AVANT le tail brut : les comptages
+            // groupés sont les faits à citer ; le tail 150 qui suit reste
+            // l'échantillon brut pour la citation d'évidence.
+            await SectionAsync("log_scan", LogScanAsync(s_emptyArgs, ct)).ConfigureAwait(false);
+
             string logs = null;
             try { logs = await ListLogsAsync(s_emptyArgs, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
@@ -2935,6 +3412,38 @@ namespace LLM_AI
                 {
                     ct.ThrowIfCancellationRequested();
                     yield return line;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Variante bornée pour log_scan : si le fichier dépasse
+        /// <c>maxBytes</c>, on saute au DERNIER <c>maxBytes</c> (la partie la
+        /// plus récente — un rotatif de 6 Mo ne doit ni faire sauter le plafond
+        /// du design, ni perdre les événements récents) et la première ligne
+        /// partielle est ignorée. Même pattern de partage que
+        /// <see cref="ReadLogLines"/> (FileShare.Delete : tolère la rotation
+        /// pendant la lecture).
+        /// </summary>
+        private static IEnumerable<string> ReadLogLinesBounded(string path, long maxBytes, CancellationToken ct)
+        {
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                          FileShare.ReadWrite | FileShare.Delete))
+            {
+                if (fs.Length > maxBytes)
+                {
+                    fs.Seek(-maxBytes, SeekOrigin.End);
+                    int b;
+                    while ((b = fs.ReadByte()) >= 0 && b != '\n') { /* ligne partielle ignorée */ }
+                }
+                using (var sr = new StreamReader(fs, Encoding.UTF8, true, 4096))
+                {
+                    string line;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        yield return line;
+                    }
                 }
             }
         }
