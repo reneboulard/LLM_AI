@@ -421,10 +421,12 @@ namespace LLM_AI
         //  Directive
         // ------------------------------------------------------------------
 
-        private static string BuildSystemPrompt(PluginConfiguration cfg)
+        private string BuildSystemPrompt(PluginConfiguration cfg)
         {
             string s = ANALYSIS_ROLE + "\n\n" + ANALYSIS_RULES;
-            var langDir = LlmAgentService.BuildLanguageDirective(cfg?.ResponseLanguage);
+            // Règle usager 2026-10-01 : config explicite, sinon langue de
+            // l'interface Emby — la directive est toujours injectée.
+            var langDir = LlmAgentService.BuildLanguageDirective(I18n.ResolveProseLangName(cfg, _host));
             if (langDir.Length > 0) s += "\n\n" + langDir;
             return s;
         }

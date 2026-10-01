@@ -578,18 +578,19 @@ en un clic, voir [Aides de la page de configuration](#aides-de-la-page-de-config
 
 ### Langue de réponse du LLM
 
-`ResponseLanguage` force la langue du **texte en prose** de l'LLM — les **raisons des
-recommandations** (champ `reason` des cartes) **et** le **rapport d'audit**. Vide / `Auto`
-= aucune directive (l'LLM suit la langue du prompt, ici le français — comportement par
-défaut). Toute autre valeur (ex. `English`, `Español`, `Deutsch`…) injecte une directive
-en fin de system prompt : l'LLM rédige alors dans cette langue. Les titres de films/séries
-et les noms de chaînes ne se **traduisent jamais** : la directive demande de recopier le
-`title` **exactement tel qu'il figure dans les résultats de `get_emby_info`** (même si
-`tmdb_lookup` renvoie le titre dans une autre langue — un titre modifié casse le
-rattachement au programme EPG). Les noms de champs JSON techniques restent inchangés.
-Select sur la page de config : `Auto`, `Français`, `English`, `Español`, `Deutsch`,
-`Italiano`, `Português`. S'applique aux deux paths (recommandation + audit, modes single
-et déterministe).
+`ResponseLanguage` fixe la langue du **texte en prose** de l'LLM — raisons des
+recommandations (champ `reason` des cartes), enrichissement des pastilles `.strm`, chat,
+rapport d'audit (modes single et dosé) et fiche mémoire. **`Auto` (vide) = la langue de
+l'interface Emby** (`UICulture`, repli anglais) ; toute valeur explicite (`Français`,
+`English`, `Español`, `Deutsch`, `Italiano`, `Português`…) est respectée telle quelle.
+Les **infos EPG ne se traduisent jamais** : la directive demande de recopier titres et
+synopsis **exactement tels qu'ils figurent dans les résultats de `get_emby_info`** (un
+titre modifié casse le rattachement au programme EPG) — la langue de la prose n'habille
+que le texte ajouté autour. Les noms de champs JSON techniques restent inchangés. Select
+sur la page de config : `Auto`, `Français`, `English`, `Español`, `Deutsch`, `Italiano`,
+`Português`. **Les métadonnées d'identification S1/S2/S3 suivent une autre règle**
+(langue de la bibliothèque Emby, sinon du programme — voir
+[Langue des fiches](#langue-des-fiches-v115)).
 
 ### Audit santé
 
@@ -1321,23 +1322,27 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
   adaptative (il peut creuser un journal suite à un constat, enchaîner les actions dans
   l'ordre qui lui semble utile). Convient à un modèle costaud / cloud. **C'est le seul
   mode où la remédiation peut être exécutée** (si `AuditRemediationEnabled` est activé).
-- **`deterministic` (rassemblement C# + synthèse)** — le C# rassemble **toutes** les
+- **`deterministic` (rassemblement C# + rapport dosé)** — le C# rassemble **toutes** les
   sondes read-only lui-même (`GatherAuditDigestAsync`, zéro appel LLM pour le
-  rassemblement) dans un digest Markdown, puis **un seul passage LLM sans outils**
-  synthétise le rapport à partir du digest. Conçu pour un modèle local/modeste
-  (ex. gemma4) : on retire au LLM l'orchestration multi-outils (son point faible) pour
-  ne lui laisser que la synthèse de texte fourni (son point fort). La remédiation y est
-  **report-only** (l'LLM n'a pas d'outil pour l'exécuter).
+  rassemblement), puis le rapport est rédigé **en sept doses de sections + un
+  assemblage final** (un bloc Markdown par dose, prompt court et borné) : un modèle
+  local/modeste (ex. gemma4) garde les règles de fidélité dans un contexte étroit, là
+  où la rédaction d'un long rapport en une seule passe les perdait. **Fidélité dosée** :
+  chaque constat est cité sous sa sévérité d'origine (critique → 🔴, avertissement → ⚠️,
+  info → ℹ️, ok → ✅ — y compris les constats bénins, omettre est interdit), les valeurs
+  (noms de comptes, nombres, âges, états) sont reprises **telles quelles** du JSON —
+  jamais recomptées, arrondies ni interprétées. La remédiation y est **report-only**
+  (l'LLM n'a pas d'outil pour l'exécuter).
 
 ### Actions de l'outil `system_audit`
 
 | Famille | Actions (lecture seule, toujours disponibles) |
 |---|---|
 | Télémétrie & config | `server_info` (version, ports, chemins, redémarrage en attente, mise à jour, maintenance), `system_config` (configuration serveur complète via `IServerConfigurationManager.Configuration`), `active_sessions`, `scheduled_tasks` |
-| Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `transcode`, `gpu_transcode` |
+| Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `log_scan` (v1.15 — scan de motifs d'anomalies : exceptions groupées par classe, HTTP 4xx/5xx entrant/sortant, échecs ffmpeg, échec fournisseurs métadonnées + « Too Many Requests », Live TV/DVR, scans de bibliothèque, signal `[LLM_AI]` groupé par signature, refus d'authentification + verrouillages — profil `{error, fatal, warn}` **avec lignes témoins brutes**), `transcode`, `gpu_transcode` |
 | Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
 | Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres) |
-| Sécurité & hygiène | `security_check` (mots de passe manquants, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous), `security_metrics` (compteurs d'activité + fenêtre d'événements de sécurité **du plugin** : SSRF bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés, actions déposées/approuvées/refusées — détection, voir ci-dessous) |
+| Sécurité & hygiène | `security_check` (mots de passe manquants — **sonde suspendue près du seuil de verrouillage Emby** et jamais comptée dans ses échecs, comptes administrateurs multiples, clés API Emby avec âge/dernière utilisation, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous), `security_metrics` (compteurs d'activité + fenêtre d'événements de sécurité **du plugin** : SSRF bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés, actions déposées/approuvées/refusées — détection, voir ci-dessous) |
 
 | Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1426,6 +1431,11 @@ coûte **aucun LLM**.
   rapport persisté (« Dernier rapport persisté — [date] (mode …) ») ; le bouton
   « Lancer l'audit » régénère et écrase. Toute réponse admin porte aussi les champs
   `Last*` (jamais peuplés pour un non-admin — le rapport expose l'état du serveur).
+- **Run détaché + single-flight (v1.15)** : le clic **répond immédiatement** et le run
+  continue **en arrière-plan** — fermer la page ne l'interrompt pas, le rapport est
+  persisté à l'arrivée (relecture gratuite par `?Last=true`). Une rafale de clics ne
+  lance qu'**un seul** run (single-flight) ; la page affiche la progression
+  (« Dose n/7 » en mode déterministe).
 
 ### Qualité du rapport (v1.13.9.13)
 
@@ -1437,9 +1447,18 @@ Deux garde-fous sur la restitution du rapport (et de la réponse de chat) :
   (« → »), retire les dollars de math-mode résiduels et dénude les balises
   d'habillage — best-effort, appliqué aux sorties audit (les deux modes) **et** chat.
 - **Règle « Markdown pur »** injectée dans les prompts d'audit (boucle agent +
-  synthèse déterministe, FR + EN) : jamais de LaTeX, jamais de balises HTML. Et la
-  **ligne UPnP** figure toujours dans les constats : aucun mapping trouvé = constat
-  ✅ explicite (la sonde `upnp_check` ne peut plus passer sous silence).
+  doses déterministes + assemblage, FR + EN) : jamais de LaTeX, jamais de balises HTML.
+- **`upnp_check` à constats structurés (v1.15)** : les trois issues de la sonde portent
+  un tableau `findings` avec sévérité explicite — routeur silencieux = constat **ok**
+  (« ÉTAT SAIN, jamais critique » — `upnp_available=false` n'est **pas** une panne),
+  passerelle sans URL de contrôle = constat info, mappings présents = verdict par
+  mapping. La sévérité vient de la structure C#, jamais du jugement du modèle : un
+  routeur UPnP muet ne peut plus fabriquer de 🔴.
+- **`log_scan` : jamais de compte nu (v1.15)** : le profil `{error, fatal, warn}` est
+  accompagné de ses lignes témoins brutes (5 warn / 3 error / 3 fatal, tronquées à
+  200 car.) — le rapport dit **ce qu'étaient** ces lignes (catégorie + propos), même
+  bénignes ; un témoin déjà couvert par un motif renvoie à son groupe, et chaque motif
+  non vide est cité groupe par groupe avec sa gravité suggérée.
 
 ---
 
@@ -1465,8 +1484,9 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 1. **S1 — nettoyage + recherche multilingue.** Le titre EPG est débarrassé de son
    bruit par `CleanEpgTitle` (marqueurs `HD`/`VOSTFR`/`VF`/`VO`, « Rediff. »/« Inédit »,
    `S##E##` / `Saison \d` / `Épisode \d`, parenthèses, **dates ISO**) puis recherché
-   sur TMDB en plusieurs langues : `en-US` (titre original), `fr-FR` (titre France),
-   + la langue de l'usager. Un candidat est retenu si le **titre normalisé**
+   sur TMDB en plusieurs langues : **la langue du contenu en tête** (voir
+   [Langue des fiches](#langue-des-fiches-v115) ci-dessous), l'autre langue
+   standard, puis la langue de l'usager. Un candidat est retenu si le **titre normalisé**
    correspond (garde-fou contre un mauvais match ambigu), avec contrôle de l'année.
    **S1 est lancé aussi sans `ProductionYear` (v1.13.28)** : sans année fiable,
    la doctrine de corroboration s'applique — seule l'**égalité exacte** du titre
@@ -1519,6 +1539,29 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    « Seberg » 2019 → tt1780967). Un candidat accepté **sans synopsis à
    comparer** est logué « à confirmer visuellement » (on fait confiance au classement
    SearXNG, comme l'usager le ferait avant de valider à la main).
+
+### Langue des fiches (v1.15)
+
+La fiche TMDB recherchée/relue par S1/S2/S3 suit la langue du **contenu** — même règle
+qu'Emby (une chaîne française reçoit des métadonnées françaises, une chaîne anglaise des
+métadonnées anglaises) :
+
+1. **Langue de la bibliothèque Emby** de l'item (`PreferredMetadataLanguage`, réglable
+   par bibliothèque dans Emby — les configurations d'Emby priment, rien n'est codé en
+   dur côté plugin) ;
+2. à défaut, **langue du programme** : le synopsis EPG d'abord (la langue de l'entrée
+   de guide — une chaîne FR y parle français même quand le titre de l'œuvre reste
+   anglais, ex. « The Walking Dead » sur une chaîne française), le titre en repli
+   (détection déterministe : accents + mots-outils, zéro LLM ; ex æquo → indéterminé) ;
+3. à défaut, la langue de l'usager (comportement historique, ordre de cascade
+   inchangé).
+
+La langue retenue passe **en tête de la cascade de recherche S1** — le titre de la
+fiche devient lexicalement comparable au titre du guide pour la porte d'acceptation
+(une œuvre française ne revient plus avec un synopsis anglais parce que la cascade
+partait en `en-US`). Les pastilles `.strm` ne suivent **pas** cette règle : leur
+enrichissement (prose LLM et fiche) reste dans la langue de l'usager (voir
+[Langue de réponse du LLM](#langue-de-réponse-du-llm)).
 
 ### Application non destructive + verrouillage
 

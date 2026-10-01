@@ -222,7 +222,7 @@ namespace LLM_AI
 
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    responseLanguage: cfg.ResponseLanguage);
+                    responseLanguage: I18n.ResolveProseLangName(cfg, _host));
                 var tools = BuildTools(cfg, runUser);
 
                 var (reply, toolResults) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
@@ -358,7 +358,9 @@ namespace LLM_AI
             "(severity critique/avertissement/ok + fix) tels quels dans le rapport : n'atténue " +
             "JAMAIS un constat critique de sécurité. La sonde UPnP figure TOUJOURS dans les " +
             "constats : aucun mapping trouvé = constat ✅ explicite (« UPnP désactivé / aucun " +
-            "mapping routeur ») — ne tais JAMAIS la ligne UPnP du rapport. Dès qu'une surface " +
+            "mapping routeur ») — ne tais JAMAIS la ligne UPnP du rapport, et ne la classe " +
+            "JAMAIS en 🔴 : « aucun mapping » est un état sain (✅), une seule liste UPnP " +
+            "(pas un doublon critique + ok). Dès qu'une surface " +
             "distante existe (accès distant " +
             "activé ou accès externe observé), inclus le test externe GRC ShieldsUP!! du champ " +
             "external_test dans les « Actions recommandées » — l'usager seul peut confirmer la " +
@@ -386,6 +388,24 @@ namespace LLM_AI
             "le rapport illisible à la restitution.\n" +
             "Sois factuel et précis : reprends les valeurs retournées par les outils, ne " +
             "spécule pas.\n" +
+            "### RÈGLE — FIDÉLITÉ AUX SONDES (les sorties d'outils sont la SEULE source de vérité)\n" +
+            "1. COMPLET : chaque constat de chaque sonde (security_check, upnp_check, " +
+            "ratings_check, security_metrics, log_scan…) figure dans le rapport sous sa " +
+            "sévérité d'origine — fusionner dans une rubrique est permis, OMETTRE un constat " +
+            "est interdit, y compris les constats Information/ℹ️ (ex. « Sonde de mot de passe " +
+            "suspendue », « Mot de passe récemment défini », « Plusieurs comptes " +
+            "administrateurs ») : un constat absent du rapport est un constat que l'usager " +
+            "ne verra jamais.\n" +
+            "2. VERBATIM : noms de comptes, nombres, âges, états sont repris TELS QUELS des " +
+            "sorties d'outils — jamais recomptés, arrondis ou interprétés (écris « 10/20 " +
+            "validés », pas « 20/40 » ; si le JSON dit « dernier usage il y a 0 j », ne dis " +
+            "JAMAIS « pas utilisée depuis longtemps ») ; nomme TOUJOURS le(s) compte(s) " +
+            "concerné(s) dans les Constats, pas seulement dans les Actions.\n" +
+            "3. RIEN DE FABRIQUÉ : ne transforme JAMAIS un champ descriptif nu (ex. " +
+            "certificate_configured=false quand HTTPS est désactivé, enable_remote_access=false) " +
+            "en constat d'une sévérité quelconque — seul un constat posé par une sonde fait " +
+            "foi ; un champ de contexte se cite comme Information avec son nom de champ, " +
+            "jamais comme une alerte.\n" +
             "### RÈGLE D'OR — REMÉDIATION\n" +
             "N'exécute JAMAIS une action de remédiation (stop_session, trigger_task, " +
             "send_message) de ton propre chef. Mentionne-la dans « Actions recommandées ». " +
@@ -448,9 +468,33 @@ namespace LLM_AI
             "prouve pas l'absence de problème antérieur : formule l'absence comme « aucun motif " +
             "observé dans la fenêtre de journal analysée », jamais comme « aucun problème ». " +
             "Les 401/403 entrants répétés se croisent avec security_check (surface exposée) et " +
-            "les échecs ffmpeg avec la section processes (orphelins).\n" +
+            "les échecs ffmpeg avec la section processes (orphelins). Si security_check signale " +
+            "que la sonde de mots de passe triviaux a été effectuée, les échecs d'authentification " +
+            "observés dans log_scan pour ces comptes admin peuvent être les TENTATIVES DE LA SONDE : " +
+            "elle produit au plus 3 échecs par compte par audit (sous le seuil de verrouillage ~5 " +
+            "d'Emby) et suspend tout compte dont le compteur d'échecs n'est pas à zéro — croise les " +
+            "deux sections avant de conclure à une tentative d'intrusion. En revanche une ligne " +
+            "« Temporarily locking out » (verrouillage de compte) ne peut PAS venir de la sonde : " +
+            "c'est le signal d'échecs répétés réels (ou d'un compte mal déverrouillé) — à signaler.\n" +
             "Markdown PUR : JAMAIS de notation math/LaTeX ($...$, \\rightarrow — écris « → » en " +
             "texte simple) ni de balises HTML (<code>, <b>…).\n" +
+            "### RÈGLE — FIDÉLITÉ AU DIGEST (le digest est la SEULE source de vérité)\n" +
+            "1. COMPLET : chaque constat de chaque section figure dans le rapport sous sa " +
+            "sévérité d'origine — fusionner dans une rubrique est permis, OMETTRE un constat " +
+            "est interdit, y compris les constats Information/ℹ️ (ex. « Sonde de mot de passe " +
+            "suspendue », « Mot de passe récemment défini », « Plusieurs comptes " +
+            "administrateurs ») : un constat absent du rapport = constat que l'usager ne " +
+            "verra jamais, ce n'est pas acceptable.\n" +
+            "2. VERBATIM : noms de comptes, nombres, âges, états sont repris TELS QUELS des " +
+            "sections — jamais recomptés, arrondis ou interprétés (écris « 10/20 validés » " +
+            "et non « 20/40 » ; si le JSON dit « dernier usage il y a 0 j », ne dis JAMAIS " +
+            "« pas utilisée depuis longtemps ») ; nomme TOUJOURS le(s) compte(s) concerné(s) " +
+            "dans les Constats, pas seulement dans les Actions.\n" +
+            "3. RIEN DE FABRIQUÉ : aucun constat qui n'existe pas dans le digest — ne " +
+            "transforme JAMAIS un champ descriptif nu (ex. certificate_configured=false) en " +
+            "constat de sévérité quelconque ; seul un constat posé par la section fait foi. " +
+            "Un champ du JSON se cite comme Information avec son nom de champ, jamais comme " +
+            "une alerte.\n" +
             "Sois factuel et précis : reprends les valeurs des sections, ne spécule pas.\n" +
             "### RÈGLE D'OR — REMÉDIATION\n" +
             "Tu n'as aucun outil en mode synthèse : tu ne peux PAS exécuter d'action de " +
@@ -522,10 +566,16 @@ namespace LLM_AI
                 // lui-même system_audit de façon adaptative. Agent avec intro +
                 // workflow d'audit ; formatSection="" supprime le bloc « FORMAT
                 // DES RECOMMANDATIONS » (l'audit = Markdown, pas un tableau JSON).
+                var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
+
+                // Langue du rapport : règle usager 2026-10-01 —
+                // ResponseLanguage (choix explicite) → langue de l'interface
+                // Emby (« Auto ») → anglais. La directive est TOUJOURS
+                // injectée : sans elle, un modèle a dérivé en chinois
+                // (terrain 2026-10-01).
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, AUDIT_WORKFLOW,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    AUDIT_ROLE_INTRO, "", cfg.ResponseLanguage);
-                var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
+                    AUDIT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host));
 
                 var (reply, _) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
                 reply = SanitizeReport(reply);
@@ -726,7 +776,7 @@ namespace LLM_AI
                     + (extraWorkflow ?? "");
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    CHAT_ROLE_INTRO, "", cfg.ResponseLanguage);
+                    CHAT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host));
 
                 // Tous les outils existants : recommandation + audit santé +
                 // (couche d'action du chat, v1.13 : tools construits par
@@ -832,34 +882,387 @@ namespace LLM_AI
             if (cfg.DebugVerbose)
                 _logger.Info("[LLM_AI] [{0}] Digest d'audit (déterministe) :\n{1}", label, digest);
 
-            // 2) Synthèse : un seul passage LLM, sans outils. La consigne
-            //    spécifique (template + focus de l'usager) est passée telle
-            //    quelle — le système prompt neutralise toute instruction de
-            //    rassemblement d'outils (« tu n'as aucun outil, les données
-            //    sont fournies »).
-            string system = AUDIT_SYNTHESIS_ROLE + "\n\n" + AUDIT_SYNTHESIS_WORKFLOW;
-            // Directive de langue de réponse (partagée avec la boucle agent —
-            // voir LlmAgentService.BuildLanguageDirective). Vide = pas de directive.
-            var langDir = LlmAgentService.BuildLanguageDirective(cfg.ResponseLanguage);
-            if (langDir.Length > 0)
-                system += "\n\n" + langDir;
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine("### DONNÉES D'AUDIT (rassemblées de façon déterministe, en sections JSON)");
-            sb.AppendLine();
-            sb.AppendLine(digest);
-            sb.AppendLine("### CONSIGNE SPÉCIFIQUE");
-            sb.AppendLine(userPrompt ?? "(audit complet — aucune consigne particulière)");
-            sb.AppendLine();
-            sb.AppendLine("Produis maintenant le rapport Markdown de santé (Constats + Actions recommandées).");
-            string user = sb.ToString();
+            // 2) Pipeline « dosé » (2026-10-01) : le rassemblement reste C# ;
+            //    la synthèse se fait en passes BORNÉES — une dose par groupe de
+            //    sections (petit contexte, fidélité tenable pour un petit
+            //    modèle), croisements pré-calculés en C# (« FAITS ÉTABLIS »),
+            //    puis un assemblage final LLM qui ne voit que les blocs déjà
+            //    rédigés + les faits. Motivation terrain : gemma4:latest
+            //    batchait 12 actions en un seul tableau → fallback silencieux
+            //    server_info → boucle d'agent expirée (10 itérations, run
+            //    16:25) ; et l'assemblage d'un long rapport en UNE passe
+            //    perdait des constats info/ℹ️ (omissions 16:09/16:13/16:18).
+            //    Côté plugin : chaque dose est repliée mécaniquement si tous
+            //    les backends échouent — le rapport sort toujours, jamais une
+            //    erreur d'audit.
+            var sections = SplitDigestSections(digest);
+            string crossFacts = BuildAuditCrossFacts(sections);
 
-            string reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
-                system, user, label, ct).ConfigureAwait(false);
+            // Directive de langue de réponse (partagée avec la boucle agent —
+            // voir LlmAgentService.BuildLanguageDirective) : règle usager
+            // 2026-10-01 — ResponseLanguage (choix explicite) → langue de
+            // l'interface Emby (« Auto ») → anglais. Toujours injectée :
+            // sans directive, un modèle a dérivé en chinois (terrain
+            // 2026-10-01).
+            var langDir = LlmAgentService.BuildLanguageDirective(I18n.ResolveProseLangName(cfg, _host));
+
+            // Groupes de doses : petits contextes (2-4 sondes), regroupés par
+            // thème de rapport. Une section absente du digest est ignorée
+            // (tolérance aux évolutions du digest).
+            var doses = new (string Title, string[] SectionNames)[]
+            {
+                ("Système et performance", new[] { "server_info", "system_config", "host_metrics" }),
+                ("Processus et stockage", new[] { "processes", "disk_storage" }),
+                ("Activité et tâches planifiées", new[] { "active_sessions", "scheduled_tasks", "transcode", "gpu_transcode" }),
+                ("Bibliothèque et métadonnées", new[] { "library_stats", "missing_metadata", "metadata_health" }),
+                ("Hygiène des cotes", new[] { "ratings_check" }),
+                ("Sécurité", new[] { "security_check", "security_metrics" }),
+                ("Réseau et journaux", new[] { "upnp_check", "log_scan", "list_logs", "inspect_log" }),
+            };
+
+            var blocks = new System.Text.StringBuilder();
+            int doseNo = 0;
+            foreach (var dose in doses)
+            {
+                var doseData = new System.Text.StringBuilder();
+                foreach (string name in dose.SectionNames)
+                {
+                    string body = DigestSection(sections, name);
+                    if (string.IsNullOrEmpty(body)) continue;   // absente du digest
+                    doseData.AppendLine("## " + name);
+                    doseData.AppendLine(body);
+                }
+                if (doseData.Length == 0) continue;
+                doseNo++;
+
+                // Jalon de progression du run détaché (v1.14.2) : la page de
+                // config pole ?Status=true et affiche « Dose 3/7 — … ». No-op
+                // hors run détaché (appel depuis la tâche planifiée, tests).
+                AuditRunState.SetProgress("Dose " + doseNo + "/" + doses.Length + " — " + dose.Title);
+
+                string block;
+                try
+                {
+                    string sys = AUDIT_DOSE_SECTION_ROLE;
+                    if (langDir.Length > 0) sys += "\n\n" + langDir;
+                    string user = "Titre du bloc à produire : « " + dose.Title + " » (le titre " +
+                        "« ### » est ajouté par le plugin — ne l'écris pas).\n\n" +
+                        "### DONNÉES DE LA SECTION (JSON du digest)\n" + doseData +
+                        "\nRédige maintenant le bloc Markdown de CETTE section.";
+                    block = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                        sys, user, label + "::dose" + doseNo + "-" + dose.Title, ct).ConfigureAwait(false);
+                    _logger.Info("[LLM_AI] [{0}] Dose {1}/{2} « {3} » : {4} car.", label, doseNo, doses.Length, dose.Title, block.Length);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    _logger.Warn("[LLM_AI] [{0}] Dose « {1} » indisponible sur tous les backends ({2}) — bloc mécanique.", label, dose.Title, ex.Message);
+                    block = MechanicalSectionBlock(dose.SectionNames, sections, ex);
+                }
+                if (cfg.DebugVerbose)
+                    _logger.Info("[LLM_AI] [{0}] Bloc « {1} » :\n{2}", label, dose.Title, block);
+
+                blocks.AppendLine("### " + dose.Title);
+                blocks.AppendLine();
+                blocks.AppendLine(block.Trim());
+                blocks.AppendLine();
+            }
+
+            // 3) Assemblage final : l'entrée = FAITS ÉTABLIS + blocs rédigés +
+            //    consigne spécifique. Le LLM ne peut plus inventer d'alerte
+            //    (il ne voit pas de champ nu) ni omettre une section entière
+            //    (chaque dose est fournie) — et si l'assemblage échoue, les
+            //    blocs constituent déjà un rapport lisible.
+            string systemAsm = AUDIT_SYNTHESIS_ROLE + "\n\n" + AUDIT_SYNTHESIS_WORKFLOW +
+                "\n\n" + AUDIT_DOSE_ASSEMBLY_MODE;
+            if (langDir.Length > 0) systemAsm += "\n\n" + langDir;
+
+            var up = new System.Text.StringBuilder();
+            up.AppendLine("### FAITS ÉTABLIS (pré-calculés en C# par le plugin — autorité sur toute lecture croisée)");
+            up.AppendLine(crossFacts);
+            up.AppendLine("### BLOCS DE SECTIONS (rédigés dosé par dose, à partir du digest déterministe)");
+            up.AppendLine();
+            up.Append(blocks.ToString());
+            up.AppendLine("### CONSIGNE SPÉCIFIQUE");
+            up.AppendLine(userPrompt ?? "(audit complet — aucune consigne particulière)");
+            up.AppendLine();
+            up.AppendLine("Assemble maintenant le rapport final Markdown de santé : Constats regroupés par " +
+                "sévérité (🔴 / ⚠️ / ℹ️ / ✅) et par rubrique, en REPRENANT les blocs tels quels (fusion de " +
+                "style permise — omettre un constat ou en inventer un est interdit), puis « Actions " +
+                "recommandées » classées par priorité. Les FAITS ÉTABLIS se citent tels quels.");
+            string userAsm = up.ToString();
+
+            // Jalon final de progression (run détaché) : l'assemblage est la
+            // passe la plus lente après les doses elles-mêmes.
+            AuditRunState.SetProgress("Assemblage final du rapport (" + doseNo + " blocs + faits établis)…");
+
+            string reply;
+            try
+            {
+                reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
+                    systemAsm, userAsm, label + "::assemblage", ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.Warn("[LLM_AI] [{0}] Assemblage final indisponible ({1}) — rapport = blocs + faits.", label, ex.Message);
+                reply = blocks.ToString() + crossFacts +
+                    "\n(Assemblage final indisponible : " + ex.Message + " — les blocs de sections sont fournis tels quels.)";
+            }
             reply = SanitizeReport(reply);
 
-            _logger.Info("[LLM_AI] [{0}] Rapport d'audit (mode déterministe) :\n{1}", label, reply);
+            _logger.Info("[LLM_AI] [{0}] Rapport d'audit (mode déterministe dosé) :\n{1}", label, reply);
             return reply;
         }
+
+        /// <summary>
+        /// Rôle des passes « dosées » du mode déterministe (AuditMode=
+        /// deterministic) : UNE dose de sections → UN bloc Markdown. Les règles
+        /// de fidélité tiennent dans un prompt court — un petit modèle les
+        /// garde dans un contexte borné, là où la rédaction d'un long rapport
+        /// en une passe les perdait (omissions ℹ️ constatées en terrain,
+        /// 2026-10-01). Le titre « ### » n'est pas demandé : le plugin le
+        /// préfixe lui-même (pas de doublon possible).
+        /// </summary>
+        internal const string AUDIT_DOSE_SECTION_ROLE =
+            "Tu rédiges le bloc Markdown d'UNE section d'un rapport d'audit de " +
+            "santé Emby. Tu n'as AUCUN outil : les données JSON fournies sont ta " +
+            "seule source — analyse-les uniquement.\n" +
+            "Règles de fidélité :\n" +
+            "1. Cite CHAQUE constat du champ findings sous sa sévérité d'origine : " +
+            "critique → 🔴, avertissement → ⚠️, info → ℹ️, ok → ✅. Fusionner deux " +
+            "constats très proches est permis ; omettre un constat est interdit " +
+            "(y compris les info/ℹ️) — un constat absent de ta sortie ne sera " +
+            "visible nulle part : ce n'est pas acceptable.\n" +
+            "2. Les valeurs (noms de comptes, nombres, âges, états) sont repris " +
+            "TELS QUELS du JSON — jamais recomptés, arrondis ou interprétés ; " +
+            "nomme TOUJOURS le(s) compte(s) concerné(s).\n" +
+            "3. N'invente RIEN : un champ descriptif nu (ex. certificate_configured=false) " +
+            "n'est pas un constat — ne le transforme JAMAIS en alerte ; cite un " +
+            "champ, si utile, comme simple information avec son nom.\n" +
+            "4. Ne divulgue jamais la valeur d'un mot de passe (elle n'est pas fournie).\n" +
+            "5. Une section avec erreur JSON devient une ligne « (non vérifiable sur " +
+            "ce serveur : raison) » — jamais une spéculation.\n" +
+            "6. Markdown PUR : jamais de LaTeX ni de balises HTML.\n" +
+            "7. Section log_scan : cite CHAQUE motif non vide du champ motifs, " +
+            "groupe par groupe, avec sa gravité suggérée et son (ses) témoin(s) — " +
+            "même un groupe bénin (1 seul événement, signal du plugin lui-même) " +
+            "se cite avec sa classe. Le champ profil est un COMPTE NU : ne le " +
+            "cite JAMAIS seul — ses champs temoins_* disent de quoi il s'agit " +
+            "(catégorie + propos), cite-les.\n" +
+            "Sortie : UNIQUEMENT le contenu du bloc, SANS titre « ### » (ajouté par " +
+            "le plugin), sans préambule, sans conclusion générale, sans rubrique " +
+            "« Actions recommandées » (rédigée à l'assemblage final).";
+
+        /// <summary>
+        /// Complément de système-prompt pour l'assemblage final dosé : l'entrée
+        /// n'est pas le digest brut mais les blocs déjà rédigés + les FAITS
+        /// ÉTABLIS pré-calculés. Replace le cadrage « JSON brut » du rôle de
+        /// synthèse sans toucher les règles de fidélité (qui restent valables :
+        /// le bloc est fidèle par construction, l'omission y est interdite).
+        /// </summary>
+        internal const string AUDIT_DOSE_ASSEMBLY_MODE =
+            "### MODE D'ASSEMBLAGE DOSÉ\n" +
+            "L'entrée ci-dessous n'est PAS le JSON brut : ce sont des BLOCS DE SECTIONS " +
+            "déjà rédigés dose par dose (fidèles par construction), précédés des " +
+            "FAITS ÉTABLIS pré-calculés en code C# (croisement log_scan × " +
+            "security_check : signature de la sonde vs échecs réels ; règle UPnP). " +
+            "Ton travail : ASSEMBLER — ordre, regroupement par sévérité, fluidité, " +
+            "rubrique « Actions recommandées ». Les FAITS ÉTABLIS font autorité sur " +
+            "toute lecture croisée : cite-les tels quels, ne les re-juge pas, ne " +
+            "conclus jamais à une intrusion pour un compte que les FAITS ÉTABLIS " +
+            "attribuent à la sonde.";
+
+        /// <summary>
+        /// Découpe le digest (sections « ## titre » + JSON) en liste ordonnée
+        /// (titre, corps). Tolérant : JSON multi-lignes accepté, sections sans
+        /// corps conservées (corps = ""), digest vide → liste vide.
+        /// </summary>
+        private static List<(string Title, string Body)> SplitDigestSections(string digest)
+        {
+            var list = new List<(string Title, string Body)>();
+            if (string.IsNullOrEmpty(digest)) return list;
+            string cur = null;
+            var body = new System.Text.StringBuilder();
+            foreach (var raw in digest.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                if (line.StartsWith("## ", StringComparison.Ordinal))
+                {
+                    if (cur != null) list.Add((cur, body.ToString().Trim()));
+                    cur = line.Substring(3).Trim();
+                    body.Clear();
+                }
+                else if (cur != null) { body.AppendLine(line); }
+            }
+            if (cur != null) list.Add((cur, body.ToString().Trim()));
+            return list;
+        }
+
+        /// <summary>Corps (JSON) d'une section du digest par nom, null si absente.</summary>
+        private static string DigestSection(List<(string Title, string Body)> sections, string name)
+        {
+            foreach (var s in sections)
+                if (string.Equals(s.Title, name, StringComparison.Ordinal))
+                    return s.Body;
+            return null;
+        }
+
+        /// <summary>
+        /// Croisements déterministes de l'audit dosé : sonde de mots de passe
+        /// triviaux (security_check.password_probe) × comptages d'authentifi-
+        /// cation du journal (log_scan, motif « authentification »). Produit
+        /// les « FAITS ÉTABLIS » de l'assemblage : le croisement était à la
+        /// charge du LLM (deux sections lointaines à re-croiser — dérives
+        /// constatées en terrain) ; ici le plugin calcule la lecture, le LLM
+        /// la cite. Tolérant : donnée absente ou inattendue → « non calculable »,
+        /// jamais une erreur (compat 4.9.x et pannes de sondes).
+        /// </summary>
+        private static string BuildAuditCrossFacts(List<(string Title, string Body)> sections)
+        {
+            try
+            {
+                string probeState = "absente";
+                int adminsScanned = -1;
+                List<string> probeMatches = null, probeSuspended = null;
+                var denials = new List<(string Compte, int N)>();
+                var lockouts = new List<string>();
+
+                foreach (var s in sections)
+                {
+                    if (string.Equals(s.Title, "security_check", StringComparison.Ordinal))
+                    {
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(s.Body);
+                            if (doc.RootElement.TryGetProperty("password_probe", out var pp))
+                            {
+                                if (pp.TryGetProperty("available", out var av))
+                                    probeState = av.ValueKind == System.Text.Json.JsonValueKind.True ? "exécutée" : "indisponible";
+                                if (pp.TryGetProperty("admins_scanned", out var ac) && ac.ValueKind == System.Text.Json.JsonValueKind.Number)
+                                    adminsScanned = ac.GetInt32();
+                                probeMatches = JsonStringList(pp, "matches");
+                                probeSuspended = JsonStringList(pp, "suspended");
+                            }
+                        }
+                        catch { probeState = "JSON illisible"; }
+                    }
+                    else if (string.Equals(s.Title, "log_scan", StringComparison.Ordinal))
+                    {
+                        try
+                        {
+                            using var doc = System.Text.Json.JsonDocument.Parse(s.Body);
+                            if (doc.RootElement.TryGetProperty("motifs", out var motifs) &&
+                                motifs.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            {
+                                foreach (var m in motifs.EnumerateArray())
+                                {
+                                    if (!(m.TryGetProperty("motif", out var mn) &&
+                                          mn.ValueKind == System.Text.Json.JsonValueKind.String &&
+                                          "authentification".Equals(mn.GetString(), StringComparison.Ordinal))) continue;
+                                    if (m.TryGetProperty("par_compte", out var pc) && pc.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                        foreach (var r in pc.EnumerateArray())
+                                            if (r.TryGetProperty("cle", out var ck) && ck.ValueKind == System.Text.Json.JsonValueKind.String &&
+                                                r.TryGetProperty("compte", out var cn) && cn.ValueKind == System.Text.Json.JsonValueKind.Number &&
+                                                cn.TryGetInt32(out int n))
+                                                denials.Add((ck.GetString(), n));
+                                    if (m.TryGetProperty("verrouillages", out var vl) && vl.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                        foreach (var r in vl.EnumerateArray())
+                                            if (r.TryGetProperty("cle", out var lk) && lk.ValueKind == System.Text.Json.JsonValueKind.String)
+                                                lockouts.Add(lk.GetString());
+                                }
+                            }
+                        }
+                        catch { /* fenêtre non lisible — les autres faits restent */ }
+                    }
+                }
+
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("- Sonde de mots de passe triviaux : " + probeState +
+                    (adminsScanned >= 0 ? " ; comptes admin scannés : " + adminsScanned : "") +
+                    (probeMatches != null && probeMatches.Count > 0
+                        ? " ; CORRESPONDANCE trivial : " + string.Join(", ", probeMatches)
+                        : " ; correspondance trivial : aucune") +
+                    (probeSuspended != null && probeSuspended.Count > 0
+                        ? " ; sonde suspendue pour (compteur d'échecs ≠ 0) : " + string.Join(", ", probeSuspended)
+                        : " ; sonde suspendue : aucun compte"));
+                if (denials.Count > 0)
+                    sb.AppendLine("- Échecs d'authentification dans la fenêtre du journal : " +
+                        string.Join(", ", denials.Select(d => d.Compte + " → " + d.N)) + ".");
+                else
+                    sb.AppendLine("- Échecs d'authentification dans la fenêtre du journal : aucun.");
+                if (lockouts.Count > 0)
+                    sb.AppendLine("- Verrouillages « Temporarily locking out » : " + string.Join(", ", lockouts) +
+                        " — échecs répétés RÉELS (jamais la sonde) : à signaler sans réserve.");
+                sb.AppendLine("- Lecture du croisement (à citer telle quelle) : pour un compte SONDÉ, au plus " +
+                    "3 échecs d'authentification sur la fenêtre = signature des tentatives contrôlées de la sonde " +
+                    "de CE RUN, pas une intrusion ; un « Temporarily locking out » ne peut PAS venir de la sonde. " +
+                    "Le compteur d'échecs d'un compte n'est remis à zéro QUE par une connexion réussie du compte.");
+                sb.AppendLine("- UPnP : l'absence de mapping / de routeur n'est PAS un défaut — état sûr.");
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "- FAITS ÉTABLIS non calculables ce run : " + ex.Message;
+            }
+        }
+
+        /// <summary>Liste de chaînes d'un tableau JSON, null si absent/non tableau.</summary>
+        private static List<string> JsonStringList(System.Text.Json.JsonElement parent, string prop)
+        {
+            if (!parent.TryGetProperty(prop, out var arr) || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return null;
+            var list = new List<string>();
+            foreach (var e in arr.EnumerateArray())
+                if (e.ValueKind == System.Text.Json.JsonValueKind.String) list.Add(e.GetString());
+            return list;
+        }
+
+        /// <summary>
+        /// Bloc mécanique de repli d'une dose : si la passe LLM a échoué sur
+        /// tous les backends, les constats de la dose sont extraits tel quels
+        /// du JSON (sévérité → emoji + titre + détail court). Le rapport sort
+        /// toujours — la pire dose est dégradée, jamais manquante.
+        /// </summary>
+        private static string MechanicalSectionBlock(string[] sectionNames,
+            List<(string Title, string Body)> sections, Exception ex)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (string name in sectionNames)
+            {
+                string body = DigestSection(sections, name);
+                if (string.IsNullOrWhiteSpace(body)) continue;
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("findings", out var f) &&
+                        f.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        foreach (var item in f.EnumerateArray())
+                        {
+                            string sev = item.TryGetProperty("severity", out var sv) && sv.ValueKind == System.Text.Json.JsonValueKind.String ? sv.GetString() : null;
+                            string t = item.TryGetProperty("title", out var ti) && ti.ValueKind == System.Text.Json.JsonValueKind.String ? ti.GetString() : "?";
+                            string d = item.TryGetProperty("detail", out var de) && de.ValueKind == System.Text.Json.JsonValueKind.String ? de.GetString() : "";
+                            sb.Append(SeverityEmoji(sev)).Append(' ').Append(t)
+                              .AppendLine(string.IsNullOrEmpty(d) ? "" : " — " + d);
+                        }
+                        continue;
+                    }
+                    sb.AppendLine(SeverityEmoji(null) + " section « " + name + " » : pas de champ findings — données brutes conservées dans le digest.");
+                }
+                catch
+                {
+                    sb.AppendLine("(section « " + name + " » : synthèse indisponible et JSON non lisible — " + ex.Message + ")");
+                }
+            }
+            return sb.ToString().TrimEnd();
+        }
+
+        /// <summary>Emoji de sévérité du digest (critique/avertissement/info/ok).</summary>
+        private static string SeverityEmoji(string sev) =>
+            "critique".Equals(sev, StringComparison.Ordinal) ? "🔴" :
+            "avertissement".Equals(sev, StringComparison.Ordinal) ? "⚠️" :
+            "info".Equals(sev, StringComparison.Ordinal) ? "ℹ️" : "✅";
 
         /// <summary>
         /// Appel LLM direct (sans boucle agent ni outils) avec repli

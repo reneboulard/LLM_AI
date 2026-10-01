@@ -254,14 +254,19 @@ namespace LLM_AI
         public string RagDirectives { get; set; } = DefaultPrompts.Fr.RagDirectives;
 
         /// <summary>
-        /// Langue de sortie du LLM pour le texte en langage naturel (raisons des
-        /// recommandations, rapport d'audit, explications). Vide = pas de
-        /// directive (comportement historique : l'LLM suit la langue du prompt,
-        /// ici le français). Toute valeur non vide (ex. « English », « Français »,
+        /// Langue de sortie du LLM pour le texte en langage naturel (pastilles
+        /// AI-Tonight, raisons des recommandations, rapport d'audit, fiches
+        /// mémoire, chat). Toute valeur non vide (ex. « English », « Français »,
         /// « Español ») injecte une directive forçant l'LLM à répondre dans cette
-        /// langue. S'applique aux recommandations ET à l'audit. Les titres de
-        /// films/séries, noms de chaînes et noms de champs JSON techniques restent
-        /// inchangés (langue d'origine).
+        /// langue — une valeur libre non reconnue des métadonnées (ex.
+        /// « Nederlands ») reste comprise ici. Vide = « Auto » : la langue est
+        /// résolue via <see cref="I18n.ResolveProseLangName"/> — langue de
+        /// configuration de l'interface Emby (UICulture), sinon anglais — et la
+        /// directive est TOUJOURS injectée (règle usager 2026-10-01 ; sans
+        /// directive, un modèle a déjà dérivé en chinois). Les infos EPG
+        /// (titres de films/séries, noms de chaînes, horaires) ne se traduisent
+        /// JAMAIS : le LLM enrichit autour, dans la langue résolue ; les noms
+        /// de champs JSON techniques restent inchangés.
         /// </summary>
         public string ResponseLanguage { get; set; } = "";
 

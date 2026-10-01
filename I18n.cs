@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Configuration;
 
@@ -115,6 +116,87 @@ namespace LLM_AI
             return En;
         }
 
+        // ------------------------------------------------------------------
+        //  Détection de la langue d'un CONTENU (synopsis EPG / titre) pour
+        //  les métadonnées S1/S2/S3 (OrphanResolver). Règle terrain
+        //  2026-10-01 : Emby aligne les fiches sur la langue de la chaîne
+        //  (chaîne FR → fiche FR, chaîne EN → fiche EN) ; le plugin suit —
+        //  bibliothèque Emby d'abord (PreferredMetadataLanguage), puis
+        //  cette détection, puis config. Déterministe, zéro LLM.
+        // ------------------------------------------------------------------
+
+        /// <summary>Sépare les mots : tout ce qui n'est pas une lettre coupe
+        /// (apostrophes comprises : « l'homme » → « l », « homme »).</summary>
+        private static readonly Regex s_langWordSplit = new Regex(@"[^\p{L}]+", RegexOptions.Compiled);
+
+        /// <summary>Accents français (texte en minuscules).</summary>
+        private const string s_frAccents = "àâäçéèêëîïôöùûüœæ";
+
+        /// <summary>Mots-outils français — aucun n'existe comme mot en anglais.</summary>
+        private static readonly HashSet<string> s_frStops = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "le","la","les","des","du","une","un","de","et","à","au","aux","dans","pour","avec","sur",
+            "son","sa","ses","est","qui","que","pas","plus","chez","sans","contre","où","grand","petit",
+            "nouveau","nouvelle","histoire","vie","monde","guerre","amour","femme","homme","enfant",
+            "nuit","jour","ville","mort","dernier","premier","cette","cet","mais","comme","tout","toute",
+            "tous","leur","leurs","notre","votre"
+        };
+
+        /// <summary>Mots-outils anglais — aucun n'existe comme mot en français
+        /// (« or », « in »/« is » anglais mais « or » français → exclus).</summary>
+        private static readonly HashSet<string> s_enStops = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "the","of","and","to","in","with","for","is","who","that","his","her","its","an","from",
+            "by","at","into","over","after","before","new","night","day","man","men","story","world",
+            "war","love","city","girl","boy","dead","game","last","first","secret","time","house","home",
+            "life","when","they","them","their","this","these","those","was","are"
+        };
+
+        /// <summary>
+        /// Détecte la langue d'un texte : accents français = preuve forte (l'anglais
+        /// n'en a pas) + mots-outils FR/EN comptés par mot entier. Retourne
+        /// <see cref="Fr"/> / <see cref="En"/>, ou <c>null</c> si indéterminé
+        /// (aucune preuve, ou ex æquo : « Le Man » — prudent par conception,
+        /// l'appelant replie sur la config).
+        /// </summary>
+        internal static string DetectTextLangKey(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            string s = text.ToLowerInvariant();
+
+            int frAcc = 0;
+            foreach (char c in s)
+            {
+                if (s_frAccents.IndexOf(c) >= 0 && ++frAcc >= 6) break;
+            }
+
+            int fr = 0, en = 0;
+            foreach (string w in s_langWordSplit.Split(s))
+            {
+                if (w.Length == 0) continue;
+                if (s_frStops.Contains(w)) fr++;
+                else if (s_enStops.Contains(w)) en++;
+            }
+
+            int frScore = fr * 2 + frAcc;
+            int enScore = en * 2;
+            if (frScore == 0 && enScore == 0) return null;
+            if (frScore > enScore) return Fr;
+            if (enScore > frScore) return En;
+            return null; // ex æquo → indéterminé
+        }
+
+        /// <summary>
+        /// Langue d'un CONTENU pour les métadonnées : synopsis EPG d'abord (la
+        /// langue de l'entrée de guide — une chaîne FR y parle français même
+        /// quand le titre de l'œuvre reste anglais, ex. « The Walking Dead »
+        /// sur une chaîne française), titre en repli. Null si indéterminé.
+        /// </summary>
+        internal static string DetectContentLangKey(string title, string overview)
+        {
+            return DetectTextLangKey(overview) ?? DetectTextLangKey(title);
+        }
+
         /// <summary>
         /// Clé de langue de l'<b>interface</b> (tâches planifiées) : lit la langue
         /// d'affichage Emby (<c>ServerConfiguration.UICulture</c>) via
@@ -134,6 +216,41 @@ namespace LLM_AI
             }
             catch { /* repli anglais */ }
             return En;
+        }
+
+        // ------------------------------------------------------------------
+        //  Prose du LLM (rapport d'audit, raisons des recommandations)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Nom de langue lisible par un LLM (ex. « French ») pour TOUTE la
+        /// <b>prose</b> du LLM — pastilles AI-Tonight, raisons des
+        /// recommandations, rapport d'audit, fiches mémoire, chat — injecté
+        /// via <see cref="LlmAgentService.BuildLanguageDirective"/>.
+        /// Règle usager (2026-10-01) :
+        /// <list type="number">
+        /// <item><see cref="PluginConfiguration.ResponseLanguage"/> TEL QUEL si
+        /// non vide (langue explicite choisie par l'usager — une valeur libre,
+        /// ex. « Nederlands », est comprise par le LLM même sans clé connue) ;</item>
+        /// <item>sinon langue de configuration de l'interface Emby
+        /// (<c>ServerConfiguration.UICulture</c> — « Auto » = langue de
+        /// l'interface) ;</item>
+        /// <item>sinon anglais (défaut Emby si la locale est illisible).</item>
+        /// </list>
+        /// Différence assumée avec les métadonnées (<see cref="ResolveMetaLangKey"/>) :
+        /// PAS de saut legacy <see cref="PluginConfiguration.TmdbLanguage"/> pour
+        /// la prose — l'interface est la seule source en Auto. Les infos EPG
+        /// (titres, chaînes, horaires) ne se traduisent JAMAIS : la prose
+        /// enrichit autour, dans la langue résolue ici.
+        /// Historique : la prose passait <c>ResponseLanguage</c> brut à
+        /// <c>BuildLanguageDirective</c> — vide = AUCUNE directive, et un
+        /// modèle a dérivé en chinois (terrain 2026-10-01, glm-5.3-flash).
+        /// </summary>
+        internal static string ResolveProseLangName(PluginConfiguration cfg, IServerApplicationHost host)
+        {
+            if (cfg != null && !string.IsNullOrWhiteSpace(cfg.ResponseLanguage))
+                return cfg.ResponseLanguage.Trim();
+            return ToLangName(ResolveDisplayLangKey(host));
         }
 
         // ------------------------------------------------------------------

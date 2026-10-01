@@ -184,6 +184,18 @@ namespace LLM_AI
 
             if (strmCard) return Status.Skipped;
 
+            // Langue de la fiche S1/S2/S3 (règle usager 2026-10-01 : configs
+            // Emby en premier) : langue préférée de la bibliothèque de
+            // l'item, sinon langue du PROGRAMME (synopsis du guide, titre en
+            // repli — chaîne FR → fiche FR, chaîne EN → fiche EN, comportement
+            // validé d'Emby lui-même), sinon langue usager (comportement
+            // historique inchangé, ordre de cascade compris).
+            string metaLang = ResolveItemMetaTmdb(item, truth);
+            string effTmdb = metaLang ?? userTmdb;
+            if (metaLang != null && !string.Equals(metaLang, userTmdb, StringComparison.OrdinalIgnoreCase))
+                _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — fiche recherchée en {1} (langue du contenu), langue usager {2}.",
+                    truth?.Title ?? itemName, metaLang, userTmdb);
+
             // Audit des taggés « revenus avec ids » : Emby identifie parfois un
             // item APRÈS qu'il a été taggé introuvable/besoin-revue — parfois
             // à tort (homonyme). Option OrphanAuditTaggedIds (opt-in) : la
@@ -192,7 +204,7 @@ namespace LLM_AI
             // uniquement : avec vérité EPG (RecordingWatcher), l'audit Emby à
             // juge synopsis ci-dessous reste la voie supérieure.
             if (truth == null && !orphan && (taggedReview || taggedNotFound) && cfg.OrphanAuditTaggedIds)
-                return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, userTmdb, verbose, ct).ConfigureAwait(false);
+                return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, effTmdb, verbose, ct).ConfigureAwait(false);
 
             if (tagged) return Status.Skipped;
 
@@ -201,19 +213,18 @@ namespace LLM_AI
             if (!orphan)
             {
                 if (truth == null || taggedIdentified) return Status.Skipped;
-                return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, userTmdb, verbose, ct).ConfigureAwait(false);
+                return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, effTmdb, metaLang, verbose, ct).ConfigureAwait(false);
             }
 
             string epgTitle = truth?.Title ?? itemName;
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
             // Orphelin pur : S0 (Emby natif) puis S1→S2→S3.
-            var langs = new[] { "en-US", "fr-FR", userTmdb }
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var langs = BuildLangCascade(metaLang, userTmdb);
             bool allowS0 = cfg.OrphanEmbyFirstPass && _providers != null;
             var trace = new PipelineTrace();
             var meta = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
-                allowS0, langs, userTmdb, dry, trace, ct).ConfigureAwait(false);
+                allowS0, langs, effTmdb, dry, trace, ct).ConfigureAwait(false);
 
             // Repli de type « film importé comme série » : Emby type l'import
             // DVR d'après le guide — un film/documentaire diffusé avec des
@@ -240,7 +251,7 @@ namespace LLM_AI
             {
                 var movieTrace = new PipelineTrace { SawCandidates = trace.SawCandidates };
                 meta = await ResolvePipelineAsync(item, truth, cfg, "movie", false,
-                    allowS0, langs, userTmdb, dry, movieTrace, ct, crossKind: true).ConfigureAwait(false);
+                    allowS0, langs, effTmdb, dry, movieTrace, ct, crossKind: true).ConfigureAwait(false);
                 trace = movieTrace;
                 if (meta != null)
                     _logger?.Info(
@@ -261,6 +272,66 @@ namespace LLM_AI
         //  S1 (TMDB multilingue) → S2 (LLM) → S3 (SearXNG). Applique le
         //  candidat retenu (ou pose needs-review). Retourne null si non résolu.
         // ------------------------------------------------------------------
+
+        // ------------------------------------------------------------------
+        //  Langue de la fiche S1/S2/S3 : config Emby d'abord, puis langue du
+        //  programme, sinon null (l'appelant garde la langue usager et
+        //  l'ordre de cascade historique).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Résout la langue TMDB de la fiche pour un item :
+        /// <list type="number">
+        /// <item><b>Config Emby d'abord</b> : langue préférée de la bibliothèque
+        /// de l'item (<c>PreferredMetadataLanguage</c> — l'usager la règle dans
+        /// Emby, le plugin la suit, jamais codée en dur). Par réflexion gardée :
+        /// <see cref="ILibraryManager"/> est compilé contre 4.10 —
+        /// <c>GetLibraryOptions(BaseItem)</c> peut manquer sur un serveur plus
+        /// vieux (un appel compilé lèverait MissingMethodException au JIT et
+        /// tuerait toute la chaîne, le repli ne courrait jamais).</item>
+        /// <item><b>Langue du programme</b> : synopsis EPG d'abord (langue de
+        /// l'entrée de guide = langue de la chaîne), titre en repli.</item>
+        /// </list>
+        /// Null si les deux échouent (bibliothèque sans langue — ex.
+        /// Recordings — et contenu indéterminé).
+        /// </summary>
+        private string ResolveItemMetaTmdb(BaseItem item, EpgTruth truth)
+        {
+            // 1) Config Emby : langue préférée de la bibliothèque de l'item.
+            if (item != null && _library != null)
+            {
+                try
+                {
+                    var m = _library.GetType().GetMethod("GetLibraryOptions", new[] { typeof(BaseItem) });
+                    var opts = m?.Invoke(_library, new object[] { item });
+                    var lang = opts?.GetType().GetProperty("PreferredMetadataLanguage")?.GetValue(opts) as string;
+                    var key = string.IsNullOrWhiteSpace(lang) ? null : I18n.LocaleToKey(lang);
+                    if (!string.IsNullOrEmpty(key))
+                        return I18n.ToTmdbLang(key);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : langue préférée de la bibliothèque illisible ({0}) — repli sur la langue du contenu.", ex.Message);
+                }
+            }
+
+            // 2) Langue du programme (synopsis du guide, titre en repli).
+            var det = I18n.DetectContentLangKey(truth?.Title ?? item?.Name, truth?.Overview ?? item?.Overview);
+            return det == null ? null : I18n.ToTmdbLang(det);
+        }
+
+        /// <summary>
+        /// Cascade de langues de recherche S1 : la langue du contenu (quand elle
+        /// est déterminée) en TÊTE — la fiche revient dans la langue du contenu et
+        /// son titre devient comparable au titre du guide pour la porte
+        /// lexicale. Indéterminé → ordre historique {en-US, fr-FR, usager}
+        /// strictement inchangé.
+        /// </summary>
+        private static string[] BuildLangCascade(string metaLang, string userTmdb) =>
+            (metaLang == null
+                ? new[] { "en-US", "fr-FR", userTmdb }
+                : new[] { metaLang, string.Equals(metaLang, "en-US", StringComparison.OrdinalIgnoreCase) ? "fr-FR" : "en-US", userTmdb })
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
         private async Task<TmdbMeta> ResolvePipelineAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool allowS0,
@@ -433,7 +504,7 @@ namespace LLM_AI
 
         private async Task<Status> AuditEmbyIdsAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool dry,
-            string userTmdb, bool verbose, CancellationToken ct)
+            string userTmdb, string metaLang, bool verbose, CancellationToken ct)
         {
             string epgTitle = string.IsNullOrWhiteSpace(truth.Title) ? item.Name : truth.Title;
             string epgSynopsis = truth.Overview;
@@ -522,7 +593,7 @@ namespace LLM_AI
             }
 
             await RevertToEpgAsync(item, truth, epgTitle, ct).ConfigureAwait(false);
-            var langs = new[] { "en-US", "fr-FR", userTmdb }.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var langs = BuildLangCascade(metaLang, userTmdb);
             // Trace pré-ensemencée : le juge vient de REJETER une fiche TMDB
             // réelle (celle de l'id d'Emby) — un candidat a été vu. L'échec du
             // re-pipeline reste donc needs-review, jamais introuvable.

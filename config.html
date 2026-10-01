@@ -1206,15 +1206,19 @@
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
                             <select is="emby-select" id="selAuditMode" label="Mode d'exécution de l'audit" data-i18n-label="cfg.audit.mode">
                                 <option value="single" data-i18n="cfg.audit.mode.single">Boucle agent (adaptatif — modèle costaud / cloud)</option>
-                                <option value="deterministic" data-i18n="cfg.audit.mode.deterministic">Déterministe + synthèse (modèle local / gemma4)</option>
+                                <option value="deterministic" data-i18n="cfg.audit.mode.deterministic">Déterministe + synthèse dosée (modèle local / gemma4)</option>
                             </select>
                             <div class="fieldDescription" data-i18n-html="cfg.audit.mode.desc">
                                 <b>single</b> : l'LLM appelle lui-même l'outil system_audit de façon adaptative (peut
                                 creuser un journal suite à un constat). Convient à un modèle puissant (cloud).
-                                <b>deterministic</b> : le plugin rassemble lui-même toutes les sondes (zéro LLM) puis
-                                un seul passage LLM <b>sans outils</b> synthétise le rapport — conçu pour un modèle
-                                local/modeste (ex. gemma4), qui synthétise bien du texte fourni mais gère mal
-                                l'orchestration multi-outils. Note : la <b>remédiation exécutable</b> n'est possible
+                                <b>deterministic</b> : le plugin rassemble lui-même toutes les sondes (zéro LLM), puis
+                                synthétise en <b>passes dosées sans outils</b> — une dose bornée par groupe de
+                                sections, croisements sonde↔journal pré-calculés en C# (« FAITS ÉTABLIS »), puis un
+                                assemblage final qui reprend les blocs rédigés. Conçu pour un modèle
+                                local/modeste (ex. gemma4) : orchestration retirée (son point faible — terrain :
+                                un batch d'actions en tableau expirait la boucle), fidélité des constats tenue par
+                                doses courtes. Une dose dont la synthèse échoue est repliée en bloc mécanique :
+                                le rapport sort toujours. Note : la <b>remédiation exécutable</b> n'est possible
                                 qu'en mode <b>single</b> (avec le flag de remédiation activé) ; en mode déterministe
                                 elle reste rapport-only.
                             </div>
@@ -1263,6 +1267,11 @@
                             <button is="emby-button" type="button" class="raised block" id="btnRunAudit" data-i18n="cfg.audit.run">
                                 Lancer l'audit santé
                             </button>
+                            <div class="fieldDescription" style="margin-top:0.5em;" data-i18n-html="cfg.audit.running.desc">
+                                L'audit s'exécute en <b>tâche de fond détachée</b> : vous pouvez quitter ou recharger la
+                                page, le run continue et le rapport est persisté à la fin. Les clics supplémentaires
+                                sont absorbés : ils ne relancent pas de nouveau run, ils reprennent la progression.
+                            </div>
                         </div>
                         <div id="auditReport" class="auditReport" style="display:none;"></div>
 

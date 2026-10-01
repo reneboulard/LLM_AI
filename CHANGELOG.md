@@ -10,6 +10,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.0] — 2026-10-01
+
+### Added (FR)
+- **`log_scan` : scan de motifs d'anomalies des journaux** (nouvelle action de
+  `system_audit`, zéro LLM dans la détection) : fenêtre des 3 fichiers
+  `embyserver*.txt` les plus récents (< 7 j), lecture ligne à ligne et groupement par
+  motif — exceptions groupées par classe (+ frame de pile), HTTP 4xx/5xx entrant
+  **et** sortant, échecs ffmpeg, échecs de fournisseurs de métadonnées + « Too Many
+  Requests », incidents Live TV/DVR (vocabulaire calibré sur un run réel : « Error
+  copying live stream », « Error getting channels »), scans de bibliothèque, signal
+  `[LLM_AI]` groupé par signature, refus d'authentification + verrouillages
+  temporaires, probes bénins. Le profil `{error, fatal, warn}` est accompagné de ses
+  **lignes témoins brutes** (5/3/3) : un compte n'est jamais nu, le rapport dit ce
+  qu'étaient les lignes, même bénignes.
+- **Mode `deterministic` dosé** : le rapport n'est plus synthétisé en une passe mais
+  rédigé **en 7 doses de sections + un assemblage final** (un bloc Markdown par
+  dose, prompt court et borné). **Fidélité dosée** : chaque constat est cité sous sa
+  sévérité d'origine (🔴/⚠️/ℹ️/✅, les bénins compris — omission interdite), les
+  valeurs (noms de comptes, nombres, âges, états) reprises **telles quelles** du
+  JSON — jamais recomptées, arrondies ni interprétées. Conçu pour un modèle local
+  modeste : les règles tiennent dans un contexte étroit.
+- **Audit non bloquant (single-flight + run détaché)** : le bouton « Lancer l'audit »
+  répond immédiatement et le run continue en arrière-plan — fermer la page ne
+  l'interrompt pas, le rapport est persisté à l'arrivée (relecture gratuite). Une
+  rafale de clics ne lance qu'un seul run ; la page affiche la progression
+  (« Dose n/7 »).
+- **`security_check` étendu** : sonde de mot de passe **suspendue près du seuil de
+  verrouillage d'Emby** (~5 échecs) et jamais comptée dans ses échecs internes (la
+  sonde ne peut plus verrouiller un compte), comptes administrateurs multiples
+  (constat info), clés API Emby avec âge, dernière utilisation et niveau
+  admin-équivalent.
+- **`upnp_check` à constats structurés** : les trois issues de la sonde portent un
+  tableau `findings` avec sévérité explicite — routeur silencieux = constat **ok**
+  (« ÉTAT SAIN, jamais critique »), passerelle sans URL de contrôle = info,
+  mappings = verdict par mapping. La sévérité vient de la structure C#, jamais du
+  jugement du modèle.
+- **Langue des fiches S1/S2/S3** : la fiche TMDB suit la langue du **contenu** —
+  langue de la bibliothèque Emby (`PreferredMetadataLanguage`) d'abord, sinon langue
+  du programme (synopsis EPG, titre en repli — détection déterministe, zéro LLM),
+  sinon langue de l'usager (comportement historique inchangé). La langue retenue
+  passe en tête de la cascade S1 : le titre de la fiche devient comparable au titre
+  du guide pour la porte d'acceptation. Les pastilles `.strm` restent dans la langue
+  de l'usager (règle inchangée).
+
+### Changed (FR)
+- **Règle de langue v2 (`ResponseLanguage`)** : `Auto` (vide) résout désormais en
+  **langue de l'interface Emby** (`UICulture`, repli anglais) au lieu de n'injecter
+  aucune directive ; une valeur explicite est respectée telle quelle. La directive
+  est injectée sur **tous** les chemins de prose (raisons des recos, pastilles
+  `.strm`, chat, rapport audit — modes single et dosé —, analyse, fiche mémoire) et
+  demande de **recopier les infos EPG telles quelles** — jamais de traduction des
+  titres/synopsis du guide.
+
+### Fixed (FR)
+- **`disk_storage` : faux 100 % sur montages squashfs/LXC** — sous LXC, les snaps
+  arrivent en `fuse` avec `total > 0` mais `free = 0` : le calcul de pourcentage
+  fabriquait un 🔴 « disque plein » sur `/snap`. Les montages `squashfs`/`fuse` et
+  les capacités `<= 0` sont exclus (comptés dans `excluded_*`, visibles dans le
+  rapport).
+- **Rapport dosé : ligne journaux vide** — le LLM ne parodiait plus le compte nu du
+  profil (`1 warning (profil: …)`) : les témoins et les motifs non vides sont cités
+  (règle de dose dédiée), le constat dit ce qu'étaient les lignes.
+- **`TryGetInt32`** levait sur les champs JSON non numériques — garde `ValueKind`
+  partout (parsing télémétrie).
+
+### Added (EN)
+- **`log_scan`: log anomaly pattern scan** (new `system_audit` action, zero LLM in
+  the detection): window of the 3 most recent `embyserver*.txt` files (< 7 days),
+  line-by-line reading grouped by pattern — exceptions grouped by class (+ stack
+  frame), ingress **and** egress HTTP 4xx/5xx, ffmpeg failures, metadata-provider
+  failures + "Too Many Requests", Live TV/DVR incidents (vocabulary calibrated on a
+  real run: "Error copying live stream", "Error getting channels"), library scans,
+  `[LLM_AI]` signal grouped by signature, authentication denials + temporary
+  lockouts, benign probes. The `{error, fatal, warn}` profile comes with its **raw
+  witness lines** (5/3/3): never a bare count — the report says what the lines were,
+  even benign ones.
+- **Dosed `deterministic` mode**: the report is no longer synthesized in one pass
+  but drafted in **7 section doses + one final assembly** (one Markdown block per
+  dose, short bounded prompt). **Dosed fidelity**: every finding is cited at its
+  original severity (🔴/⚠️/ℹ️/✅, benign ones included — omitting is forbidden), and
+  values (account names, numbers, ages, states) are copied **verbatim** from the
+  JSON — never recounted, rounded or interpreted. Designed for a modest local model:
+  the rules fit in a narrow context.
+- **Non-blocking audit (single-flight + detached run)**: the "Run health audit"
+  button answers immediately and the run keeps going in the background — closing
+  the page does not interrupt it, the report is persisted on arrival (free re-read).
+  A burst of clicks starts only one run; the page shows progress ("Dose n/7").
+- **Extended `security_check`**: password probe **suspended near Emby's lockout
+  threshold** (~5 failures) and never counted in its internal failures (the probe
+  can no longer lock an account), multiple administrator accounts (info finding),
+  Emby API keys with age, last use and admin-equivalent level.
+- **`upnp_check` with structured findings**: all three probe outcomes carry a
+  `findings` array with an explicit severity — silent router = **ok** finding
+  ("HEALTHY STATE, never critical"), gateway without a control URL = info,
+  mappings = verdict per mapping. Severity comes from the C# structure, never from
+  the model's judgment.
+- **S1/S2/S3 fiche language**: the TMDB fiche follows the **content's** language —
+  Emby library language (`PreferredMetadataLanguage`) first, else the program's
+  language (EPG synopsis, title fallback — deterministic detection, zero LLM), else
+  the user's language (historical behavior unchanged). The retained language goes
+  first in the S1 cascade: the fiche title becomes comparable to the guide title for
+  the acceptance gate. `.strm` cards stay in the user's language (rule unchanged).
+
+### Changed (EN)
+- **Language rule v2 (`ResponseLanguage`)**: `Auto` (empty) now resolves to the
+  **Emby interface language** (`UICulture`, English fallback) instead of injecting
+  no directive; an explicit value is honored as-is. The directive is injected on
+  **every** prose path (reco reasons, `.strm` cards, chat, audit report — single and
+  dosed modes —, analysis, memory card) and asks to **copy EPG information
+  verbatim** — never translate guide titles/synopses.
+
+### Fixed (EN)
+- **`disk_storage`: fake 100 % on squashfs/LXC mounts** — under LXC, snaps come in
+  as `fuse` with `total > 0` but `free = 0`: the percentage math fabricated a 🔴
+  "disk full" on `/snap`. `squashfs`/`fuse` mounts and `<= 0` capacities are now
+  excluded (counted in `excluded_*`, visible in the report).
+- **Dosed report: empty log line** — the LLM no longer parrots the profile's bare
+  count (`1 warning (profil: …)`): witnesses and non-empty patterns are cited
+  (dedicated dose rule), the finding says what the lines were.
+- **`TryGetInt32`** threw on non-numeric JSON fields — `ValueKind` guard everywhere
+  (telemetry parsing).
+
 ## [1.14.1.0] — 2026-09-30
 
 ### Added (FR)

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -94,7 +95,11 @@ namespace LLM_AI
                     "security_check (sécurité : mots de passe des comptes/admins, accès distant et HTTPS, " +
                     "UPnP, en-têtes proxy, preuves d'accès externe — sessions actives ET historique des appareils " +
                     "avec IP publique ; si un accès externe est observé, les avertissements sont rehaussés critique " +
-                    "— constats severity critique/avertissement/ok avec correctif), " +
+                    "— constats severity critique/avertissement/ok avec correctif ; en plus : sonde contrôlée de " +
+                    "mots de passe triviaux IN-PROCESS sur les comptes admin uniquement (liste fermée bornée — " +
+                    "jamais le login HTTP, jamais le hash, valeur matchante jamais divulguée), corrélation " +
+                    "inter-audits « mot de passe récemment défini », inventaire des clés API Emby actives — " +
+                    "credential admin-équivalent permanent, rotation conseillée si ancienne), " +
                     "upnp_check (interroge le routeur en UPnP : passerelle détectée ? IP WAN externe ? table de " +
                     "redirection de ports — UN MAPPING VERS LE PORT EMBY 8096/8920 EST CRITIQUE ; lecture seule, " +
                     "n'ajoute/supprime JAMAIS de mapping ; attention : les redirections manuelles du routeur sont " +
@@ -220,7 +225,9 @@ namespace LLM_AI
                 {
                     case "server_info":      result = await ServerInfoAsync(ct).ConfigureAwait(false); break;
                     case "system_config":   result = SystemConfig(); break;
-                    case "security_check":   result = SecurityCheck(); break;
+                    // async depuis v-next : la sonde de mots de passe triviaux
+                    // attend le chemin d'auth in-process des comptes admin.
+                    case "security_check":   result = await SecurityCheckAsync(ct).ConfigureAwait(false); break;
                     case "upnp_check":       result = await UpnpCheckAsync(ct).ConfigureAwait(false); break;
                     case "active_sessions":  result = ActiveSessions(args); break;
                     case "scheduled_tasks":   result = ScheduledTasks(args); break;
@@ -763,6 +770,22 @@ namespace LLM_AI
             @"fail|error|lost|perdu|échou|abort|timeout|unavailable|indisponible",
             RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+        // Échecs d'authentification par compte et verrouillages — motif
+        // « authentification » de log_scan. Base du croisement déterministe
+        // avec security_check.password_probe (FAITS ÉTABLIS de l'audit dosé,
+        // 2026-10-01) : avant, les « has been denied » n'étaient vus que dans
+        // le tail brut, sans comptage par compte — le LLM devait croiser à la
+        // louche deux sections lointaines. Terrain : la sonde émet au plus
+        // ProbeAttemptCap refus par compte par run (signature à reconnaître) ;
+        // « Temporarily locking out user X » (chaîne field-verified 2026-10-01)
+        // ne peut PAS venir de la sonde = échecs répétés réels.
+        private static readonly Regex s_authDeniedRe = new(
+            @"Authentication request for (?<acct>.+?) has been denied",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex s_lockoutRe = new(
+            @"Temporarily locking out user (?<acct>.+?) due to",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         /// <summary>
         /// Emby 4.10 enrobe IP et tokens de caractères invisibles
         /// (U+200C/U+200D — anti-copie ; constat terrain 2026-10-01 : un grep
@@ -816,11 +839,19 @@ namespace LLM_AI
             var ffmpegFail = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
             var provFail = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
             var llmIssues = new Dictionary<string, ScanHit>(StringComparer.Ordinal);
+            var authDenied = new Dictionary<string, ScanHit>(StringComparer.Ordinal); // compte → refus (« has been denied »)
+            var authLockouts = new Dictionary<string, ScanHit>(StringComparer.Ordinal); // compte → « Temporarily locking out »
             var liveDvr = new ScanHit();
             var libScan = new ScanHit();
             var tooMany = new ScanHit();
             int benignProbes = 0;
             int totalLines = 0, errorLines = 0, fatalLines = 0, warnLines = 0;
+            // Témoins bruts des compteurs du profil (terrain 18:36 : le modèle
+            // ne pouvait rien dire d'un « warn:1 » nu). Bornés : 5 warn / 3
+            // error / 3 fatal — au-delà, les motifs groupés portent le détail.
+            var warnWitnesses = new List<string>();
+            var errWitnesses = new List<string>();
+            var fatalWitnesses = new List<string>();
             string oldest = null, newest = null;
             var fileRows = new List<object>();
 
@@ -889,10 +920,10 @@ namespace LLM_AI
                     totalLines++;
                     if (oldest == null) oldest = ts;
                     newest = ts;
-                    if (lvl == "Warn") warnLines++;
+                    if (lvl == "Warn") { warnLines++; if (warnWitnesses.Count < 5) warnWitnesses.Add(witness); }
                     bool isError = lvl == "Error", isFatal = lvl == "Fatal";
-                    if (isError) errorLines++;
-                    if (isFatal) fatalLines++;
+                    if (isError) { errorLines++; if (errWitnesses.Count < 3) errWitnesses.Add(witness); }
+                    if (isFatal) { fatalLines++; if (fatalWitnesses.Count < 3) fatalWitnesses.Add(witness); }
                     bool isBad = isError || isFatal;
 
                     // ---- Exceptions : Error/Fatal + bloc attaché ----------
@@ -925,6 +956,24 @@ namespace LLM_AI
                             if (!httpIn.TryGetValue(key, out var hh)) { hh = new ScanHit(); httpIn[key] = hh; }
                             hh.Add(ts, "http/1.1 Response " + key + " to " + ip);
                         }
+                    }
+
+                    // ---- Authentification : refus par compte + verrouillages --
+                    // StripInvisibles obligatoire : Emby 4.10 enrobe aussi les
+                    // noms d'usager de U+200C/U+200D (note_ip).
+                    var ad = s_authDeniedRe.Match(txt);
+                    if (ad.Success)
+                    {
+                        string acct = StripInvisibles(ad.Groups["acct"].Value);
+                        if (!authDenied.TryGetValue(acct, out var ah)) { ah = new ScanHit(); authDenied[acct] = ah; }
+                        ah.Add(ts, witness);
+                    }
+                    var lk = s_lockoutRe.Match(txt);
+                    if (lk.Success)
+                    {
+                        string acct = StripInvisibles(lk.Groups["acct"].Value);
+                        if (!authLockouts.TryGetValue(acct, out var lhh)) { lhh = new ScanHit(); authLockouts[acct] = lhh; }
+                        lhh.Add(ts, witness);
                     }
 
                     // ---- ffmpeg / ffprobe / sondes -------------------------
@@ -1052,6 +1101,20 @@ namespace LLM_AI
                 },
                 new
                 {
+                    motif = "authentification",
+                    gravite_suggeree = authDenied.Count == 0 && authLockouts.Count == 0 ? null
+                        : (authLockouts.Count > 0 ? "critique si surface exposée (voir security_check)" : "info"),
+                    comptage = authDenied.Values.Sum(h => h.Count),
+                    par_compte = authDenied.Count == 0 ? null : authDenied.OrderByDescending(kv => kv.Value.Count)
+                        .Select(kv => new { cle = kv.Key, compte = kv.Value.Count, premier = kv.Value.First, dernier = kv.Value.Last, temoins = kv.Value.Witnesses.ToArray() }).ToArray(),
+                    verrouillages = authLockouts.Count == 0 ? null : authLockouts
+                        .Select(kv => new { cle = kv.Key, compte = kv.Value.Count, premier = kv.Value.First, temoins = kv.Value.Witnesses.ToArray() }).ToArray(),
+                    note = "Refus d'authentification par compte (« Authentication request for X has been denied ») et verrouillages « Temporarily locking out », comptés en C# exactement. " +
+                        "Croisement déterministe avec security_check.password_probe : au plus 3 refus par compte par audit = signature de la sonde (ses tentatives contrôlées), PAS une intrusion ; " +
+                        "un « Temporarily locking out » ne peut PAS venir de la sonde = échecs répétés réels. La remise à zéro du compteur se fait UNIQUEMENT par une connexion réussie du compte."
+                },
+                new
+                {
                     motif = "http_sortant_4xx_5xx",
                     gravite_suggeree = httpOut.Count == 0 ? null
                         : (httpOut.Keys.Any(k => k.StartsWith("5", StringComparison.Ordinal)) ? "avertissement" : "info"),
@@ -1124,7 +1187,20 @@ namespace LLM_AI
                     plus_recente_ligne = newest,
                     lignes_lues = totalLines
                 },
-                profil = new { error = errorLines, fatal = fatalLines, warn = warnLines },
+                // Terrain 18:36 : le profil NU ne dit rien (« 1 warning ») —
+                // le modèle n'avait que le chiffre à parodier. Témoins bruts
+                // (ligne complète tronquée à 200 car.) : la dose peut dire CE
+                // QUE c'est (catégorie + propos), même bénin.
+                profil = new
+                {
+                    error = errorLines, fatal = fatalLines, warn = warnLines,
+                    temoins_error = errWitnesses.Count == 0 ? null : errWitnesses.ToArray(),
+                    temoins_fatal = fatalWitnesses.Count == 0 ? null : fatalWitnesses.ToArray(),
+                    temoins_warn = warnWitnesses.Count == 0 ? null : warnWitnesses.ToArray(),
+                    note_profil = "Témoins bruts (max 5 warn / 3 error / 3 fatal) : un compte nu ne dit rien — " +
+                        "cite de quoi il s'agit (catégorie + propos), même bénin ; un témoin déjà couvert par " +
+                        "un motif renvoie à son groupe."
+                },
                 motifs,
                 note_fenetre = "Fenêtre finie : l'absence de motif dans l'échantillon ne prouve PAS l'absence de problème antérieur. Comptages exacts en C# (zéro LLM dans la détection) — reprends-les TELS QUELS, ne les recompte pas.",
                 note_http = "Codes HTTP observables à la verbosité par défaut (correction terrain : l'exercice du 2026-10-01 cherchait « HTTP Response », la vraie casse est « Http response »/« http/1.1 Response »).",
@@ -1392,14 +1468,32 @@ namespace LLM_AI
         /// </summary>
         private async Task<string> DiskStorageAsync(JsonElement args, CancellationToken ct)
         {
-            var drives = DriveInfo.GetDrives()
+            // Filtre squashfs (terrain 2026-10-01 : les mounts /snap/… readonly
+            // rapportent TOUJOURS 100% utilisé ; une passe LLM en a tiré un faux
+            // 🔴 « Capacité maximale atteinte » + une action urgente absurde).
+            // A-v3 (terrain 18:25) : sous LXC, les images snap ne sont PAS du
+            // squashfs — elles arrivent en fuse (fuse.snapfuse) avec total>0 et
+            // free=0 → used_pct=100 servi à chaque audit (le modèle a ré-mordu
+            // au run 18:25) ; le préfixe /snap/ est le propre de snapd (images
+            // système read-only). Filtre capacité nulle (A-v2, terrain 17:09) :
+            // sur un hôte LXC, lxcfs/efivars rapportent total_bytes=0 — appât
+            // vivant pour les modèles naïfs. On retire ces volumes du JSON et
+            // on compte ce qui est retiré : l'appât n'existe plus, au lieu
+            // d'espérer que le modèle l'ignore.
+            var allReady = DriveInfo.GetDrives()
                 .Where(d => d.IsReady)
                 .OrderByDescending(d => d.Name.Length)   // match préfixe le plus spécifique
+                .ToArray();
+            bool IsSquash(DriveInfo d) =>
+                "squashfs".Equals(d.DriveFormat, StringComparison.OrdinalIgnoreCase)
+                || (d.Name ?? "").StartsWith("/snap/", StringComparison.Ordinal);
+            var drives = allReady
+                .Where(d => !IsSquash(d) && d.TotalSize > 0)
                 .Select(d =>
                 {
-                    // TotalSize peut valoir 0 (volume réseau/ram mal reporté) :
-                    // division par zéro → +Infinity → JsonSerializer lève. On garde
-                    // 0 dans ce cas plutôt que de planter l'audit entier.
+                    // TotalSize ne peut plus être nul après le filtre ci-dessus :
+                    // la garde reste défensive (division par zéro → +Infinity →
+                    // JsonSerializer lèverait).
                     long total = d.TotalSize;
                     long free = d.AvailableFreeSpace;
                     return new
@@ -1414,6 +1508,14 @@ namespace LLM_AI
                     };
                 })
                 .ToArray();
+            var excludedSquashfs = allReady
+                .Where(IsSquash)
+                .Select(d => d.Name)
+                .ToArray();
+            var excludedZeroCapacity = allReady
+                .Where(d => !IsSquash(d) && d.TotalSize <= 0)
+                .Select(d => d.Name)
+                .ToArray();
 
             // Mapping chemins Emby → volume (préfixe le plus spécifique).
             // ResolveEmbyPathsAsync : SystemInfo si dispo, sinon repli via les
@@ -1422,8 +1524,7 @@ namespace LLM_AI
             var pathMap = new List<object>();
             if (paths.Count > 0)
             {
-                var allDrives = DriveInfo.GetDrives().Where(d => d.IsReady)
-                    .OrderByDescending(d => d.Name.Length).ToArray();
+                var allDrives = allReady;   // déjà trié préfixe-spécifique, squashfs déjà identifié
                 foreach (var kv in paths)
                 {
                     if (string.IsNullOrWhiteSpace(kv.Value)) continue;
@@ -1454,6 +1555,22 @@ namespace LLM_AI
             return JsonSerializer.Serialize(new
             {
                 drives,
+                excluded_readonly_fs = excludedSquashfs.Length == 0 ? null : new
+                {
+                    count = excludedSquashfs.Length,
+                    mounts = excludedSquashfs,
+                    note = "images système read-only (snap) : squashfs sur un hôte normal, " +
+                        "fuse-snap sous LXC — l'usage rapporté (100%) est un artefact du mapping, " +
+                        "pas une pression réelle — retirés volontairement (faux positifs de capacité, terrain 2026-10-01)"
+                },
+                excluded_zero_capacity = excludedZeroCapacity.Length == 0 ? null : new
+                {
+                    count = excludedZeroCapacity.Length,
+                    mounts = excludedZeroCapacity,
+                    note = "volumes rapportant une capacité totale nulle (ex. pseudo-filesystems lxcfs/efivars " +
+                        "sur un hôte LXC) : total/usage sans signification pour Emby — retirés volontairement " +
+                        "(terrain 2026-10-01)"
+                },
                 emby_paths = pathMap,
                 transcode_temp_bytes = transcodeSize,
                 transcode_temp_size_truncated = sizeTruncated
@@ -1779,6 +1896,25 @@ namespace LLM_AI
                     },
                     scanned_movie_series = scanned,
                     sample_cap_reached = capped,
+                    findings = needsReview > 0
+                        ? new object[]
+                        {
+                            new
+                            {
+                                severity = "avertissement",
+                                title = "Items du plugin à réviser (llmai-needs-review)",
+                                detail = needsReview + " item(s) — candidats de métadonnées trouvés mais rejetés : " +
+                                    (needsReview - dvrReview) + " en bibliothèque régulière, " + dvrReview + " en DVR. " +
+                                    "Révision humaine possible : re-identifier avec le bon candidat ou retirer le tag ; " +
+                                    "le retry nocturne peut relancer l'identification si activé. PAS une erreur du plugin : " +
+                                    "les candidats ont été écartés prudemment.",
+                                fix = "Revoir la liste des items à réviser dans le plugin : valider un candidat correct ou le débannir (retirer le tag)."
+                            }
+                        }
+                        : new object[]
+                        {
+                            new { severity = "ok", title = "Aucun item du plugin à réviser", detail = "", fix = "" }
+                        },
                     note = "la bibliothèque régulière est le domaine d'Emby natif"
                 }
             }, s_json);
@@ -2002,6 +2138,45 @@ namespace LLM_AI
         ///   L'entité <c>User</c> n'a pas de HasPassword (le DTO REST l'ajoute)
         ///   : on teste <c>Password</c>/<c>Salt</c> vides, sans jamais exposer
         ///   le hash.</item>
+        /// <item><b>Sonde « mot de passe trivial » (admins uniquement)</b> :
+        ///   le trou entre « sans mdp » (déjà détecté) et « mdp = 1234 »
+        ///   (invisible). Vérification in-process via le chemin d'auth du
+        ///   compte — la signature <c>IUserManager.AuthenticateUser</c>
+        ///   (validée 4.10.1 ; réflexion avec repli « info non vérifiable »
+        ///   pour les builds qui differeraient). JAMAIS le login HTTP, jamais
+        ///   le hash exposé (seul le booléen de match ; la valeur matchante
+        ///   n'est pas divulguée). Liste fermée bornée (~40 candidats :
+        ///   triviaux universels + nom du compte, nom du serveur, « emby »,
+        ///   « test ») — honnêteté codée : l'absence de match ne prouve PAS
+        ///   la force. Constat ⚠️ à la base, 🔴 via l'escalade d'exposition
+        ///   existante. Sonde divulguée dans le constat (« sonde contrôlée
+        ///   effectuée » — les échecs d'auth du journal de ce run, s'ils
+        ///   existent, sont ceux de la sonde, PAS une intrusion). Usagers
+        ///   ordinaires NON sondés.</item>
+        /// <item><b>Corrélation inter-runs « mot de passe récemment défini »</b> :
+        ///   snapshot persisté en fin de security_check (<c>LLM_AI_audit_accounts.json</c>
+        ///   dans le dossier de configuration du plugin — écrit par Emby, pas
+        ///   de gotcha chown). Diff au run suivant → constat info : un mot de
+        ///   passe est apparu sur X depuis le dernier audit — corrélation
+        ///   honnête, jamais une accusation (ce design REMPLACE le besoin
+        ///   d'un cache événementiel <c>UserPasswordChanged</c>, l'audit-only
+        ///   n'en a pas).</item>
+        /// <item><b>Clés API Emby</b> (inventaire) : une clé API est un
+        ///   credential ADMIN-ÉQUIVALENT PERMANENT. Lecture réflexion-safe de
+        ///   l'<c>IAuthenticationRepository</c> (records actifs sans usager,
+        ///   ≈ la page /Auth/Keys du dashboard — validé 2026-10-01) ; ⚠️ si
+        ///   clés actives + rotation conseillée au-delà de ~6 mois
+        ///   (<c>DateCreated</c>) et dernier usage lisible
+        ///   (<c>DateLastActivity</c>) ; le token lui-même n'est JAMAIS
+        ///   exposé. Fallback = inventaire « non vérifiable », jamais une
+        ///   erreur.</item>
+        /// <item><b>Plusieurs admins / pratique</b> : plus d'un compte admin
+        ///   actif → constat info NON-jugeant (deux admins légitimes ne sont
+        ///   pas un avertissement : la bonne pratique reste un seul compte
+        ///   admin sécurisé + des comptes usagers). Le libellé « Administrateur
+        ///   sans mot de passe » liste les conséquences plugin : le chat admin
+        ///   dépense des tokens LLM et expose system_audit (chemins, disques,
+        ///   journaux, sessions) et la fiche mémoire est éditable.</item>
         /// <item><b>Réseau</b> : accès distant sans HTTPS, HTTPS activé sans
         ///   certificat, UPnP (ouverture de ports automatique),
         ///   <c>ProxyHeaderMode != None</c> sans reverse proxy (en-têtes
@@ -2040,7 +2215,7 @@ namespace LLM_AI
         /// honnête : l'ABSENCE de visite ne prouve pas la non-exposition
         /// (port ouvert jamais scanné) ; le <c>note</c> le rappelle. Ne lève pas.
         /// </summary>
-        private string SecurityCheck()
+        private async Task<string> SecurityCheckAsync(CancellationToken ct)
         {
             // Constats stockés en tuples mutables : la passe d'escalade (accès
             // externe observé → avertissement rehaussé critique) réécrit la
@@ -2050,9 +2225,13 @@ namespace LLM_AI
                 findings.Add((severity, title, detail ?? "", fix ?? ""));
 
             // ---- Comptes & mots de passe --------------------------------
-            int totalUsers = 0, disabledUsers = 0;
+            int totalUsers = 0, disabledUsers = 0, adminCount = 0;
+            bool usersRead = false;
+            var adminNames = new List<string>();        // noms des admins actifs (verbatim dans les constats)
             var adminsNoPassword = new List<string>();
             var usersNoPassword = new List<string>();
+            var adminsToProbe = new List<string>();     // admins actifs AVEC mot de passe → sonde triviaux
+            var currentHasPassword = new Dictionary<string, bool>(StringComparer.Ordinal); // alimente le snapshot inter-runs
             try
             {
                 var users = _users.GetUserList(new UserQuery()) ?? Array.Empty<User>();
@@ -2061,15 +2240,27 @@ namespace LLM_AI
                     if (u == null) continue;
                     totalUsers++;
                     if (u.Policy?.IsDisabled == true) { disabledUsers++; continue; }
-                    // L'entité User n'expose pas HasPassword (le DTO REST l'ajoute) :
-                    // un compte sans mot de passe a Password/Salt vides. On ne sort
-                    // JAMAIS le hash lui-même — seulement le booléen.
-                    if (!string.IsNullOrEmpty(u.Password) || !string.IsNullOrEmpty(u.Salt))
-                        continue;
-                    usersNoPassword.Add(u.Name ?? u.Id.ToString());
+                    var name = u.Name ?? u.Id.ToString();
+                    // L'entité User n'expose pas HasPassword (le DTO REST
+                    // l'ajoute) : 4.10 écrit SHA1("") dans Password pour les
+                    // comptes SANS mot de passe (sentinelle, terrain 2026-10-01
+                    // users.db) — comptes sans mdp des builds anciens = champs
+                    // vides. IsPasswordSet couvre les deux ; le hash lui-même
+                    // ne sort JAMAIS — seulement le booléen.
+                    bool hasPassword = IsPasswordSet(u);
+                    currentHasPassword[name] = hasPassword;
+                    if (u.Policy?.IsAdministrator == true) { adminCount++; adminNames.Add(name); }
+                    if (!hasPassword)
+                    {
+                        usersNoPassword.Add(name);
+                        if (u.Policy?.IsAdministrator == true)
+                            adminsNoPassword.Add(name);
+                        continue;                    // sans mdp : déjà constaté ici — la sonde ne le teste pas
+                    }
                     if (u.Policy?.IsAdministrator == true)
-                        adminsNoPassword.Add(u.Name ?? u.Id.ToString());
+                        adminsToProbe.Add(name);
                 }
+                usersRead = true;
             }
             catch (Exception ex)
             {
@@ -2082,7 +2273,10 @@ namespace LLM_AI
                 if (adminsNoPassword.Count > 0)
                     Add("critique", "Administrateur sans mot de passe",
                         string.Join(", ", adminsNoPassword) +
-                        " — n'importe qui sur le réseau (ou Internet si exposé) obtient le rôle admin sans credential.",
+                        " — n'importe qui sur le réseau (ou Internet si exposé) obtient le rôle admin sans credential. " +
+                        "Dans ce plugin : le chat admin devient utilisable sans credential — dépense de tokens LLM et " +
+                        "exposition des données system_audit (chemins, disques, journaux, sessions) — et la fiche " +
+                        "mémoire du plugin est éditable.",
                         "Dashboard → Utilisateurs → sélectionner le compte → « Définir un mot de passe ».");
                 else
                     Add("ok", "Tous les administrateurs ont un mot de passe", null, null);
@@ -2092,6 +2286,280 @@ namespace LLM_AI
                         string.Join(", ", nonAdminNoPw) +
                         " — secret vide = aucune barrière si le compte a un accès (même local).",
                         "Dashboard → Utilisateurs → sélectionner chaque compte → « Définir un mot de passe ».");
+
+                // Plusieurs admins actifs : recommandation de pratique, info
+                // NON-jugeant (deux admins légitimes ne sont pas un défaut).
+                if (adminCount > 1)
+                    Add("info", "Plusieurs comptes administrateurs",
+                        adminCount + " comptes administrateurs actifs (" + string.Join(", ", adminNames) +
+                        ") — la bonne pratique est un seul compte admin sécurisé et des comptes usagers aux droits " +
+                        "réduits pour l'usage courant.", null);
+
+                // Corrélation inter-runs « mot de passe récemment défini » :
+                // diff contre le snapshot du run précédent (écrit en FIN de
+                // security_check, petit JSON à côté du LLM_AI.xml). Corrélation
+                // honnête, JAMAIS une accusation. Ce design REMPLACE le besoin
+                // d'un cache événementiel UserPasswordChanged (audit-only n'en
+                // a pas).
+                var previousHasPassword = LoadAccountsSnapshot(out var previousWrittenUtc);
+                if (previousHasPassword != null)
+                {
+                    var newlyProtected = new List<string>();
+                    foreach (var kv in currentHasPassword)
+                        if (kv.Value
+                            && previousHasPassword.TryGetValue(kv.Key, out var was) && !was)
+                            newlyProtected.Add(kv.Key);
+                    if (newlyProtected.Count > 0)
+                        Add("info", "Mot de passe récemment défini",
+                            "Un mot de passe est apparu sur " + string.Join(", ", newlyProtected) +
+                            " depuis le dernier audit" +
+                            (string.IsNullOrEmpty(previousWrittenUtc) ? "" : " (" + previousWrittenUtc + ")") +
+                            " — corrélation de snapshot, pas une accusation : si ce changement n'était pas vous, " +
+                            "vérifiez le compte.",
+                            null);
+                }
+            }
+
+            // ---- Sonde « mot de passe trivial » (admins uniquement) --------
+            // (décision 2026-10-01) Le trou entre « sans mdp » (déjà détecté
+            // ci-dessus) et « mdp = 1234 » (invisible). Vérification IN-PROCESS
+            // contre une liste fermée bornée via le chemin d'auth du compte —
+            // JAMAIS le login HTTP, jamais le hash exposé (seul le booléen de
+            // match), la valeur matchante JAMAIS divulguée. Usagers ordinaires
+            // NON sondés. Repli : signature AuthenticateUser introuvable →
+            // constat info, jamais une erreur (gotcha JIT des builds qui
+            // différencieraient — signature validée 4.10.1).
+            int probeScanned = 0, probeTried = 0;
+            var probeMatches = new List<string>();
+            var probeSuspended = new List<string>();    // comptes non sondés : verrouillé OU compteur d'échecs résiduel
+            var probeCapped = new List<string>();       // comptes dont la liste fermée dépasse le cap de tentatives
+            bool probeUnavailable = false;
+            bool probeLockoutHit = false;               // la sonde a déclenché le verrouillage malgré tout → stop net
+            if (usersRead && adminsToProbe.Count > 0)
+            {
+                string serverName = null;
+                try { serverName = _host.TryResolve<MediaBrowser.Controller.Configuration.IServerConfigurationManager>()?.Configuration?.ServerName; }
+                catch { }
+
+                var authMi = ResolveAuthenticateUser();
+                if (authMi == null)
+                {
+                    probeUnavailable = true;
+                }
+                else
+                {
+                    foreach (var name in adminsToProbe)
+                    {
+                        probeScanned++;
+
+                        // Pré-vérification par compte (terrain 2026-10-01) : Emby
+                        // verrouille TEMPORAIREMENT un compte au-delà de ~5 échecs
+                        // d'authentification (UserPolicy.InvalidLoginAttemptCount,
+                        // remis à zéro UNIQUEMENT par une connexion réussie du
+                        // compte — l'expiration du verrouillage rouvre l'accès
+                        // mais ne remet PAS le compteur). La sonde ne s'ajoute
+                        // JAMAIS à des échecs existants. On ne teste PAS
+                        // User.IsLockedOut/LockedOutDate : la date peut rester
+                        // non-nulle POUR TOUJOURS après un vieux verrouillage
+                        // déjà expiré (terrain 16:0x : René LockedOutDate=15:22
+                        // encore posé, login pourtant rétabli 15:42) — la lire
+                        // suspendrait le compte pour tous les audits futurs.
+                        User fresh = null;
+                        try { fresh = _users.GetUserByName(name); } catch { }
+                        if (fresh == null) continue;    // parti entre la lecture et la sonde
+                        int failedCount = 0;
+                        try { failedCount = fresh.Policy?.InvalidLoginAttemptCount ?? 0; }
+                        catch { failedCount = 0; }   // compteur non lisible sur cette build → 0
+                        if (failedCount > 0)
+                        {
+                            probeSuspended.Add(name + " (" + failedCount + " tentative(s) d'échec déjà comptée(s))");
+                            continue;
+                        }
+
+                        // Couverture PROGRESSIVE : ≤ ProbeAttemptCap tentatives par
+                        // compte et par run, sous le seuil de verrouillage ; le reste
+                        // de la liste fermée attend un run avec compteur à zéro.
+                        int triedForAccount = 0;
+                        foreach (var candidate in BuildTrivialCandidates(name, serverName))
+                        {
+                            if (triedForAccount >= ProbeAttemptCap)
+                            {
+                                probeCapped.Add(name);
+                                break;
+                            }
+                            triedForAccount++;
+                            probeTried++;
+                            if (await TrivialPasswordMatchAsync(name, candidate, ct).ConfigureAwait(false))
+                            {
+                                probeMatches.Add(name);
+                                break;   // premier match : stop pour ce compte — sonde contrôlée, JAMAIS un bruteforce
+                            }
+                            // Après chaque échec : si le compteur a mangé notre
+                            // cap ET des échecs concurrents (l'usager réel se
+                            // trompe pendant la sonde), on s'arrête — ne JAMAIS
+                            // ajouter l'échec qui ferait franchir le seuil
+                            // de verrouillage (~5, terrain 2026-10-01).
+                            User after = null;
+                            try { after = _users.GetUserByName(name); } catch { }
+                            int afterCount = 0;
+                            try { afterCount = after?.Policy?.InvalidLoginAttemptCount ?? 0; }
+                            catch { afterCount = triedForAccount; }
+                            if (afterCount >= ProbeLockoutMargin)
+                            {
+                                probeLockoutHit = true;
+                                break;
+                            }
+                        }
+                        if (probeLockoutHit) break;
+                    }
+                }
+            }
+            if (probeUnavailable)
+                Add("info", "Sonde de mot de passe trivial non exécutée",
+                    "La signature AuthenticateUser n'est pas reconnue sur cette version d'Emby — les mots de passe " +
+                    "triviaux des comptes admin ne sont pas vérifiables par cette sonde.", null);
+            if (probeSuspended.Count > 0)
+                Add("info", "Sonde de mot de passe suspendue pour certains comptes",
+                    "La sonde ne s'ajoute JAMAIS aux échecs d'authentification déjà comptés (Emby verrouille " +
+                    "temporairement un compte au-delà de ~5 échecs). Comptes non sondés ce run : " +
+                    string.Join(", ", probeSuspended) + ". Le compteur se remet à zéro UNIQUEMENT à la première " +
+                    "connexion réussie du compte (l'expiration du verrouillage rouvre l'accès sans remettre le " +
+                    "compteur — constaté 2026-10-01) ; la sonde reprendra alors, 3 tentatives au plus.", null);
+            if (probeLockoutHit)
+                Add("info", "Sonde interrompue : marge de verrouillage atteinte",
+                    "En cours de sonde, le compteur d'échecs d'un compte admin a atteint la marge de sécurité de " +
+                    "la sonde (" + ProbeLockoutMargin + " sur un seuil de verrouillage ~5) — échecs réels concurrents " +
+                    "ou résiduels : la sonde s'est arrêtée pour ne jamais ajouter l'échec qui ferait franchir le " +
+                    "seuil. Couverture partielle de la liste ce run ; le verrouillage d'Emby est temporaire et le " +
+                    "compteur se remet à zéro à la première connexion réussie du compte.", null);
+            if (probeMatches.Count > 0)
+                Add("avertissement", "Mot de passe trivial détecté (sonde contrôlée)",
+                    "Sonde contrôlée effectuée : " + probeTried + " tentatives d'authentification in-process sur " +
+                    probeScanned + " compte(s) admin, " + ProbeAttemptCap + " tentatives max par compte et par run " +
+                    "(sous le seuil de verrouillage ~5 d'Emby — couverture progressive entre runs) — jamais le login " +
+                    "HTTP, jamais le hash (seul le booléen de match), usagers ordinaires NON sondés. Le mot de passe de " +
+                    string.Join(", ", probeMatches) +
+                    " correspond à un candidat trivial de la liste fermée (valeur volontairement non divulguée). " +
+                    "Les tentatives d'authentification échouées éventuellement visibles dans le journal du serveur " +
+                    "au moment de cet audit (au plus " + ProbeAttemptCap + " par compte) proviennent de CETTE sonde, PAS d'une intrusion.",
+                    "Dashboard → Utilisateurs → sélectionner le compte → « Modifier le mot de passe ».");
+
+            // ---- Inventaire des clés API Emby ------------------------------
+            // Une clé API = credential ADMIN-ÉQUIVALENT PERMANENT (pas de
+            // session, pas de mot de passe, pas d'expiration). Inventaire des
+            // auth records actifs SANS usager (≈ /Auth/Keys du dashboard,
+            // validé 2026-10-01), lecture réflexion-safe (les shapes varient
+            // par build). Rotation conseillée au-delà de ~6 mois (seuil fixé
+            // à l'implémentation — décision 2026-10-01). Fallback = info,
+            // jamais une erreur.
+            bool apiKeyChecked = false;
+            int apiKeyCount = 0;
+            var apiKeyLabels = new List<string>();
+            var apiKeyTooOld = new List<string>();
+            try
+            {
+                var repo = _host.TryResolve<MediaBrowser.Controller.Security.IAuthenticationRepository>();
+                var queryType = Type.GetType("MediaBrowser.Controller.Security.AuthenticationInfoQuery, MediaBrowser.Controller");
+                var infoType = Type.GetType("MediaBrowser.Controller.Security.AuthenticationInfo, MediaBrowser.Controller");
+                if (repo != null && queryType != null && infoType != null)
+                {
+                    var q = Activator.CreateInstance(queryType);
+                    void SetQ(string prop, object val)
+                    {
+                        try { queryType.GetProperty(prop)?.SetValue(q, val, null); } catch { }
+                    }
+                    // HasUser=false ≈ /Auth/Keys (validé 2026-10-01 : la page du
+                    // dashboard ne renvoie que les records sans usager).
+                    SetQ("HasUser", false);
+                    SetQ("IsActive", true);
+                    SetQ("EnableTotalRecordCount", false);
+                    SetQ("Limit", 200);   // borne douce — quelques clés en pratique
+                    var qr = repo.Get((MediaBrowser.Controller.Security.AuthenticationInfoQuery)q);
+                    var items = qr?.Items;
+                    if (items != null)
+                    {
+                        apiKeyChecked = true;
+                        apiKeyCount = items.Length;
+                        foreach (var o in items)
+                        {
+                            if (o == null) continue;
+                            string S(string prop)
+                            {
+                                try { return infoType.GetProperty(prop)?.GetValue(o, null) as string; }
+                                catch { return null; }
+                            }
+                            DateTimeOffset? D(string prop)
+                            {
+                                try { return infoType.GetProperty(prop)?.GetValue(o, null) as DateTimeOffset?; }
+                                catch { return null; }
+                            }
+                            long IdOf()
+                            {
+                                try { return infoType.GetProperty("Id")?.GetValue(o, null) is long id ? id : 0L; }
+                                catch { return 0L; }
+                            }
+                            var app = S("AppName") ?? S("DeviceName");
+                            var created = D("DateCreated");
+                            var lastAct = D("DateLastActivity");
+                            var label = string.IsNullOrWhiteSpace(app) ? "clé #" + IdOf() : app.Trim();
+                            if (created.HasValue)
+                            {
+                                var age = DateTime.UtcNow - created.Value.ToUniversalTime();
+                                if (age.TotalDays >= ApiKeyRotationDays)
+                                    apiKeyTooOld.Add("\"" + label + "\" (créée le " +
+                                        created.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ")");
+                                label += ", âge " + (int)age.TotalDays + " j";
+                            }
+                            else
+                            {
+                                label += ", âge inconnu";   // honnêteté : inventaire sans âge
+                            }
+                            if (lastAct.HasValue)
+                                label += ", dernier usage il y a " +
+                                    (int)(DateTime.UtcNow - lastAct.Value.ToUniversalTime()).TotalDays + " j";
+                            apiKeyLabels.Add(label);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] system_audit security_check clés API : {0}", ex.Message);
+            }
+            if (!apiKeyChecked)
+                Add("info", "Inventaire des clés API non vérifiable",
+                    "IAuthenticationRepository / AuthenticationInfoQuery indisponibles sur cette version d'Emby — " +
+                    "les clés API actives n'ont pas pu être comptées.", null);
+            else if (apiKeyCount > 0)
+            {
+                var detail = apiKeyCount + " clé(s) API Emby active(s) : " + string.Join(" ; ", apiKeyLabels) +
+                    ". Une clé API est un credential ADMIN-ÉQUIVALENT PERMANENT : pas de session, pas de mot de " +
+                    "passe, pas d'expiration — elle contourne les contrôles par compte.";
+                if (apiKeyTooOld.Count > 0)
+                    detail += " Rotation conseillée (" + ApiKeyRotationDays + " j ou plus) : " +
+                        string.Join(", ", apiKeyTooOld) +
+                        " — créer une nouvelle clé, migrer les appels, retirer l'ancienne.";
+                // NB gouvernance fusionnée ici (terrain 2026-10-01 : les
+                // constats info isolés « multi-admins » sont tombés à la
+                // compression de synthèse sur 3 modèles et 2 pipelines ;
+                // ce constat ⚠️ a survécu à CHAQUE run — le fait y voyage).
+                if (adminCount > 1)
+                    detail += " NB gouvernance : " + adminCount + " comptes administrateurs actifs (" +
+                        string.Join(", ", adminNames) +
+                        ") — bonne pratique : un seul compte admin sécurisé, comptes usagers à droits réduits.";
+                Add("avertissement", "Clés API Emby actives",
+                    detail,
+                    "Dashboard → Avancé → Clés API : revoquer les clés qui ne servent plus ; ne les partager " +
+                    "qu'avec les applications qui en ont besoin.");
+            }
+            else if (apiKeyCount == 0 && adminCount > 1)
+            {
+                // Aucune clé active : le ⚠️ api-keys (porteur du NB gouvernance)
+                // n'existe pas — ancre de repli pour le même fait.
+                Add("info", "Gouvernance des administrateurs",
+                    adminCount + " comptes administrateurs actifs (" + string.Join(", ", adminNames) +
+                    ") : bonne pratique = un seul compte admin sécurisé et des comptes usagers aux droits réduits " +
+                    "(aucune clé API active).", null);
             }
 
             // ---- Configuration réseau -----------------------------------
@@ -2576,6 +3044,30 @@ namespace LLM_AI
             }
             bool publicAccessObserved = publicPeers.Count > 0 || publicDevices.Count > 0;
 
+            // ---- Snapshot inter-runs : écriture en FIN de security_check ----
+            // (le diff a été fait au DÉBUT contre le snapshot précédent ;
+            // écrire même sans diff — le premier run pose la base de calage).
+            // Petit JSON dans le dossier de configuration du plugin, écrit par
+            // Emby : pas de gotcha chown. Tolérant : un échec n'interrompt pas
+            // l'audit (le diff du prochain run retombera sur l'ancien snapshot).
+            if (usersRead && currentHasPassword.Count > 0)
+            {
+                try
+                {
+                    var snapshotPath = AccountsSnapshotPath;
+                    if (snapshotPath != null)
+                        File.WriteAllText(snapshotPath, JsonSerializer.Serialize(new
+                        {
+                            written_utc = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC",
+                            users = currentHasPassword
+                        }, s_json));
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] system_audit security_check snapshot (écriture) : {0}", ex.Message);
+                }
+            }
+
             // ---- Escalade de sévérité ------------------------------------
             // Règle de l'usager : accès externe observé + mauvaise config ⇒ le
             // constat n'est plus un avertissement. Tout ⚠️ est rehaussé 🔴
@@ -2614,8 +3106,44 @@ namespace LLM_AI
                 {
                     total = totalUsers,
                     disabled = disabledUsers,
+                    admin_count = adminCount,
                     no_password = usersNoPassword,
                     admins_no_password = adminsNoPassword
+                },
+                password_probe = new
+                {
+                    available = usersRead && !probeUnavailable,
+                    admins_scanned = probeScanned,
+                    candidates_tried = probeTried,
+                    attempts_cap_per_account = ProbeAttemptCap,
+                    matches = probeMatches,
+                    suspended = probeSuspended.Count > 0 ? probeSuspended : null,
+                    capped = probeCapped.Count > 0 ? probeCapped : null,
+                    lockout_triggered = probeLockoutHit ? (bool?)true : null,
+                    note = probeUnavailable
+                        ? "sonde indisponible sur cette version Emby (signature AuthenticateUser inconnue)"
+                        : probeScanned == 0
+                        ? "aucun compte admin avec mot de passe — rien à sonder"
+                        : "sonde contrôlée in-process, SOUS le seuil de verrouillage d'Emby : au plus " + ProbeAttemptCap +
+                          " tentatives par compte et par run (le serveur verrouille temporairement le compte au-delà de ~5 échecs) ; " +
+                          "compte suspendu si son compteur d'échecs n'est pas à zéro (remis à zéro UNIQUEMENT par une connexion " +
+                          "réussie du compte — l'expiration du verrouillage rouvre l'accès sans remettre le compteur : " +
+                          "terrain 2026-10-01) — la couverture de la liste fermée est PROGRESSIVE entre audits. Liste " +
+                          "fermée bornée (candidats triviaux universels + contextuels — nom du compte, nom du serveur, « emby », " +
+                          "« test ») ; usagers ordinaires NON sondés ; jamais le login HTTP, jamais le hash ; la valeur matchante " +
+                          "n'est pas divulguée. Honnêteté : liste fermée + couverture partielle par run — l'absence de match ne " +
+                          "prouve PAS la force du mot de passe. Les échecs d'authentification visibles dans le journal de CE RUN " +
+                          "(au plus " + ProbeAttemptCap + " par compte) sont ceux de la sonde, PAS une intrusion."
+                },
+                api_keys = new
+                {
+                    verified = apiKeyChecked,
+                    active_count = apiKeyCount,
+                    keys = apiKeyCount > 0 ? apiKeyLabels : null,
+                    rotation_threshold_days = ApiKeyRotationDays,
+                    note = apiKeyChecked
+                        ? "inventaire réflexion-safe des auth records actifs sans usager (≈ GET /Auth/Keys du dashboard) — le token n'est JAMAIS exposé ; une clé = credential admin-équivalent PERMANENT (pas de session, pas de mot de passe, pas d'expiration)"
+                        : "inventaire non vérifiable sur cette version d'Emby (interface ou types manquants)"
                 },
                 network = new
                 {
@@ -2642,6 +3170,221 @@ namespace LLM_AI
                        "Reprends les constats (severity + fix) tels quels dans le rapport.",
                 external_test = ShouldSuggestExternalTest(remote, publicAccessObserved) ? ShieldsUpHint : null
             }, s_json);
+        }
+
+        // ------------------------------------------------------------------
+        //  Sonde « mot de passe trivial » (constat sécurité) + snapshot inter-runs
+        // ------------------------------------------------------------------
+
+        /// <summary>Borne dure de la LISTE de candidats par compte admin — la
+        /// sonde est CONTRÔLÉE, jamais un brute-force (décision 2026-10-01 :
+        /// ~30 candidats triviaux + contextuels, un cap en dur pour l'avenir).</summary>
+        private const int ProbeCandidateCap = 40;
+
+        /// <summary>TENTATIVES d'authentification max PAR COMPTE PAR RUN — la
+        /// sonde ne doit JAMAIS faire basculer le verrouillage de connexion
+        /// d'Emby (constat terrain 2026-10-01 15:22 : « Temporarily locking
+        /// out user René due to 5 unsuccessful login attempts » — le serveur
+        /// verrouille le compte au-delà de ~5 échecs, compteur
+        /// <c>UserPolicy.InvalidLoginAttemptCount</c>, remis à zéro
+        /// UNIQUEMENT par une connexion réussie du compte). Cap = 3 (marge de
+        /// 2), la sonde suspend tout compte dont le compteur n'est pas déjà à
+        /// zéro, et s'arrête sur <see cref="ProbeLockoutMargin"/> si le
+        /// compteur grimpe en cours de sonde. La couverture du reste de la
+        /// liste est PROGRESSIVE : reprise aux runs suivants une fois le
+        /// compteur remis à zéro. Honnêteté codée : le constat ne prétend
+        /// JAMAIS couvrir la liste entière en un seul run.</summary>
+        private const int ProbeAttemptCap = 3;
+
+        /// <summary>Marge d'arrêt en cours de sonde : dès que le compteur
+        /// d'échecs d'un compte atteint cette valeur pendant qu'on le sonde,
+        /// on arrête ce compte (le seuil de verrouillage observé est ~5 —
+        /// terrain 2026-10-01 — on refuse d'ajouter l'échec qui pourrait
+        /// l'atteindre, même si des échecs réels concurrents ont mangé notre
+        /// marge). Doit rester &lt; au seuil d'Emby.</summary>
+        private const int ProbeLockoutMargin = 4;
+
+        /// <summary>Âge (jours) au-delà duquel la rotation d'une clé API Emby
+        /// est suggérée dans le constat — ~6 mois ; seuil fixé à
+        /// l'implémentation (décision 2026-10-01).</summary>
+        private const int ApiKeyRotationDays = 183;
+
+        /// <summary>SHA1 de la chaîne vide — sentinelle « sans mot de passe »
+        /// que Emby 4.10 écrit dans le champ <c>User.Password</c> des comptes
+        /// SANS mot de passe (terrain 2026-10-01 : users.db LocalUsersv2,
+        /// compte « Test » sans mdp = DA39A3EE…709, et le DTO REST l'exclut
+        /// aussi : HasPassword=false). Sur 4.10 un compte sans mdp n'a donc
+        /// PAS Password/Salt vides : sans ce test sur le hash vide, FAUX
+        /// POSITIF « a un mot de passe ». (René qui a un vrai mdp n'a pas de
+        /// Salt du tout : le champ Salt est un reliquat legacy.)</summary>
+        private static readonly string EmptyPasswordSha1 =
+            Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Array.Empty<byte>()));
+
+        /// <summary>Critère « un mot de passe VRAIMENT vérifiable existe » :
+        /// champ non vide ET pas la sentinelle SHA1-du-vide (les deux pour
+        /// compat 4.9.x où un compte sans mdp a les champs vides).</summary>
+        private static bool IsPasswordSet(User user)
+        {
+            if (user == null) return false;
+            return IsPasswordValueSet(user.Password) || IsPasswordValueSet(user.Salt);
+        }
+
+        private static bool IsPasswordValueSet(string v) =>
+            !string.IsNullOrEmpty(v) &&
+            !string.Equals(v, EmptyPasswordSha1, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Liste fermée de candidats triviaux universels (~30) —
+        /// honnêteté codée : un mot de passe qui n'y matche pas n'est PAS
+        /// prouvé fort (le constat et le champ <c>password_probe.note</c> le
+        /// rappellent au LLM).</summary>
+        private static readonly string[] TrivialPasswords = new[]
+        {
+            "password", "password1", "1234", "12345", "123456", "12345678",
+            "123456789", "1234567890", "0000", "000000", "111111", "121212",
+            "123321", "qwerty", "qwerty123", "azerty", "azerty123", "abc123",
+            "letmein", "welcome", "iloveyou", "monkey", "dragon", "admin",
+            "admin123", "motdepasse", "motdepasse123", "guest", "media", "test123"
+        };
+
+        /// <summary>Candidats de la sonde : candidats contextuels EN TÊTE (nom
+        /// du compte en 2 casses, nom du serveur en 2 casses, « emby »,
+        /// « test ») puis triviaux universels — dédup ORDINEL exact (les
+        /// variantes minuscules doivent rester probed : un mot de passe
+        /// « rené » ≠ « René »), cap <see cref="ProbeCandidateCap"/>. Ne lève
+        /// jamais.</summary>
+        private static List<string> BuildTrivialCandidates(string username, string serverName)
+        {
+            var list = new List<string>();
+            void Push(string s)
+            {
+                if (string.IsNullOrWhiteSpace(s)) return;
+                if (list.Contains(s, StringComparer.Ordinal)) return;
+                if (list.Count >= ProbeCandidateCap) return;
+                list.Add(s);
+            }
+            Push(username);
+            Push(username?.ToLowerInvariant());
+            Push(username?.Replace(" ", string.Empty).ToLowerInvariant());
+            Push(serverName);
+            Push(serverName?.ToLowerInvariant());
+            Push("emby");
+            Push("test");
+            foreach (var p in TrivialPasswords) Push(p);
+            return list;
+        }
+
+        /// <summary>Signature <c>IUserManager.AuthenticateUser</c> résolue UNE
+        /// fois par réflexion (cache statique) — AUCUN membre Emby référencé
+        /// en dur dans l'IL de la sonde : si une autre build Emby la nomme ou
+        /// la forme différemment, la résolution échoue et la sonde se dégrade
+        /// en constat « info non vérifiable » (jamais une
+        /// MissingMethodException à JIT qui tuerait la chaîne entière — gotcha
+        /// documenté). Signature validée contre libs/ 4.10.1 le 2026-10-01 :
+        /// (username, password, isUserSession, cancellationToken) → Task&lt;User&gt;
+        /// ; repli sur l'ancienne forme (username, password, cancellationToken).</summary>
+        private static MethodInfo s_authenticateUserMi;
+        private static MethodInfo ResolveAuthenticateUser()
+        {
+            if (s_authenticateUserMi != null) return s_authenticateUserMi;
+            try
+            {
+                var all = typeof(IUserManager).GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(m => m.Name == "AuthenticateUser").ToList();
+                // 4.10+ : (username, password, isUserSession, cancellationToken)
+                s_authenticateUserMi = all.FirstOrDefault(m =>
+                {
+                    var p = m.GetParameters();
+                    return p.Length == 4
+                        && p[0].ParameterType == typeof(string)
+                        && p[1].ParameterType == typeof(string)
+                        && p[2].ParameterType == typeof(bool)
+                        && p[3].ParameterType == typeof(CancellationToken);
+                })
+                // Repli anciennes builds : (username, password, cancellationToken)
+                ?? all.FirstOrDefault(m =>
+                {
+                    var p = m.GetParameters();
+                    return p.Length == 3
+                        && p[0].ParameterType == typeof(string)
+                        && p[1].ParameterType == typeof(string)
+                        && p[2].ParameterType == typeof(CancellationToken);
+                });
+                return s_authenticateUserMi;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Un seul essai de la sonde : le candidat OUVRE-t-il le
+        /// compte ? Reçoit UNIQUEMENT un booléen (jamais le hash, jamais la
+        /// valeur de retour exposée au-delà). Tout échec d'authentification
+        /// (exception quelconque levée par le chemin d'auth — « Invalid
+        /// username or password » est une exception ressource dans Emby, pas
+        /// une ligne de journal HTTP) vaut non-match. Propage l'annulation du
+        /// run (guard <c>when (ct.IsCancellationRequested)</c> — le motif
+        /// « timeout ≠ annulation » ne s'applique pas ici : aucun HttpClient).
+        /// Ne lève jamais hors annulation.</summary>
+        private async Task<bool> TrivialPasswordMatchAsync(string username, string candidate, CancellationToken ct)
+        {
+            var mi = ResolveAuthenticateUser();
+            if (mi == null) return false;
+            try
+            {
+                var args = mi.GetParameters().Length >= 4
+                    ? new object[] { username, candidate, false, ct }   // isUserSession=false : pas une session usager
+                    : new object[] { username, candidate, ct };
+                if (!(mi.Invoke(_users, args) is Task task)) return false;
+                await task.ConfigureAwait(false);
+                // Une User reçue = le candidat OUVRE le compte (le match).
+                return task.GetType().GetProperty("Result")?.GetValue(task, null) is User;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { return false; }   // échec d'auth (ou toute autre levée) = pas de match
+        }
+
+        /// <summary>Chemin du snapshot inter-runs — dossier de configuration
+        /// du plugin, à côté du LLM_AI.xml (pattern MemoryCard.CardPath) :
+        /// écrit par Emby, pas de gotcha chown. Null si indisponible.</summary>
+        private static string AccountsSnapshotPath
+        {
+            get
+            {
+                try
+                {
+                    var dir = Plugin.Paths?.PluginConfigurationsPath;
+                    return string.IsNullOrEmpty(dir) ? null : Path.Combine(dir, "LLM_AI_audit_accounts.json");
+                }
+                catch { return null; }
+            }
+        }
+
+        /// <summary>Charge le snapshot des comptes du run d'audit précédent
+        /// (map nom → a-un-mot-de-passe) et sa date d'écriture. Tolérant :
+        /// fichier absent ou corrompu → null (le premier run pose la base de
+        /// calage, aucun constat de diff). Ne lève jamais.</summary>
+        private static Dictionary<string, bool> LoadAccountsSnapshot(out string writtenUtc)
+        {
+            writtenUtc = null;
+            try
+            {
+                var path = AccountsSnapshotPath;
+                if (path == null || !File.Exists(path)) return null;
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var root = doc.RootElement;
+                Dictionary<string, bool> map = null;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    if (root.TryGetProperty("written_utc", out var w) && w.ValueKind == JsonValueKind.String)
+                        writtenUtc = w.GetString();
+                    if (root.TryGetProperty("users", out var us) && us.ValueKind == JsonValueKind.Object)
+                    {
+                        map = new Dictionary<string, bool>(StringComparer.Ordinal);
+                        foreach (var p in us.EnumerateObject())
+                            map[p.Name] = p.Value.ValueKind == JsonValueKind.True;
+                    }
+                }
+                return map;
+            }
+            catch { writtenUtc = null; return null; }
         }
 
         /// <summary>
@@ -2770,6 +3513,22 @@ namespace LLM_AI
                     upnp_available = false,
                     verdict = "ok",
                     checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                    // Terrain 18:36 : sans findings explicite, gemma4 lisait
+                    // « upnp_available=false » comme une PANNE et classait la
+                    // ligne UPnP en 🔴. La sévérité devient structurelle : la
+                    // dose cite le constat sous sa sévérité d'origine (règle
+                    // fidélité #1), plus de jugement laissé au modèle.
+                    findings = new object[]
+                    {
+                        new
+                        {
+                            severity = "ok",
+                            finding = "UPnP désactivé ou muet au routeur : aucune passerelle n'a répondu au SSDP, " +
+                                      "aucune redirection de port ne peut être créée à l'insu de l'admin — ÉTAT SAIN, " +
+                                      "jamais critique (« upnp_available=false » n'est PAS une panne).",
+                            fix = (string)null
+                        }
+                    },
                     note = "Aucune passerelle UPnP n'a répondu au SSDP (UPnP désactivé ou muet au routeur) : " +
                            "aucune redirection de port ne peut être créée à l'insu de l'admin. Ne conclus " +
                            "PAS pour autant que le port est fermé : les redirections MANUELLES de l'UI du " +
@@ -2823,6 +3582,18 @@ namespace LLM_AI
                     discovered_locations = locations.Keys.ToArray(),
                     verdict = "info",
                     checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                    // Sévérité structurelle (même correction terrain 18:36).
+                    findings = new object[]
+                    {
+                        new
+                        {
+                            severity = "info",
+                            finding = "Passerelle UPnP présente mais aucun service WANIPConnection/WANPPPConnection " +
+                                      "n'expose d'URL de contrôle (UPnP limité au DLNA ?) : table de redirection " +
+                                      "non énumérable — « passerelle présente, état des ports inconnu ».",
+                            fix = (string)null
+                        }
+                    },
                     note = "Une passerelle UPnP répond mais aucun service WANIPConnection/WANPPPConnection " +
                            "n'expose d'URL de contrôle (UPnP limité au DLNA ?). Impossible d'énumérer la " +
                            "table de redirection — traiter comme « passerelle présente, état des ports " +
@@ -2924,6 +3695,27 @@ namespace LLM_AI
                 mapping_count = mappings.Count,
                 mappings,
                 checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
+                // Sévérité structurelle (même correction terrain 18:36) : le
+                // constat porte sa propre sévérité, la dose la cite telle
+                // quelle (critique → 🔴, info → ℹ️, ok → ✅).
+                findings = new object[]
+                {
+                    new
+                    {
+                        severity = verdict,
+                        finding = mappedToEmby
+                            ? "UN MAPPING UPnP EXPOSE LE PORT EMBY SUR LE WAN — le port 8096/8920 " +
+                              "est joignable depuis Internet."
+                            : (mappings.Count > 0
+                                ? "Table de redirection UPnP énumérée : " + mappings.Count +
+                                  " redirection(s) active(s), aucune vers le port Emby."
+                                : "Table de redirection UPnP vide : aucun mapping actif — aucun port " +
+                                  "n'est exposé via UPnP."),
+                        fix = mappedToEmby
+                            ? "Supprimer le mapping dans l'UI du routeur et désactiver l'UPnP."
+                            : (string)null
+                    }
+                },
                 note = mappedToEmby
                     ? "UN MAPPING UPnP EXPOSE LE PORT EMBY SUR LE WAN — constat CRITIQUE : le port 8096/8920 " +
                       "est joignable depuis Internet. Reproduis ce constat tel quel, avec la ligne du mapping. " +
@@ -3023,7 +3815,9 @@ namespace LLM_AI
             SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
             SectionSync("metadata_health", () => MetadataHealth());
             SectionSync("ratings_check", () => RatingsCheck());
-            SectionSync("security_check", () => SecurityCheck());
+            // security_check est async depuis la sonde de mots de passe
+            // triviaux (AuthenticateUser in-process est asynchrone).
+            await SectionAsync("security_check", SecurityCheckAsync(ct)).ConfigureAwait(false);
             SectionSync("security_metrics", () => SecurityMonitor.SnapshotJson());
             await SectionAsync("upnp_check", UpnpCheckAsync(ct)).ConfigureAwait(false);
 

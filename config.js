@@ -1088,71 +1088,143 @@ define(["loading"], function (loading) {
                 });
             }
 
-            // Audit santé : déclenche l'endpoint /Plugins/LLMAI/Audit et rend
-            // le rapport Markdown retourné dans #auditReport. La page de config
-            // étant déjà en contexte admin, la porte d'auth côté serveur passe.
-            // Formatage local de la date ISO de l'endpoint (le rapport persisté
-            // et le run partagent le même rendu).
+            // Audit santé (v1.14.2 — run DÉTACHÉ) : le GET sans paramètre
+            // démarre l'audit en tâche de fond et répond immédiatement
+            // (Running=true). La page pole ?Status=true toutes les 5 s et
+            // affiche la progression (« Dose 3/7 — … ») ; quand le run
+            // termine, la réponse Status porte le rapport frais (Outcome=ok)
+            // ou l'erreur (Outcome=error). Fermer ou quitter la page
+            // n'annule PLUS le run (terrain 01/10/2026 : « Audit annulé » ×9,
+            // rapport perdu à la dose 7/7) ; le single-flight côté serveur
+            // absorbe les clics en rafale (un clic pendant un run renvoie
+            // l'état en cours — la page reprend simplement le polling).
             var fmtAuditDate = function (iso) {
                 if (!iso) return "";
                 try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
             };
+            var auditModeLabel = function (m) {
+                return m === "deterministic"
+                    ? i18n.t("cfg.audit.mode.deterministic")
+                    : i18n.t("cfg.audit.mode.single");
+            };
+            var auditPollTimer = null;
+            var auditPollFails = 0;
+            var auditStopPolling = function () {
+                if (auditPollTimer) { clearInterval(auditPollTimer); auditPollTimer = null; }
+            };
+            // Quitter la vue coupe le POLLING, pas le run (détaché). Le fil
+            // reprend au prochain chargement de la page (?Last=true porte
+            // aussi l'état Running).
+            view.addEventListener("viewbeforehide", auditStopPolling);
+            var auditSetBusy = function (busy) {
+                var b = view.querySelector("#btnRunAudit");
+                if (!b) return;
+                b.disabled = busy;
+                b.textContent = busy ? i18n.t("cfg.audit.running") : i18n.t("cfg.audit.run");
+            };
+            var auditShowMeta = function (text) {
+                var el = view.querySelector("#auditReport");
+                if (!el) return;
+                el.style.display = "block";
+                el.innerHTML = '<div class="auditMeta">' + esc(text) + '</div>';
+            };
+            var auditApplyStatus = function (st) {
+                if (!st) return;
+                var el = view.querySelector("#auditReport");
+                if (st.Running) {
+                    auditSetBusy(true);
+                    auditShowMeta(i18n.t("cfg.audit.running") +
+                        (st.Progress ? " — " + st.Progress : ""));
+                    return;
+                }
+                // Terminé (ou jamais lancé) : couper le polling puis rendre.
+                auditStopPolling();
+                auditSetBusy(false);
+                if (!el) return;
+                if (st.Outcome === "ok" && st.LastReport) {
+                    el.style.display = "block";
+                    el.innerHTML = '<div class="auditMeta">' +
+                        esc(i18n.t("cfg.audit.last",
+                            fmtAuditDate(st.LastGeneratedAt),
+                            auditModeLabel(st.LastMode))) +
+                        '</div>' + renderMarkdown(st.LastReport);
+                } else if (st.Outcome === "error") {
+                    auditShowMeta(i18n.t("cfg.audit.failed") +
+                        (st.Error ? " — " + st.Error : ""));
+                }
+                // Outcome null = aucun run détaché terminé : rien à faire
+                // (la page affiche déjà le dernier rapport via ?Last=true).
+            };
+            var auditStartPolling = function () {
+                auditPollFails = 0;
+                auditStopPolling();
+                auditPollTimer = setInterval(function () {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/Audit", { Status: "true" }),
+                        type: "GET"
+                    }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (st) {
+                        auditPollFails = 0;
+                        auditApplyStatus(st);
+                    }, function () {
+                        // Tolérance réseau : le run continue côté serveur ;
+                        // après 5 échecs consécutifs on arrête de poler (le
+                        // rapport sera quand même persisté — rechargement de
+                        // page pour le voir).
+                        if (++auditPollFails >= 5) auditStopPolling();
+                    });
+                }, 5000);
+            };
+
             var runAuditBtn = view.querySelector("#btnRunAudit");
             if (runAuditBtn) {
                 runAuditBtn.addEventListener("click", function () {
-                    var reportEl = view.querySelector("#auditReport");
                     var focus = (view.querySelector("#txtAuditFocus").value || "").trim();
                     var url = ApiClient.getUrl("Plugins/LLMAI/Audit", focus ? { Focus: focus } : {});
 
-                    // États UI : bouton désactivé + libellé « en cours ».
-                    runAuditBtn.disabled = true;
-                    var prevLabel = runAuditBtn.textContent;
-                    runAuditBtn.textContent = i18n.t("cfg.audit.running");
-                    if (reportEl) {
-                        reportEl.style.display = "block";
-                        reportEl.innerHTML =
-                            '<div class="auditMeta">' + esc(i18n.t("cfg.audit.running")) + '</div>';
-                    }
+                    // Le run est détaché : le bouton repasse actif quand le
+                    // polling voit la fin — l'usager peut naviguer sans tuer
+                    // l'audit.
+                    auditSetBusy(true);
+                    auditShowMeta(i18n.t("cfg.audit.running"));
 
                     ApiClient.ajax({ url: url, type: "GET" }).then(function (resp) {
                         return resp.json();
                     }).then(function (data) {
-                        runAuditBtn.disabled = false;
-                        runAuditBtn.textContent = prevLabel;
-                        if (!reportEl) return;
                         if (!data || data.Enabled === false) {
-                            reportEl.innerHTML = '<div class="auditMeta">' +
-                                esc(i18n.t("cfg.audit.disabled")) + '</div>';
+                            auditSetBusy(false);
+                            auditShowMeta(i18n.t("cfg.audit.disabled"));
                             return;
                         }
-                        if (data.Error) {
-                            reportEl.innerHTML = '<div class="auditMeta">' +
-                                esc(data.Error) + '</div>';
+                        if (data.Error && !data.Running) {
+                            // ex. accès non-admin
+                            auditSetBusy(false);
+                            auditShowMeta(data.Error);
                             return;
                         }
-                        var meta = '<div class="auditMeta">' +
-                            esc(i18n.t("cfg.audit.done")) +
-                            (data.Date ? ' — ' + esc(fmtAuditDate(data.Date)) : '') +
-                            '</div>';
-                        reportEl.innerHTML = meta + renderMarkdown(data.Report || "");
+                        if (data.Running) {
+                            // Démarré (ou déjà en cours — single-flight) : la
+                            // progression puis le rapport arrivent par polling.
+                            auditApplyStatus(data);
+                            auditStartPolling();
+                            return;
+                        }
+                        auditSetBusy(false);
                     }, function (err) {
-                        runAuditBtn.disabled = false;
-                        runAuditBtn.textContent = prevLabel;
-                        if (reportEl) {
-                            reportEl.style.display = "block";
-                            reportEl.innerHTML = '<div class="auditMeta">' +
-                                esc(i18n.t("cfg.alert.saveError",
-                                    (err && err.statusText ? err.statusText : err))) +
-                                '</div>';
-                        }
+                        auditSetBusy(false);
+                        auditShowMeta(i18n.t("cfg.alert.saveError",
+                            (err && err.statusText ? err.statusText : err)));
                     });
                 });
 
                 // Dernier rapport persisté (v1.13.10) : affiché PAR DÉFAUT au
                 // chargement de la page — lecture seule GET ?Last=true, zéro
-                // LLM. Relire un audit ne coûte plus une exécution ; le bouton
-                // ci-dessus régénère et écrase. Best-effort : échec réseau ou
-                // rapport absent = la zone reste masquée (état d'origine).
+                // LLM. Relire un audit ne coûte plus une exécution ; le
+                // bouton ci-dessus régénère et écrase. La réponse porte
+                // AUSSI l'état du run détaché : un rechargement pendant un
+                // audit reprend le fil (bouton occupé + polling). Best-effort :
+                // échec réseau ou rapport absent = la zone reste masquée.
                 var lastEl = view.querySelector("#auditReport");
                 if (lastEl) {
                     ApiClient.ajax({
@@ -1161,16 +1233,19 @@ define(["loading"], function (loading) {
                     }).then(function (resp) {
                         return resp.json();
                     }).then(function (data) {
-                        if (!data || !data.LastReport) return;
-                        var meta = '<div class="auditMeta">' +
+                        if (!data) return;
+                        if (data.Running) {
+                            auditApplyStatus(data);
+                            auditStartPolling();
+                            return;
+                        }
+                        if (!data.LastReport) return;
+                        lastEl.style.display = "block";
+                        lastEl.innerHTML = '<div class="auditMeta">' +
                             esc(i18n.t("cfg.audit.last",
                                 fmtAuditDate(data.LastGeneratedAt),
-                                data.LastMode === "deterministic" ?
-                                    i18n.t("cfg.audit.mode.deterministic") :
-                                    i18n.t("cfg.audit.mode.single"))) +
-                            '</div>';
-                        lastEl.style.display = "block";
-                        lastEl.innerHTML = meta + renderMarkdown(data.LastReport);
+                                auditModeLabel(data.LastMode))) +
+                            '</div>' + renderMarkdown(data.LastReport);
                     }, function () { /* pas de rapport : état d'origine */ });
                 }
             }

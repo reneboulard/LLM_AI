@@ -557,17 +557,18 @@ see [Config page helpers](#config-page-helpers)), `ResponseLanguage` (LLM output
 
 ### LLM response language
 
-`ResponseLanguage` forces the language of the LLM's **prose** — the **recommendation
-reasons** (card `reason` field) **and** the **audit report**. Empty / `Auto` = no directive
-(the LLM follows the prompt's language, here French — default behavior). Any other value
-(e.g. `English`, `Español`, `Deutsch`…) injects a directive at the end of the system
-prompt: the LLM then writes in that language. Movie/series titles and channel names are
-**never translated**: the directive asks to copy the `title` **exactly as it appears in
-the `get_emby_info` results** (even when `tmdb_lookup` returns the title in another
-language — a modified title breaks the EPG program match). Technical JSON field names
+`ResponseLanguage` sets the language of the LLM's **prose** — recommendation reasons
+(card `reason` field), `.strm` card enrichment, chat, audit report (single and dosed
+modes) and the memory card. **`Auto` (empty) = the Emby interface language**
+(`UICulture`, English fallback); any explicit value (`Français`, `English`, `Español`,
+`Deutsch`, `Italiano`, `Português`…) is honored as-is. **EPG information is never
+translated**: the directive asks to copy titles and synopses **exactly as they appear
+in the `get_emby_info` results** (a modified title breaks the EPG program match) —
+the prose language only dresses the text added around them. Technical JSON field names
 stay unchanged. Config-page select:
-`Auto`, `Français`, `English`, `Español`, `Deutsch`, `Italiano`, `Português`. Applies to
-both paths (recommendation + audit, single and deterministic modes).
+`Auto`, `Français`, `English`, `Español`, `Deutsch`, `Italiano`, `Português`.
+**S1/S2/S3 identification metadata follows a separate rule** (Emby library language,
+else the program's — see [Fiche language](#fiche-language-v115)).
 
 ### Health audit
 
@@ -617,9 +618,14 @@ tool). See [Server health audit](#server-health-audit).
     drill into a log after a finding). Suited to a capable / cloud model. **The only
     mode where remediation can be executed** (if the flag is on).
   - `deterministic` — the C# gathers all read-only probes itself (zero LLM calls for
-    the gathering), then a single **tool-free** LLM pass synthesizes the report from the
-    digest. Designed for a local/smaller model (e.g. gemma4): multi-tool orchestration
-    (its weak point) is removed, leaving only synthesis of provided text. Remediation is
+    the gathering), then the report is drafted in **seven section doses + one final
+    assembly** (one Markdown block per dose, short bounded prompt): a local/smaller
+    model (e.g. gemma4) keeps the fidelity rules in a narrow context, where drafting a
+    long report in a single pass used to lose them. **Dosed fidelity**: every finding
+    is cited at its original severity (critical → 🔴, warning → ⚠️, info → ℹ️,
+    ok → ✅ — benign findings included, omitting is forbidden), and values (account
+    names, numbers, ages, states) are copied **verbatim** from the JSON — never
+    recounted, rounded or interpreted. Remediation is
     report-only (the LLM has no tool to execute it).
 - `AuditPrompt` — prompt template sent to the LLM (user message). The optional `Focus`
   parameter of the endpoint is appended at runtime to orient the audit.
@@ -1304,10 +1310,10 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 | Family | Actions (read-only, always available) |
 |---|---|
 | Telemetry & config | `server_info` (version, ports, paths, pending restart, update, maintenance), `system_config` (full server configuration via `IServerConfigurationManager.Configuration`), `active_sessions`, `scheduled_tasks` |
-| Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `transcode`, `gpu_transcode` |
+| Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `log_scan` (v1.15 — anomaly pattern scan: exceptions grouped by class, ingress/egress HTTP 4xx/5xx, ffmpeg failures, metadata-provider failures + "Too Many Requests", Live TV/DVR, library scans, `[LLM_AI]` signal grouped by signature, authentication denials + lockouts — `{error, fatal, warn}` profile **with raw witness lines**), `transcode`, `gpu_transcode` |
 | Hardware & OS | `host_metrics` (BCL: process, GC, runtime, uptime, scan running, aggregate transcode CPU — GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters) |
 | Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres) |
-| Security & hygiene | `security_check` (missing passwords, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below), `security_metrics` (plugin activity counters + window of the plugin's **security events**: blocked SSRF, malformed/unknown tool calls, backend failures, refused chat turns, deposited/approved/refused actions — detection, see below) |
+| Security & hygiene | `security_check` (missing passwords — **probe suspended near Emby's lockout threshold** and never counted in its failures, multiple administrator accounts, Emby API keys with age/last use, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below), `security_metrics` (plugin activity counters + window of the plugin's **security events**: blocked SSRF, malformed/unknown tool calls, backend failures, refused chat turns, deposited/approved/refused actions — detection, see below) |
 
 | Family | **Remediation** actions (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1391,6 +1397,11 @@ overwritten at each run: reading it costs **no LLM**.
   ("Last persisted report — [date] (mode …)"); the "Run health audit" button regenerates
   and overwrites. Every admin response also carries the `Last*` fields (never populated
   for a non-admin — the report exposes server state).
+- **Detached run + single-flight (v1.15)**: the click **answers immediately** and the
+  run keeps going **in the background** — closing the page does not interrupt it, the
+  report is persisted on arrival (free re-read via `?Last=true`). A burst of clicks
+  starts only **one** run (single-flight); the page shows progress ("Dose n/7" in
+  deterministic mode).
 
 ### Report quality (v1.13.9.13)
 
@@ -1401,10 +1412,20 @@ Two guard rails on report (and chat reply) rendering:
   unreadable. The filter replaces LaTeX arrows with their text glyph ("→"), strips
   residual math-mode dollars and unwraps decoration tags — best-effort, applied to
   audit outputs (both modes) **and** chat.
-- **"Pure Markdown" rule** injected into the audit prompts (agent loop +
-  deterministic synthesis, FR + EN): no LaTeX, no HTML tags. And the **UPnP line**
-  always appears in the findings: no mapping found = explicit ✅ finding (the
-  `upnp_check` probe can no longer go unmentioned).
+- **"Pure Markdown" rule** injected into the audit prompts (v1.15: across the agent
+  loop, the deterministic doses **and** the final assembly, FR + EN): no LaTeX, no
+  HTML tags.
+- **`upnp_check` with structured findings (v1.15)**: all three probe outcomes carry a
+  `findings` array with an explicit severity — silent router = **ok** finding
+  ("HEALTHY STATE, never critical" — `upnp_available=false` is **not** an outage),
+  gateway without a control URL = info finding, mappings present = verdict per
+  mapping. Severity comes from the C# structure, never from the model's judgment: a
+  mute UPnP router can no longer fabricate a 🔴.
+- **`log_scan`: never a bare count (v1.15)**: the `{error, fatal, warn}` profile comes
+  with its raw witness lines (5 warn / 3 error / 3 fatal, truncated to 200 chars) —
+  the report says **what those lines were** (category + gist), even benign ones; a
+  witness already covered by a pattern points back to its group, and every non-empty
+  pattern is cited group by group with its suggested severity.
 
 ---
 
@@ -1428,8 +1449,9 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
 1. **S1 — cleanup + multi-language search.** The EPG title is stripped of noise by
    `CleanEpgTitle` (`HD`/`VOSTFR`/`VF`/`VO` markers, "Rediff."/"Inédit", `S##E##` /
    `Saison \d` / `Épisode \d`, parentheses, **ISO dates**) then searched on TMDB in
-   several languages: `en-US` (original title), `fr-FR` (France title), + the user's
-   language. A candidate is accepted if the **normalized title** matches (guard
+   several languages: **the content's language first** (see
+   [Fiche language](#fiche-language-v115) below), the other standard language, then
+   the user's language. A candidate is accepted if the **normalized title** matches (guard
    against an ambiguous wrong match), with a year check. **S1 also runs with no
    `ProductionYear` (v1.13.28)**: without a reliable year the corroboration
    doctrine applies — only the **exact equality** of the guide's title with the
@@ -1478,6 +1500,26 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
    catalog knows (e.g. "L'histoire de Jean Seberg" → film "Seberg" 2019 → tt1780967). A
    candidate accepted **with no synopsis to compare** is logged "to confirm visually"
    (trust SearXNG ranking, as the user would before validating by hand).
+
+### Fiche language (v1.15)
+
+The TMDB fiche searched/re-read by S1/S2/S3 follows the **content's** language — same
+rule as Emby itself (a French channel gets French metadata, an English channel English
+metadata):
+
+1. **Emby library language** of the item (`PreferredMetadataLanguage`, set per library
+   in Emby — Emby's configurations take priority, nothing is hard-coded in the plugin);
+2. failing that, **the program's language**: the EPG synopsis first (the guide entry's
+   language — a French channel speaks French there even when the work's title stays
+   English, e.g. "The Walking Dead" on a French channel), then the title as fallback
+   (deterministic detection: accents + function words, zero LLM; a tie → undetermined);
+3. failing that, the user's language (historical behavior, cascade order unchanged).
+
+The retained language goes **first in the S1 search cascade** — the fiche title becomes
+lexically comparable to the guide title for the acceptance gate (a French work no
+longer comes back with an English synopsis because the cascade started in `en-US`).
+The `.strm` cards do **not** follow this rule: their enrichment (LLM prose and fiche)
+stays in the user's language (see [LLM response language](#llm-response-language)).
 
 ### Non-destructive apply + locking
 

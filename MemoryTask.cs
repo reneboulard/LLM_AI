@@ -178,8 +178,10 @@ namespace LLM_AI
 
                 progress?.Report(40);
 
+                // Règle usager 2026-10-01 : config explicite, sinon langue de
+                // l'interface Emby — la directive est toujours injectée.
                 var system = MEMORY_ROLE + "\n\n" + MEMORY_RULES
-                    + "\n\n" + LlmAgentService.BuildLanguageDirective(cfg?.ResponseLanguage);
+                    + "\n\n" + LlmAgentService.BuildLanguageDirective(I18n.ResolveProseLangName(cfg, _host));
                 var (reply, ok) = await _runner.RunSynthesisAsync(cfg, "MÉMOIRE", system, table,
                     cancellationToken).ConfigureAwait(false);
                 if (!ok || string.IsNullOrWhiteSpace(reply))
