@@ -441,7 +441,9 @@ namespace LLM_AI
             "Les comptages de la section log_scan sont calculés en C# (zéro LLM) : exceptions " +
             "groupées par classe avec première trame de stack, codes HTTP 4xx/5xx entrants et " +
             "sortants, échecs ffmpeg, pannes de providers, santé du plugin. Reprends-les TELS " +
-            "QUELS avec leurs valeurs chiffrées — ne les recompte PAS depuis le tail brut du " +
+            "QUELS avec leurs valeurs chiffrées, groupe par groupe — même un groupe bénin se " +
+            "cite avec sa classe (ex. une requête pendant le démarrage du serveur) : ne les " +
+            "recompte PAS depuis le tail brut du " +
             "journal. L'absence d'un motif dans la fenêtre finie (3 fichiers, ≤ 7 jours) ne " +
             "prouve pas l'absence de problème antérieur : formule l'absence comme « aucun motif " +
             "observé dans la fenêtre de journal analysée », jamais comme « aucun problème ». " +

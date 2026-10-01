@@ -973,11 +973,19 @@ namespace LLM_AI
                         tooMany.Add(ts, witness);   // jamais « 429 » nu (leçon terrain)
 
                     // ---- Live TV / DVR / scan de bibliothèque --------------
+                    // Contexte Live TV calibré sur le premier run prod
+                    // (2026-10-01, DellXPS) : « Error copying live stream »
+                    // (SharedHttpPipelineSource) et « Error getting channels »
+                    // (cat. LiveTvManager) — le vocabulaire local n'avait
+                    // rien donné, zéro échec dans la fenêtre.
                     if (isBad || lvl == "Warn")
                     {
                         string low = txt.ToLowerInvariant();
                         bool failWord = s_failWordRe.IsMatch(txt);
-                        if (failWord && (low.Contains("tuner") || low.Contains("recording") || low.Contains("enregistrement")))
+                        bool liveCtx = low.Contains("tuner") || low.Contains("recording")
+                                    || low.Contains("enregistrement") || low.Contains("live stream")
+                                    || low.Contains("live tv") || cat.IndexOf("LiveTv", StringComparison.Ordinal) >= 0;
+                        if (failWord && liveCtx)
                             liveDvr.Add(ts, witness);
                         if (failWord && low.Contains("scan"))
                             libScan.Add(ts, witness);
