@@ -284,7 +284,16 @@ define([], function () {
                             if (!c || !c.Id) return;
                             var opt = document.createElement("option");
                             opt.value = c.Id;
-                            opt.textContent = c.Label || c.Id;
+                            // Libellé traduit par clé d'id (dictionnaire
+                            // i18n.js FR/EN) : la langue du menu suit
+                            // l'interface Emby du client, comme le reste
+                            // de la page — le libellé serveur (registre
+                            // FR) reste le repli pour un id inconnu.
+                            var key = "chat.ctx." + c.Id;
+                            var lbl = i18n.t(key);
+                            opt.textContent = (lbl && lbl !== key)
+                                ? lbl
+                                : (c.Label || c.Id);
                             chatContextSel.appendChild(opt);
                         });
                     }, function () { /* indisponible : chat sans modes (fail-open) */ });
@@ -343,9 +352,9 @@ define([], function () {
                         }, function () { return base; });
                     }
                     if (err && err.name === "AbortError")
-                        return Promise.resolve("Requête trop longue — le LLM n'a pas répondu dans le délai imparti. Réessayez.");
+                        return Promise.resolve(i18n.t("chat.err.timeout"));
                     if (err instanceof TypeError)
-                        return Promise.resolve("Serveur injoignable (connexion interrompue).");
+                        return Promise.resolve(i18n.t("chat.err.network"));
                     return Promise.resolve(String(err == null ? "" : err));
                 }
 
@@ -498,9 +507,10 @@ define([], function () {
                         if (!mode || chatBusy) return;
                         var opt = chatContextSel.options[chatContextSel.selectedIndex];
                         var labelTxt = (opt && opt.textContent) || mode;
-                        sendChatText("[Admin] J'ai sélectionné le mode « " + labelTxt + " ». " +
-                            "Avant toute chose : indique clairement sur quel prompt tu travailles " +
-                            "(champ concerné) et affiche le texte actuel que tu vas modifier.");
+                        // v1.15.0.1 : message prérédigé traduit (il s'affiche
+                        // comme tour « Vous » du fil ET est relu par le LLM) —
+                        // il suivait la langue de personne (FR codé en dur).
+                        sendChatText(i18n.t("chat.mode.selected", labelTxt));
                     });
                 }
 

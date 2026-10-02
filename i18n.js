@@ -311,6 +311,22 @@ define([], function () {
             "cfg.chat.prompts.desc": "Opt-in. Le chat peut lire les cinq prompts de la configuration et <b>proposer</b> leur réécriture. L'écriture est <b>deux phases</b> : la proposition attend le clic « Approuver » de l'admin sur la carte de diff de la page chat (expiration 10 min, une par conversation) — le LLM n'a aucun chemin d'écriture direct. Les modes d'édition du menu déroulant de la page chat (lecture du prompt courant + guide) restent disponibles sans ce flag.",
             "chat.context": "Mode de conversation",
             "chat.context.none": "Aucun (assistant général)",
+            // Libellés des modes d'édition (menu déroulant du chat) : le
+            // registre serveur (ChatContexts.All) sert le libellé FR de
+            // référence ; la page traduit par clé d'id — la langue suit
+            // l'interface Emby du client, comme le reste de la page
+            // (repli : libellé serveur).
+            "chat.ctx.edit_rag": "Éditer — Directives RAG",
+            "chat.ctx.edit_schedule_series": "Éditer — Tâche séries (enregistrements)",
+            "chat.ctx.edit_schedule_movies": "Éditer — Tâche films (enregistrements)",
+            "chat.ctx.edit_tonight": "Éditer — Run « À regarder ce soir »",
+            "chat.ctx.edit_audit": "Éditer — Prompt d'audit santé",
+            // Annonce automatique au changement de mode (tour « Vous » du
+            // fil — visible par l'usager ET relue par le LLM) + erreurs
+            // d'envoi (timeout / connexion) : suivent la langue de la page.
+            "chat.mode.selected": "[Admin] J'ai sélectionné le mode « {0} ». Avant toute chose : indique clairement sur quel prompt tu travailles (champ concerné) et affiche le texte actuel que tu vas modifier.",
+            "chat.err.timeout": "Requête trop longue — le LLM n'a pas répondu dans le délai imparti. Réessayez.",
+            "chat.err.network": "Serveur injoignable (connexion interrompue).",
             "chat.pending.title": "Modification de prompt en attente d'approbation",
             "chat.pending.field": "Champ",
             "chat.pending.before": "Avant",
@@ -703,6 +719,22 @@ define([], function () {
             "cfg.chat.prompts.desc": "Opt-in. The chat can read the five configuration prompts and <b>propose</b> rewrites. Writing is <b>two-phase</b>: the proposal waits for the admin's \"Approve\" click on the chat page's diff card (expires in 10 min, one per conversation) — the LLM has no direct write path. The chat page's dropdown editing modes (current prompt text + guide) remain available without this flag.",
             "chat.context": "Conversation mode",
             "chat.context.none": "None (general assistant)",
+            // Edit-mode labels (chat dropdown): the server registry
+            // (ChatContexts.All) serves the FR reference label; the page
+            // translates by id key — the language follows the client's
+            // Emby interface, like the rest of the page (fallback: the
+            // server label).
+            "chat.ctx.edit_rag": "Edit — RAG directives",
+            "chat.ctx.edit_schedule_series": "Edit — Series task (recordings)",
+            "chat.ctx.edit_schedule_movies": "Edit — Movies task (recordings)",
+            "chat.ctx.edit_tonight": "Edit — \"Watch tonight\" run",
+            "chat.ctx.edit_audit": "Edit — Health audit prompt",
+            // Automatic announcement on mode change (the \"You\" turn of
+            // the thread — seen by the user AND re-read by the LLM) +
+            // send errors (timeout / connection): follow the page language.
+            "chat.mode.selected": "[Admin] I selected the mode \"{0}\". First of all: clearly state which prompt you are working on (the field concerned) and show the current text you are about to modify.",
+            "chat.err.timeout": "Request took too long — the LLM did not respond within the allotted time. Try again.",
+            "chat.err.network": "Server unreachable (connection interrupted).",
             "chat.pending.title": "Prompt edit pending approval",
             "chat.pending.field": "Field",
             "chat.pending.before": "Before",

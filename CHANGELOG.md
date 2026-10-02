@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.1] — 2026-10-02
+
+### Fixed (FR)
+- **Langue du menu « Mode de conversation » du chat** : les cinq modes d'édition
+  (Directives RAG, tâche séries, tâche films, « À regarder ce soir », audit
+  santé) étaient servis en français codé en dur, quelle que soit la langue de
+  l'interface Emby. Les libellés vivent désormais dans le dictionnaire i18n du
+  plugin (FR + EN) : le menu suit la langue d'affichage du client, comme le
+  reste de la page (le libellé serveur reste en repli).
+- **Annonce de sélection de mode traduite** : le message prérédigé envoyé à la
+  sélection d'un mode (tour « Vous » visible dans le fil) était codé en dur en
+  français. Idem pour les messages d'erreur d'envoi (délai dépassé, serveur
+  injoignable) : tous suivent désormais la langue de la page.
+
+### Fixed (EN)
+- **Chat "Conversation mode" dropdown language**: the five editing modes (RAG
+  directives, series task, movies task, "Watch tonight", health audit) were
+  served as hard-coded French regardless of the Emby interface language. The
+  labels now live in the plugin's i18n dictionary (FR + EN): the dropdown
+  follows the client's display language, like the rest of the page (the server
+  label remains as fallback).
+- **Translated mode-selection announcement**: the canned message sent when a
+  mode is selected (the "You" turn shown in the thread) was hard-coded French.
+  Same for the send error messages (timeout, server unreachable): they now all
+  follow the page language.
+
 ## [1.15.0.0] — 2026-10-01
 
 ### Added (FR)
