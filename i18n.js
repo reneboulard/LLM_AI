@@ -327,6 +327,19 @@ define([], function () {
             "chat.mode.selected": "[Admin] J'ai sélectionné le mode « {0} ». Avant toute chose : indique clairement sur quel prompt tu travailles (champ concerné) et affiche le texte actuel que tu vas modifier.",
             "chat.err.timeout": "Requête trop longue — le LLM n'a pas répondu dans le délai imparti. Réessayez.",
             "chat.err.network": "Serveur injoignable (connexion interrompue).",
+            // Notes [Admin] poussées dans le fil après un clic
+            // Approuver/Refuser (v1.15.0.2 — elles suivent la langue de la
+            // page comme l'annonce de sélection ; le LLM les rejoue au tour
+            // suivant et peut les citer, d'où la cohérence de voix).
+            "chat.note.prompt.approved": "[Admin] J'ai approuvé la modification du prompt « {0} » — elle a été enregistrée dans la configuration.",
+            "chat.note.prompt.refused": "[Admin] J'ai refusé la modification du prompt « {0} » — rien n'a été écrit.",
+            "chat.note.testhint": " Façon de tester : {0}",
+            "chat.note.action.approved": "[Admin] J'ai approuvé l'action « {0} » — {1}",
+            "chat.note.action.executed": "elle a été exécutée",
+            "chat.note.action.executed.detail": "elle a été exécutée : {0}",
+            "chat.note.action.failed": "mais l'exécution n'a pas abouti : {0}",
+            "chat.note.action.refused": "[Admin] J'ai refusé l'action « {0} » — rien n'a été exécuté.",
+            "chat.empty": "(vide)",
             "chat.pending.title": "Modification de prompt en attente d'approbation",
             "chat.pending.field": "Champ",
             "chat.pending.before": "Avant",
@@ -735,6 +748,19 @@ define([], function () {
             "chat.mode.selected": "[Admin] I selected the mode \"{0}\". First of all: clearly state which prompt you are working on (the field concerned) and show the current text you are about to modify.",
             "chat.err.timeout": "Request took too long — the LLM did not respond within the allotted time. Try again.",
             "chat.err.network": "Server unreachable (connection interrupted).",
+            // [Admin] notes pushed into the thread after an Approve/Refuse
+            // click (v1.15.0.2 — they follow the page language like the mode
+            // announcement; the LLM replays them on the next turn and may
+            // quote them, hence the consistent voice).
+            "chat.note.prompt.approved": "[Admin] I approved the prompt change \"{0}\" — it has been saved to the configuration.",
+            "chat.note.prompt.refused": "[Admin] I rejected the prompt change \"{0}\" — nothing was written.",
+            "chat.note.testhint": " How to test it: {0}",
+            "chat.note.action.approved": "[Admin] I approved the action \"{0}\" — {1}",
+            "chat.note.action.executed": "it was executed",
+            "chat.note.action.executed.detail": "it was executed: {0}",
+            "chat.note.action.failed": "but the execution did not complete: {0}",
+            "chat.note.action.refused": "[Admin] I rejected the action \"{0}\" — nothing was executed.",
+            "chat.empty": "(empty)",
             "chat.pending.title": "Prompt edit pending approval",
             "chat.pending.field": "Field",
             "chat.pending.before": "Before",

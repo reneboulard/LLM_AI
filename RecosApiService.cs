@@ -131,7 +131,7 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new RecosResponse { Error = "Configuration du plugin indisponible." };
+                return new RecosResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             // Lecture seule des deux champs consommés par la page — rien de la
             // config complète (clés API, prompts, chemins) ne traverse cette
@@ -183,7 +183,7 @@ namespace LLM_AI
             var plugin = Plugin.Instance;
             var cfg = plugin?.Configuration;
             if (cfg == null)
-                return new ForgetResponse { Error = "Configuration du plugin indisponible." };
+                return new ForgetResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             // Tout usager authentifié peut oublier un titre : le bouton est
             // affiché sur une page du menu utilisateur et la drop list est

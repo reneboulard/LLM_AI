@@ -130,7 +130,7 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new AuditResponse { Enabled = false, Error = "Configuration du plugin indisponible." };
+                return new AuditResponse { Enabled = false, Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             if (!cfg.AuditEnabled)
                 return new AuditResponse { Enabled = false };
@@ -141,7 +141,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new AuditResponse { Enabled = true, Error = "Réservé aux administrateurs." };
+                return new AuditResponse { Enabled = true, Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             // ---- ?Status=true : polling du run détaché (v1.14.2) ---------
             // État live (running/progression/outcome) + dernier rapport

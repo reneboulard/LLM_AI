@@ -10,6 +10,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.2] — 2026-10-02
+
+### Fixed (FR)
+- **Langue de toutes les chaînes serveur affichées dans le chat admin et la
+  page de configuration** : elles étaient codées en dur en français, quelle
+  que soit la langue de l'interface Emby. Elles suivent désormais la langue
+  d'affichage (même bucket que les noms de tâches, repli EN) via le
+  dictionnaire serveur du plugin (FR + EN) :
+  - *Carte de diff d'un prompt* : libellé du champ (« Directives RAG », « Run
+    « ce soir » »…), bandeau de divergence et indices de test affichés après
+    approbation. Le tool `plugin_prompts` continue de servir ses libellés
+    français au LLM (actions list/get) — seul ce qui s'affiche change.
+  - *Cartes d'action Emby (11 tools)* : libellés des propositions («
+    Enregistrement « … » (DVR, film) », « Ajout à la collection… »), détails
+    d'exécution affichés après approbation, refus atteignables à l'exécution
+    (garde-fous, budget, limites), libellés des actions du tour (« Chat : … »).
+  - *Erreurs des endpoints* : « Réservé aux administrateurs », « Configuration
+    du plugin indisponible », « Message vide », délai LLM dépassé, propositions
+    expirées, exécutions annulées/échouées — les ~35 sites partagent désormais
+    les mêmes clés sur tous les endpoints du plugin (chat, config, audit,
+    genres, recos, mémoire, métriques, file cross-kind).
+  - *Préfixe d'échec du run LLM* (« Échec du chat : ») localisé, avec
+    contrôle de cohérence mis à jour dans les deux chats (admin et externe).
+  - *Erreurs du run « ce soir »* (usager non résolu, aucune recommandation,
+    items introuvables) — elles remontent sur la carte du chat via
+    `run_tonight_run` et sur la page Recommandations.
+- **Notes [Admin] du fil de chat traduites** : les quatre messages prérédigés
+  poussés après un clic Approuver/Refuser (prompt et action) sont rendus par
+  le dictionnaire client (FR + EN), comme l'annonce de sélection de mode —
+  même s'ils ne s'affichent pas comme bulle, le LLM les rejoue au tour
+  suivant et peut les citer : la voix reste cohérente dans la langue de la
+  page. Le repli « (vide) » de la carte de diff suit aussi la langue.
+- **Frontière assumée** : les textes destinés au seul LLM (descriptions des
+  tools, guides des modes, détails JSON du dépôt, refus défensifs de
+  re-validation) restent en français — design documenté, le lecteur est le
+  LLM. Les chaînes propres au chat externe (gate PIN, limites de débit,
+  endpoint show) restent aussi en français — surface séparée (app
+  compagnon), hors de ce correctif.
+
+### Fixed (EN)
+- **Language of every server string shown in the admin chat and the
+  configuration page**: they were hard-coded French regardless of the Emby
+  interface language. They now follow the display language (same bucket as
+  task names, EN fallback) through the plugin's server dictionary (FR + EN):
+  - *Prompt diff card*: field label ("RAG directives", "\"Watch tonight\"
+    run"…), divergence banner and the test hints shown after approval. The
+    `plugin_prompts` tool keeps serving its French labels to the LLM
+    (list/get actions) — only what is displayed changes.
+  - *Emby action cards (11 tools)*: proposal labels ("Recording \"…\" (DVR,
+    movie)", "Add to the collection…"), execution details shown after
+    approval, refusals reachable at execution time (guardrails, budget,
+    limits), and the turn's action labels ("Chat: …").
+  - *Endpoint errors*: "Administrators only", "Plugin configuration
+    unavailable", "Empty message", LLM timeout, expired proposals,
+    cancelled/failed executions — the ~35 sites now share the same keys
+    across all the plugin's endpoints (chat, config, audit, genres, recos,
+    memory, metrics, cross-kind queue).
+  - *LLM run failure prefix* ("Chat failed: ") localized, with the
+    consistency check updated in both chats (admin and external).
+  - *"Watch tonight" run errors* (user not resolved, no recommendation,
+    items not found) — they surface on the chat card via `run_tonight_run`
+    and on the Recommendations page.
+- **Thread [Admin] notes translated**: the four canned messages pushed
+  after an Approve/Refuse click (prompt and action) are rendered through the
+  client dictionary (FR + EN), like the mode-selection announcement — they
+  are not shown as bubbles, but the LLM replays them on the next turn and
+  may quote them: the voice stays consistent in the page language. The diff
+  card's "(empty)" fallback follows the language too.
+- **Deliberate boundary**: texts aimed at the LLM only (tool descriptions,
+  mode guides, deposit-phase JSON details, defensive re-validation
+  refusals) stay in French — documented design, the reader is the LLM. The
+  external chat's own strings (PIN gate, rate limits, show endpoint) also
+  stay French — a separate surface (companion app), out of this fix.
+
 ## [1.15.0.1] — 2026-10-02
 
 ### Fixed (FR)

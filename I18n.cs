@@ -307,6 +307,15 @@ namespace LLM_AI
             return key;
         }
 
+        /// <summary>
+        /// Libellé localisé <paramref name="key"/> dans la langue d'affichage
+        /// résolue depuis <paramref name="host"/> — raccourci monolithe pour
+        /// les endpoints/services à un ou deux sites d'erreur (chat, config,
+        /// actions du chat). Même bucket que les noms de tâches.
+        /// </summary>
+        internal static string SDisplay(string key, IServerApplicationHost host)
+            => S(key, ResolveDisplayLangKey(host));
+
         // --- tables de mapping nom/locale -> clé --------------------------
 
         private static readonly Dictionary<string, string> s_nameToKey =
@@ -391,6 +400,103 @@ namespace LLM_AI
                     ["rec.status.none"] = "Aucun enregistrement en attente de confirmation (réservation en attente ≠ enregistrement créé).",
                     ["rec.status.locked"] = "Outil d'enregistrement verrouillé (trop de codes erronés) — réessayez dans {0} minute(s). Rapporte-le tel quel ; ne suggère pas d'autres essais.",
                     ["rec.status.pendingnote"] = "Réservation EN ATTENTE du code (≠ enregistrement créé) : le code s'affiche à l'écran de l'app ; l'usager doit le fournir dans son message, jamais toi.",
+                    // --- Chat admin + page config : erreurs des endpoints
+                    // (v1.15.0.2) — résolues via la langue d'affichage
+                    // (ResolveDisplayLangKey), même bucket que les noms de
+                    // tâches. Avant : chaînes codées en dur FR.
+                    ["err.admin"] = "Réservé aux administrateurs.",
+                    ["err.noconfig"] = "Configuration du plugin indisponible.",
+                    ["err.emptymsg"] = "Message vide.",
+                    ["err.chatext.disabled"] = "Chat externe désactivé.",
+                    ["err.llmtimeout"] = "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez.",
+                    ["err.chatfail"] = "Échec du chat : ",
+                    ["err.pending.expired.save"] = "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau la sauvegarde dans la conversation.",
+                    ["err.pending.expired.action"] = "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau l'action dans la conversation.",
+                    ["err.proposal.invalid"] = "Proposition invalide — rien n'a été écrit.",
+                    ["err.actionlayer.disabled"] = "La couche d'action du chat est désactivée (budget 0) — rien n'a été exécuté.",
+                    ["err.tool.unknown"] = "Outil d'action indisponible ou inconnu — proposition invalide.",
+                    ["err.exec.cancelled"] = "Exécution annulée.",
+                    ["detail.executed"] = "Action exécutée.",
+                    ["err.exec.failed"] = "Échec de l'exécution — consultez le journal du serveur.",
+                    // --- Chat admin : carte de diff (libellé du champ,
+                    // bandeau de divergence, indice de test) ---
+                    ["chat.field.rag_directives"] = "Directives RAG",
+                    ["chat.field.schedule_task"] = "Tâche séries",
+                    ["chat.field.schedule_task_movies"] = "Tâche films",
+                    ["chat.field.tonight_prompt"] = "Run « ce soir »",
+                    ["chat.field.audit_prompt"] = "Prompt d'audit",
+                    ["chat.warn.divergence"] = "⚠ Ce texte diffère fortement du texte actuel du champ (recouvrement {0}%) — vérifiez qu'il s'agit bien d'une révision de « {1} » et non d'un autre prompt.",
+                    ["chat.hint.tonight_prompt"] = "Test réel : demandez dans cette conversation « lance le run ce soir » (tool run_tonight_run — opt-in « déclenchement par le chat » en config) : il exécute le VRAI code TonightService avec la nouvelle directive ; le résultat apparaît sur la page Recommandations (badge « générée via chat »).",
+                    ["chat.hint.schedule_task"] = "Test : (a) dry-run conversationnel — demandez « applique la directive aux données epg_series et montre le tableau JSON » (vérifie le format et les champs) ; (b) exécution réelle — déclenchez la tâche « Enregistrements séries » (tableau de bord Emby, ou system_audit action=trigger_task si la remédiation est activée) et vérifiez les recommandations produites.",
+                    ["chat.hint.schedule_task_movies"] = "Test : (a) dry-run conversationnel — demandez « applique la directive aux données epg_movies et montre le tableau JSON » ; (b) exécution réelle — déclenchez la tâche « Enregistrements films » et vérifiez les recommandations.",
+                    ["chat.hint.audit_prompt"] = "Test réel : le bouton « Lancer l'audit santé » de la page de configuration (le chat, lui, exécute system_audit avec son workflow interne, pas ce prompt).",
+                    ["chat.hint.rag_directives"] = "Test : ces directives s'appliquent à TOUS les runs — le meilleur indicateur est un run « ce soir » (ou le dry-run conversationnel d'une directive de tâche) : les garde-fous (jamais un titre possédé, jamais une donnée devinée) doivent y être visibles.",
+                    // --- Chat admin : actions Emby (libellés des cartes de
+                    // proposition, toasts « Actions du tour », détails
+                    // d'exécution affichés sur la carte + poussés au LLM) ---
+                    ["act.label.record"] = "Enregistrement « {0} » (DVR, {1})",
+                    ["act.label.card"] = "Carte .strm « {0} »{1}",
+                    ["act.label.tag"] = "Tag « AI Tonight » : {0} item(s)",
+                    ["act.label.colladd"] = "Ajout à la collection « AI Tonight » : {0} item(s)",
+                    ["act.label.collremove"] = "Retrait de la collection « AI Tonight » : {0} item(s)",
+                    ["act.label.pladd"] = "Ajout à la playlist privée de l'admin : {0} item(s)",
+                    ["act.label.plremove"] = "Retrait de la playlist privée de l'admin : {0} item(s)",
+                    ["act.label.run"] = "Run « À regarder ce soir »",
+                    ["act.label.run.dir"] = " (directives : {0})",
+                    ["act.label.stop.playing"] = "Arrêt de la lecture de {0} — « {1} »",
+                    ["act.label.stop.idle"] = "Arrêt de la session de {0} (aucune lecture en cours)",
+                    ["act.label.task"] = "Déclenchement de la tâche « {0} »",
+                    ["act.label.msg"] = "Message Emby à {0} ({1}) : {2} — {3}",
+                    ["act.user.fallback"] = "un usager",
+                    ["act.toast.record"] = "Chat : timer programmé pour « {0} »",
+                    ["act.toast.card"] = "Chat : carte .strm « {0} » créée",
+                    ["act.toast.tag"] = "Chat : {0} item(s) tagué(s) « {1} »",
+                    ["act.toast.colladd"] = "Chat : {0} item(s) ajouté(s) à la collection « {1} »",
+                    ["act.toast.collremove"] = "Chat : {0} item(s) retiré(s) de la collection « {1} »",
+                    ["act.toast.pladd"] = "Chat : {0} item(s) ajouté(s) à la playlist « {1} »",
+                    ["act.toast.plremove"] = "Chat : {0} item(s) retiré(s) de la playlist « {1} »",
+                    ["act.toast.run"] = "Chat : run « ce soir » lancé ({0} reco(s))",
+                    ["act.toast.stop.idle"] = "Chat : rien à arrêter pour {0} (aucune lecture en cours)",
+                    ["act.toast.stop"] = "Chat : lecture arrêtée pour {0} (« {1} »)",
+                    ["act.toast.task"] = "Chat : tâche « {0} » déclenchée",
+                    ["act.toast.msg"] = "Chat : message ({0}) envoyé à {1}",
+                    ["act.ok.record"] = "Enregistrement programmé : {0}",
+                    ["act.ok.card"] = "Carte créée dans la bibliothèque « AI Suggestions » : {0}",
+                    ["act.ok.tag"] = "{0} item(s) étiqueté(s) « {1} ».",
+                    ["act.ok.colladd"] = "{0} item(s) ajouté(s) à la collection « {1} ».",
+                    ["act.ok.collremove"] = "{0} item(s) retiré(s) de la collection.",
+                    ["act.ok.pladd"] = "{0} item(s) ajouté(s) à la playlist « {1} » (privée, compte admin).",
+                    ["act.ok.plremove"] = "{0} item(s) retiré(s) de la playlist privée du compte admin.",
+                    ["act.ok.run"] = "{0} recommandation(s) générée(s) et livrée(s) via les surfaces habituelles (page Recommandations, genre/collection/playlist selon la config) : {1}",
+                    ["act.ok.stop.idle"] = "Aucune lecture en cours pour {0} — rien à arrêter.",
+                    ["act.ok.stop"] = "Lecture arrêtée pour {0} (« {1} »).",
+                    ["act.ok.task"] = "Tâche « {0} » mise en file d'exécution.",
+                    ["act.ok.msg.osd"] = "Toast OSD : {0} session(s) atteinte(s) sur {1} destinataire(s).{2}",
+                    ["act.ok.msg.notif"] = "Notification envoyée à {0} ({1}/{2}).",
+                    // Refus ATTEIGNABLES à l'approbation (le détail s'affiche
+                    // sur la carte en erreur) — les refus défensifs de
+                    // re-validation (doublons de la phase de dépôt, lus par
+                    // le LLM) restent en français.
+                    ["act.ref.record"] = "Enregistrement non programmé ({0}). Rapportez le motif à l'admin, ne réessayez pas à l'identique.",
+                    ["act.ref.card"] = "Écriture de la carte impossible (bibliothèque .strm absente ou erreur).",
+                    ["act.ref.noids"] = "aucun id résolvable dans la bibliothèque.",
+                    ["act.ref.colladd"] = "ajout impossible (API collection).",
+                    ["act.ref.notadded"] = "Aucun de ces ids n'a été ajouté par vous dans cette conversation — retrait refusé.",
+                    ["act.ref.nopluser"] = "aucun usager admin résolvable pour la playlist.",
+                    ["act.ref.noadd"] = "aucun ajout effectué (items déjà présents dans la playlist, ou échec API).",
+                    ["act.ref.plremove.noop"] = "Le retrait n'a PAS été appliqué : RemoveFromPlaylist est inopérant sur ce build Emby. Ne réessayez pas — le prochain run Tonight recrée la playlist de toute façon.",
+                    ["act.ref.tonight.off"] = "Le module « À regarder ce soir » est désactivé dans la config.",
+                    ["act.ref.tonight.running"] = "Un run « ce soir » déclenché par le chat est déjà en cours — réessayez plus tard.",
+                    ["act.ref.tonight.limit"] = "Limite de 2 runs par conversation atteinte.",
+                    ["act.ref.nouser"] = "aucun usager résolvable pour le run.",
+                    ["act.ref.cancelled"] = "annulé",
+                    ["act.ref.budget.turn"] = "Budget d'actions atteint pour ce tour ({0}). Finissez votre proposition ou réformez-la — n'insistez pas.",
+                    ["act.ref.budget.conv"] = "Budget d'actions de la conversation épuisé ({0}). Poursuivez en lecture seule.",
+                    // --- Run « ce soir » : erreurs TonightResult (carte du
+                    // chat via run_tonight_run + page Recommandations) ---
+                    ["tonight.err.nouser"] = "Utilisateur non résolu.",
+                    ["tonight.err.noreco"] = "Le run LLM n'a pas produit de recommandation.",
+                    ["tonight.err.noitems"] = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés).",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -452,6 +558,103 @@ namespace LLM_AI
                     ["rec.status.none"] = "No recording awaiting confirmation (a pending reservation is not a created recording).",
                     ["rec.status.locked"] = "The recording tool is locked (too many wrong codes) — try again in {0} minute(s). Report it as-is; do not suggest further attempts.",
                     ["rec.status.pendingnote"] = "Reservation AWAITING the code (not a created recording): the code is shown on the app's screen; the user must provide it in their message, never you.",
+                    // --- Admin chat + config page: endpoint errors (v1.15.0.2)
+                    // — resolved through the display language
+                    // (ResolveDisplayLangKey), same bucket as task names.
+                    // Previously: hardcoded FR strings.
+                    ["err.admin"] = "Administrators only.",
+                    ["err.noconfig"] = "Plugin configuration unavailable.",
+                    ["err.emptymsg"] = "Empty message.",
+                    ["err.chatext.disabled"] = "External chat disabled.",
+                    ["err.llmtimeout"] = "The LLM did not respond in time (timeout exceeded). Try again.",
+                    ["err.chatfail"] = "Chat failed: ",
+                    ["err.pending.expired.save"] = "Proposal not found or expired (valid for 10 minutes) — request the save again in the conversation.",
+                    ["err.pending.expired.action"] = "Action not found or expired (valid for 10 minutes) — request the action again in the conversation.",
+                    ["err.proposal.invalid"] = "Invalid proposal — nothing was written.",
+                    ["err.actionlayer.disabled"] = "The chat action layer is disabled (budget 0) — nothing was executed.",
+                    ["err.tool.unknown"] = "Action tool unavailable or unknown — invalid proposal.",
+                    ["err.exec.cancelled"] = "Execution cancelled.",
+                    ["detail.executed"] = "Action executed.",
+                    ["err.exec.failed"] = "Execution failed — check the server log.",
+                    // --- Admin chat: diff card (field label, divergence
+                    // banner, test hint) ---
+                    ["chat.field.rag_directives"] = "RAG directives",
+                    ["chat.field.schedule_task"] = "Series task",
+                    ["chat.field.schedule_task_movies"] = "Movies task",
+                    ["chat.field.tonight_prompt"] = "\"Watch tonight\" run",
+                    ["chat.field.audit_prompt"] = "Audit prompt",
+                    ["chat.warn.divergence"] = "⚠ This text differs strongly from the field's current text ({0}% overlap) — make sure it really is a revision of \"{1}\" and not another prompt.",
+                    ["chat.hint.tonight_prompt"] = "Real test: ask in this conversation \"run tonight's run\" (tool run_tonight_run — opt-in \"chat triggering\" in config): it executes the REAL TonightService code with the new directive; the result appears on the Recommendations page (\"generated via chat\" badge).",
+                    ["chat.hint.schedule_task"] = "Test: (a) conversational dry-run — ask \"apply the directive to the epg_series data and show the JSON table\" (checks the format and fields); (b) real run — trigger the series-recordings task (Emby dashboard, or system_audit action=trigger_task if remediation is enabled) and check the recommendations produced.",
+                    ["chat.hint.schedule_task_movies"] = "Test: (a) conversational dry-run — ask \"apply the directive to the epg_movies data and show the JSON table\"; (b) real run — trigger the movies-recordings task and check the recommendations.",
+                    ["chat.hint.audit_prompt"] = "Real test: the \"Run health audit\" button on the configuration page (the chat itself runs system_audit with its own internal workflow, not this prompt).",
+                    ["chat.hint.rag_directives"] = "Test: these directives apply to ALL runs — the best indicator is a \"tonight\" run (or the conversational dry-run of a task directive): the guardrails (never an owned title, never a guessed fact) must be visible there.",
+                    // --- Admin chat: Emby actions (proposal card labels,
+                    // "Actions this turn" toasts, execution details shown
+                    // on the card + pushed to the LLM) ---
+                    ["act.label.record"] = "Recording \"{0}\" (DVR, {1})",
+                    ["act.label.card"] = ".strm card \"{0}\"{1}",
+                    ["act.label.tag"] = "\"AI Tonight\" tag: {0} item(s)",
+                    ["act.label.colladd"] = "Add to the \"AI Tonight\" collection: {0} item(s)",
+                    ["act.label.collremove"] = "Remove from the \"AI Tonight\" collection: {0} item(s)",
+                    ["act.label.pladd"] = "Add to the admin's private playlist: {0} item(s)",
+                    ["act.label.plremove"] = "Remove from the admin's private playlist: {0} item(s)",
+                    ["act.label.run"] = "\"Watch tonight\" run",
+                    ["act.label.run.dir"] = " (directives: {0})",
+                    ["act.label.stop.playing"] = "Stop playback of {0} — \"{1}\"",
+                    ["act.label.stop.idle"] = "Stop {0}'s session (nothing playing)",
+                    ["act.label.task"] = "Trigger the task \"{0}\"",
+                    ["act.label.msg"] = "Emby message to {0} ({1}): {2} — {3}",
+                    ["act.user.fallback"] = "a user",
+                    ["act.toast.record"] = "Chat: timer scheduled for \"{0}\"",
+                    ["act.toast.card"] = "Chat: .strm card \"{0}\" created",
+                    ["act.toast.tag"] = "Chat: {0} item(s) tagged \"{1}\"",
+                    ["act.toast.colladd"] = "Chat: {0} item(s) added to the \"{1}\" collection",
+                    ["act.toast.collremove"] = "Chat: {0} item(s) removed from the \"{1}\" collection",
+                    ["act.toast.pladd"] = "Chat: {0} item(s) added to the \"{1}\" playlist",
+                    ["act.toast.plremove"] = "Chat: {0} item(s) removed from the \"{1}\" playlist",
+                    ["act.toast.run"] = "Chat: \"tonight\" run started ({0} recommendation(s))",
+                    ["act.toast.stop.idle"] = "Chat: nothing to stop for {0} (nothing playing)",
+                    ["act.toast.stop"] = "Chat: playback stopped for {0} (\"{1}\")",
+                    ["act.toast.task"] = "Chat: task \"{0}\" triggered",
+                    ["act.toast.msg"] = "Chat: message ({0}) sent to {1}",
+                    ["act.ok.record"] = "Recording scheduled: {0}",
+                    ["act.ok.card"] = "Card created in the \"AI Suggestions\" library: {0}",
+                    ["act.ok.tag"] = "{0} item(s) tagged \"{1}\".",
+                    ["act.ok.colladd"] = "{0} item(s) added to the \"{1}\" collection.",
+                    ["act.ok.collremove"] = "{0} item(s) removed from the collection.",
+                    ["act.ok.pladd"] = "{0} item(s) added to the playlist \"{1}\" (private, admin account).",
+                    ["act.ok.plremove"] = "{0} item(s) removed from the admin account's private playlist.",
+                    ["act.ok.run"] = "{0} recommendation(s) generated and delivered through the usual surfaces (Recommendations page, genre/collection/playlist per config): {1}",
+                    ["act.ok.stop.idle"] = "Nothing playing for {0} — nothing to stop.",
+                    ["act.ok.stop"] = "Playback stopped for {0} (\"{1}\").",
+                    ["act.ok.task"] = "Task \"{0}\" queued for execution.",
+                    ["act.ok.msg.osd"] = "OSD toast: {0} session(s) reached out of {1} recipient(s).{2}",
+                    ["act.ok.msg.notif"] = "Notification sent to {0} ({1}/{2}).",
+                    // Refusals REACHABLE at approval (the detail is shown on
+                    // the card as an error) — defensive re-validation
+                    // refusals (twins of the deposit phase, read by the LLM)
+                    // stay in French.
+                    ["act.ref.record"] = "Recording not scheduled ({0}). Report the reason to the admin; do not retry the same way.",
+                    ["act.ref.card"] = "Card could not be written (.strm library missing or error).",
+                    ["act.ref.noids"] = "no resolvable id in the library.",
+                    ["act.ref.colladd"] = "add failed (collection API).",
+                    ["act.ref.notadded"] = "None of these ids were added by you in this conversation — removal refused.",
+                    ["act.ref.nopluser"] = "no resolvable admin user for the playlist.",
+                    ["act.ref.noadd"] = "nothing added (items already in the playlist, or API failure).",
+                    ["act.ref.plremove.noop"] = "The removal was NOT applied: RemoveFromPlaylist is a no-op on this Emby build. Do not retry — the next Tonight run rebuilds the playlist anyway.",
+                    ["act.ref.tonight.off"] = "The \"Watch tonight\" module is disabled in the config.",
+                    ["act.ref.tonight.running"] = "A chat-triggered \"tonight\" run is already in progress — try again later.",
+                    ["act.ref.tonight.limit"] = "Limit of 2 runs per conversation reached.",
+                    ["act.ref.nouser"] = "no resolvable user for the run.",
+                    ["act.ref.cancelled"] = "cancelled",
+                    ["act.ref.budget.turn"] = "Action budget reached for this turn ({0}). Finish your proposal or rephrase it — do not insist.",
+                    ["act.ref.budget.conv"] = "Conversation action budget exhausted ({0}). Continue read-only.",
+                    // --- "Watch tonight" run: TonightResult errors (chat card
+                    // via run_tonight_run + Recommendations page) ---
+                    ["tonight.err.nouser"] = "Could not resolve the user.",
+                    ["tonight.err.noreco"] = "The LLM run produced no recommendation.",
+                    ["tonight.err.noitems"] = "All recommendations pointed to items that could not be found (expired EPG or deleted items).",
                     ["task.category"] = "LLM AI",
                 },
             };

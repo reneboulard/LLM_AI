@@ -62,13 +62,14 @@ namespace LLM_AI
         private readonly string _sessionId;
         private readonly string _userId;
         private readonly string _contextId;
+        private readonly string _lang;
         private readonly ILogger _logger;
 
         public ChatPromptsTool(PluginConfiguration cfg, string sessionId, string userId,
-            string contextId, ILogger logger)
+            string contextId, string langKey, ILogger logger)
         {
             _cfg = cfg; _sessionId = sessionId; _userId = userId;
-            _contextId = contextId; _logger = logger;
+            _contextId = contextId; _lang = langKey; _logger = logger;
         }
 
         public string Name => "plugin_prompts";
@@ -163,7 +164,8 @@ namespace LLM_AI
                     // Avertissement de divergence (non bloquant, affiché sur
                     // la carte) : un texte qui ne recouvre presque pas le
                     // texte courant n'est probablement pas une révision du
-                    // read-modify-write.
+                    // read-modify-write. Rendu dans la langue d'affichage
+                    // (v1.15.0.2) — la carte est le seul lecteur.
                     string warn = null;
                     var current = GetPrompt(_cfg, field) ?? "";
                     if (current.Trim().Length > 0 && text.Length > 0)
@@ -171,16 +173,17 @@ namespace LLM_AI
                         double overlap = WordOverlap(text, current);
                         if (overlap < WarnOverlapThreshold)
                         {
-                            warn = "⚠ Ce texte diffère fortement du texte actuel du champ (recouvrement " +
-                                Math.Round(overlap * 100) + "%) — vérifiez qu'il s'agit bien d'une " +
-                                "révision de « " + LabelOf(field) + " » et non d'un autre prompt.";
+                            warn = string.Format(CultureInfo.InvariantCulture,
+                                I18n.S("chat.warn.divergence", _lang),
+                                Math.Round(overlap * 100),
+                                LabelOfLocalized(field, _lang));
                             _logger?.Info("[LLM_AI] Chat prompts : divergence détectée sur {0} " +
                                 "(recouvrement {1}%).", field, Math.Round(overlap * 100));
                         }
                     }
 
                     var pending = ChatPromptStore.Create(_cfg, _sessionId, _userId, field, text,
-                        LabelOf(field), warn, _logger);
+                        LabelOfLocalized(field, _lang), warn, _logger);
                     if (pending == null)
                         return Task.FromResult(Json(new { status = "failed", detail = "création de l'attente impossible." }));
 
@@ -227,6 +230,20 @@ namespace LLM_AI
             return field ?? "";
         }
 
+        /// <summary>Libellé du champ DANS LA LANGUE D'AFFICHAGE
+        /// (v1.15.0.2) : contrairement à <see cref="LabelOf"/> (français,
+        /// servi au LLM via les actions list/get), celui-ci est rendu sur la
+        /// carte de diff de la page. Repli EN puis clé brute
+        /// (cf. <see cref="I18n.S"/>).</summary>
+        internal static string LabelOfLocalized(string field, string langKey)
+        {
+            string f = (field ?? "").Trim();
+            foreach (var (id, _) in FieldIds)
+                if (string.Equals(id, f, StringComparison.Ordinal))
+                    return I18n.S("chat.field." + id, langKey);
+            return field ?? "";
+        }
+
         /// <summary>Lecteur du texte courant (liste blanche stricte —
         /// reflexion interdite, un champ inconnu retourne null).</summary>
         internal static string GetPrompt(PluginConfiguration cfg, string field)
@@ -244,43 +261,22 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Indication de test par champ (FR, convention du plugin : les
-        /// chaînes serveur affichées à l'admin sont FR) — renvoyée dans la
-        /// réponse d'approbation et poussée dans le fil pour que le LLM
-        /// sache COMMENT tester la nouvelle directive. Réaliste : elle dit
-        /// le chemin qui exécute le VRAI code, ou la simulation possible
-        /// quand aucun tool ne rejoue la tâche.
+        /// Indication de test par champ — renvoyée dans la réponse
+        /// d'approbation et affichée sur la carte (ligne dédiée) puis poussée
+        /// dans le fil pour que le LLM sache COMMENT tester la nouvelle
+        /// directive. Localisée (v1.15.0.2 — la carte est le premier
+        /// lecteur) : les textes vivent dans <c>I18n.s_res</c> sous les clés
+        /// <c>chat.hint.&lt;champ&gt;</c>. Réaliste : elle dit le chemin qui
+        /// exécute le VRAI code, ou la simulation possible quand aucun tool
+        /// ne rejoue la tâche.
         /// </summary>
-        internal static string TestHintFor(string field)
+        internal static string TestHintFor(string field, string langKey)
         {
-            switch ((field ?? "").Trim())
-            {
-                case "tonight_prompt":
-                    return "Test réel : demandez dans cette conversation « lance le run ce soir » " +
-                        "(tool run_tonight_run — opt-in « déclenchement par le chat » en config) : il " +
-                        "exécute le VRAI code TonightService avec la nouvelle directive ; le résultat " +
-                        "apparaît sur la page Recommandations (badge « générée via chat »).";
-                case "schedule_task":
-                    return "Test : (a) dry-run conversationnel — demandez « applique la directive aux " +
-                        "données epg_series et montre le tableau JSON » (vérifie le format et les champs) ; " +
-                        "(b) exécution réelle — déclenchez la tâche « Enregistrements séries » (tableau de " +
-                        "bord Emby, ou system_audit action=trigger_task si la remédiation est activée) et " +
-                        "vérifiez les recommandations produites.";
-                case "schedule_task_movies":
-                    return "Test : (a) dry-run conversationnel — demandez « applique la directive aux " +
-                        "données epg_movies et montre le tableau JSON » ; (b) exécution réelle — " +
-                        "déclenchez la tâche « Enregistrements films » et vérifiez les recommandations.";
-                case "audit_prompt":
-                    return "Test réel : le bouton « Lancer l'audit santé » de la page de configuration " +
-                        "(le chat, lui, exécute system_audit avec son workflow interne, pas ce prompt).";
-                case "rag_directives":
-                    return "Test : ces directives s'appliquent à TOUS les runs — le meilleur indicateur " +
-                        "est un run « ce soir » (ou le dry-run conversationnel d'une directive de tâche) : " +
-                        "les garde-fous (jamais un titre possédé, jamais une donnée devinée) doivent y " +
-                        "être visibles.";
-                default:
-                    return "";
-            }
+            string f = (field ?? "").Trim();
+            foreach (var (id, _) in FieldIds)
+                if (string.Equals(id, f, StringComparison.Ordinal))
+                    return I18n.S("chat.hint." + id, langKey);
+            return "";
         }
 
         /// <summary>Recouvrement lexical entre deux textes : mots

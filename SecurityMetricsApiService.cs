@@ -73,7 +73,7 @@ namespace LLM_AI
                 return Task.FromResult<object>(new SecurityMetricsResponse
                 {
                     GeneratedAt = DateTimeOffset.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                    Error = "Réservé aux administrateurs."
+                    Error = I18n.SDisplay("err.admin", ApplicationHost)
                 });
             }
 

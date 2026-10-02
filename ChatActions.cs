@@ -189,17 +189,17 @@ namespace LLM_AI
 
         /// <summary>Refus typé renvoyé au modèle quand le budget est
         /// épuisé (tour ou conversation) — le tool s'arrête proprement.</summary>
+        /// <summary>Refus typé renvoyé au modèle quand le budget est
+        /// épuisé (tour ou conversation) — le tool s'arrête proprement.
+        /// Localisé (v1.15.0.2) : ce refus n'est émis qu'à l'exécution
+        /// (approbation) et s'affiche alors sur la carte.</summary>
         public static string BudgetRefusal(string sessionId, BudgetVerdict verdict, PluginConfiguration cfg)
         {
             if (verdict == BudgetVerdict.ConvExhausted)
                 return Json(new { status = "refused",
-                    detail = string.Format(CultureInfo.InvariantCulture,
-                        "Budget d'actions de la conversation épuisé ({0}). Poursuivez en lecture seule.",
-                        Cap(cfg)) });
+                    detail = LF("act.ref.budget.conv", Cap(cfg)) });
             return Json(new { status = "refused",
-                detail = string.Format(CultureInfo.InvariantCulture,
-                    "Budget d'actions atteint pour ce tour ({0}). Finissez votre proposition ou réformez-la — n'insistez pas.",
-                    Budget(cfg)) });
+                detail = LF("act.ref.budget.turn", Budget(cfg)) });
         }
 
         public static bool TryBeginRun()
@@ -273,6 +273,10 @@ namespace LLM_AI
             ILogger logger, IJsonSerializer json, ISessionManager sessions,
             ITaskManager tasks, INotificationManager notifications)
         {
+            // Langue d'affichage de l'approbation (v1.15.0.2) : les détails
+            // d'exécution/toasts rendus par ExecuteCoreAsync suivent
+            // l'interface, comme au dépôt.
+            s_lang = I18n.ResolveDisplayLangKey(host);
             switch ((toolName ?? string.Empty).Trim().ToLowerInvariant())
             {
                 case "record_program":
@@ -361,6 +365,10 @@ namespace LLM_AI
             // Singleton Emby, re-posé à chaque tour (les outils y lisent le
             // gestionnaire pour les toasts de traçabilité — cf. ci-dessous).
             s_sessions = sessions;
+            // Langue d'affichage du tour : les libellés/détails/toasts
+            // déposés pendant CE tour sont rendus dans la langue de
+            // l'interface (v1.15.0.2).
+            s_lang = I18n.ResolveDisplayLangKey(host);
             // Liaison d'usager des pendings (deux phases v1.13.29) : la
             // proposition est émise par CET admin — un autre compte ne peut
             // pas approuver (ChatActionStore.Consume vérifie).
@@ -396,6 +404,24 @@ namespace LLM_AI
         // Singleton Emby (posé par <see cref="BuildTools"/>) : les outils y
         // lisent le gestionnaire de sessions pour les toasts.
         private static ISessionManager s_sessions;
+
+        // Langue d'affichage courante (v1.15.0.2) — même pattern que
+        // s_sessions : posée au début de chaque requête par
+        // <see cref="BuildTools"/> (tour de chat) ou
+        // <see cref="BuildToolByName"/> (approbation), lue par les outils
+        // pour rendre en langue d'interface tout ce que la page affiche
+        // (libellés des cartes, toasts « Actions du tour », détails
+        // d'exécution). Les réponses JSON destinées au SEUL LLM (dépôt,
+        // garde-fous de re-validation défensifs) restent en français
+        // (design documenté : le lecteur est le LLM).
+        private static string s_lang = I18n.En;
+
+        /// <summary>Libellé localisé (repli EN — cf. <see cref="I18n.S"/>).</summary>
+        internal static string L(string key) => I18n.S(key, s_lang);
+
+        /// <summary>Libellé localisé avec substituants ({0}, {1}…).</summary>
+        internal static string LF(string key, params object[] args)
+            => string.Format(CultureInfo.InvariantCulture, I18n.S(key, s_lang), args);
 
         /// <summary>
         /// Toast « traçage d'action » : quand une action du chat réussit
@@ -562,8 +588,9 @@ namespace LLM_AI
                 if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(programId))
                     return Task.FromResult(Json(new { status = "refused", detail = "title et program_id sont requis." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Enregistrement « " + title.Trim() + " » (DVR, " +
-                    (string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase) ? "série" : "film") + ")"));
+                    LF("act.label.record", title.Trim(),
+                        I18n.S(string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
+                            ? "rec.kind.series" : "rec.kind.movie", s_lang))));
             }
 
             /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
@@ -601,15 +628,14 @@ namespace LLM_AI
                     {
                         Refund(_sessionId, 1); // garde-fou : pas une action réelle
                         return Json(new { status = "refused",
-                            detail = "Enregistrement non programmé (" + outcome + "). " +
-                                     "Rapportez le motif à l'admin, ne réessayez pas à l'identique." });
+                            detail = LF("act.ref.record", outcome) });
                     }
 
                     _logger?.Info("[LLM_AI] Chat action : timer créé pour « {0} » (programId={1}).", title, programId);
-                    await ToastActionAsync(_sessionId, "Chat : timer programmé pour « " + title + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = "Enregistrement programmé : " + title });
+                    await ToastActionAsync(_sessionId, LF("act.toast.record", title), _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.record", title) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     Refund(_sessionId, 1);
@@ -667,8 +693,8 @@ namespace LLM_AI
                         detail = "title et program_id sont requis (une carte pointe un programme EPG à venir)." }));
                 string reason = ArgString(args, "reason") ?? "";
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Carte .strm « " + title.Trim() + " »" +
-                    (string.IsNullOrWhiteSpace(reason) ? "" : " — " + reason.Trim())));
+                    LF("act.label.card", title.Trim(),
+                        string.IsNullOrWhiteSpace(reason) ? "" : " — " + reason.Trim())));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -702,14 +728,14 @@ namespace LLM_AI
                     {
                         Refund(_sessionId, 1);
                         return Json(new { status = "failed",
-                            detail = "Écriture de la carte impossible (bibliothèque .strm absente ou erreur)." });
+                            detail = L("act.ref.card") });
                     }
 
                     _logger?.Info("[LLM_AI] Chat action : carte .strm créée pour « {0} » (source={1}).", title, reco.Source);
-                    await ToastActionAsync(_sessionId, "Chat : carte .strm « " + title + " » créée", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = "Carte créée dans la bibliothèque « AI Suggestions » : " + title });
+                    await ToastActionAsync(_sessionId, LF("act.toast.card", title), _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.card", title) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     Refund(_sessionId, 1);
@@ -758,7 +784,7 @@ namespace LLM_AI
                 if (ids.Count > 10)
                     return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Tag « AI Tonight » : " + ids.Count + " item(s)"));
+                    LF("act.label.tag", ids.Count)));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -782,11 +808,12 @@ namespace LLM_AI
                         .ConfigureAwait(false);
 
                     _logger?.Info("[LLM_AI] Chat action : {0} item(s) taggé(s) « {1} ».", ids.Count, AiTagger.TonightTag);
-                    await ToastActionAsync(_sessionId, "Chat : " + ids.Count + " item(s) tagué(s) « " + AiTagger.TonightTag + " »",
-                        _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = ids.Count + " item(s) étiqueté(s) « " + AiTagger.TonightTag + " »." });
+                    await ToastActionAsync(_sessionId,
+                        LF("act.toast.tag", ids.Count, AiTagger.TonightTag), _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok",
+                        detail = LF("act.ok.tag", ids.Count, AiTagger.TonightTag) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action tag_ai_tonight : {0}", ex.Message);
@@ -838,7 +865,7 @@ namespace LLM_AI
                 if (ids.Count > 10)
                     return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Ajout à la collection « AI Tonight » : " + ids.Count + " item(s)"));
+                    LF("act.label.colladd", ids.Count)));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -854,7 +881,7 @@ namespace LLM_AI
 
                     var norm = ids.Select(s => NormId(_library, s)).Where(s => s != null).Distinct().ToList();
                     if (norm.Count == 0)
-                        return Json(new { status = "refused", detail = "aucun id résolvable dans la bibliothèque." });
+                        return Json(new { status = "refused", detail = L("act.ref.noids") });
 
                     var verdict = Reserve(_sessionId, norm.Count, _cfg);
                     if (verdict != BudgetVerdict.Ok)
@@ -865,7 +892,7 @@ namespace LLM_AI
                     if (added <= 0)
                     {
                         Refund(_sessionId, norm.Count);
-                        return Json(new { status = "failed", detail = "ajout impossible (API collection)." });
+                        return Json(new { status = "failed", detail = L("act.ref.colladd") });
                     }
 
                     var st = ChatActions.For(_sessionId);
@@ -874,12 +901,13 @@ namespace LLM_AI
 
                     _logger?.Info("[LLM_AI] Chat action : {0} item(s) ajouté(s) à la collection « {1} ».",
                         added, AiTonightCollectionManager.CollectionName);
-                    await ToastActionAsync(_sessionId, "Chat : " + added + " item(s) ajouté(s) à la collection « "
-                        + AiTonightCollectionManager.CollectionName + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = added + " item(s) ajouté(s) à la collection « "
-                        + AiTonightCollectionManager.CollectionName + " »." });
+                    await ToastActionAsync(_sessionId,
+                        LF("act.toast.colladd", added, AiTonightCollectionManager.CollectionName),
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok",
+                        detail = LF("act.ok.colladd", added, AiTonightCollectionManager.CollectionName) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action collection_add : {0}", ex.Message);
@@ -924,7 +952,7 @@ namespace LLM_AI
                 if (ids == null || ids.Count == 0)
                     return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Retrait de la collection « AI Tonight » : " + ids.Count + " item(s)"));
+                    LF("act.label.collremove", ids.Count)));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -940,8 +968,7 @@ namespace LLM_AI
                     List<string> eligible;
                     lock (st) eligible = ids.Select(s => NormId(_library, s)).Where(s => s != null && st.CollectionAdded.Contains(s)).ToList();
                     if (eligible.Count == 0)
-                        return Json(new { status = "refused",
-                            detail = "Aucun de ces ids n'a été ajouté par vous dans cette conversation — retrait refusé." });
+                        return Json(new { status = "refused", detail = L("act.ref.notadded") });
 
                     var verdict = Reserve(_sessionId, eligible.Count, _cfg);
                     if (verdict != BudgetVerdict.Ok)
@@ -961,11 +988,12 @@ namespace LLM_AI
 
                     _logger?.Info("[LLM_AI] Chat action : {0} item(s) retiré(s) de la collection « {1} ».",
                         removed, AiTonightCollectionManager.CollectionName);
-                    await ToastActionAsync(_sessionId, "Chat : " + removed + " item(s) retiré(s) de la collection « "
-                        + AiTonightCollectionManager.CollectionName + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = removed + " item(s) retiré(s) de la collection." });
+                    await ToastActionAsync(_sessionId,
+                        LF("act.toast.collremove", removed, AiTonightCollectionManager.CollectionName),
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.collremove", removed) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action collection_remove : {0}", ex.Message);
@@ -1020,7 +1048,7 @@ namespace LLM_AI
                 if (ids.Count > 10)
                     return Task.FromResult(Json(new { status = "refused", detail = "10 ids maximum par appel." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Ajout à la playlist privée de l'admin : " + ids.Count + " item(s)"));
+                    LF("act.label.pladd", ids.Count)));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -1036,7 +1064,7 @@ namespace LLM_AI
 
                     var norm = ids.Select(s => NormId(_library, s)).Where(s => s != null).Distinct().ToList();
                     if (norm.Count == 0)
-                        return Json(new { status = "refused", detail = "aucun id résolvable dans la bibliothèque." });
+                        return Json(new { status = "refused", detail = L("act.ref.noids") });
 
                     // Hygiène v1.13.2 : AddItemsAsync normalise en feuilles
                     // (série → épisode next up) et déduplique — le budget est
@@ -1054,7 +1082,7 @@ namespace LLM_AI
                     if (_adminUser == null)
                     {
                         Refund(_sessionId, norm.Count);
-                        return Json(new { status = "refused", detail = "aucun usager admin résolvable pour la playlist." });
+                        return Json(new { status = "refused", detail = L("act.ref.nopluser") });
                     }
                     string targetName = AiTonightPlaylistManager.UserPlaylistName(_adminUser);
 
@@ -1064,8 +1092,7 @@ namespace LLM_AI
                     if (added <= 0)
                     {
                         Refund(_sessionId, norm.Count);
-                        return Json(new { status = "refused",
-                            detail = "aucun ajout effectué (items déjà présents dans la playlist, ou échec API)." });
+                        return Json(new { status = "refused", detail = L("act.ref.noadd") });
                     }
 
                     var st = ChatActions.For(_sessionId);
@@ -1074,12 +1101,12 @@ namespace LLM_AI
 
                     _logger?.Info("[LLM_AI] Chat action : {0} item(s) ajouté(s) à la playlist « {1} ».",
                         added, targetName);
-                    await ToastActionAsync(_sessionId, "Chat : " + added + " item(s) ajouté(s) à la playlist « "
-                        + targetName + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = added + " item(s) ajouté(s) à la playlist « "
-                        + targetName + " » (privée, compte admin)." });
+                    await ToastActionAsync(_sessionId, LF("act.toast.pladd", added, targetName),
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok",
+                        detail = LF("act.ok.pladd", added, targetName) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action playlist_add : {0}", ex.Message);
@@ -1127,7 +1154,7 @@ namespace LLM_AI
                 if (ids == null || ids.Count == 0)
                     return Task.FromResult(Json(new { status = "refused", detail = "item_ids requis." }));
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Retrait de la playlist privée de l'admin : " + ids.Count + " item(s)"));
+                    LF("act.label.plremove", ids.Count)));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -1143,8 +1170,7 @@ namespace LLM_AI
                     List<string> eligible;
                     lock (st) eligible = ids.Select(s => NormId(_library, s)).Where(s => s != null && st.PlaylistAdded.Contains(s)).ToList();
                     if (eligible.Count == 0)
-                        return Json(new { status = "refused",
-                            detail = "Aucun de ces ids n'a été ajouté par vous dans cette conversation — retrait refusé." });
+                        return Json(new { status = "refused", detail = L("act.ref.notadded") });
 
                     var verdict = Reserve(_sessionId, eligible.Count, _cfg);
                     if (verdict != BudgetVerdict.Ok)
@@ -1167,9 +1193,7 @@ namespace LLM_AI
                     if (removed.Count == 0)
                     {
                         _logger?.Info("[LLM_AI] Chat action : retrait playlist sans effet (RemoveFromPlaylist inopérant sur ce build).");
-                        return Json(new { status = "failed",
-                            detail = "Le retrait n'a PAS été appliqué : RemoveFromPlaylist est inopérant sur ce build Emby. "
-                                + "Ne réessayez pas — le prochain run Tonight recrée la playlist de toute façon." });
+                        return Json(new { status = "failed", detail = L("act.ref.plremove.noop") });
                     }
 
                     string targetName = _adminUser != null
@@ -1177,11 +1201,11 @@ namespace LLM_AI
                         : AiTonightPlaylistManager.PlaylistName;
                     _logger?.Info("[LLM_AI] Chat action : {0} entrée(s) retirée(s) de la playlist « {1} ».",
                         removed.Count, targetName);
-                    await ToastActionAsync(_sessionId, "Chat : " + removed.Count + " item(s) retiré(s) de la playlist « "
-                        + targetName + " »", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = removed.Count + " item(s) retiré(s) de la playlist privée du compte admin." });
+                    await ToastActionAsync(_sessionId, LF("act.toast.plremove", removed.Count, targetName),
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.plremove", removed.Count) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action playlist_remove : {0}", ex.Message);
@@ -1234,9 +1258,11 @@ namespace LLM_AI
                 string directives = (ArgString(args, "directives") ?? "").Trim();
                 if (directives.Length > 500) directives = directives.Substring(0, 500);
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Run « À regarder ce soir »" +
-                    (directives.Length > 0 ? " (directives : " +
-                        (directives.Length > 80 ? directives.Substring(0, 80) + "…" : directives) + ")" : "")));
+                    L("act.label.run") +
+                    (directives.Length > 0
+                        ? LF("act.label.run.dir",
+                            directives.Length > 80 ? directives.Substring(0, 80) + "…" : directives)
+                        : "")));
             }
 
             /// <summary>Phase 2 : exécution réelle (approbation uniquement).</summary>
@@ -1245,18 +1271,17 @@ namespace LLM_AI
                 try
                 {
                     if (!_cfg.TonightEnabled)
-                        return Json(new { status = "refused", detail = "Le module « À regarder ce soir » est désactivé dans la config." });
+                        return Json(new { status = "refused", detail = L("act.ref.tonight.off") });
 
                     if (!TryBeginRun())
-                        return Json(new { status = "refused", detail = "Un run « ce soir » déclenché par le chat est déjà en cours — réessayez plus tard." });
+                        return Json(new { status = "refused", detail = L("act.ref.tonight.running") });
                     try
                     {
                         var st = ChatActions.For(_sessionId);
                         lock (st)
                         {
                             if (st.RunCount >= 2)
-                                return Json(new { status = "refused",
-                                    detail = "Limite de 2 runs par conversation atteinte." });
+                                return Json(new { status = "refused", detail = L("act.ref.tonight.limit") });
                         }
 
                         var verdict = Reserve(_sessionId, 1, _cfg);
@@ -1277,7 +1302,7 @@ namespace LLM_AI
                         if (user == null)
                         {
                             Refund(_sessionId, 1);
-                            return Json(new { status = "refused", detail = "aucun usager résolvable pour le run." });
+                            return Json(new { status = "refused", detail = L("act.ref.nouser") });
                         }
 
                         lock (st) st.RunCount++;
@@ -1312,19 +1337,17 @@ namespace LLM_AI
                         }
                         catch { /* payload non parsable : rapport sans titres */ }
 
-                        await ToastActionAsync(_sessionId, "Chat : run « ce soir » lancé (" + titles.Count + " reco(s))",
+                        await ToastActionAsync(_sessionId, LF("act.toast.run", titles.Count),
                             _logger).ConfigureAwait(false);
                         return Json(new
                         {
                             status = "ok",
-                            detail = (titles.Count + " recommandation(s) générée(s) et livrée(s) via les surfaces "
-                                + "habituelles (page Recommandations, genre/collection/playlist selon la config) : ")
-                                + string.Join(", ", titles)
+                            detail = LF("act.ok.run", titles.Count, string.Join(", ", titles))
                         });
                     }
                     finally { EndRun(); }
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     _logger?.Warn("[LLM_AI] Chat action run_tonight_run : {0}", ex.Message);
@@ -1385,11 +1408,10 @@ namespace LLM_AI
                     return Task.FromResult(Json(new { status = "refused",
                         detail = "session introuvable : " + sid.Trim() + " (voir system_audit, action active_sessions)." }));
 
+                string who = session.UserName ?? L("act.user.fallback");
                 string label = session.NowPlayingItem?.Name != null
-                    ? "Arrêt de la lecture de " + (session.UserName ?? "un usager")
-                        + " — « " + session.NowPlayingItem.Name + " »"
-                    : "Arrêt de la session de " + (session.UserName ?? "un usager")
-                        + " (aucune lecture en cours)";
+                    ? LF("act.label.stop.playing", who, session.NowPlayingItem.Name)
+                    : LF("act.label.stop.idle", who);
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args, label));
             }
 
@@ -1416,7 +1438,7 @@ namespace LLM_AI
                             detail = r.Error + " — la session a pu se terminer entre le dépôt et l'approbation." });
                     }
 
-                    string who = r.UserName ?? "un usager";
+                    string who = r.UserName ?? L("act.user.fallback");
                     if (r.NowPlaying == null)
                     {
                         // Rien ne joue sur la session : le Stop est envoyé
@@ -1425,19 +1447,18 @@ namespace LLM_AI
                         // disent la vérité (constat terrain 2026-09-21).
                         _logger?.Info("[LLM_AI] Chat action stop_session : rien à arrêter pour {0} " +
                             "(aucune lecture en cours, session={1}).", who, r.SessionId);
-                        await ToastActionAsync(_sessionId, "Chat : rien à arrêter pour " + who +
-                            " (aucune lecture en cours)", _logger).ConfigureAwait(false);
-                        return Json(new { status = "ok",
-                            detail = "Aucune lecture en cours pour " + who + " — rien à arrêter." });
+                        await ToastActionAsync(_sessionId, LF("act.toast.stop.idle", who),
+                            _logger).ConfigureAwait(false);
+                        return Json(new { status = "ok", detail = LF("act.ok.stop.idle", who) });
                     }
 
-                    string what = " (« " + r.NowPlaying + " »)";
                     _logger?.Info("[LLM_AI] Chat action stop_session : lecture arrêtée pour {0} (session={1}).",
                         who, r.SessionId);
-                    await ToastActionAsync(_sessionId, "Chat : lecture arrêtée pour " + who + what, _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = "Lecture arrêtée pour " + who + what + "." });
+                    await ToastActionAsync(_sessionId, LF("act.toast.stop", who, r.NowPlaying),
+                        _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.stop", who, r.NowPlaying) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     Refund(_sessionId, 1);
@@ -1504,7 +1525,7 @@ namespace LLM_AI
                               "(listing complet : system_audit, action scheduled_tasks)." }));
 
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Déclenchement de la tâche « " + worker.Name + " »"));
+                    LF("act.label.task", worker.Name)));
             }
 
             /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
@@ -1533,10 +1554,10 @@ namespace LLM_AI
 
                     _logger?.Info("[LLM_AI] Chat action trigger_task : tâche « {0} » mise en file (id={1}).",
                         r.Name, r.TaskId);
-                    await ToastActionAsync(_sessionId, "Chat : tâche « " + r.Name + " » déclenchée", _logger).ConfigureAwait(false);
-                    return Json(new { status = "ok", detail = "Tâche « " + r.Name + " » mise en file d'exécution." });
+                    await ToastActionAsync(_sessionId, LF("act.toast.task", r.Name), _logger).ConfigureAwait(false);
+                    return Json(new { status = "ok", detail = LF("act.ok.task", r.Name) });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     Refund(_sessionId, 1);
@@ -1613,7 +1634,7 @@ namespace LLM_AI
                 string shownText = text.Trim();
                 if (shownText.Length > 60) shownText = shownText.Substring(0, 60) + "…";
                 return Task.FromResult(CreatePending(_sessionId, _adminUserId, ToolKey, args,
-                    "Message Emby à " + resolved[0].Name + " (" + delivery + ") : " + header + " — " + shownText));
+                    LF("act.label.msg", resolved[0].Name, delivery, header, shownText)));
             }
 
             /// <summary>Phase 2 : exécution réelle — appelée UNIQUEMENT par
@@ -1659,20 +1680,20 @@ namespace LLM_AI
                     string detail;
                     if (r.Delivery == "osd")
                     {
-                        detail = "Toast OSD : " + r.Sent + " session(s) atteinte(s) sur " + r.Recipients + " destinataire(s)."
-                            + (r.Note != null ? " " + r.Note : "");
+                        detail = LF("act.ok.msg.osd", r.Sent, r.Recipients,
+                            r.Note != null ? " " + r.Note : "");
                     }
                     else
                     {
-                        detail = "Notification envoyée à " + recipientName + " (" + r.Sent + "/" + r.Recipients + ").";
+                        detail = LF("act.ok.msg.notif", recipientName, r.Sent, r.Recipients);
                     }
 
                     _logger?.Info("[LLM_AI] Chat action send_message : {0} vers {1} ({2}).", r.Delivery, recipientName, r.Sent);
-                    await ToastActionAsync(_sessionId, "Chat : message (" + r.Delivery + ") envoyé à " + recipientName,
+                    await ToastActionAsync(_sessionId, LF("act.toast.msg", r.Delivery, recipientName),
                         _logger).ConfigureAwait(false);
                     return Json(new { status = "ok", detail = detail });
                 }
-                catch (OperationCanceledException) { return Json(new { status = "failed", detail = "annulé" }); }
+                catch (OperationCanceledException) { return Json(new { status = "failed", detail = L("act.ref.cancelled") }); }
                 catch (Exception ex)
                 {
                     Refund(_sessionId, 1);

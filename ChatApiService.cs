@@ -178,9 +178,15 @@ namespace LLM_AI
 
         public async Task<object> Post(ChatRequest req)
         {
+            // Langue d'affichage de ce tour (v1.15.0.2) : toutes les chaînes
+            // serveur affichées par la page (erreurs, libellés des cartes)
+            // suivent la langue de l'interface — même bucket que les noms
+            // de tâches. Résolu une fois par requête.
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
+
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ChatResponse { Enabled = false, Error = "Configuration du plugin indisponible." };
+                return new ChatResponse { Enabled = false, Error = I18n.S("err.noconfig", lang) };
 
             if (!cfg.ChatEnabled)
                 return new ChatResponse { Enabled = false };
@@ -191,11 +197,11 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatResponse { Enabled = true, Error = "Réservé aux administrateurs." };
+                return new ChatResponse { Enabled = true, Error = I18n.S("err.admin", lang) };
 
             string message = (req?.Message ?? string.Empty).Trim();
             if (message.Length == 0)
-                return new ChatResponse { Enabled = true, Error = "Message vide." };
+                return new ChatResponse { Enabled = true, Error = I18n.S("err.emptymsg", lang) };
 
             // Contexte déroulant (v1.13.8) : résolu contre le registre
             // statique (liste blanche) — un id inconnu est simplement ignoré
@@ -287,7 +293,7 @@ namespace LLM_AI
             if (cfg.ChatPromptsEnabled)
             {
                 actionTools ??= new List<ILlmTool>();
-                actionTools.Add(new ChatPromptsTool(cfg, sessionId, userId, contextId, Logger));
+                actionTools.Add(new ChatPromptsTool(cfg, sessionId, userId, contextId, lang, Logger));
                 Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts).");
             }
 
@@ -309,7 +315,7 @@ namespace LLM_AI
                 // Annulation DÉPASSANT la requête HTTP (timeout HttpClient LLM) :
                 // le client est encore là → on lui répond.
                 Logger.Info("[LLM_AI] [CHAT] Requête annulée (délai backend LLM) — réponse d'erreur envoyée.");
-                return new ChatResponse { Enabled = true, Error = "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez." };
+                return new ChatResponse { Enabled = true, Error = I18n.S("err.llmtimeout", lang) };
             }
             catch (OperationCanceledException)
             {
@@ -336,7 +342,7 @@ namespace LLM_AI
             //  ------------------------------------------------------------------
             if (contextBlock.Length > 0 && cfg.ChatPromptsEnabled
                 && !string.IsNullOrWhiteSpace(reply)
-                && !reply.StartsWith("Échec du chat", StringComparison.Ordinal)
+                && !reply.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal)
                 && ChatPromptStore.PeekPagePending(sessionId) == null
                 && reply.IndexOf("```", StringComparison.Ordinal) < 0
                 && reply.TrimEnd().EndsWith("?", StringComparison.Ordinal))
@@ -359,7 +365,7 @@ namespace LLM_AI
                         nudge, _sessions, _tasks, _notifications, ct, memoryBlock,
                         actionTools, actionsWorkflow, contextBlock).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(nudged)
-                        && !nudged.StartsWith("Échec du chat", StringComparison.Ordinal))
+                        && !nudged.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal))
                     {
                         reply = nudged;
                         Logger.Info("[LLM_AI] [CHAT] Filet prose : réponse corrigée fournie.");
@@ -380,7 +386,7 @@ namespace LLM_AI
             // la page (retry possible) et ne doit pas polluer la mémoire.
             string savedSession = sessionId;
             if (cfg.ChatMemoryEnabled && !string.IsNullOrWhiteSpace(reply)
-                && !reply.StartsWith("Échec du chat", StringComparison.Ordinal))
+                && !reply.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal))
             {
                 savedSession = ChatMemoryStore.RecordTurn(cfg, userId, sessionId,
                     fromUser: true, text: message, logger: Logger);
@@ -477,12 +483,12 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ChatMemoryGetResponse { Error = "Configuration du plugin indisponible." };
+                return new ChatMemoryGetResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatMemoryGetResponse { Error = "Réservé aux administrateurs." };
+                return new ChatMemoryGetResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             if (!cfg.ChatMemoryEnabled)
                 return new ChatMemoryGetResponse { Enabled = false };
@@ -536,7 +542,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatMemoryGetResponse { Error = "Réservé aux administrateurs." };
+                return new ChatMemoryGetResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null || !cfg.ChatMemoryEnabled)
@@ -591,7 +597,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatContextsResponse { Enabled = true, Error = "Réservé aux administrateurs." };
+                return new ChatContextsResponse { Enabled = true, Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var list = new List<ChatContextInfo>();
             foreach (var c in ChatContexts.All)
@@ -634,11 +640,11 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatPromptDecisionResponse { Error = "Réservé aux administrateurs." };
+                return new ChatPromptDecisionResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ChatPromptDecisionResponse { Error = "Configuration du plugin indisponible." };
+                return new ChatPromptDecisionResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var action = ChatPromptStore.Consume(req?.ActionId, RequestSessionHint(),
                 admin.Id.ToString(), Logger);
@@ -650,25 +656,26 @@ namespace LLM_AI
                     "(action_id={0}, session={1}, usager={2}).",
                     req?.ActionId, RequestSessionHint(), admin.Name);
                 return new ChatPromptDecisionResponse { Error =
-                    "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau la sauvegarde dans la conversation." };
+                    I18n.SDisplay("err.pending.expired.save", ApplicationHost) };
             }
 
             string text = (action.NewText ?? string.Empty).Trim();
             if (!ChatPromptsTool.IsKnownField(action.Field) || text.Length == 0 ||
                 text.Length > ChatPromptsTool.MaxPromptChars)
-                return new ChatPromptDecisionResponse { Error = "Proposition invalide — rien n'a été écrit." };
+                return new ChatPromptDecisionResponse { Error = I18n.SDisplay("err.proposal.invalid", ApplicationHost) };
 
             ChatPromptsTool.SetPrompt(cfg, action.Field, text);
             Plugin.Instance.SaveConfiguration();
             Logger.Info("[LLM_AI] Chat prompts : champ « {0} » écrasé par approbation de l'admin " +
                 "(action_id={1}, {2} caractères).", action.Field, action.ActionId, text.Length);
 
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
             return new ChatPromptDecisionResponse
             {
                 Ok = true,
                 Field = action.Field,
-                Label = action.Label ?? ChatPromptsTool.LabelOf(action.Field),
-                TestHint = ChatPromptsTool.TestHintFor(action.Field)
+                Label = action.Label ?? ChatPromptsTool.LabelOfLocalized(action.Field, lang),
+                TestHint = ChatPromptsTool.TestHintFor(action.Field, lang)
             };
         }
 
@@ -688,7 +695,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatPromptDecisionResponse { Error = "Réservé aux administrateurs." };
+                return new ChatPromptDecisionResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             ChatPromptStore.Discard(req?.ActionId, Logger);
             return new ChatPromptDecisionResponse { Ok = true };
@@ -728,19 +735,19 @@ namespace LLM_AI
 
         public async Task<object> Post(ChatActionApproveRequest req)
         {
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatActionDecisionResponse { Error = "Réservé aux administrateurs." };
+                return new ChatActionDecisionResponse { Error = I18n.S("err.admin", lang) };
 
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ChatActionDecisionResponse { Error = "Configuration du plugin indisponible." };
+                return new ChatActionDecisionResponse { Error = I18n.S("err.noconfig", lang) };
 
             var cfgBudget = Math.Max(0, cfg.ChatActionBudget);
             if (cfgBudget <= 0)
-                return new ChatActionDecisionResponse { Error =
-                    "La couche d'action du chat est désactivée (budget 0) — rien n'a été exécuté." };
+                return new ChatActionDecisionResponse { Error = I18n.S("err.actionlayer.disabled", lang) };
 
             var action = ChatActionStore.Consume(req?.ActionId, RequestSessionHint(),
                 admin.Id.ToString());
@@ -753,7 +760,7 @@ namespace LLM_AI
                     "(action_id={0}, session={1}, usager={2}).",
                     req?.ActionId, RequestSessionHint(), admin.Name);
                 return new ChatActionDecisionResponse { Error =
-                    "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau l'action dans la conversation." };
+                    I18n.S("err.pending.expired.action", lang) };
             }
 
             var tool = ChatActions.BuildToolByName(action.Tool, cfg, action.Session, admin,
@@ -764,8 +771,7 @@ namespace LLM_AI
             {
                 Logger.Info("[LLM_AI] Chat action Approve : outil inconnu (tool={0}) — proposition invalide.",
                     action.Tool);
-                return new ChatActionDecisionResponse { Error =
-                    "Outil d'action indisponible ou inconnu — proposition invalide." };
+                return new ChatActionDecisionResponse { Error = I18n.S("err.tool.unknown", lang) };
             }
 
             JsonElement args = default;
@@ -784,7 +790,7 @@ namespace LLM_AI
             }
             catch (OperationCanceledException)
             {
-                return new ChatActionDecisionResponse { Error = "Exécution annulée." };
+                return new ChatActionDecisionResponse { Error = I18n.S("err.exec.cancelled", lang) };
             }
             catch (Exception ex)
             {
@@ -819,8 +825,8 @@ namespace LLM_AI
             {
                 Ok = ok,
                 Label = action.Label,
-                Detail = ok ? (detail ?? "Action exécutée.") : null,
-                Error = ok ? null : (detail ?? "Échec de l'exécution — consultez le journal du serveur.")
+                Detail = ok ? (detail ?? I18n.S("detail.executed", lang)) : null,
+                Error = ok ? null : (detail ?? I18n.S("err.exec.failed", lang))
             };
         }
 
@@ -840,7 +846,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new ChatActionDecisionResponse { Error = "Réservé aux administrateurs." };
+                return new ChatActionDecisionResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             ChatActionStore.Discard(req?.ActionId);
             return new ChatActionDecisionResponse { Ok = true };

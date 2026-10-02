@@ -813,7 +813,11 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 _logger.ErrorException("[LLM_AI] [{0}] Échec du chat : {1}", ex, label, ex.Message);
-                return "Échec du chat : " + ex.Message;
+                // Préfixe localisé (v1.15.0.2) — la réponse s'affiche telle
+                // quelle dans le fil ; les contrôleurs StartsWith des deux
+                // chats comparent la MÊME clé résolue de la même façon
+                // (langue d'affichage depuis le même hôte).
+                return I18n.S("err.chatfail", I18n.ResolveDisplayLangKey(_host)) + ex.Message;
             }
         }
 

@@ -321,12 +321,13 @@ namespace LLM_AI
         public async Task<object> Post(ChatExternalRequest req)
         {
             var ct = Request?.CancellationToken ?? CancellationToken.None;
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ChatExternalResponse { Error = "Configuration du plugin indisponible." };
+                return new ChatExternalResponse { Error = I18n.S("err.noconfig", lang) };
 
             if (!cfg.ExternalChatEnabled)
-                return new ChatExternalResponse { Enabled = false, Error = "Chat externe désactivé." };
+                return new ChatExternalResponse { Enabled = false, Error = I18n.S("err.chatext.disabled", lang) };
 
             // Gate commune (origine + secret + usager). Toute erreur est une
             // réponse JSON — jamais de 401/403 ServiceStack (l'app compagnon lit le
@@ -341,7 +342,7 @@ namespace LLM_AI
 
             string message = (req?.Message ?? string.Empty).Trim();
             if (message.Length == 0)
-                return new ChatExternalResponse { Enabled = true, Error = "Message vide." };
+                return new ChatExternalResponse { Enabled = true, Error = I18n.S("err.emptymsg", lang) };
             if (message.Length > MaxMessageChars)
                 return new ChatExternalResponse { Enabled = true, Error =
                     "Message trop long (" + MaxMessageChars + " caractères maximum)." };
@@ -482,7 +483,8 @@ namespace LLM_AI
             // admin : un tour raté n'est pas rejoué).
             string savedSession = sessionId;
             if (cfg.ChatMemoryEnabled && !string.IsNullOrWhiteSpace(reply)
-                && !reply.StartsWith("Échec du chat", StringComparison.Ordinal))
+                && !reply.StartsWith(I18n.S("err.chatfail",
+                    I18n.ResolveDisplayLangKey(ApplicationHost)), StringComparison.Ordinal))
             {
                 savedSession = ChatMemoryStore.RecordTurn(cfg, userId,
                     existingSession != null ? sessionId : "",
@@ -554,12 +556,13 @@ namespace LLM_AI
         public async Task<object> Post(ExternalShowRequest req)
         {
             var ct = Request?.CancellationToken ?? CancellationToken.None;
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new ExternalShowResponse { Error = "Configuration du plugin indisponible." };
+                return new ExternalShowResponse { Error = I18n.S("err.noconfig", lang) };
 
             if (!cfg.ExternalChatEnabled)
-                return new ExternalShowResponse { Error = "Chat externe désactivé." };
+                return new ExternalShowResponse { Error = I18n.S("err.chatext.disabled", lang) };
 
             string gateError = GateError(cfg, req?.Token);
             if (gateError != null)

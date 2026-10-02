@@ -88,11 +88,11 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new TestLlmResponse { Ok = false, Error = "Réservé aux administrateurs." };
+                return new TestLlmResponse { Ok = false, Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new TestLlmResponse { Ok = false, Error = "Configuration du plugin indisponible." };
+                return new TestLlmResponse { Ok = false, Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var backend = new LlmBackend
             {
@@ -217,7 +217,7 @@ namespace LLM_AI
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
                 return new TestNewReleaseSourcesResponse
-                    { Ok = false, Error = "Réservé aux administrateurs." };
+                    { Ok = false, Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var specs = NewReleasesTool.ParseSources(req?.Sources);
             if (specs.Count == 0)
@@ -311,12 +311,12 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new DefaultPromptsResponse { Lang = I18n.En, Error = "Configuration du plugin indisponible." };
+                return new DefaultPromptsResponse { Lang = I18n.En, Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new DefaultPromptsResponse { Lang = I18n.En, Error = "Réservé aux administrateurs." };
+                return new DefaultPromptsResponse { Lang = I18n.En, Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             // Langue : forçage explicite ?Lang=…, sinon ResponseLanguage
             // (langue de réponse choisie en config), sinon langue d'affichage
@@ -368,7 +368,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new MemoryCardResponse { Error = "Réservé aux administrateurs." };
+                return new MemoryCardResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var (current, history) = MemoryCard.Load();
             return new MemoryCardResponse
@@ -399,7 +399,7 @@ namespace LLM_AI
             var admin = ResolveAdmin();
             bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
             if (!isAdmin)
-                return new MemoryCardResponse { Error = "Réservé aux administrateurs." };
+                return new MemoryCardResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             var (current, history) = MemoryCard.Load();
             var updated = new MemoryCardData

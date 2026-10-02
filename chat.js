@@ -570,7 +570,7 @@ define([], function () {
                     var texts = card.querySelectorAll(".chatPendingText");
                     // textContent (jamais innerHTML) : le texte du prompt est
                     // affiché brut, quel que soit son contenu.
-                    if (texts[0]) texts[0].textContent = pending.OldText || "(vide)";
+                    if (texts[0]) texts[0].textContent = pending.OldText || i18n.t("chat.empty");
                     if (texts[1]) texts[1].textContent = pending.NewText || "";
                     chatLog.appendChild(card);
                     chatLog.scrollTop = chatLog.scrollHeight;
@@ -635,10 +635,11 @@ define([], function () {
                         decide("Plugins/LLMAI/ChatPrompt/Approve",
                             i18n.t("chat.pending.approved"),
                             function (resp) {
-                                return "[Admin] J'ai approuvé la modification du prompt « " +
-                                    (pending.Label || pending.Field) + " » — elle a été enregistrée " +
-                                    "dans la configuration." +
-                                    (resp && resp.TestHint ? " Façon de tester : " + resp.TestHint : "");
+                                return i18n.t("chat.note.prompt.approved",
+                                        (pending.Label || pending.Field)) +
+                                    (resp && resp.TestHint
+                                        ? i18n.t("chat.note.testhint", resp.TestHint)
+                                        : "");
                             });
                     });
                     if (refuseBtn) refuseBtn.addEventListener("click", function () {
@@ -646,8 +647,8 @@ define([], function () {
                         decide("Plugins/LLMAI/ChatPrompt/Refuse",
                             i18n.t("chat.pending.refused"),
                             function () {
-                                return "[Admin] J'ai refusé la modification du prompt « " +
-                                    (pending.Label || pending.Field) + " » — rien n'a été écrit.";
+                                return i18n.t("chat.note.prompt.refused",
+                                    (pending.Label || pending.Field));
                             });
                     });
                 }
@@ -727,10 +728,13 @@ define([], function () {
                         decideAction("Plugins/LLMAI/ChatAction/Approve",
                             i18n.t("chat.action.approved"),
                             function (resp) {
-                                return "[Admin] J'ai approuvé l'action « " + actionLabel + " » — " +
+                                return i18n.t("chat.note.action.approved", actionLabel,
                                     (resp && resp.Ok
-                                        ? "elle a été exécutée" + (resp.Detail ? " : " + resp.Detail : ".")
-                                        : "mais l'exécution n'a pas abouti : " + (resp && resp.Error ? resp.Error : "?"));
+                                        ? (resp.Detail
+                                            ? i18n.t("chat.note.action.executed.detail", resp.Detail)
+                                            : i18n.t("chat.note.action.executed"))
+                                        : i18n.t("chat.note.action.failed",
+                                            (resp && resp.Error ? resp.Error : "?"))));
                             });
                     });
                     if (refuseBtn) refuseBtn.addEventListener("click", function () {
@@ -738,8 +742,7 @@ define([], function () {
                         decideAction("Plugins/LLMAI/ChatAction/Refuse",
                             i18n.t("chat.action.refused"),
                             function () {
-                                return "[Admin] J'ai refusé l'action « " + actionLabel +
-                                    " » — rien n'a été exécuté.";
+                                return i18n.t("chat.note.action.refused", actionLabel);
                             });
                     });
                 }

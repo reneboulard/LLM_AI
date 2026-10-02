@@ -126,7 +126,7 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new TonightResponse { Enabled = false, Error = "Configuration du plugin indisponible." };
+                return new TonightResponse { Enabled = false, Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             if (!cfg.TonightEnabled)
                 return new TonightResponse { Enabled = false };

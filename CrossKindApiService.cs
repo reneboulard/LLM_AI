@@ -261,7 +261,7 @@ namespace LLM_AI
             return policy != null && policy.IsAdministrator;
         }
 
-        private string NotAdminError() => "Réservé aux administrateurs.";
+        private string NotAdminError() => I18n.SDisplay("err.admin", ApplicationHost);
 
         // ------------------------------------------------------------------
         //  Helpers

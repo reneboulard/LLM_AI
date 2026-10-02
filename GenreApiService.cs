@@ -154,11 +154,11 @@ namespace LLM_AI
 
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new GenreProposalsResponse { Error = "Configuration du plugin indisponible." };
+                return new GenreProposalsResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var admin = ResolveAdmin();
             if (!(admin?.Policy?.IsAdministrator ?? false))
-                return new GenreProposalsResponse { Error = "Réservé aux administrateurs." };
+                return new GenreProposalsResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             // Auto-réparation d'abord : une sauvegarde de la page de config
             // GenreCleaner peut avoir réécrit le XML depuis sa copie mémoire
@@ -271,11 +271,11 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             if (cfg == null)
-                return new GenreApplyResponse { Error = "Configuration du plugin indisponible." };
+                return new GenreApplyResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
 
             var admin = ResolveAdmin();
             if (!(admin?.Policy?.IsAdministrator ?? false))
-                return new GenreApplyResponse { Error = "Réservé aux administrateurs." };
+                return new GenreApplyResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
 
             if (req?.Mappings == null || req.Mappings.Count == 0)
                 return new GenreApplyResponse { Error = "Aucun mappage fourni." };

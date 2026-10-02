@@ -242,9 +242,9 @@ namespace LLM_AI
             string sessionDirectives = null, bool fromChat = false)
         {
             if (cfg == null)
-                return new TonightResult { Error = "Configuration du plugin indisponible." };
+                return new TonightResult { Error = I18n.SDisplay("err.noconfig", _host) };
             if (user == null)
-                return new TonightResult { Error = "Utilisateur non résolu." };
+                return new TonightResult { Error = I18n.SDisplay("tonight.err.nouser", _host) };
 
             // Cache par usager (sauf Refresh).
             int cacheHours = Math.Max(0, cfg.TonightCacheHours);
@@ -381,7 +381,7 @@ namespace LLM_AI
             if (!ok || string.IsNullOrWhiteSpace(payload))
             {
                 if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
-                return new TonightResult { Error = "Le run LLM n'a pas produit de recommandation." };
+                return new TonightResult { Error = I18n.SDisplay("tonight.err.noreco", _host) };
             }
 
             // Le run a réussi : consomme le gate « prêt à dévorer » en attente
@@ -413,7 +413,7 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(payload))
             {
                 if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
-                return new TonightResult { Error = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés)." };
+                return new TonightResult { Error = I18n.SDisplay("tonight.err.noitems", _host) };
             }
 
             // Note « contrôle parental restrictif » (v1.13.15.0) : si la policy
