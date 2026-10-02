@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.5] — 2026-10-02
+
+### Fixed (FR)
+- **Langue des jalons de progression et des messages d'échec affichés dans la
+  fenêtre d'audit (page de configuration)** : ils restaient en français codé
+  en dur — « Collecte des données du serveur… », « Dose 3/7 — … »,
+  « Assemblage final du rapport (…)… », « échec de l'audit : … », « run
+  annulé (timeout) », « Aucun backend LLM configuré… » — quand l'interface
+  Emby est en anglais, la page mélangeait donc libellés client EN et
+  messages serveur FR (constat terrain 2026-10-02 : « Audit running —
+  Collecte des données du serveur… »). Ces chaînes suivent désormais la
+  langue d'affichage via le dictionnaire serveur du plugin (bucket v1.15.0.2 :
+  `ResolveDisplayLangKey`) :
+  - *Jalons du run détaché* : collecte initiale, « Dose n/7 — <titre> »
+    (les 7 titres de doses reçoivent des variantes d'affichage EN — le
+    rapport déterministe garde ses titres de rubriques français, limite
+    assumée v1.15.0.3), assemblage final.
+  - *Échecs du run* : aucun backend, échec de l'audit (préfixe localisé,
+    message d'exception brut — pas le nôtre), timeout 25 min, « aucun
+    rapport produit ».
+  - *Chat admin* : le message « aucun backend configuré » suit aussi la
+    langue d'interface (même famille, même correctif).
+
+### Fixed (EN)
+- **Language of progress milestones and failure messages shown in the audit
+  window (configuration page)**: they remained hardcoded French —
+  "Collecte des données du serveur…", "Dose 3/7 — …", "Assemblage final du
+  rapport (…)…", "échec de l'audit : …", "run annulé (timeout)", "Aucun
+  backend LLM configuré…" — so with an English Emby interface the page mixed
+  EN client labels with FR server messages (field observation 2026-10-02:
+  "Audit running — Collecte des données du serveur…"). These strings now
+  follow the display language through the plugin's server dictionary
+  (v1.15.0.2 bucket: `ResolveDisplayLangKey`):
+  - *Detached-run milestones*: initial collection, "Dose n/7 — <title>"
+    (the 7 dose titles get EN display variants — the deterministic report
+    keeps its French rubric titles, assumed limitation v1.15.0.3), final
+    assembly.
+  - *Run failures*: no backend, audit failure (localized prefix, raw
+    exception message — not ours to localize), 25-minute timeout, "no
+    report produced".
+  - *Admin chat*: the "no backend configured" message also follows the
+    interface language (same defect family, same fix).
+
 ## [1.15.0.4] — 2026-10-02
 
 ### Fixed (FR)

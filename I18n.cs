@@ -410,6 +410,7 @@ namespace LLM_AI
                     ["err.chatext.disabled"] = "Chat externe désactivé.",
                     ["err.llmtimeout"] = "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez.",
                     ["err.chatfail"] = "Échec du chat : ",
+                    ["err.chatnobackend"] = "Aucun backend LLM configuré/activé — impossible de discuter.",
                     ["err.pending.expired.save"] = "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau la sauvegarde dans la conversation.",
                     ["err.pending.expired.action"] = "Action introuvable ou expirée (attente valable 10 minutes) — demandez à nouveau l'action dans la conversation.",
                     ["err.proposal.invalid"] = "Proposition invalide — rien n'a été écrit.",
@@ -418,6 +419,18 @@ namespace LLM_AI
                     ["err.exec.cancelled"] = "Exécution annulée.",
                     ["detail.executed"] = "Action exécutée.",
                     ["err.exec.failed"] = "Échec de l'exécution — consultez le journal du serveur.",
+                    // --- Fenêtre d'audit (page config) : jalons de progression
+                    // + échecs du run détaché (v1.15.0.5) — résolus via la
+                    // langue d'affichage, même bucket que err.* ci-dessus.
+                    // Le rapport LUI-MÊME suit la règle de prose
+                    // (ResolveProseLangName), pas ces clés. ---
+                    ["audit.progress.collect"] = "Collecte des données du serveur…",
+                    ["audit.progress.dose"] = "Dose {0}/{1} — {2}",
+                    ["audit.progress.assembly"] = "Assemblage final du rapport ({0} blocs + faits établis)…",
+                    ["audit.err.nobackend"] = "Aucun backend LLM configuré/activé — impossible d'exécuter l'audit.",
+                    ["audit.err.fail"] = "Échec de l'audit : {0}",
+                    ["audit.err.noreport"] = "aucun rapport produit",
+                    ["audit.err.timeout"] = "run annulé (timeout)",
                     // --- Chat admin : carte de diff (libellé du champ,
                     // bandeau de divergence, indice de test) ---
                     ["chat.field.rag_directives"] = "Directives RAG",
@@ -568,6 +581,7 @@ namespace LLM_AI
                     ["err.chatext.disabled"] = "External chat disabled.",
                     ["err.llmtimeout"] = "The LLM did not respond in time (timeout exceeded). Try again.",
                     ["err.chatfail"] = "Chat failed: ",
+                    ["err.chatnobackend"] = "No LLM backend configured/enabled — chat is unavailable.",
                     ["err.pending.expired.save"] = "Proposal not found or expired (valid for 10 minutes) — request the save again in the conversation.",
                     ["err.pending.expired.action"] = "Action not found or expired (valid for 10 minutes) — request the action again in the conversation.",
                     ["err.proposal.invalid"] = "Invalid proposal — nothing was written.",
@@ -576,6 +590,18 @@ namespace LLM_AI
                     ["err.exec.cancelled"] = "Execution cancelled.",
                     ["detail.executed"] = "Action executed.",
                     ["err.exec.failed"] = "Execution failed — check the server log.",
+                    // --- Audit window (config page): detached-run progress
+                    // milestones + failures (v1.15.0.5) — resolved through
+                    // the display language, same bucket as err.* above.
+                    // The report ITSELF follows the prose rule
+                    // (ResolveProseLangName), not these keys. ---
+                    ["audit.progress.collect"] = "Collecting server data…",
+                    ["audit.progress.dose"] = "Step {0}/{1} — {2}",
+                    ["audit.progress.assembly"] = "Assembling the final report ({0} blocks + established facts)…",
+                    ["audit.err.nobackend"] = "No LLM backend configured/enabled — cannot run the audit.",
+                    ["audit.err.fail"] = "Audit failed: {0}",
+                    ["audit.err.noreport"] = "no report produced",
+                    ["audit.err.timeout"] = "run cancelled (timeout)",
                     // --- Admin chat: diff card (field label, divergence
                     // banner, test hint) ---
                     ["chat.field.rag_directives"] = "RAG directives",

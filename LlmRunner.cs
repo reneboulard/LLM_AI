@@ -550,7 +550,9 @@ namespace LLM_AI
                 if (backends.Count == 0)
                 {
                     _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — audit ignoré.", label);
-                    return "Aucun backend LLM configuré/activé — impossible d'exécuter l'audit.";
+                    // Chaîne AFFICHÉE (fenêtre d'audit via FinishError) :
+                    // langue d'interface, plus de FR en dur (v1.15.0.5).
+                    return I18n.S("audit.err.nobackend", I18n.ResolveDisplayLangKey(_host));
                 }
 
                 string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
@@ -606,7 +608,9 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 _logger.ErrorException("[LLM_AI] [{0}] Échec de l'audit : {1}", ex, label, ex.Message);
-                return "Échec de l'audit : " + ex.Message;
+                // Affiché dans la fenêtre d'audit — langue d'interface
+                // (v1.15.0.5) ; le message d'exception reste brut.
+                return string.Format(I18n.S("audit.err.fail", I18n.ResolveDisplayLangKey(_host)), ex.Message);
             }
         }
 
@@ -808,7 +812,8 @@ namespace LLM_AI
                 if (backends.Count == 0)
                 {
                     _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — chat ignoré.", label);
-                    return "Aucun backend LLM configuré/activé — impossible de discuter.";
+                    // Affiché dans le chat admin — langue d'interface (v1.15.0.5).
+                    return I18n.S("err.chatnobackend", I18n.ResolveDisplayLangKey(_host));
                 }
 
                 string ollamaCloudKey = ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
@@ -974,18 +979,27 @@ namespace LLM_AI
             string langName = I18n.ResolveProseLangName(cfg, _host);
             var langDir = LlmAgentService.BuildLanguageDirective(langName);
 
+            // Langue d'INTERFACE pour les jalons de progression affichés dans
+            // la fenêtre d'audit (bucket v1.15.0.2 — ≠ prose du rapport qui
+            // suit ResolveProseLangName ci-dessus) : un run sur une interface
+            // EN affiche « Step 3/7 — System and performance ».
+            var uiLang = I18n.ResolveDisplayLangKey(_host);
+
             // Groupes de doses : petits contextes (2-4 sondes), regroupés par
             // thème de rapport. Une section absente du digest est ignorée
-            // (tolérance aux évolutions du digest).
-            var doses = new (string Title, string[] SectionNames)[]
+            // (tolérance aux évolutions du digest). Title = titre du bloc du
+            // RAPPORT (structurelle, française — limite assumée v1.15.0.3) ;
+            // TitleEn = variante d'AFFICHAGE des jalons de progression sur
+            // une interface non française (le rapport garde ses titres FR).
+            var doses = new (string Title, string TitleEn, string[] SectionNames)[]
             {
-                ("Système et performance", new[] { "server_info", "system_config", "host_metrics" }),
-                ("Processus et stockage", new[] { "processes", "disk_storage" }),
-                ("Activité et tâches planifiées", new[] { "active_sessions", "scheduled_tasks", "transcode", "gpu_transcode" }),
-                ("Bibliothèque et métadonnées", new[] { "library_stats", "missing_metadata", "metadata_health" }),
-                ("Hygiène des cotes", new[] { "ratings_check" }),
-                ("Sécurité", new[] { "security_check", "security_metrics" }),
-                ("Réseau et journaux", new[] { "upnp_check", "log_scan", "list_logs", "inspect_log" }),
+                ("Système et performance", "System and performance", new[] { "server_info", "system_config", "host_metrics" }),
+                ("Processus et stockage", "Processes and storage", new[] { "processes", "disk_storage" }),
+                ("Activité et tâches planifiées", "Activity and scheduled tasks", new[] { "active_sessions", "scheduled_tasks", "transcode", "gpu_transcode" }),
+                ("Bibliothèque et métadonnées", "Library and metadata", new[] { "library_stats", "missing_metadata", "metadata_health" }),
+                ("Hygiène des cotes", "Ratings hygiene", new[] { "ratings_check" }),
+                ("Sécurité", "Security", new[] { "security_check", "security_metrics" }),
+                ("Réseau et journaux", "Network and logs", new[] { "upnp_check", "log_scan", "list_logs", "inspect_log" }),
             };
 
             var blocks = new System.Text.StringBuilder();
@@ -1006,7 +1020,12 @@ namespace LLM_AI
                 // Jalon de progression du run détaché (v1.14.2) : la page de
                 // config pole ?Status=true et affiche « Dose 3/7 — … ». No-op
                 // hors run détaché (appel depuis la tâche planifiée, tests).
-                AuditRunState.SetProgress("Dose " + doseNo + "/" + doses.Length + " — " + dose.Title);
+                // Localisé dans la langue d'INTERFACE (v1.15.0.5) : titre
+                // d'affichage EN hors interface FR — le rapport, lui, garde
+                // ses titres de rubriques français.
+                AuditRunState.SetProgress(string.Format(
+                    I18n.S("audit.progress.dose", uiLang), doseNo, doses.Length,
+                    uiLang == I18n.Fr ? dose.Title : dose.TitleEn));
 
                 string block;
                 try
@@ -1069,8 +1088,9 @@ namespace LLM_AI
             string userAsm = AppendAuditLangRequirement(up.ToString(), langName);
 
             // Jalon final de progression (run détaché) : l'assemblage est la
-            // passe la plus lente après les doses elles-mêmes.
-            AuditRunState.SetProgress("Assemblage final du rapport (" + doseNo + " blocs + faits établis)…");
+            // passe la plus lente après les doses elles-mêmes. Localisé dans
+            // la langue d'interface (v1.15.0.5).
+            AuditRunState.SetProgress(string.Format(I18n.S("audit.progress.assembly", uiLang), doseNo));
 
             string reply;
             try

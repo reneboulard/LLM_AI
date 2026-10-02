@@ -35,7 +35,7 @@ namespace LLM_AI
     {
         private static readonly object _lock = new object();
         private static bool _running;
-        private static string _progress;         // jalon courant (donnée FR, affichée telle quelle)
+        private static string _progress;         // jalon courant (LOCALISÉ par l'appelant, bucket interface — v1.15.0.5)
         private static DateTimeOffset _startedAt;
         private static DateTimeOffset? _finishedAt;
         private static string _outcome;         // "ok" | "error" du DERNIER run détaché
@@ -46,14 +46,18 @@ namespace LLM_AI
         /// DOIT appeler <see cref="FinishOk"/> ou <see cref="FinishError"/>
         /// dans un finally équivalent). False = un run est déjà en cours
         /// (single-flight) — l'appelant renvoie l'état au client.
+        /// <paramref name="initialProgress"/> = premier jalon affiché dans la
+        /// fenêtre d'audit, LOCALISÉ PAR L'APPELANT (bucket langue
+        /// d'interface, <c>I18n.SDisplay</c>) : cette classe statique n'a pas
+        /// accès à l'hôte pour résoudre la langue elle-même.
         /// </summary>
-        internal static bool TryStart()
+        internal static bool TryStart(string initialProgress)
         {
             lock (_lock)
             {
                 if (_running) return false;
                 _running = true;
-                _progress = "Collecte des données du serveur…";
+                _progress = initialProgress ?? string.Empty;
                 _startedAt = DateTimeOffset.UtcNow;
                 _finishedAt = null;
                 _outcome = null;

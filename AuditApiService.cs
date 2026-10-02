@@ -190,7 +190,10 @@ namespace LLM_AI
             if (!string.IsNullOrWhiteSpace(focus))
                 prompt += "\n\n### Focus demandé\n" + focus.Trim();
 
-            if (!AuditRunState.TryStart())
+            // Jalon initial LOCALISÉ (v1.15.0.5) : la fenêtre d'audit l'affiche
+            // pendant toute la phase de collecte (en mode single, pendant tout
+            // le run — la boucle agent n'a pas de jalons intermédiaires).
+            if (!AuditRunState.TryStart(I18n.SDisplay("audit.progress.collect", ApplicationHost)))
             {
                 // Single-flight : un run est déjà en cours — on rend son état,
                 // la page reprend simplement le polling.
@@ -246,18 +249,24 @@ namespace LLM_AI
                         // « Aucun backend configuré… », « Échec de l'audit… »,
                         // vide : le run a terminé SANS rapport — l'ancien
                         // rapport persisté reste le dernier valide.
-                        AuditRunState.FinishError(report ?? "aucun rapport produit");
+                        // (report est déjà localisé par LlmRunner ; le repli
+                        // « aucun rapport produit » suit la langue
+                        // d'interface — v1.15.0.5.)
+                        AuditRunState.FinishError(report ?? I18n.SDisplay("audit.err.noreport", ApplicationHost));
                     }
                 }
                 catch (OperationCanceledException)
                 {
                     Logger?.Warn("[LLM_AI] Audit détaché annulé (timeout 25 min ou arrêt) — le dernier rapport persisté reste affiché.");
-                    AuditRunState.FinishError("run annulé (timeout)");
+                    AuditRunState.FinishError(I18n.SDisplay("audit.err.timeout", ApplicationHost));
                 }
                 catch (Exception ex)
                 {
                     Logger?.ErrorException("[LLM_AI] Échec de l'audit détaché : {0}", ex, ex.Message);
-                    AuditRunState.FinishError("échec de l'audit : " + ex.Message);
+                    // Erreur AFFICHÉE dans la fenêtre : préfixe localisé +
+                    // message d'exception brut (le message d'exception n'est
+                    // pas le nôtre — pas localisable).
+                    AuditRunState.FinishError(string.Format(I18n.SDisplay("audit.err.fail", ApplicationHost), ex.Message));
                 }
                 finally
                 {
