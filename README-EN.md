@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.13.27.1 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.15.0.2 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -570,6 +570,10 @@ stay unchanged. Config-page select:
 **S1/S2/S3 identification metadata follows a separate rule** (Emby library language,
 else the program's — see [Fiche language](#fiche-language-v115)).
 
+The plugin's **interface strings** (pages, admin-chat cards — labels, details,
+toasts — and endpoint error messages) **always** follow the Emby display
+language, independently of this setting (v1.15.0.2).
+
 ### Health audit
 
 **On-demand** (admin-only) endpoint `GET /Plugins/LLMAI/Audit` that produces a server
@@ -875,7 +879,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default image (embedded resource): `default_poster.jpg` (400×600 portrait) on the `AI Tonight` collection (BoxSet) and on the "AI Tonight" playlists (public + per-user private), `default_library.jpg` (640×360 16:9) on the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
-| `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks. |
+| `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks and, since v1.15.0.2, the strings shown in the admin chat and the configuration page (cards, details, endpoint errors). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (internal static) | **Security monitor** (detection, v1.14.0.6): in-process counters (web_fetch/web_search calls, blocked SSRF, malformed/unknown tool calls, LLM backend failures, refused chat turns, deposited/approved/refused actions) + bounded security event journal (200 events). Zero configuration, in-memory (reset on restart); every event is durably logged as `LLM_AI[SEC]` in the Emby log. Never throws. |
@@ -2261,8 +2265,10 @@ Two distinct **buckets**:
 - **metadata** (`ResolveMetaLangKey`) — `.nfo` `<plot>`, TMDB overview, LLM prose:
   precedence `ResponseLanguage` → Emby display language → legacy `TmdbLanguage` →
   English;
-- **UI** (`ResolveDisplayLangKey`) — scheduled-task name/description: Emby display
-  language (`UICulture`), English fallback.
+- **UI** (`ResolveDisplayLangKey`) — scheduled-task name/description, strings shown
+  in the admin chat (diff/action card labels, execution details, toasts) and the
+  pages' endpoint error messages (v1.15.0.2): Emby display language (`UICulture`),
+  English fallback.
 
 Helpers `ToTmdbLang` (2-letter key → TMDB code `fr-FR`/`en-US`…) and `ToLangName` (→
 human name for the LLM translation target). Data-driven extensibility: add an `I18n.s_res`

@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.13.27.1 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.15.0.2 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -592,6 +592,10 @@ sur la page de config : `Auto`, `Français`, `English`, `Español`, `Deutsch`, `
 (langue de la bibliothèque Emby, sinon du programme — voir
 [Langue des fiches](#langue-des-fiches-v115)).
 
+Les **chaînes d'interface du plugin** (pages, cartes du chat admin — libellés,
+détails, toasts — et messages d'erreur des endpoints) suivent **toujours** la
+langue d'affichage Emby, indépendamment de ce réglage (v1.15.0.2).
+
 ### Audit santé
 
 Endpoint **à la demande** (admin uniquement) `GET /Plugins/LLMAI/Audit` qui produit un
@@ -898,7 +902,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose une image par défaut standardisée (ressource embedded) : `default_poster.jpg` (400×600 portrait) sur la collection `AI Tonight` (BoxSet) et sur les playlists « AI Tonight » (publique + privées par usager), `default_library.jpg` (640×360 16:9) sur la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette du guide de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (statique) | Registre des programmes suggérés par la tâche nocturne : remplacé à chaque run (`ApplyRecos`, filtres record bucket), persisté `AiBadgeProgramIds`, rechargement paresseux au 1er `Supports` (le constructeur du plugin ne touche jamais `Configuration` — `AssemblyFilePath` n'est posé qu'après construction). |
-| `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées. |
+| `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées et, depuis v1.15.0.2, les chaînes affichées du chat admin et de la page de configuration (cartes, détails, erreurs des endpoints). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs backend LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
@@ -2336,7 +2340,9 @@ ajouter une branche dans `STRINGS` et un sélecteur de langue côté page.
 - **métadonnées** (`ResolveMetaLangKey`) — `<plot>` du `.nfo`, synopsis TMDB, prose LLM :
   précédence `ResponseLanguage` → langue d'affichage Emby → legacy `TmdbLanguage` →
   anglais ;
-- **interface** (`ResolveDisplayLangKey`) — nom/description des tâches planifiées :
+- **interface** (`ResolveDisplayLangKey`) — nom/description des tâches planifiées,
+  chaînes affichées du chat admin (libellés des cartes de diff et d'action, détails
+  d'exécution, toasts) et messages d'erreur des endpoints des pages (v1.15.0.2) :
   langue d'affichage Emby (`UICulture`), repli anglais.
 
 Helpers `ToTmdbLang` (clé 2 lettres → code TMDB `fr-FR`/`en-US`…) et `ToLangName` (→ nom
