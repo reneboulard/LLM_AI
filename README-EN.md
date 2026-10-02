@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 1.15.0.2 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 1.15.0.5 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 
@@ -2266,9 +2266,10 @@ Two distinct **buckets**:
   precedence `ResponseLanguage` → Emby display language → legacy `TmdbLanguage` →
   English;
 - **UI** (`ResolveDisplayLangKey`) — scheduled-task name/description, strings shown
-  in the admin chat (diff/action card labels, execution details, toasts) and the
-  pages' endpoint error messages (v1.15.0.2): Emby display language (`UICulture`),
-  English fallback.
+  in the admin chat (diff/action card labels, execution details, toasts), the
+  pages' endpoint error messages (v1.15.0.2) and the health-audit window:
+  detached-run milestones (dose "Step n/7", assembly) and failure messages
+  (v1.15.0.5): Emby display language (`UICulture`), English fallback.
 
 Helpers `ToTmdbLang` (2-letter key → TMDB code `fr-FR`/`en-US`…) and `ToLangName` (→
 human name for the LLM translation target). Data-driven extensibility: add an `I18n.s_res`

@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 1.15.0.2 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 1.15.0.5 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
@@ -2342,8 +2342,10 @@ ajouter une branche dans `STRINGS` et un sélecteur de langue côté page.
   anglais ;
 - **interface** (`ResolveDisplayLangKey`) — nom/description des tâches planifiées,
   chaînes affichées du chat admin (libellés des cartes de diff et d'action, détails
-  d'exécution, toasts) et messages d'erreur des endpoints des pages (v1.15.0.2) :
-  langue d'affichage Emby (`UICulture`), repli anglais.
+  d'exécution, toasts), messages d'erreur des endpoints des pages (v1.15.0.2) et
+  fenêtre d'audit santé : jalons du run détaché (« Step n/7 » des doses, assemblage)
+  et messages d'échec (v1.15.0.5) : langue d'affichage Emby (`UICulture`), repli
+  anglais.
 
 Helpers `ToTmdbLang` (clé 2 lettres → code TMDB `fr-FR`/`en-US`…) et `ToLangName` (→ nom
 humain pour la cible de traduction LLM). Extensible par la donnée : ajouter une entrée
