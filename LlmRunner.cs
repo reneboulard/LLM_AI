@@ -572,12 +572,27 @@ namespace LLM_AI
                 // ResponseLanguage (choix explicite) → langue de l'interface
                 // Emby (« Auto ») → anglais. La directive est TOUJOURS
                 // injectée : sans elle, un modèle a dérivé en chinois
-                // (terrain 2026-10-01).
+                // (terrain 2026-10-01). Elle ne suffit PAS seule sur ce
+                // path : terrain 2026-10-02 (UICulture en-US, prompt d'audit
+                // anglais, gemma4:latest priorité 1) — rapport pourtant EN
+                // FRANÇAIS : tout ce que le plugin injecte (workflow,
+                // descriptions d'outils, sorties des sondes) est français,
+                // la boucle agent se termine sur des résultats d'outils
+                // français (récence au moment où le rapport s'écrit) et la
+                // directive — noyée en fin de system prompt, elle-même
+                // rédigée en français — perd. Correctif validé sur le
+                // terrain le même jour (l'usager l'a d'abord testé en le
+                // collant à la fin du prompt d'audit configuré) : l'exigence
+                // de langue est réinjectée en FIN de user prompt (récence +
+                // quirk documenté : gemma suit le user prompt) via
+                // AppendAuditLangRequirement.
+                string langName = I18n.ResolveProseLangName(cfg, _host);
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, AUDIT_WORKFLOW,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    AUDIT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host));
+                    AUDIT_ROLE_INTRO, "", langName);
 
-                var (reply, _) = await agent.RunAsync(userPrompt, tools, ct).ConfigureAwait(false);
+                var (reply, _) = await agent.RunAsync(
+                    AppendAuditLangRequirement(userPrompt, langName), tools, ct).ConfigureAwait(false);
                 reply = SanitizeReport(reply);
 
                 _logger.Info("[LLM_AI] [{0}] Rapport d'audit :\n{1}", label, reply);
@@ -593,6 +608,49 @@ namespace LLM_AI
                 _logger.ErrorException("[LLM_AI] [{0}] Échec de l'audit : {1}", ex, label, ex.Message);
                 return "Échec de l'audit : " + ex.Message;
             }
+        }
+
+        /// <summary>
+        /// Réinjecte l'exigence de langue de l'audit EN FIN de user prompt —
+        /// les DEUX modes, les TROIS sites : boucle agent (single), doses
+        /// déterministes, assemblage final. Pourquoi la directive de system
+        /// prompt (<see cref="LlmAgentService.BuildLanguageDirective"/>) ne
+        /// suffit pas sur le path audit : tout ce que le plugin injecte —
+        /// workflow, descriptions d'outils, sorties des sondes — est en
+        /// français, la boucle agent se termine sur des résultats d'outils
+        /// français (récence au moment où le rapport s'écrit) et la
+        /// directive (elle-même en français) perd. Terrain 2026-10-02 :
+        /// UICulture en-US + prompt d'audit anglais → rapport pourtant en
+        /// français (gemma4:latest, priorité 1). Validé le même jour : la
+        /// même exigence collée en fin de user prompt tient (récence + quirk
+        /// documenté : gemma suit le user prompt). L'exigence est rédigée
+        /// DANS la langue cible pour l'anglais (la phrase elle-même est un
+        /// signal de langue) ; pour toute autre valeur (libre, ex.
+        /// « Nederlands ») gabarit français — même compromis que
+        /// <see cref="LlmAgentService.BuildLanguageDirective"/>. Les valeurs
+        /// de sondes restent VERBATIM (règles de fidélité) : l'exigence
+        /// interdit explicitement de les traduire.
+        /// </summary>
+        internal static string AppendAuditLangRequirement(string userPrompt, string langName)
+        {
+            if (string.IsNullOrWhiteSpace(langName)) return userPrompt ?? string.Empty;
+            bool english = string.Equals(I18n.ParseLangName(langName), I18n.En, StringComparison.Ordinal);
+            string req = english
+                ? "\n\nLANGUAGE — ABSOLUTE REQUIREMENT: Write ALL your output in English. " +
+                  "All section headings in English (\"## Findings\", \"## Recommended actions\", " +
+                  "\"## Metadata health\") — even when other instructions use the French titles " +
+                  "« ## Constats » or « ## Actions recommandées ». Every finding, explanation and " +
+                  "recommended action must be in English, even though the workflow, the tool " +
+                  "descriptions and the tool outputs are in French: the French data NEVER changes " +
+                  "your output language. EXCEPTION — never translate probe values: account names, " +
+                  "paths, log lines, JSON field names and quoted finding text are copied verbatim."
+                : "\n\nLANGUE — EXIGENCE ABSOLUE : rédige TOUTE ta sortie en " + langName.Trim() + " — " +
+                  "titres de sections, constats, explications et actions recommandées, même si le " +
+                  "workflow, les descriptions d'outils et les données des sondes sont en français : " +
+                  "cela ne change PAS la langue de ta sortie. EXCEPTION — ne traduis JAMAIS les " +
+                  "valeurs des sondes : noms de comptes, chemins, lignes de journal, champs JSON " +
+                  "et constats cités se reprennent tels quels.";
+            return (userPrompt ?? string.Empty).TrimEnd() + req;
         }
 
         // ------------------------------------------------------------------
@@ -907,8 +965,14 @@ namespace LLM_AI
             // 2026-10-01 — ResponseLanguage (choix explicite) → langue de
             // l'interface Emby (« Auto ») → anglais. Toujours injectée :
             // sans directive, un modèle a dérivé en chinois (terrain
-            // 2026-10-01).
-            var langDir = LlmAgentService.BuildLanguageDirective(I18n.ResolveProseLangName(cfg, _host));
+            // 2026-10-01). Elle ne suffit pas seule (terrain 2026-10-02,
+            // boucle agent : contexte massivement français) : chaque user
+            // prompt du pipeline dosé (doses + assemblage) reçoit AUSSI
+            // l'exigence de langue en FIN de prompt via
+            // AppendAuditLangRequirement — mêmes raisons (récence + petits
+            // modèles qui suivent le user prompt).
+            string langName = I18n.ResolveProseLangName(cfg, _host);
+            var langDir = LlmAgentService.BuildLanguageDirective(langName);
 
             // Groupes de doses : petits contextes (2-4 sondes), regroupés par
             // thème de rapport. Une section absente du digest est ignorée
@@ -949,10 +1013,15 @@ namespace LLM_AI
                 {
                     string sys = AUDIT_DOSE_SECTION_ROLE;
                     if (langDir.Length > 0) sys += "\n\n" + langDir;
-                    string user = "Titre du bloc à produire : « " + dose.Title + " » (le titre " +
+                    // Exigence de langue en fin de user prompt (voir
+                    // AppendAuditLangRequirement) : le rôle de dose et les
+                    // données du digest sont en français — sans elle, un
+                    // petit modèle dérive vers la langue du contexte.
+                    string user = AppendAuditLangRequirement(
+                        "Titre du bloc à produire : « " + dose.Title + " » (le titre " +
                         "« ### » est ajouté par le plugin — ne l'écris pas).\n\n" +
                         "### DONNÉES DE LA SECTION (JSON du digest)\n" + doseData +
-                        "\nRédige maintenant le bloc Markdown de CETTE section.";
+                        "\nRédige maintenant le bloc Markdown de CETTE section.", langName);
                     block = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
                         sys, user, label + "::dose" + doseNo + "-" + dose.Title, ct).ConfigureAwait(false);
                     _logger.Info("[LLM_AI] [{0}] Dose {1}/{2} « {3} » : {4} car.", label, doseNo, doses.Length, dose.Title, block.Length);
@@ -994,7 +1063,10 @@ namespace LLM_AI
                 "sévérité (🔴 / ⚠️ / ℹ️ / ✅) et par rubrique, en REPRENANT les blocs tels quels (fusion de " +
                 "style permise — omettre un constat ou en inventer un est interdit), puis « Actions " +
                 "recommandées » classées par priorité. Les FAITS ÉTABLIS se citent tels quels.");
-            string userAsm = up.ToString();
+            // Exigence de langue en fin de user prompt, comme les doses (voir
+            // AppendAuditLangRequirement) : les blocs rédigés doivent déjà être
+            // dans la langue cible, l'assemblage y tient la prose de liaison.
+            string userAsm = AppendAuditLangRequirement(up.ToString(), langName);
 
             // Jalon final de progression (run détaché) : l'assemblage est la
             // passe la plus lente après les doses elles-mêmes.

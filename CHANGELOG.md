@@ -10,6 +10,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.3] — 2026-10-02
+
+### Fixed (FR)
+- **Fidélité de langue du rapport d'audit santé (les deux modes)** : avec la
+  langue de réponse sur Auto et une interface Emby en anglais, le rapport
+  sortait pourtant en français — la directive de langue (fin de system
+  prompt) perdait contre tout ce que le plugin injecte en français
+  (workflow d'audit, descriptions d'outils, sorties des sondes), et la
+  boucle agent se termine sur des résultats d'outils français au moment
+  précis où le rapport s'écrit (effet de récence) ; les petits modèles
+  locaux (gemma4, priorité 1 du banc) sous-pondèrent le system prompt.
+  L'exigence de langue est désormais réinjectée en FIN de user prompt aux
+  TROIS sites — boucle agent (mode single), chaque dose du mode
+  déterministe, passe d'assemblage — rédigée dans la langue cible pour
+  l'anglais (la phrase est elle-même un signal de langue), gabarit
+  français pour toute autre valeur libre (« Nederlands »…). La directive
+  de system prompt est conservée (défense en profondeur). Les valeurs des
+  sondes restent VERBATIM (règles de fidélité) : l'exigence interdit
+  explicitement de traduire noms de comptes, chemins, lignes de journal et
+  constats cités — un rapport en anglais cite donc des chaînes françaises
+  quand la sonde les produit. Validé sur le terrain le 2026-10-02 : la
+  même exigence collée manuellement en fin de prompt d'audit a fait sortir
+  le rapport en anglais ; ce correctif la rend permanente (un
+  « Réinitialiser » du prompt ne peut plus la perdre). Limite assumée :
+  les titres de rubriques du mode déterministe (« Système et
+  performance »…) restent en français — ils sont structuraux, ajoutés par
+  le code autour des blocs.
+
+### Fixed (EN)
+- **Audit health report language fidelity (both modes)**: with the response
+  language set to Auto and an English Emby interface, the report still came
+  out in French — the language directive (end of system prompt) lost against
+  everything the plugin injects in French (audit workflow, tool
+  descriptions, probe outputs), and the agent loop ends on French tool
+  results at the very moment the report is written (recency effect); small
+  local models (gemma4, priority 1 on the test bench) under-weight the
+  system prompt. The language requirement is now re-injected at the END of
+  the user prompt at all THREE sites — agent loop (single mode), each
+  deterministic-mode dose, and the final assembly pass — written in the
+  target language for English (the sentence itself is a language cue),
+  French template for any other free-form value ("Nederlands"…). The
+  system-prompt directive is kept (defense in depth). Probe values stay
+  VERBATIM (fidelity rules): the requirement explicitly forbids translating
+  account names, paths, log lines and quoted findings — an English report
+  therefore quotes French strings when the probe produces them.
+  Field-validated 2026-10-02: the same requirement pasted manually at the
+  end of the audit prompt made the report come out in English; this fix
+  makes it permanent (a prompt "Reset" can no longer lose it). Assumed
+  limitation: the deterministic mode's rubric titles ("Système et
+  performance"…) stay French — they are structural, added by the code
+  around the blocks.
+
 ## [1.15.0.2] — 2026-10-02
 
 ### Fixed (FR)
