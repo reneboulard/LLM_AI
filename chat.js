@@ -178,6 +178,22 @@ define([], function () {
         return out.join("\n");
     }
 
+    // Câblage unique (v1.15.0.4) : le dashboard CACHE la vue et re-tire
+    // « viewshow » sur le MÊME élément à chaque retour sur la page — tout
+    // branchement vivant dans le handler s'accumulait (constat terrain :
+    // le chat envoyait le message ×N et les appels LLM partaient ×N après
+    // N affichages de la page). Voir config.js pour le commentaire canonique
+    // du mécanisme (tryRestoreView du ViewManager).
+    var onceMap = new WeakMap();
+    function once(el, ev, fn) {
+        if (!el) return;
+        var evs = onceMap.get(el);
+        if (!evs) { evs = {}; onceMap.set(el, evs); }
+        if (evs[ev]) return;
+        evs[ev] = true;
+        el.addEventListener(ev, fn);
+    }
+
     return function (view) {
         view.addEventListener("viewshow", function () {
             i18nReady().then(function () {
@@ -231,7 +247,7 @@ define([], function () {
                     } else legacy();
                 }
                 if (chatLog) {
-                    chatLog.addEventListener("click", function (ev) {
+                    once(chatLog, "click", function (ev) {
                         var btn = ev.target;
                         while (btn && btn !== chatLog && !(btn.classList && btn.classList.contains("chatCodeBtn"))) {
                             btn = btn.parentNode;
@@ -490,7 +506,7 @@ define([], function () {
                 }
 
                 if (chatSendBtn) {
-                    chatSendBtn.addEventListener("click", sendChat);
+                    once(chatSendBtn, "click", sendChat);
                 }
 
                 // Annonce au changement de mode (v1.13.9, pattern llm_core) :
@@ -502,7 +518,7 @@ define([], function () {
                 // est sautée (le mode est de toute façon porté par le tour
                 // suivant).
                 if (chatContextSel) {
-                    chatContextSel.addEventListener("change", function () {
+                    once(chatContextSel, "change", function () {
                         var mode = chatContextSel.value || "";
                         if (!mode || chatBusy) return;
                         var opt = chatContextSel.options[chatContextSel.selectedIndex];
@@ -747,12 +763,12 @@ define([], function () {
                     });
                 }
                 if (chatInput) {
-                    chatInput.addEventListener("keydown", function (e) {
+                    once(chatInput, "keydown", function (e) {
                         if (e.key === "Enter") { e.preventDefault(); sendChat(); }
                     });
                 }
                 if (chatClearBtn) {
-                    chatClearBtn.addEventListener("click", function () {
+                    once(chatClearBtn, "click", function () {
                         if (chatBusy) return;
                         chatHistory = [];
                         // Oubli côté serveur de la session en cours (mémoire
@@ -804,10 +820,11 @@ define([], function () {
                         }
                         banner.hidden = false;
 
+                        // Branché UNE fois (once) — remplace la garde ad-hoc
+                        // _llmaiWired qui protégeait déjà ce bouton contre le
+                        // viewshow multiple.
                         var resumeBtn = view.querySelector("#btnResumeChat");
-                        if (resumeBtn && !resumeBtn._llmaiWired) {
-                            resumeBtn._llmaiWired = true;
-                            resumeBtn.addEventListener("click", function () {
+                        once(resumeBtn, "click", function () {
                                 if (chatBusy) return;
                                 chatSessionId = info.Id;
                                 chatHistory = [];
@@ -826,8 +843,7 @@ define([], function () {
                                         : renderMarkdown(t.Content));
                                 }
                                 banner.hidden = true;
-                            });
-                        }
+                        });
                     }, function () { /* indisponible : chat sans mémoire (fail-open) */ });
                 }
                 loadChatMemory();

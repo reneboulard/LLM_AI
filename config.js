@@ -390,10 +390,38 @@ define(["loading"], function (loading) {
         return out;
     }
 
+    // ----------------------------------------------------------------
+    //  Câblage unique (v1.15.0.4)
+    // ----------------------------------------------------------------
+
+    // Le ViewManager du dashboard CACHE les vues : chaque retour sur la page
+    // re-tire « viewshow » sur le MÊME élément DOM (tryRestoreView). Tout le
+    // câblage vivant dans le handler viewshow, chaque ré-affichage ajoutait
+    // un listener de plus par élément — constat terrain : la sauvegarde
+    // affichait ses confirmations ×2/×4/×6 (N listeners submit × 2
+    // notifications : le toast « Settings saved » d'Emby +
+    // processPluginConfigurationUpdateResult ET l'alerte du plugin) et
+    // POSTait la configuration N fois ; même famille pour chaque bouton
+    // (ajout backend ×N lignes, fiche mémoire ×N POST, analyses genres
+    // ×N, dialogues cross-kind ×N POST…). once() branche UN listener par
+    // élément+événement pour la durée de vie de l'élément (WeakMap : zéro
+    // fuite, un dialogue recréé repart propre). Les chargements (fill,
+    // bandeau, statut audit, file cross-kind…) restent exécutés à CHAQUE
+    // viewshow, inchangés — seul le branchement devient unique.
+    var onceMap = new WeakMap();
+    function once(el, ev, fn) {
+        if (!el) return;
+        var evs = onceMap.get(el);
+        if (!evs) { evs = {}; onceMap.set(el, evs); }
+        if (evs[ev]) return;
+        evs[ev] = true;
+        el.addEventListener(ev, fn);
+    }
+
     // Pré-remplit l'URL et le modèle par défaut quand l'utilisateur change de
     // provider sur une ligne vide (pour guider la saisie des 3 choix).
     function wireProviderChange(host) {
-        host.addEventListener("change", function (e) {
+        once(host, "change", function (e) {
             var sel = e.target.closest ? e.target.closest(".beProvider") : null;
             if (!sel) return;
             var row = e.target.closest ? e.target.closest(".llmBackendRow") : null;
@@ -519,7 +547,7 @@ define(["loading"], function (loading) {
 
     function wireResetPromptButtons(view) {
         view.querySelectorAll(".btnResetPrompt").forEach(function (btn) {
-            btn.addEventListener("click", function () {
+            once(btn, "click", function () {
                 var targetId = btn.getAttribute("data-reset-target") || "";
                 var key = btn.getAttribute("data-default-key") || "";
                 if (!targetId || !key) return;
@@ -584,7 +612,7 @@ define(["loading"], function (loading) {
     function wireSaveMemoryCardButton(view) {
         var btn = view.querySelector("#btnSaveMemoryCard");
         if (!btn) return;
-        btn.addEventListener("click", function () {
+        once(btn, "click", function () {
             var txt = view.querySelector("#txtMemoryCard");
             var saved = view.querySelector("#lblMemoryCardSaved");
             if (!txt) return;
@@ -722,7 +750,7 @@ define(["loading"], function (loading) {
     function wireToggleAllButton(view) {
         var btn = view.querySelector("#btnToggleSections");
         if (!btn) return;
-        btn.addEventListener("click", function () {
+        once(btn, "click", function () {
             var sections = view._llmaiSections || [];
             if (!sections.length) return;
             // Action : replier s'il reste une section dépliée, sinon déplier.
@@ -1025,7 +1053,7 @@ define(["loading"], function (loading) {
             // l'app compagnon (chat-external/config.json).
             var extSecretBtn = view.querySelector("#btnExternalChatSecretGen");
             if (extSecretBtn) {
-                extSecretBtn.addEventListener("click", function () {
+                once(extSecretBtn, "click", function () {
                     var buf = new Uint8Array(16);
                     (window.crypto || window.msCrypto).getRandomValues(buf);
                     var hex = "";
@@ -1037,7 +1065,7 @@ define(["loading"], function (loading) {
             // Ajouter un backend.
             var addBtn = view.querySelector("#btnAddBackend");
             if (addBtn) {
-                addBtn.addEventListener("click", function () {
+                once(addBtn, "click", function () {
                     var current = collectBackends(view);
                     var host = view.querySelector("#llmBackends");
                     var idx = host ? host.querySelectorAll(".llmBackendRow").length : 0;
@@ -1051,7 +1079,7 @@ define(["loading"], function (loading) {
             // Supprimer / tester un backend (délégation sur le conteneur).
             var host = view.querySelector("#llmBackends");
             if (host) {
-                host.addEventListener("click", function (e) {
+                once(host, "click", function (e) {
                     var btn = e.target.closest ? e.target.closest(".btnRemoveBackend, .btnTestBackend") : null;
                     if (!btn) return;
                     var row = e.target.closest ? e.target.closest(".llmBackendRow") : null;
@@ -1077,7 +1105,7 @@ define(["loading"], function (loading) {
             // Filtre de recherche de la liste des chaines.
             var chFilter = view.querySelector("#wlChannelsFilter");
             if (chFilter) {
-                chFilter.addEventListener("input", function () {
+                once(chFilter, "input", function () {
                     var q = (chFilter.value || "").toLowerCase();
                     var box = view.querySelector("#wlChannels");
                     if (!box) return;
@@ -1107,15 +1135,20 @@ define(["loading"], function (loading) {
                     ? i18n.t("cfg.audit.mode.deterministic")
                     : i18n.t("cfg.audit.mode.single");
             };
-            var auditPollTimer = null;
-            var auditPollFails = 0;
+            // État de polling PORTÉ PAR LA VUE (expando) : le câblage est
+            // unique (once) mais chaque ré-affichage recrée ces closures —
+            // un timer armé par le chargement du N-ième affichage doit
+            // rester arrêtable par le stopPolling branché au premier. Sans
+            // ça, once() laisserait fuir les timers des affichages
+            // suivants (le viewbeforehide du 1er ne voit que SES
+            // variables de closure).
             var auditStopPolling = function () {
-                if (auditPollTimer) { clearInterval(auditPollTimer); auditPollTimer = null; }
+                if (view._llmaiAuditTimer) { clearInterval(view._llmaiAuditTimer); view._llmaiAuditTimer = null; }
             };
             // Quitter la vue coupe le POLLING, pas le run (détaché). Le fil
             // reprend au prochain chargement de la page (?Last=true porte
             // aussi l'état Running).
-            view.addEventListener("viewbeforehide", auditStopPolling);
+            once(view, "viewbeforehide", auditStopPolling);
             var auditSetBusy = function (busy) {
                 var b = view.querySelector("#btnRunAudit");
                 if (!b) return;
@@ -1156,30 +1189,30 @@ define(["loading"], function (loading) {
                 // (la page affiche déjà le dernier rapport via ?Last=true).
             };
             var auditStartPolling = function () {
-                auditPollFails = 0;
+                view._llmaiAuditFails = 0;
                 auditStopPolling();
-                auditPollTimer = setInterval(function () {
+                view._llmaiAuditTimer = setInterval(function () {
                     ApiClient.ajax({
                         url: ApiClient.getUrl("Plugins/LLMAI/Audit", { Status: "true" }),
                         type: "GET"
                     }).then(function (resp) {
                         return resp.json();
                     }).then(function (st) {
-                        auditPollFails = 0;
+                        view._llmaiAuditFails = 0;
                         auditApplyStatus(st);
                     }, function () {
                         // Tolérance réseau : le run continue côté serveur ;
                         // après 5 échecs consécutifs on arrête de poler (le
                         // rapport sera quand même persisté — rechargement de
                         // page pour le voir).
-                        if (++auditPollFails >= 5) auditStopPolling();
+                        if (++view._llmaiAuditFails >= 5) auditStopPolling();
                     });
                 }, 5000);
             };
 
             var runAuditBtn = view.querySelector("#btnRunAudit");
             if (runAuditBtn) {
-                runAuditBtn.addEventListener("click", function () {
+                once(runAuditBtn, "click", function () {
                     var focus = (view.querySelector("#txtAuditFocus").value || "").trim();
                     var url = ApiClient.getUrl("Plugins/LLMAI/Audit", focus ? { Focus: focus } : {});
 
@@ -1357,8 +1390,8 @@ define(["loading"], function (loading) {
                 };
 
                 var ckBtn = view.querySelector("#btnCrossKindRefresh");
-                if (ckBtn) ckBtn.addEventListener("click", ckLoad);
-                if (ckShowIgnoredEl) ckShowIgnoredEl.addEventListener("change", ckLoad);
+                if (ckBtn) once(ckBtn, "click", ckLoad);
+                if (ckShowIgnoredEl) once(ckShowIgnoredEl, "change", ckLoad);
 
                 // Bibliothèques (une fois par affichage de la page) — le
                 // dialogue les liste, triées : films d'abord (cas principal),
@@ -1454,7 +1487,7 @@ define(["loading"], function (loading) {
                     };
 
                     if (ckLibEl) {
-                        ckLibEl.addEventListener("change", function () {
+                        once(ckLibEl, "change", function () {
                             if (!ckEntry) return;
                             var idx = parseInt(ckLibEl.value, 10);
                             if (isNaN(idx) || !ckLibs[idx]) return;
@@ -1462,11 +1495,11 @@ define(["loading"], function (loading) {
                         });
                     }
 
-                    ckDlg.querySelector("#ckDlgCancel").addEventListener("click", function () {
+                    once(ckDlg.querySelector("#ckDlgCancel"), "click", function () {
                         ckDlg.close();
                     });
 
-                    ckGoBtn.addEventListener("click", function () {
+                    once(ckGoBtn, "click", function () {
                         if (!ckEntry) return;
                         var folder = (ckFolderEl.value || "").trim();
                         var file = (ckFileEl.value || "").trim();
@@ -1538,7 +1571,7 @@ define(["loading"], function (loading) {
                     // <movie>, suppression opt-in de tvshow.nfo. Le serveur
                     // rollback l'état initial au moindre échec.
                     if (ckConvertBtn) {
-                        ckConvertBtn.addEventListener("click", function () {
+                        once(ckConvertBtn, "click", function () {
                             if (!ckEntry) return;
                             var name = ((ckNameEl && ckNameEl.value) || "").trim();
                             if (!name) {
@@ -1620,7 +1653,7 @@ define(["loading"], function (loading) {
                 // Délégation des clics : « Régulariser… » ouvre le dialogue avec
                 // l'entrée correspondante ; « Ignorer / Ne plus ignorer » bascule
                 // le tag et recharge la file.
-                ckListEl.addEventListener("click", function (e) {
+                once(ckListEl, "click", function (e) {
                     var btn = e.target && e.target.closest ? e.target.closest(".btnCkRegularize") : null;
                     if (btn && ckDlg) {
                         var id = btn.getAttribute("data-ck");
@@ -1650,7 +1683,7 @@ define(["loading"], function (loading) {
             // vient du web.
             var testSourcesBtn = view.querySelector("#btnTestNewReleases");
             if (testSourcesBtn) {
-                testSourcesBtn.addEventListener("click", function () {
+                once(testSourcesBtn, "click", function () {
                     testNewReleaseSources(view, testSourcesBtn,
                         view.querySelector("#newReleaseTestResult"));
                 });
@@ -1662,7 +1695,7 @@ define(["loading"], function (loading) {
             // serveur (la page de config est déjà un contexte admin).
             var genreAnalyzeBtn = view.querySelector("#btnGenreAnalyze");
             if (genreAnalyzeBtn) {
-                genreAnalyzeBtn.addEventListener("click", function () {
+                once(genreAnalyzeBtn, "click", function () {
                     var infoEl = view.querySelector("#genreProposalsInfo");
                     var listEl = view.querySelector("#genreProposals");
                     var suggestLabelEl = view.querySelector("#genreSuggestLabel");
@@ -1785,7 +1818,7 @@ define(["loading"], function (loading) {
 
             var genreApplyBtn = view.querySelector("#btnGenreApply");
             if (genreApplyBtn) {
-                genreApplyBtn.addEventListener("click", function () {
+                once(genreApplyBtn, "click", function () {
                     var mappings = [];
                     view.querySelectorAll(".genreCheck:checked").forEach(function (chk) {
                         var name = chk.getAttribute("data-name");
@@ -1865,17 +1898,21 @@ define(["loading"], function (loading) {
             //  « Chat LLM AI » — menu Serveur — servie par chat.js. Cette
             //  page ne conserve que le flag d'activation chkChatEnabled.)
 
-            // Soumission du formulaire = sauvegarde.
-            view.querySelector("form.LLMAIConfigForm").addEventListener("submit", function (e) {
+            // Soumission du formulaire = sauvegarde. Branché UNE fois (once) :
+            // la vue est cachée par le dashboard et viewshow re-tire à chaque
+            // retour sur la page — sans la garde, chaque ré-affichage
+            // multipliait les POST et les confirmations (terrain : popups
+            // ×2/×4/×6). Notification de succès : le SEUL toast « Settings
+            // saved » d'Emby via processPluginConfigurationUpdateResult —
+            // l'alerte du plugin était un doublon (chaque sauvegarde
+            // affichait DEUX confirmations dès le premier affichage).
+            once(view.querySelector("form.LLMAIConfigForm"), "submit", function (e) {
                 e.preventDefault();
                 var cfg = collect(view);
 
                 ApiClient.updatePluginConfiguration(pluginId, cfg).then(function () {
                     if (typeof Dashboard !== "undefined" && Dashboard.processPluginConfigurationUpdateResult) {
                         Dashboard.processPluginConfigurationUpdateResult(cfg);
-                    }
-                    if (typeof Dashboard !== "undefined" && Dashboard.alert) {
-                        Dashboard.alert(i18n.t("cfg.alert.saved"));
                     }
                 }, function (err) {
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {

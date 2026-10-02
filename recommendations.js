@@ -727,6 +727,22 @@ define([], function () {
         }
     }
 
+    // Câblage unique (v1.15.0.4) : le dashboard CACHE la vue et re-tire
+    // « viewshow » sur le MÊME élément à chaque retour sur la page — tout
+    // branchement vivant dans le handler s'accumulait (les actions des
+    // cartes « ce soir » partaient ×N après N affichages). Voir config.js
+    // pour le commentaire canonique du mécanisme (tryRestoreView du
+    // ViewManager).
+    var onceMap = new WeakMap();
+    function once(el, ev, fn) {
+        if (!el) return;
+        var evs = onceMap.get(el);
+        if (!evs) { evs = {}; onceMap.set(el, evs); }
+        if (evs[ev]) return;
+        evs[ev] = true;
+        el.addEventListener(ev, fn);
+    }
+
     return function (view) {
         view.addEventListener("viewshow", function () {
             // i18n : charge le module, résout la langue (globalize) puis traduit
@@ -785,13 +801,13 @@ define([], function () {
                         '<div class="recEmpty">' + i18n.t("rec.alert.cfgLoad") + '</div>';
                 });
 
-                view.querySelector("#btnToggleRaw").addEventListener("click", function () {
+                once(view.querySelector("#btnToggleRaw"), "click", function () {
                     var raw = view.querySelector("#recRaw");
                     raw.style.display = (raw.style.display === "none") ? "block" : "none";
                 });
 
                 // Délégation d'événements pour les boutons des cartes (rendu dynamique).
-                view.addEventListener("click", function (e) {
+                once(view, "click", function (e) {
                     var target = e.target;
                     if (!(target instanceof Element)) return;
                     var refreshBtn = target.closest ? target.closest(".ai-btn-tonight-refresh") : null;

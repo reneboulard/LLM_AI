@@ -10,6 +10,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.15.0.4] — 2026-10-02
+
+### Fixed (FR)
+- **Multiplication des confirmations de sauvegarde et des branchements sur
+  les trois pages web** : le ViewManager du dashboard CACHE les vues et
+  re-tire `viewshow` sur le MÊME élément DOM à chaque retour sur la page
+  (`tryRestoreView`) ; tout le câblage vivant dans le handler `viewshow`
+  s'accumulait donc à chaque ré-affichage. Constat terrain (page de
+  configuration) : la sauvegarde affichait ses confirmations ×2/×4/×6
+  (N listeners submit × 2 notifications — le toast « Settings saved »
+  d'Emby via `processPluginConfigurationUpdateResult` ET l'alerte du
+  plugin) et POSTait la configuration N fois ; même famille pour chaque
+  bouton (ajout de backend ×N lignes, fiche mémoire ×N POST, analyses
+  genres ×N, dialogues cross-kind ×N POST d'écriture, etc.).
+  - Correctif : helper `once()` (WeakMap par élément+événement) —
+    branchement unique pour la durée de vie de l'élément (un dialogue ou
+    une carte recréés repartent propres) ; les chargements (config,
+    bandeau, statut audit, file cross-kind) continuent de s'exécuter à
+    CHAQUE affichage, inchangés.
+  - Notification de succès : une seule — le toast standard « Settings
+    saved » d'Emby ; l'alerte redondante du plugin est retirée (l'alerte
+    d'erreur reste). La clé `cfg.alert.saved` reste au dictionnaire
+    (inutilisée, précédent `cfg.audit.done`).
+  - Page audit : l'état du polling est porté par la vue (expando
+    `_llmaiAuditTimer`) pour que le `stopPolling` branché au premier
+    affichage arrête aussi les timers armés par les chargements des
+    affichages suivants — sans ça, `once()` aurait laissé fuir des
+    pollers en arrière-plan.
+  - Chat : « Envoyer » et l'appui sur Entrée partaient ×N (N appels LLM
+    par message) ; Effacer, changement de mode, délégation des blocs de
+    code — même correctif. La garde ad-hoc `_llmaiWired` du bouton
+    « Reprendre » est normalisée sur `once()`. Les boutons des cartes
+    d'action (DOM recréé à chaque proposition) n'étaient pas concernés.
+  - Recommandations : bascule JSON brut et délégation des clics des
+    cartes — même correctif.
+
+### Fixed (EN)
+- **Save confirmations and wirings multiplying on the three web pages**:
+  the dashboard's ViewManager CACHES views and re-dispatches `viewshow`
+  on the SAME DOM element every time you come back to the page
+  (`tryRestoreView`); every wiring living inside the `viewshow` handler
+  therefore accumulated on each re-display. Field observation
+  (configuration page): save showed its confirmations ×2/×4/×6 (N submit
+  listeners × 2 notifications — Emby's "Settings saved" toast via
+  `processPluginConfigurationUpdateResult` AND the plugin's own alert)
+  and POSTed the configuration N times; same defect family on every
+  button (backend add ×N rows, memory card ×N POSTs, genre analyses
+  ×N, cross-kind dialogs ×N write POSTs, etc.).
+  - Fix: a `once()` helper (WeakMap keyed by element+event) — one and
+    only one listener for the element's lifetime (a recreated dialog or
+    card starts clean); loads (config, update banner, audit status,
+    cross-kind queue) still run on EVERY display, unchanged.
+  - Success notification: a single one — Emby's standard "Settings
+    saved" toast; the plugin's redundant alert is removed (the error
+    alert stays). The `cfg.alert.saved` key remains in the dictionary
+    (unused, per the `cfg.audit.done` precedent).
+  - Audit page: the polling state is carried by the view (`_llmaiAuditTimer`
+    expando) so that the `stopPolling` wired on the first display also
+    stops timers armed by later displays' loads — without it, `once()`
+    would have leaked background pollers.
+  - Chat: "Send" and the Enter key fired ×N (N LLM calls per message);
+    Clear, mode change, code-block delegation — same fix. The "Resume"
+    button's ad-hoc `_llmaiWired` guard is normalized onto `once()`.
+    The action-card buttons (DOM recreated per proposal) were not
+    affected.
+  - Recommendations: raw-JSON toggle and card click delegation — same
+    fix.
+
 ## [1.15.0.3] — 2026-10-02
 
 ### Fixed (FR)
