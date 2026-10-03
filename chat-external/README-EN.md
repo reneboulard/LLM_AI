@@ -142,6 +142,18 @@ username and password as the Emby app).
 To revoke access: change the secret **on both sides** (Emby +
 `config.json`), or disable the external chat in Emby.
 
+## Translations (page and message language)
+
+The chat page and the local server error messages (empty message, too
+long, Emby unreachable…) follow the **Emby server's interface language**
+(dashboard → Preferences → Language) — resolved **plugin-side**, the app
+decides nothing. At page load, the app fetches the "ext" section of the
+community overlay `LLM_AI_i18n.json` via `GET /Plugins/LLMAI/I18nExt`
+(shared secret, loopback call — same as above), with a 30 s app-side
+cache. See the plugin README (community translations section) to provide
+or complete a language; missing or unreachable → per-key fallback to the
+embedded French (the app remains usable without any translation).
+
 ## Voice conversation 🎤 🔊
 
 This is what the app is for: **talking to the server and being answered

@@ -13,6 +13,9 @@ Rôle :
     deuxième stockage de mots de passe ;
   - relaie chaque tour vers l'endpoint plugin `POST /Plugins/LLMAI/ChatExternal`
     (secret partagé) et la navigation vers `POST /Plugins/LLMAI/Show` ;
+  - traduit page et messages serveur via l'overlay communautaire du plugin
+    (`GET /Plugins/LLMAI/I18nExt`, section « ext » — langue résolue CÔTÉ
+    plugin, cache 30 s, repli FR par clé) ;
   - détient l'historique de conversation CÔTÉ PAGE (l'endpoint est
     stateless) — le serveur Python ne stocke rien.
 
@@ -40,6 +43,7 @@ import secrets
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -195,12 +199,13 @@ def emby_authenticate(username, password):
         {"X-Emby-Authorization": AUTH_HEADER},
     )
     if status == 0:
-        return None, "Emby injoignable (%s)." % resp.get("__network__", "?")
+        return None, MSG("srv.err.embydown", "Emby injoignable ({0}).",
+                         resp.get("__network__", "?"))
     if status != 200:
         return None, None  # identifiants refusés (pas de détail au client)
     name = (resp.get("User") or {}).get("Name") or ""
     if not name.strip():
-        return None, "Réponse Emby inattendue."
+        return None, MSG("srv.err.embybadresp", "Réponse Emby inattendue.")
     return name.strip(), None
 
 
@@ -221,6 +226,65 @@ def plugin_show(user, item_id):
         "User": user,
         "ItemId": item_id,
     })
+
+
+# ---------------------------------------------------------------------------
+# i18n de l'écosystème chat externe (overlay communautaire, v1.16.0 P3b)
+# ---------------------------------------------------------------------------
+# Le plugin expose GET /Plugins/LLMAI/I18nExt (gate loopback + secret partagé)
+# qui sert la section « ext » de l'overlay LLM_AI_i18n.json pour la langue
+# résolue CÔTÉ PLUGIN (cascade UICulture du serveur Emby — l'app ne décide
+# RIEN de la langue). Payload = {« ext.* », « srv.* », « _lang »} ; SANS
+# « _lang » (plugin injoignable, gate refusée, réponse mal formée), l'échange
+# est un échec → repli {} : la page rend ses littéraux FR embarqués (repli
+# par clé) et MSG fait de même côté serveur. Le Python ne valide RIEN : le
+# chargeur du plugin valide déjà placeholders/textes par clé et ne sert que
+# du validé.
+
+_EXT_TTL = 30.0            # micro-cache (même esprit que le throttle mtime
+                           # du chargeur du plugin)
+_EXT_I18N = {"at": 0.0, "data": None}
+
+def ext_i18n(timeout=10.0):
+    """Section « ext » de l'overlay pour la langue résolue côté plugin.
+    Retourne toujours un dict ({} si échec), mis en cache _EXT_TTL — un
+    échec est mis en cache aussi (pas de marteau sur un plugin momentané-
+    ment bas ; retry au prochain TTL)."""
+    now = time.time()
+    if _EXT_I18N["data"] is not None and now - _EXT_I18N["at"] < _EXT_TTL:
+        return _EXT_I18N["data"]
+    data = {}
+    try:
+        q = urllib.parse.urlencode({"Token": CFG["secret"]})
+        url = CFG["emby_url"].rstrip("/") + "/Plugins/LLMAI/I18nExt?" + q
+        with urllib.request.urlopen(urllib.request.Request(url),
+                                    timeout=timeout) as r:
+            doc = json.loads(r.read().decode("utf-8"))
+        if isinstance(doc, dict) and "_lang" in doc:
+            data = doc
+    except Exception:
+        data = {}
+    _EXT_I18N["at"] = now
+    _EXT_I18N["data"] = data
+    return data
+
+def MSG(key, alt, *args):
+    """Message serveur (« srv.* ») : valeur d'overlay (validée côté plugin,
+    jamais servie sinon) sinon l'alternative FR embarquée ; substitution
+    {0}/{1}… à la str.format avec repli sûr — l'overlay ne peut contenir que
+    les {n} que porte la native EN (validateur du chargeur), mais on ne
+    prend jamais le risque d'un 500 pour un texte."""
+    v = ext_i18n(timeout=3.0).get(key)
+    v = v if isinstance(v, str) and v else alt
+    if args:
+        try:
+            v = v.format(*args)
+        except Exception:
+            try:
+                v = alt.format(*args)
+            except Exception:
+                v = alt
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +380,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
+        elif self.path == "/api/i18n.js":
+            # Traductions de l'overlay (section ext, langue résolue côté
+            # plugin) — le Python ne valide rien, il replie les JSON
+            # validés par le chargeur ; échec → {} (repli FR de la page).
+            body = ("window.LLMAI_EXT_I18N = "
+                    + json.dumps(ext_i18n(), ensure_ascii=False,
+                                 separators=(",", ":")) + ";").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path == "/api/whoami":
             user = read_cookie(self)
             if user:
@@ -346,18 +423,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_login(self, body):
         if not body:
-            return self.send_json({"error": "Requête invalide."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.badrequest", "Requête invalide.")}, 400)
         username = (body.get("username") or "").strip()
         password = body.get("password") or ""
         if not username or not password:
-            return self.send_json({"error": "Nom d'usager et mot de passe requis."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.creds", "Nom d'usager et mot de passe requis.")}, 400)
         name, err = emby_authenticate(username, password)
         if err:
             return self.send_json({"error": err}, 502)
         if name is None:
             # Identifiants refusés — même message que l'identité soit
             # mauvaise ou que l'usager soit inconnu (pas d'indice).
-            return self.send_json({"error": "Connexion refusée (identifiants Emby invalides)."}, 401)
+            return self.send_json({"error": MSG(
+                "srv.err.auth",
+                "Connexion refusée (identifiants Emby invalides).")}, 401)
         self.send_json({"ok": True, "user": name},
                        extra_headers={"Set-Cookie": make_cookie(name)})
 
@@ -366,13 +447,17 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return self.send_json({"error": "non connecté"}, 401)
         if not body:
-            return self.send_json({"error": "Requête invalide."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.badrequest", "Requête invalide.")}, 400)
 
         message = (body.get("message") or "").strip()
         if not message:
-            return self.send_json({"error": "Message vide."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.empty", "Message vide.")}, 400)
         if len(message) > 2000:  # même borne que le plugin
-            return self.send_json({"error": "Message trop long (2000 caractères maximum)."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.toolong", "Message trop long ({0} caractères maximum).",
+                2000)}, 400)
 
         # Défense en profondeur : seuls user/assistant partent, plafonnés.
         history = []
@@ -392,8 +477,9 @@ class Handler(BaseHTTPRequestHandler):
 
         status, resp = plugin_chat(user, message, history, session, tts)
         if status == 0:
-            return self.send_json({"error": "Emby injoignable (%s)."
-                                   % resp.get("__network__", "?")}, 502)
+            return self.send_json({"error": MSG(
+                "srv.err.embydown", "Emby injoignable ({0}).",
+                resp.get("__network__", "?"))}, 502)
         # La gate répond toujours en JSON (200) avec un champ Error.
         self.send_json({
             "reply": resp.get("Reply"),
@@ -420,15 +506,18 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             return self.send_json({"error": "non connecté"}, 401)
         if not body:
-            return self.send_json({"error": "Requête invalide."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.badrequest", "Requête invalide.")}, 400)
         item_id = (body.get("item_id") or "").strip()
         if not item_id:
-            return self.send_json({"error": "Item manquant."}, 400)
+            return self.send_json({"error": MSG(
+                "srv.err.noitem", "Item manquant.")}, 400)
 
         status, resp = plugin_show(user, item_id)
         if status == 0:
-            return self.send_json({"error": "Emby injoignable (%s)."
-                                   % resp.get("__network__", "?")}, 502)
+            return self.send_json({"error": MSG(
+                "srv.err.embydown", "Emby injoignable ({0}).",
+                resp.get("__network__", "?"))}, 502)
         self.send_json({
             "ok": resp.get("Ok", False),
             "device": resp.get("Device"),
@@ -446,7 +535,8 @@ PAGE_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chat Emby</title>
+<title>🤖 Chat Emby</title>
+<script src="/api/i18n.js"></script>
 <style>
   :root {
     --bg: #10141a; --panel: #1a2029; --panel2: #222a36; --border: #2e3846;
@@ -551,7 +641,7 @@ PAGE_HTML = r"""<!doctype html>
 <body>
 
 <div id="login">
-  <h2>🤖 Chat Emby</h2>
+  <h2 id="ltitle">🤖 Chat Emby</h2>
   <input id="u" type="text" placeholder="Nom d'usager Emby" autocomplete="username">
   <input id="p" type="password" placeholder="Mot de passe Emby" autocomplete="current-password">
   <div class="err" id="lerr"></div>
@@ -560,11 +650,11 @@ PAGE_HTML = r"""<!doctype html>
 
 <div id="chat">
   <header>
-    <h1>🤖 Chat Emby</h1>
+    <h1 id="utitle">🤖 Chat Emby</h1>
     <span class="user" id="who"></span>
     <button id="autotts" onclick="toggleAutoTts()" title="Lecture automatique des réponses">🔊 Auto</button>
-    <button onclick="newSession()">➕ Nouvelle</button>
-    <button onclick="logout()">Quitter</button>
+    <button id="newbtn" onclick="newSession()">➕ Nouvelle</button>
+    <button id="quitbtn" onclick="logout()">Quitter</button>
   </header>
   <div id="msgs"></div>
   <form onsubmit="return send(event)">
@@ -582,6 +672,40 @@ var user = "", session = "", chatHistory = [], busy = false;
 
 // -- utilitaires ------------------------------------------------------------
 function $(id) { return document.getElementById(id); }
+// i18n (v1.16.0, plan P3b) : la page embarque ses littéraux FR (repli par
+// clé) ; l'overlay communautaire du plugin — servi par /api/i18n.js, langue
+// résolue CÔTÉ PLUGIN (cascade UICulture, l'app ne décide rien) — les
+// remplace par clé si présent. Bulles déjà rendues non re-localisées en
+// session (rechargement = re-fetch). Les chaînes ext = TEXTE BRUT
+// (textContent / placeholder / title — jamais innerHTML), seules les règles
+// {0} s'appliquent.
+function L(key, alt) {
+  var v = window.LLMAI_EXT_I18N ? window.LLMAI_EXT_I18N[key] : null;
+  return (typeof v === "string" && v.length) ? v : alt;
+}
+function fmt(s) {
+  for (var i = 1; i < arguments.length; i++)
+    s = s.split("{" + (i - 1) + "}").join(String(arguments[i]));
+  return s;
+}
+function translateChrome() {
+  var title = L("ext.title", "🤖 Chat Emby");
+  document.title = title;
+  $("ltitle").textContent = title;
+  $("utitle").textContent = title;
+  $("u").placeholder = L("ext.login.user.ph", "Nom d'usager Emby");
+  $("p").placeholder = L("ext.login.pwd.ph", "Mot de passe Emby");
+  $("lbtn").textContent = L("ext.login.submit", "Se connecter");
+  $("autotts").title = L("ext.autotts.title", "Lecture automatique des réponses");
+  $("autotts").textContent = L("ext.autotts.label", "🔊 Auto");
+  $("newbtn").textContent = L("ext.new", "➕ Nouvelle");
+  $("quitbtn").textContent = L("ext.quit", "Quitter");
+  $("in").placeholder = L("ext.msg.ph", "Votre message…");
+  $("mic").title = L("ext.mic.title", "Dictée vocale");
+  $("sbtn").textContent = L("ext.send", "Envoyer");
+  document.documentElement.lang =
+    (window.LLMAI_EXT_I18N && window.LLMAI_EXT_I18N._lang) || "fr";
+}
 // Langue de la voix (dictée 🎤 + synthèse 🔊) : celle du navigateur de
 // l'usager (normalement alignée avec SA langue), repli fr-FR. Ex.
 // « fr-CA », « en-US » ; le navigateur ne reconnaît/parle que dans une
@@ -697,7 +821,8 @@ function toggleAutoTts() {
   autoTts = !autoTts;
   try { localStorage.setItem(ttsKey(), autoTts ? "1" : "0"); } catch (e) {}
   updateAutoTtsBtn();
-  toast(autoTts ? "🔊 Lecture automatique activée." : "Lecture automatique désactivée.");
+  toast(autoTts ? L("ext.tts.auto.on", "🔊 Lecture automatique activée.")
+                : L("ext.tts.auto.off", "Lecture automatique désactivée."));
 }
 // Markdown → texte oral : les liens [Titre](url) ne gardent que « Titre »,
 // les blocs de code et URL restantes sont écartés (pas de charabia lu).
@@ -730,7 +855,7 @@ function speakText(raw, btn) {
   if (speakingBtn === btn) { stopSpeak(); return; }
   stopSpeak();
   var text = cleanSpeech(raw);
-  if (!text) { toast("⚠️ Rien à lire dans cette réponse.", true); return; }
+  if (!text) { toast(L("ext.tts.none", "⚠️ Rien à lire dans cette réponse."), true); return; }
   speakingBtn = btn;
   btn.textContent = "⏹";
   var parts = chunkSpeech(text, 180), i = 0;
@@ -759,18 +884,18 @@ function api(path, body, cb) {
     if (xhr.status === 401 && path !== "/api/login") { showLogin(); return; }
     cb(data, xhr.status);
   };
-  xhr.onerror = function () { cb({ error: "Serveur injoignable." }, 0); };
+  xhr.onerror = function () { cb({ error: L("ext.err.srvdown", "Serveur injoignable.") }, 0); };
   xhr.send(JSON.stringify(body || {}));
 }
 
 function login() {
   var u = $("u").value.trim(), p = $("p").value;
-  if (!u || !p) { $("lerr").textContent = "Nom et mot de passe requis."; return; }
+  if (!u || !p) { $("lerr").textContent = L("ext.err.required", "Nom et mot de passe requis."); return; }
   $("lbtn").disabled = true;
   api("/api/login", { username: u, password: p }, function (d, st) {
     $("lbtn").disabled = false;
     if (st === 200 && d.ok) { enterChat(d.user); }
-    else { $("lerr").textContent = d.error || "Connexion refusée."; }
+    else { $("lerr").textContent = d.error || L("ext.err.connrefused", "Connexion refusée."); }
   });
 }
 
@@ -790,8 +915,10 @@ function enterChat(name) {
   chatHistory.forEach(function (t) { addBubble(t.role, t.content); });
   if (!chatHistory.length) {
     addBubble("assistant",
-              "Bonjour " + user + " ! Posez vos questions sur la médiathèque, "
-              + "ce qui passe ce soir, ou demandez-moi une suggestion. 🎬");
+              fmt(L("ext.hello",
+                    "Bonjour {0} ! Posez vos questions sur la médiathèque, "
+                    + "ce qui passe ce soir, ou demandez-moi une suggestion. 🎬"),
+                  user));
   }
   scrollDown();
   $("in").focus();
@@ -809,7 +936,7 @@ function newSession() {
   session = ""; chatHistory = [];
   try { localStorage.removeItem(storageKey()); } catch (e) {}
   $("msgs").innerHTML = "";
-  addBubble("assistant", "Nouvelle conversation. Comment puis-je aider ? 🎬");
+  addBubble("assistant", L("ext.newsession", "Nouvelle conversation. Comment puis-je aider ? 🎬"));
   $("in").focus();
 }
 
@@ -835,7 +962,7 @@ function send(ev) {
           chatHistory = outgoing.concat([{ role: "assistant", content: d.reply || "" }]);
           session = d.session || session;
           persist();
-          var bubble = addBubble("assistant", d.reply || "(réponse vide)");
+          var bubble = addBubble("assistant", d.reply || L("ext.reply.empty", "(réponse vide)"));
           // 🔑 Code de confirmation (enregistrements, human-in-the-loop) :
           // canal HORS BANDE — le code n'apparaît jamais dans le texte du
           // LLM (il ne le connaît pas), il est affiché ICI et l'usager le
@@ -844,7 +971,9 @@ function send(ev) {
           if (d.confirm_code) {
             var chip = document.createElement("div");
             chip.className = "confirmcode";
-            chip.textContent = "🔑 Code de confirmation : " + d.confirm_code;
+            chip.textContent = fmt(L("ext.confirm.code",
+                                     "🔑 Code de confirmation : {0}"),
+                                   d.confirm_code);
             bubble.appendChild(chip);
             // ⏳ Contenu du bucket affiché AVEC le code : ce que l'usager
             // voit à l'écran EST la réservation déposée par le serveur
@@ -877,7 +1006,8 @@ function send(ev) {
 function showItem(itemId) {
   api("/api/show", { item_id: itemId }, function (d) {
     if (d.error) { toast("⚠️ " + d.error, true); return; }
-    toast("📺 Projeté sur « " + (d.device || "?") + " » (" + d.command + ")");
+    toast(fmt(L("ext.show.ok", "📺 Projeté sur « {0} » ({1})"),
+              d.device || "?", d.command));
   });
 }
 
@@ -904,9 +1034,11 @@ function setupVoice() {
   recog.onerror = function (ev) {
     $("mic").classList.remove("rec");
     if (ev && ev.error === "not-allowed") {
-      toast("🎤 Micro refusé — autorisez-le dans la barre d'adresse.", true);
+      toast(L("ext.mic.denied",
+              "🎤 Micro refusé — autorisez-le dans la barre d'adresse."), true);
     } else if (ev && ev.error && ev.error !== "aborted" && ev.error !== "no-speech") {
-      toast("🎤 Dictée indisponible (" + ev.error + ").", true);
+      toast(fmt(L("ext.mic.fail", "🎤 Dictée indisponible ({0})."),
+                ev.error), true);
     }
   };
 }
@@ -916,7 +1048,8 @@ function toggleMic() {
   $("mic").classList.add("rec");
   try { recog.start(); } catch (e) {
     $("mic").classList.remove("rec");
-    toast("🎤 Dictée indisponible ici (HTTPS requis pour le micro).", true);
+    toast(L("ext.mic.https",
+            "🎤 Dictée indisponible ici (HTTPS requis pour le micro)."), true);
   }
 }
 
@@ -929,6 +1062,9 @@ $("p").addEventListener("keydown", function (ev) {
 
 // -- démarrage ----------------------------------------------------------------
 (function boot() {
+  // Chrome traduit AVANT tout rendu/flux : titre, libellés, placeholders et
+  // <html lang> (depuis _lang — langue résolue côté plugin via /api/i18n.js).
+  translateChrome();
   // URL Emby absolue pour « ↗ fiche web » : fournie par le serveur via la
   // balise meta ci-dessous (emby_public_url, repli emby_url — config.json).
   var meta = document.querySelector('meta[name="emby-base"]');

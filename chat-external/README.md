@@ -150,6 +150,18 @@ Ouvrez ensuite `http://<machine-emby>:8070/` depuis un navigateur du foyer
 Pour révoquer l'accès : changez le secret **des deux côtés** (Emby +
 `config.json`), ou désactivez le chat externe dans Emby.
 
+## Traductions (langue de la page et des messages)
+
+La page de chat et les messages d'erreur du serveur local (message vide,
+trop long, Emby injoignable…) suivent la **langue d'interface du serveur
+Emby** (tableau de bord → Préférences → Langue) — résolue **côté plugin**,
+l'app ne décide rien. Au chargement, la page récupère la section « ext » de
+l'overlay communautaire `LLM_AI_i18n.json` via `GET /Plugins/LLMAI/I18nExt`
+(secret partagé, appel loopback — le même que ci-dessus), avec un cache de
+30 s côté app. Voir le README du plugin (section traductions communautaires)
+pour fournir ou compléter une langue ; absent ou injoignable → repli par
+clé sur le français embarqué (l'app reste utilisable sans traduction).
+
 ## Conversation par la voix 🎤 🔊
 
 C'est la raison d'être de l'app : **parler au serveur et se faire répondre

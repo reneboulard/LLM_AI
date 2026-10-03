@@ -370,7 +370,7 @@ namespace LLM_AI
         }
 
         /// <summary>Nombre de clés ext EN natives (dénominateur des logs —
-        /// 33 clés au 2026-10-03 : 26 ext.* + 7 srv.*).</summary>
+        /// 35 clés au 2026-10-03 : 27 ext.* + 8 srv.*).</summary>
         internal static int EnExtKeyCount
             => s_ext.TryGetValue(En, out var en) ? en.Count : 0;
 
@@ -804,7 +804,7 @@ namespace LLM_AI
                 ["en"] = new(StringComparer.Ordinal)
                 {
                     // --- chrome de la page (ext.*) ---
-                    ["ext.title"] = "Emby Chat",
+                    ["ext.title"] = "🤖 Emby Chat",
                     ["ext.login.user.ph"] = "Emby username",
                     ["ext.login.pwd.ph"] = "Emby password",
                     ["ext.login.submit"] = "Sign in",
@@ -827,6 +827,7 @@ namespace LLM_AI
                     ["ext.tts.auto.on"] = "🔊 Auto-read enabled.",
                     ["ext.tts.auto.off"] = "Auto-read disabled.",
                     ["ext.show.ok"] = "📺 Now playing on \"{0}\" ({1})",
+                    ["ext.confirm.code"] = "🔑 Confirmation code: {0}",
                     ["ext.mic.denied"] = "🎤 Microphone denied — allow it in the address bar.",
                     ["ext.mic.fail"] = "🎤 Voice input unavailable ({0}).",
                     ["ext.mic.https"] = "🎤 Voice input unavailable here (HTTPS required for the mic).",
@@ -837,6 +838,7 @@ namespace LLM_AI
                     ["srv.err.empty"] = "Empty message.",
                     ["srv.err.toolong"] = "Message too long ({0} characters maximum).",
                     ["srv.err.embydown"] = "Emby unreachable ({0}).",
+                    ["srv.err.embybadresp"] = "Unexpected Emby response.",
                     ["srv.err.noitem"] = "Missing item.",
                 },
             };
