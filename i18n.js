@@ -15,12 +15,25 @@
 //   t(key, ...a)   -> traduction ; substitution {0} {1} … ; repli en puis clé.
 //   translateView  -> parcourt le DOM et applique data-i18n / data-i18n-html /
 //                     data-i18n-ph / data-i18n-label / data-i18n-title.
+//
+// Overlay communautaire (v1.16.0, plan P3) : init() fait AUSSI un fetch de
+// GET /Plugins/LLMAI/I18n (endpoint du plugin, en parallèle de la détection).
+// Le payload { "<lang>": { "web": {…} } } enrichit STRINGS (patch fr/en,
+// ajout de langues comme « es ») AVANT la résolution pickLang, qui est
+// désormais data-driven (itération Object.keys(STRINGS)). La section web
+// n'est PAS validée côté serveur — la référence EN web vit dans CE module,
+// pas dans la DLL — la validation est donc ici, par clé, au merge : clé
+// inconnue du dictionnaire EN natif, placeholders {n} ou balises HTML
+// divergents de l'EN natif → clé sautée + console.warn (miroir exact des
+// règles 4-5 du kit/chargeur). Échec fetch (plugin < v1.16.0 → 404, hôte
+// injoignable, réponse non-JSON) → null silencieux : natif inchangé
+// (fail-open symétrique du chargeur).
 define([], function () {
     "use strict";
 
     // ------------------------------------------------------------------
-    //  Dictionnaires FR + EN (extensible : ajouter une locale ci-dessous et
-    //  un préfixe dans pickLang).
+    //  Dictionnaires FR + EN (extensible : ajouter une locale ci-dessous,
+    //  ou livrer un overlay communautaire — cf. la section Overlay).
     // ------------------------------------------------------------------
     var STRINGS = {
         fr: {
@@ -871,24 +884,131 @@ define([], function () {
     // ------------------------------------------------------------------
     var lang = null;
 
-    // Mappe une locale Emby/navigateur (ex. "fr-CA", "fr-FR", "en-US") vers un
-    // code de dictionnaire. Extensible : ajouter un préfixe pour une nouvelle
-    // langue (et un dictionnaire ci-dessus). Tout ce qui n'est pas reconnu ->
-    // "en" (repli anglais).
+    // Data-driven (v1.16.0, plan P3) : itère les clés de STRINGS (ordre
+    // d'insertion : fr, en, puis les langues ajoutées par l'overlay) et rend
+    // la première dont le préfixe de locale correspond. « fr-CA » → fr,
+    // « es-ES » → es si la langue a été chargée depuis l'overlay (sinon la
+    // clé « es » n'existe pas et l'itération retombe sur « en »). Tout ce
+    // qui ne correspond à aucune clé -> "en" (repli anglais, inchangé).
     function pickLang(loc) {
         loc = String(loc || "").toLowerCase();
-        if (loc.indexOf("fr") === 0) return "fr";
-        // (extensible : if (loc.indexOf("es") === 0) return "es"; ...)
+        var keys = Object.keys(STRINGS);
+        for (var i = 0; i < keys.length; i++) {
+            var k = String(keys[i] || "").toLowerCase();
+            if (k && loc.indexOf(k) === 0) return keys[i];
+        }
         return "en";
     }
 
-    // Détecte la langue : globalize.getCurrentLocale() (source de vérité Emby)
-    // via Emby.importModule, repli navigator.language, repli "en". Toujours
-    // résolue (jamais rejetée) — l'i18n ne doit pas casser l'UI.
-    function init() {
-        if (lang) return Promise.resolve(lang);
+    // ------------------------------------------------------------------
+    //  Overlay de traductions communautaires (v1.16.0, plan P3)
+    // ------------------------------------------------------------------
+    // GET /Plugins/LLMAI/I18n sert les tranches web du fichier administré
+    // LLM_AI_i18n.json (chargeur I18nOverlay.cs). La validation est ICI, par
+    // clé, au merge (miroir exact des règles 4-5 du kit validate_i18n.js) :
+    // multiset des placeholders {n} (trié, joint ',') et multiset des
+    // balises HTML (/<\/?[a-zA-Z][^>]*>/g, trié, joint '|') comparés à
+    // l'EN NATIF (la référence de contrat — jamais à un patch qui précède).
+    function warnOverlay(langKey, key, msg) {
+        try { console.warn("[LLM_AI i18n] [" + langKey + "] " + key + " — " + msg); }
+        catch (e) { /* la console ne doit jamais casser l'i18n */ }
+    }
+    function phSig(s) {
+        var m = String(s || "").match(/\{\d+\}/g);
+        return m ? m.slice().sort().join(",") : "";
+    }
+    function tagSig(s) {
+        var m = String(s || "").match(/<\/?[a-zA-Z][^>]*>/g);
+        return m ? m.slice().sort().join("|") : "";
+    }
+    function copyDict(d) {
+        var out = {}, keys = Object.keys(d), i;
+        for (i = 0; i < keys.length; i++) out[keys[i]] = d[keys[i]];
+        return out;
+    }
+
+    // Fetch de l'overlay — null silencieux sur tout échec (endpoint absent,
+    // plugin < v1.16.0, hôte injoignable, réponse non-JSON, fetch vieux
+    // navigateur) : natif inchangé. no-store : l'overlay est éditable live
+    // et le serveur re-scanne à chaque GET.
+    function fetchOverlayWeb() {
+        try {
+            if (typeof fetch !== "function") return Promise.resolve(null);
+            return fetch("/Plugins/LLMAI/I18n", { cache: "no-store" })
+                .then(function (r) { return (r && r.ok) ? r.json() : null; })
+                .then(function (payload) {
+                    return (payload && typeof payload === "object"
+                            && !Array.isArray(payload)) ? payload : null;
+                })
+                .catch(function () { return null; });
+        } catch (e) { return Promise.resolve(null); }
+    }
+
+    // Merge des tranches web dans STRINGS : patch fr/en (remplacement par
+    // clé) + ajout de langues nouvelles. La référence de validation est la
+    // photo de l'EN natif prise au début du merge (un patch "en" qui
+    // précéderait un autre langage dans le payload ne redéfinit PAS le
+    // contrat — miroir du comportement chargeur C#, où patch-en s'applique
+    // à l'étage de repli sans changer les règles). Une langue créée n'est
+    // rattachée à STRINGS que si au moins une clé a survécu (un dict vide
+    // n'a pas de valeur ni pour lookup ni pour pickLang).
+    function mergeOverlayWeb(payload) {
+        if (!payload) return;
+        var enNative = (STRINGS.en && typeof STRINGS.en === "object")
+            ? copyDict(STRINGS.en) : {};
+        var langs = Object.keys(payload), li;
+        for (li = 0; li < langs.length; li++) {
+            var lk = String(langs[li] || "");
+            if (!lk) continue;
+            var sect = payload[lk];
+            var web = (sect && typeof sect === "object" && !Array.isArray(sect))
+                ? sect.web : null;
+            if (!web || typeof web !== "object" || Array.isArray(web)) continue;
+
+            var dict = (STRINGS[lk] && typeof STRINGS[lk] === "object") ? STRINGS[lk] : null;
+            var created = dict === null;
+            if (created) dict = {};
+
+            var keys = Object.keys(web), landed = 0, skipped = 0, i;
+            for (i = 0; i < keys.length; i++) {
+                var k = String(keys[i]), v = web[k];
+                if (typeof v !== "string" || v.length === 0) {
+                    warnOverlay(lk, k, "valeur non-textuelle ou vide ignorée, clé sautée");
+                    skipped++; continue;
+                }
+                var ref = enNative[k];
+                if (typeof ref !== "string") {
+                    warnOverlay(lk, k, "clé inconnue du dictionnaire EN natif (glissement ou clé nouvelle ?), clé sautée");
+                    skipped++; continue;
+                }
+                if (phSig(ref) !== phSig(v)) {
+                    warnOverlay(lk, k, "placeholders divergents (EN {" + phSig(ref)
+                        + "} vs soumis {" + phSig(v) + "}), clé sautée");
+                    skipped++; continue;
+                }
+                if (tagSig(ref) !== tagSig(v)) {
+                    warnOverlay(lk, k, "balises HTML divergentes (EN <" + tagSig(ref)
+                        + "> vs soumis <" + tagSig(v) + ">), clé sautée");
+                    skipped++; continue;
+                }
+                dict[k] = v;
+                landed++;
+            }
+            if (created && landed === 0) continue;
+            if (created) STRINGS[lk] = dict;
+            try {
+                console.info("[LLM_AI i18n] overlay « " + lk + " » fusionné — "
+                    + landed + " clés web" + (skipped ? " (" + skipped + " sautées)" : ""));
+            } catch (e) { /* console.info indisponible */ }
+        }
+    }
+
+    // Détecte la localeEmby/navigateur : promesse TOUJOURS résolue (jamais
+    // rejetée — l'i18n ne doit pas casser l'UI). globalize.getCurrentLocale()
+    // (source de vérité Emby) via Emby.importModule, repli navigator.language,
+    // repli "".
+    function detectLocale() {
         return new Promise(function (resolve) {
-            var done = function (l) { lang = l; resolve(l); };
             try {
                 if (typeof Emby !== "undefined" && Emby.importModule) {
                     Emby.importModule("./modules/common/globalize.js").then(function (g) {
@@ -897,14 +1017,36 @@ define([], function () {
                         // deux pour que getCurrentLocale() (langue d'affichage
                         // Emby, ex. fr-CA) soit bien trouvée.
                         var gl = g && (g.default || g);
-                        var loc = (gl && typeof gl.getCurrentLocale === "function") ? gl.getCurrentLocale() : "";
-                        done(pickLang(loc || (navigator.language || "")));
-                    }, function () { done(pickLang(navigator.language || "")); });
+                        var loc = (gl && typeof gl.getCurrentLocale === "function")
+                            ? gl.getCurrentLocale() : "";
+                        resolve(loc || (navigator.language || ""));
+                    }, function () { resolve(navigator.language || ""); });
                 } else {
-                    done(pickLang(navigator.language || ""));
+                    resolve(navigator.language || "");
                 }
-            } catch (e) { done(pickLang(navigator.language || "")); }
+            } catch (e) { resolve(navigator.language || ""); }
         });
+    }
+
+    var initPromise = null;
+
+    // Résout la langue courante (une seule fois) : locale + overlay en
+    // parallèle, merge AVANT pickLang (les langues ajoutées par l'overlay
+    // doivent être visibles du data-driven pickLang), donc translateView —
+    // appelé par les pages après init() — voit toujours les chaînes finies.
+    function init() {
+        if (lang) return Promise.resolve(lang);
+        if (initPromise) return initPromise;      // double init concurrent → même promesse
+        initPromise = new Promise(function (resolve) {
+            var done = function (l) { lang = l; resolve(l); };
+            var fallback = function () { done(pickLang(navigator.language || "")); };
+            Promise.all([detectLocale(), fetchOverlayWeb()])
+                .then(function (results) {
+                    mergeOverlayWeb(results[1]);
+                    done(pickLang(results[0]));
+                }, fallback);
+        });
+        return initPromise;
     }
 
     // ------------------------------------------------------------------
