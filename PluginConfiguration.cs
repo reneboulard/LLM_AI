@@ -1012,6 +1012,23 @@ namespace LLM_AI
         public string AuditMode { get; set; } = "single";
 
         // ------------------------------------------------------------------
+        //  Atelier de langues (v1.17.0) : génération/entretien des langues
+        //  d'interface par le LLM du plugin (gabarit du run détaché d'audit ;
+        //  doses validées → fichier LLM_AI_i18n.json, à côté duquel vit
+        //  l'overlay communautaire). La config ne mémorise QUE le dernier
+        //  code de langue saisi (confort de saisie) — aucune option
+        //  d'exécution n'y vivra : un run de génération est éphémère.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Dernier code de langue saisi dans le panneau « Langues d'interface »
+        /// de la page de configuration (ex. « es »). Confort de reprise
+        /// uniquement — la génération démarre depuis la page, chaque run étant
+        /// éphémère. Normalisé à la saisie ([a-z]{2,3}) ; vide = panneau vierge.
+        /// </summary>
+        public string I18nGenerateLang { get; set; } = "";
+
+        // ------------------------------------------------------------------
         //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat, section de la
         //  page de config). Réutilise les backends LLM (priorités usager) et
         //  TOUS les outils existants (recommandation + system_audit) : zéro

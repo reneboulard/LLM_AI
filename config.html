@@ -1275,6 +1275,58 @@
                         </div>
                         <div id="auditReport" class="auditReport" style="display:none;"></div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.i18n.h">Langues d'interface</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.i18n.desc">
+                            Ajoute/entretient une langue d'interface du plugin (pages de configuration, messages
+                            serveur, app compagnon) avec le LLM configuré ici. La génération passe par des
+                            <b>doses</b> validées (placeholders {n} et balises préservés, valeurs identiques à
+                            l'anglais rejetées) puis écrit le fichier <b>LLM_AI_i18n.json</b> dans le dossier de
+                            configuration du plugin — l'atelier manuel décrit dans le README reste possible, et le
+                            fichier peut toujours être retouché à la main. Réservé aux administrateurs.
+                        </div>
+
+                        <div class="inputContainer" style="max-width:320px;">
+                            <input is="emby-input" type="text" id="txtI18nLang"
+                                   label="Code de langue"
+                                   data-i18n-label="cfg.i18n.lang"
+                                   placeholder="ex. es" />
+                            <div class="fieldDescription" data-i18n-html="cfg.i18n.lang.desc">
+                                2-3 lettres minuscules (ex. <b>es</b>, de, it, pt). La terminologie officielle Emby
+                                de cette langue (chaînes du serveur) sert de glossaire d'ancrage à chaque dose ; sans
+                                fichier local, le glossaire est vide (avertissement au rapport).
+                            </div>
+                        </div>
+                        <div id="divI18nCoverage" style="display:none;margin:0.4em 0;font-size:13px;"></div>
+
+                        <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
+                            <select is="emby-select" id="selI18nMode"
+                                    label="Mode de génération" data-i18n-label="cfg.i18n.mode">
+                                <option value="missing" data-i18n="cfg.i18n.mode.missing">Compléter — clés manquantes et sautées seulement</option>
+                                <option value="full" data-i18n="cfg.i18n.mode.full">Générer / refaire la langue complète</option>
+                                <option value="skipped" data-i18n="cfg.i18n.mode.skipped">Re-traduire les clés sautées seulement</option>
+                            </select>
+                            <div class="fieldDescription" data-i18n-html="cfg.i18n.mode.desc">
+                                <b>Générer</b> : toutes les clés, repart de zéro (l'existant est écrasé, un fichier
+                                .bak est conservé). <b>Compléter</b> : seulement les clés absentes ; vos retouches
+                                manuelles restent intouchables. <b>Re-traduire sautées</b> : seulement les clés
+                                refusées par la validation (repli natif en attendant).
+                            </div>
+                        </div>
+
+                        <div style="margin:0.8em 0;">
+                            <button is="emby-button" type="button" class="raised block" id="btnRunI18n" data-i18n="cfg.i18n.run">
+                                Lancer la génération
+                            </button>
+                            <div class="fieldDescription" style="margin-top:0.5em;" data-i18n-html="cfg.i18n.running.desc">
+                                La génération s'exécute en <b>tâche de fond détachée</b> : vous pouvez quitter ou
+                                recharger la page, le run continue et le rapport est écrit à la fin. Les clics
+                                supplémentaires sont absorbés : ils ne relancent pas de run, ils reprennent la
+                                progression.
+                            </div>
+                        </div>
+                        <div id="divI18nRun" class="auditReport" style="display:none;"></div>
+                        <div id="divI18nReport" class="auditReport" style="display:none;"></div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.chat.h">Chat avec l'assistant IA</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.desc">
                             Conversation interactive multi-tours avec l'agent LLM, sur sa propre page

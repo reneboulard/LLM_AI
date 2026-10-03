@@ -841,6 +841,8 @@ define(["loading"], function (loading) {
         // Mode d'exécution de l'audit : single (boucle agent) | deterministic (rassemblement C# + synthèse).
         view.querySelector("#selAuditMode").value = cfg.AuditMode === "deterministic" ? "deterministic" : "single";
         view.querySelector("#txtAuditPrompt").value = cfg.AuditPrompt || "";
+        // Atelier de langues — dernier code saisi (confort de reprise).
+        view.querySelector("#txtI18nLang").value = cfg.I18nGenerateLang || "";
         view.querySelector("#txtAuditFocus").value = "";
         // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
         view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
@@ -980,6 +982,9 @@ define(["loading"], function (loading) {
             AuditRemediationEnabled: view.querySelector("#chkAuditRemediationEnabled").checked,
             AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
             AuditPrompt: view.querySelector("#txtAuditPrompt").value,
+            // Atelier de langues — dernier code de langue utilisé (confort :
+            // le panneau rouvre sur le même code).
+            I18nGenerateLang: (view.querySelector("#txtI18nLang").value || "").trim().toLowerCase(),
             // Chat interactif — simple booléen, pas de carry-forward spécial.
             ChatEnabled: view.querySelector("#chkChatEnabled").checked,
             // Mémoire de conversation (opt-in) — les sessions vivent dans
@@ -1281,6 +1286,184 @@ define(["loading"], function (loading) {
                             '</div>' + renderMarkdown(data.LastReport);
                     }, function () { /* pas de rapport : état d'origine */ });
                 }
+            }
+
+            // Atelier de langues (v1.17.0) : couverture d'un code de langue +
+            // génération DÉTACHÉE via GET /Plugins/LLMAI/I18nGenerate
+            // (?Lang=es&Mode=full|missing|skipped — mêmes conventions que
+            // l'audit : single-flight, clics absorbés, polling ?Status=true
+            // toutes les 5 s ; quitter la page coupe le polling, pas le run ;
+            // endpoint 404 → message « mise à jour requise », tant que le
+            // moteur T1c n'est pas déployé). La couverture lit la base chaude
+            // (?base=1) et la diff usager (?missing=1&lang=xx) — deux GET
+            // existants dès v1.16.0.
+            var i18nGenStopPolling = function () {
+                if (view._llmaiI18nTimer) { clearInterval(view._llmaiI18nTimer); view._llmaiI18nTimer = null; }
+            };
+            // Même convention expando que l'audit : le timer vit sur la vue
+            // pour rester arrêtable par le viewbeforehide branché en once().
+            once(view, "viewbeforehide", i18nGenStopPolling);
+            var i18nGenSetBusy = function (busy) {
+                var b = view.querySelector("#btnRunI18n");
+                if (!b) return;
+                b.disabled = busy;
+                b.textContent = busy ? i18n.t("cfg.i18n.running") : i18n.t("cfg.i18n.run");
+            };
+            var i18nLangValue = function () {
+                var el = view.querySelector("#txtI18nLang");
+                var v = ((el && el.value) || "").trim().toLowerCase();
+                return /^[a-z]{2,3}$/.test(v) ? v : "";
+            };
+            var i18nShowMeta = function (text) {
+                var el = view.querySelector("#divI18nRun");
+                if (!el) return;
+                el.style.display = "block";
+                el.innerHTML = '<div class="auditMeta">' + esc(text) + '</div>';
+            };
+            // Couverture : totaux = base chaude ; manquantes = diff usager.
+            // Les 3 familles sont indépendantes — un échec de GET n'empêche
+            // pas la lecture (fail-open symétrique des endpoints).
+            var i18nCoverageRefresh = function () {
+                var el = view.querySelector("#divI18nCoverage");
+                if (!el) return;
+                var lang = i18nLangValue();
+                if (!lang) { el.style.display = "none"; el.textContent = ""; return; }
+                el.style.display = "block";
+                el.textContent = i18n.t("cfg.i18n.loading");
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/I18n", { base: "1" }),
+                    type: "GET"
+                }).then(function (r) { return r.json(); }).then(function (base) {
+                    return ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/I18n", { missing: "1", lang: lang }),
+                        type: "GET"
+                    }).then(function (r2) { return r2.json(); }).then(function (miss) {
+                        var bEn = (base && base.en) || {};
+                        var mLang = (miss && miss[lang]) || {};
+                        var fams = ["web", "server", "ext"];
+                        var parts = [lang], missingTotal = 0;
+                        for (var i = 0; i < fams.length; i++) {
+                            var bF = bEn[fams[i]] || {}, mF = mLang[fams[i]] || {};
+                            var total = Object.keys(bF).length;
+                            var missing = Object.keys(mF).length;
+                            missingTotal += missing;
+                            parts.push(total - missing, total);
+                        }
+                        parts.push(missingTotal);
+                        el.textContent = i18n.t("cfg.i18n.coverage",
+                            parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]);
+                    });
+                }, function () {
+                    el.textContent = i18n.t("cfg.i18n.coverage.err");
+                });
+            };
+            var i18nLangTimer = null;
+            var i18nLangEl = view.querySelector("#txtI18nLang");
+            if (i18nLangEl) {
+                once(i18nLangEl, "input", function () {
+                    if (i18nLangTimer) clearTimeout(i18nLangTimer);
+                    i18nLangTimer = setTimeout(i18nCoverageRefresh, 400);
+                });
+            }
+            var i18nApplyStatus = function (st) {
+                if (!st) return;
+                if (st.Running) {
+                    i18nGenSetBusy(true);
+                    i18nShowMeta(i18n.t("cfg.i18n.running") +
+                        (st.Progress ? " — " + st.Progress : ""));
+                    return;
+                }
+                // Terminé (ou jamais lancé) : couper le polling puis rendre.
+                i18nGenStopPolling();
+                i18nGenSetBusy(false);
+                if (st.Outcome === "ok") {
+                    i18nShowMeta(i18n.t("cfg.i18n.done") +
+                        (st.LastGeneratedAt ? " — " + fmtAuditDate(st.LastGeneratedAt) : ""));
+                    i18nCoverageRefresh(); // la couverture a changé
+                    var rep = view.querySelector("#divI18nReport");
+                    if (rep && st.Report) {
+                        rep.style.display = "block";
+                        rep.innerHTML = '<div class="auditMeta">' +
+                            esc(i18n.t("cfg.i18n.last", fmtAuditDate(st.LastGeneratedAt))) +
+                            '</div>' + renderMarkdown(st.Report);
+                    }
+                } else if (st.Outcome === "error") {
+                    i18nShowMeta(i18n.t("cfg.i18n.failed") +
+                        (st.Error ? " — " + st.Error : ""));
+                }
+            };
+            var i18nGenStartPolling = function () {
+                view._llmaiI18nFails = 0;
+                i18nGenStopPolling();
+                view._llmaiI18nTimer = setInterval(function () {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/I18nGenerate", { Status: "true" }),
+                        type: "GET"
+                    }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (st) {
+                        view._llmaiI18nFails = 0;
+                        i18nApplyStatus(st);
+                    }, function () {
+                        // Tolérance réseau : le run continue côté serveur ;
+                        // après 5 échecs consécutifs on arrête de poler.
+                        if (++view._llmaiI18nFails >= 5) i18nGenStopPolling();
+                    });
+                }, 5000);
+            };
+            var runI18nBtn = view.querySelector("#btnRunI18n");
+            if (runI18nBtn) {
+                once(runI18nBtn, "click", function () {
+                    var lang = i18nLangValue();
+                    if (!lang) {
+                        i18nShowMeta(i18n.t("cfg.i18n.lang.invalid"));
+                        return;
+                    }
+                    var mode = (view.querySelector("#selI18nMode").value || "missing");
+                    i18nGenSetBusy(true);
+                    i18nShowMeta(i18n.t("cfg.i18n.running"));
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/I18nGenerate", { Lang: lang, Mode: mode }),
+                        type: "GET"
+                    }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (data) {
+                        if (!data) { i18nGenSetBusy(false); return; }
+                        if (data.Error && !data.Running) {
+                            // ex. code de langue refusé, généré en cours
+                            i18nGenSetBusy(false);
+                            i18nShowMeta(data.Error);
+                            return;
+                        }
+                        i18nApplyStatus(data);
+                        if (data.Running) i18nGenStartPolling();
+                    }, function (err) {
+                        i18nGenSetBusy(false);
+                        var st = err && (err.status || err.statusCode);
+                        i18nShowMeta(st === 404
+                            ? i18n.t("cfg.i18n.endpoint.missing")
+                            : i18n.t("cfg.alert.saveError",
+                                (err && err.statusText ? err.statusText : err)));
+                    });
+                });
+
+                // Reprise du fil (rechargement pendant un run) : l'état du
+                // run détaché se relit sans effet de bord (?Status=true) —
+                // endpoint absent tant que T1c n'est pas déployé → silence.
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/I18nGenerate", { Status: "true" }),
+                    type: "GET"
+                }).then(function (resp) {
+                    return resp.json();
+                }).then(function (st) {
+                    if (st && st.Running) {
+                        i18nApplyStatus(st);
+                        i18nGenStartPolling();
+                    }
+                }, function () { /* endpoint absent (< T1c) : silence */ });
+
+                // Couverture immédiate si un code est déjà mémorisé.
+                if (i18nLangValue()) i18nCoverageRefresh();
             }
 
             // File de régularisation cross-kind : GET /Plugins/LLMAI/CrossKindQueue
