@@ -346,8 +346,8 @@ namespace LLM_AI
         /// <summary>Nombre de clés du dictionnaire serveur EN natif — le dénominateur
         /// « attendu » des lignes de log de l'overlay. Dérivé DYNAMIQUEMENT
         /// (jamais hardcodé — leçon du kit : les chiffres figés se percent) ;
-        /// croît à chaque ajout de chaînes serveur (v1.17.0 T1b : +25 clés
-        /// i18n.gen.* de l'atelier → 176).</summary>
+        /// croît à chaque ajout de chaînes serveur (v1.17.0 T1b/T1c : +27
+        /// clés i18n.gen.* de l'atelier → 178).</summary>
         internal static int EnServerKeyCount
             => s_res.TryGetValue(En, out var en) ? en.Count : 0;
 
@@ -398,6 +398,24 @@ namespace LLM_AI
         /// </summary>
         internal static string SDisplay(string key, IServerApplicationHost host)
             => S(key, ResolveDisplayLangKey(host));
+
+        /// <summary>Libellé localisé <paramref name="key"/> dans la langue
+        /// d'affichage + substitution des placeholders {n} (boucle du kit :
+        /// <see cref="Convert.ToString(object, IFormatProvider)"/> InvariantCulture
+        /// — jamais string.Format, dont les accolades littérales de l'UI
+        /// casserait). Les jalons des runs DETACHÉS publient ainsi du texte
+        /// prêt à afficher, localisé par l'appelant (endpoint) et non par le
+        /// moteur (qui reste sans opinion de langue d'affichage).</summary>
+        internal static string SFormatDisplay(string key, IServerApplicationHost host,
+            params object[] args)
+        {
+            string s = S(key, ResolveDisplayLangKey(host));
+            if (s == null) return null;
+            for (int i = 0; i < args.Length; i++)
+                s = s.Replace("{" + i + "}",
+                    Convert.ToString(args[i], CultureInfo.InvariantCulture) ?? "");
+            return s;
+        }
 
         // --- tables de mapping nom/locale -> clé --------------------------
 
@@ -649,6 +667,8 @@ namespace LLM_AI
                     ["i18n.gen.err.novalue"] = "Aucune valeur exploitable dans les réponses LLM (réponses non parsables, doses mortes, ou backends tous indisponibles).",
                     ["i18n.gen.err.backend"] = "Aucun backend LLM disponible (tous les serveurs activés ont échoué).",
                     ["i18n.gen.err.write"] = "Écriture du fichier de langue impossible : {0}.",
+                    ["i18n.gen.err.timeout"] = "Génération annulée — timeout de 25 minutes ou arrêt du serveur ; le fichier de langue précédent reste en place.",
+                    ["i18n.gen.err.fail"] = "Échec de la génération : {0}",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -862,6 +882,8 @@ namespace LLM_AI
                     ["i18n.gen.err.novalue"] = "No usable value in the LLM responses (unparsable answers, dead doses, or all backends down).",
                     ["i18n.gen.err.backend"] = "No LLM backend available (every enabled server failed).",
                     ["i18n.gen.err.write"] = "Cannot write the language file: {0}.",
+                    ["i18n.gen.err.timeout"] = "Generation cancelled — 25-minute timeout or server shutdown; the previous language file remains in place.",
+                    ["i18n.gen.err.fail"] = "Generation failed: {0}",
                     ["task.category"] = "LLM AI",
                 },
             };
