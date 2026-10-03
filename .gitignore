@@ -28,6 +28,9 @@ TODO.md
 ## Local script (offline validation of NewReleaseSources lines — python port of NewReleasesTool)
 validate_source.sh
 
+## i18n translation kit (local-only harness + community translation data — see TODO.md)
+i18n-kit/
+
 ## Generated at build (LLM_AI.csproj target GenerateAssetVersionJs)
 asset_version.js
 
