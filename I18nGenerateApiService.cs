@@ -167,7 +167,13 @@ namespace LLM_AI
                 }
                 catch (OperationCanceledException)
                 {
-                    Logger?.Warn("[LLM_AI] I18n génération annulée (timeout 25 min ou arrêt) — le fichier de langue précédent reste en place (.bak au dernier write).");
+                    // N'arrive plus QUE pour une vraie annulation (CTS 25 min
+                    // — le filtre when (_ct.IsCancellationRequested) du moteur
+                    // rejette toute autre OCE vers l'échec backend normal ;
+                    // depuis le terrain 2026-10-03 : le dépassement du
+                    // HttpClient de 2 min tuait le run entier « timeout 25 min
+                    // ou arrêt » — message faux, sans escalade).
+                    Logger?.Warn("[LLM_AI] I18n génération annulée (timeout 25 min du run) — le fichier de langue précédent reste en place (.bak au dernier write).");
                     I18nGenState.FinishError(I18n.SDisplay("i18n.gen.err.timeout", ApplicationHost));
                 }
                 catch (Exception ex)

@@ -475,7 +475,7 @@ namespace LLM_AI
             string raw;
             int backendIdx;
             try { (raw, backendIdx) = await ChatAsync(system, user).ConfigureAwait(false); }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 outcome.LastError = ex.Message;
@@ -500,7 +500,7 @@ namespace LLM_AI
                     _logger?.Warn("[LLM_AI] I18n génération : dose {0} — JSON imparsable via {1} — escalade vers le backend suivant.",
                         dose.Name, BackendLabel(next));
                     try { (raw, backendIdx) = await ChatAsync(system, user, backendIdx + 1).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { throw; }
+                    catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
                     catch
                     {
                         // Chaîne KO après le backend défaillant : le Warn par
@@ -731,6 +731,14 @@ namespace LLM_AI
         /// (72 appels rapportés pour 36 réels, constaté au terrain du
         /// 2026-10-03) est corrigé : un seul incrément par appel réel, les
         /// appelants n'ajoutent plus rien.</para></summary>
+        /// <summary>Timeout PAR APPEL des doses (5 min) : les grosses doses
+        /// de tête (56 clés) sur un modèle local lent dépassaient le global
+        /// 2 min de LlmClient → TaskCanceledException sans ct annulé =
+        /// tout le run mourait « timeout 25 min » sans escalade (terrain
+        /// 2026-10-03, run « de » gemma4:26b) ; 5 min couvre ~56 clés à
+        /// >5 s/clé — le CTS 25 min du run reste le filet run-level.</summary>
+        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(5);
+
         private async Task<(string Content, int Backend)> ChatAsync(
             string system, string user, int startBackend = 0)
         {
@@ -753,11 +761,15 @@ namespace LLM_AI
                         b.ProviderType == LlmProvider.OllamaCloud ? _ollamaKey :
                         b.ProviderType == LlmProvider.Gemini ? _geminiKey : null;
                     _backendsUsed.Add(b.Url + " / " + b.Model);
-                    var content = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, _ct)
+                    var content = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, _ct,
+                            CallTimeout)
                         .ConfigureAwait(false);
                     return (content, i);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (_ct.IsCancellationRequested)
+                {
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     last = ex;

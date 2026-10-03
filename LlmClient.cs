@@ -21,8 +21,36 @@ namespace LLM_AI
     {
         private static readonly HttpClient _http = new HttpClient
         {
-            Timeout = TimeSpan.FromMinutes(2)
+            // Plafond HAUT, jamais la muraille active : le timeout EFFICACE
+            // par appel vient du linked CTS de SendWithTimeoutAsync (défaut
+            // 2 min = l'ancien Timeout ici ; le moteur I18nGenerator passe
+            // 5 min pour ses doses — les grosses doses de tête sur un
+            // modèle local lent dépassaient 2 min et mouraient
+            // TaskCanceledException sans ct annulé, terrain 2026-10-03,
+            // run « de » 26b : tout le run déclaré « timeout 25 min »).
+            Timeout = TimeSpan.FromMinutes(10)
         };
+
+        /// <summary>Timeout par défaut par appel quand l'appelant ne passe
+        /// pas de <c>perCall</c> — le comportement historique (2 min via
+        /// HttpClient.Timeout) est réappliqué via CancelAfter, inchangé pour
+        /// chat / audit / tonight.</summary>
+        private static readonly TimeSpan DefaultCallTimeout = TimeSpan.FromMinutes(2);
+
+        /// <summary>SendAsync avec timeout PAR APPEL : linked CTS CancelAfter
+        /// sur le token appelant — une vraie annulation se propage telle
+        /// quelle ; seul le dépassement du délai produit une
+        /// <c>OperationCanceledException</c> dont le token appelant n'est
+        /// PAS annulé — les appelants distinguent par filtre
+        /// <c>catch (OCE) when (ct.IsCancellationRequested)</c> (gotcha
+        /// HttpClient.Timeout).</summary>
+        private static async Task<HttpResponseMessage> SendWithTimeoutAsync(
+            HttpRequestMessage req, TimeSpan? perCall, CancellationToken ct)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(perCall ?? DefaultCallTimeout);
+            return await _http.SendAsync(req, linked.Token).ConfigureAwait(false);
+        }
 
         /// <summary>
         /// Longueur de contexte (num_ctx) : politique « instance chargée d'abord ».
@@ -80,7 +108,9 @@ namespace LLM_AI
             try
             {
                 using (var req = new HttpRequestMessage(HttpMethod.Get, url.TrimEnd('/') + "/api/ps"))
-                using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                // perCall null = défaut 2 min (le comportement historique de
+                // ce GET léger, maintenir malgré le plafond HttpClient 10 min).
+                using (var resp = await SendWithTimeoutAsync(req, null, ct).ConfigureAwait(false))
                 {
                     // Modèle pas dans la liste = non chargé ; autre statut = état
                     // inconnu (null → repli par modèle).
@@ -175,13 +205,14 @@ namespace LLM_AI
             string userPrompt,
             IJsonSerializer json,
             ILogger logger,
-            CancellationToken ct)
+            CancellationToken ct,
+            TimeSpan? perCall = null)
         {
             var messages = new List<ChatMessage>();
             if (!string.IsNullOrEmpty(systemPrompt))
                 messages.Add(new ChatMessage { Role = "system", Content = systemPrompt });
             messages.Add(new ChatMessage { Role = "user", Content = userPrompt ?? string.Empty });
-            return ChatOllamaAsync(url, model, null, messages, json, logger, ct);
+            return ChatOllamaAsync(url, model, null, messages, json, logger, ct, perCall);
         }
 
         /// <summary>
@@ -199,7 +230,8 @@ namespace LLM_AI
             IReadOnlyList<ChatMessage> messages,
             IJsonSerializer json,
             ILogger logger,
-            CancellationToken ct)
+            CancellationToken ct,
+            TimeSpan? perCall = null)
         {
             if (backend == null)
                 throw new ArgumentNullException(nameof(backend));
@@ -213,11 +245,11 @@ namespace LLM_AI
             {
                 case LlmProvider.OllamaLocal:
                 case LlmProvider.OllamaCloud:
-                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct);
+                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall);
                 case LlmProvider.Gemini:
-                    return ChatGeminiAsync(url, backend.Model, apiKey, messages, logger, ct);
+                    return ChatGeminiAsync(url, backend.Model, apiKey, messages, logger, ct, perCall);
                 default:
-                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct);
+                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall);
             }
         }
 
@@ -234,7 +266,8 @@ namespace LLM_AI
             IReadOnlyList<ChatMessage> messages,
             IJsonSerializer json,
             ILogger logger,
-            CancellationToken ct)
+            CancellationToken ct,
+            TimeSpan? perCall = null)
         {
             if (string.IsNullOrWhiteSpace(url))
                 throw new ArgumentException("URL du LLM non configurée.", nameof(url));
@@ -257,7 +290,7 @@ namespace LLM_AI
                 if (!string.IsNullOrEmpty(apiKey))
                     req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-                using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                using (var resp = await SendWithTimeoutAsync(req, perCall, ct).ConfigureAwait(false))
                 {
                     var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
@@ -299,7 +332,8 @@ namespace LLM_AI
             string apiKey,
             IReadOnlyList<ChatMessage> messages,
             ILogger logger,
-            CancellationToken ct)
+            CancellationToken ct,
+            TimeSpan? perCall = null)
         {
             if (string.IsNullOrWhiteSpace(model))
                 throw new ArgumentException("Modèle Gemini non configuré.", nameof(model));
@@ -317,7 +351,7 @@ namespace LLM_AI
                 req.Content = new StringContent(body, Encoding.UTF8);
                 req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
-                using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                using (var resp = await SendWithTimeoutAsync(req, perCall, ct).ConfigureAwait(false))
                 {
                     var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
