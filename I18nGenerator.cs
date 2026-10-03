@@ -28,6 +28,45 @@ namespace LLM_AI
         string doseName, int keys);
 
     /// <summary>
+    /// Sentinelles d'échappement des doses (v1.17.0, terrain du 2026-10-03) :
+    /// les deux caractères que les modèles échappent mal dans un JSON rendu —
+    /// <see cref="Qu"/> (guillemet double : un <c>"</c> non échappé casse la
+    /// chaîne JSON) et <see cref="Nl"/> (saut de ligne réel, même panne —)
+    /// sont REMPLACÉS dans le payload servi au modèle par des tokens visibles
+    /// qu'il copie fidèlement, puis DÉCODÉS ici après le parsage, avant toute
+    /// validation. La valeur écrite dans l'overlay reste naturelle.
+    /// <para>Vérifié au harnais : aucun native EN/FR web/server/ext ne
+    /// contient ces tokens (la correspondance est injective). Un native qui
+    /// en contiendrait un jour devrait changer la table — le harnais
+    /// échouera d'abord.</para></summary>
+    internal static class I18nSentinel
+    {
+        /// <summary>Token d'un saut de ligne dans une valeur.</summary>
+        internal const string Nl = "[NL]";
+
+        /// <summary>Token d'un guillemet double dans une valeur.</summary>
+        internal const string Qu = "[QU]";
+
+        /// <summary>Encodage côté moteur : la valeur native vue par le modèle
+        /// ne contient plus jamais un caractère à échapper en JSON.</summary>
+        internal static string Encode(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return s.Replace("\r\n", Nl).Replace("\r", Nl)
+                .Replace("\n", Nl).Replace("\"", Qu);
+        }
+
+        /// <summary>Décodage de la sortie modèle après parsage (les tokens
+        /// exacts uniquement — une variante bricolée reste un libellé à
+        /// corriger, jamais un crash).</summary>
+        internal static string Decode(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return s;
+            return s.Replace(Nl, "\n").Replace(Qu, "\"");
+        }
+    }
+
+    /// <summary>
     /// Moteur de génération de langues d'interface (v1.17.0, chantier
     /// « Atelier de langues », T1b) : produit la section d'une langue du
     /// fichier <c>LLM_AI_i18n.json</c> avec le LLM configuré du plugin.
@@ -183,7 +222,6 @@ namespace LLM_AI
 
                 var first = await RunDoseAsync(dose, system, langKey, nats, frs, null)
                     .ConfigureAwait(false);
-                _llmCalls += first.vals.Calls;
                 Collect(first);
                 if (first.vals.Accepted != null)
                 {
@@ -198,7 +236,6 @@ namespace LLM_AI
                 lastDoseError ??= first.vals.LastError;
                 var retry = await RunDoseAsync(dose, system, langKey, nats, frs, "hardened")
                     .ConfigureAwait(false);
-                _llmCalls += retry.vals.Calls;
                 Collect(retry);
                 if (retry.vals.Accepted == null)
                 {
@@ -224,7 +261,6 @@ namespace LLM_AI
                 {
                     var (vals, _) = await RunDoseAsync(dose, system, langKey, nats, frs, "repair", repairReasons)
                         .ConfigureAwait(false);
-                    _llmCalls += vals.Calls;
                     if (vals.Accepted == null) continue;
                     foreach (var kv in vals.Accepted)
                     {
@@ -409,7 +445,6 @@ namespace LLM_AI
 
         private sealed class DoseOutcome
         {
-            internal int Calls;
             /// <summary>null = dose en échec complet (rien d'exploitable).</summary>
             internal List<AcceptedVal> Accepted;
             /// <summary>Clés acceptées mais identiques-EN non triviales (⚠️).</summary>
@@ -438,33 +473,61 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] I18n génération (verbose) — dose {0}\n=== SYSTEM ===\n{1}\n=== USER ===\n{2}",
                     dose.Name, system, user);
             string raw;
-            try { raw = await ChatAsync(system, user).ConfigureAwait(false); }
+            int backendIdx;
+            try { (raw, backendIdx) = await ChatAsync(system, user).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 outcome.LastError = ex.Message;
                 return (outcome, noErrs);
             }
-            outcome.Calls = 1;
+            var firstRaw = raw;
 
-            var parsed = ParseDose(raw, langKey);
+            var parsed = TryParseDose(raw, langKey);
             if (parsed == null)
             {
-                // Béquilles de LlmAgentService (petits modèles), puis dernier
-                // recours sur la chaîne assainie des deux.
-                var san = LlmAgentService.SanitizeJsonControlChars(raw);
-                parsed = ParseDose(san, langKey)
-                    ?? ParseDose(LlmAgentService.RepairUnescapedQuotes(san), langKey);
+                // ESCALADE PARSE-DEAD (v1.17.0, terrain 2026-10-03) : un
+                // backend qui rend HTTP-200 avec un JSON imparsable doit
+                // céder la dose aux backends suivants — avant ce correctif,
+                // seul un EXCEPTION escaladait : les 3 doses mortes de glm
+                // (newreleases_nfo, activate_channels_feedback,
+                // autoprog_chatext_diskgate) n'ont JAMAIS vu gemma4 local ni
+                // Gemini, 0/45 sur toute la journée. Chaque backend est
+                // tenté une fois par RunDoseAsync.
+                while (parsed == null && backendIdx + 1 < _backends.Count)
+                {
+                    var next = _backends[backendIdx + 1];
+                    _logger?.Warn("[LLM_AI] I18n génération : dose {0} — JSON imparsable via {1} — escalade vers le backend suivant.",
+                        dose.Name, BackendLabel(next));
+                    try { (raw, backendIdx) = await ChatAsync(system, user, backendIdx + 1).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                    catch
+                    {
+                        // Chaîne KO après le backend défaillant : le Warn par
+                        // backend + SecurityMonitor ont déjà tracé — on sort
+                        // par la voie du parsage, avec le DUMP de la réponse
+                        // (l'information diagnostique utile).
+                        break;
+                    }
+                    parsed = TryParseDose(raw, langKey);
+                }
                 if (parsed == null)
                 {
-                    _logger?.Warn("[LLM_AI] I18n génération : dose {0} — JSON non parsable, même après béquilles ({1} caractères).",
-                        dose.Name, raw?.Length ?? 0);
+                    // DUMP DIAGNOSTIQUE (borné, une seule ligne) : ␊/␍/␉
+                    // rendent les contrôles VISIBLES — un saut de ligne RÉEL
+                    // n'a plus jamais la même apparence qu'un texte « \n »
+                    // mal échappé ; la tête montre où le JSON casse en vrai.
+                    _logger?.Warn("[LLM_AI] I18n génération : dose {0} — JSON non parsable, même après béquilles et escalade ({1} caractères) — RAW : {2}",
+                        dose.Name, firstRaw?.Length ?? 0, BoundedDump(firstRaw));
                     outcome.LastError = "JSON non parsable";
                     return (outcome, noErrs);
                 }
             }
 
             // Validation par clé (la native EN comme référence — règle kit).
+            // Les valeurs de la réponse sont DÉCODÉES ([NL]/[QU] → \n/") au
+            // préalable : la native EN de référence reste naturelle, la valeur
+            // écrite aussi.
             var refused = new List<(string Sec, string Key, string Reason)>();
             int identicalSuspect = 0;
             foreach (var e in dose.Entries)
@@ -476,6 +539,20 @@ namespace LLM_AI
                     continue;
                 }
                 var enNative = nats[e.Sec].TryGetValue(e.Key, out var en) ? en : null;
+                val = I18nSentinel.Decode(val ?? string.Empty);
+                if (enNative != null && enNative.Contains('\n')
+                    && !val.Contains('\n'))
+                {
+                    // Valeur multi-lignes du native (les placeholders « une
+                    // ligne par source », ex. cfg.newreleases.ph) : le modèle
+                    // qui perd le saut — texte « \n » collé ou lignes fondues —
+                    // produirait une config illisible CONCATÉNÉE. Refusé, la
+                    // clé part à la réparation. (Le cas d'un saut RÉEL dans le
+                    // JSON du modèle est couvert en amont : Sanitize le
+                    // transforme en échappement valide.)
+                    refused.Add((e.Sec, e.Key, "saut de ligne non reproduit ([NL] ou \\n attendu)"));
+                    continue;
+                }
                 var verdict = I18nDoses.Validate(enNative, val);
                 if (verdict != I18nDoses.Verdict.Ok)
                 {
@@ -525,6 +602,42 @@ namespace LLM_AI
         // ------------------------------------------------------------------
         //  Parsage de la dose
         // ------------------------------------------------------------------
+
+        /// <summary>Parsage + béquilles en un seul point (utilisé par les deux
+        /// chemins : tentative principale et escalades) — cru, puis la chaîne
+        /// assainie des contrôles, puis la réparée en guillemets.</summary>
+        private static Dictionary<string, Dictionary<string, string>> TryParseDose(
+            string raw, string langKey)
+        {
+            var parsed = ParseDose(raw, langKey);
+            if (parsed != null) return parsed;
+            var san = LlmAgentService.SanitizeJsonControlChars(raw);
+            return ParseDose(san, langKey)
+                ?? ParseDose(LlmAgentService.RepairUnescapedQuotes(san), langKey);
+        }
+
+        /// <summary>Label de backend pour les logs d'escalade (URL / modèle).</summary>
+        private static string BackendLabel(LlmBackend b)
+            => b == null ? "?" : ((b.Url ?? "?") + " / " + (b.Model ?? "?"));
+
+        /// <summary>Dump borné d'une réponse brute pour diagnostic — UNE ligne
+        /// de log : les contrôles sont rendus visibles (␊ = saut de ligne
+        /// RÉEL, ␍, ␉ — un texte « \n » mal échappé du modèle reste tel quel,
+        /// les deux formes deviennent distinguables au relecture) ; au-delà de
+        /// 900 caractères, tête 600 + « ⋮ » + queue 250.</summary>
+        internal static string BoundedDump(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "(vide)";
+            const int head = 600, tail = 250;
+            string core = s.Length <= head + tail + 40
+                ? s
+                : s.Substring(0, head) + " ⋮ " + s.Substring(s.Length - tail);
+            core = core.TrimStart('\n', '\r');
+            var sb = new StringBuilder(core.Length + 16);
+            foreach (var c in core)
+                sb.Append(c == '\n' ? '␊' : c == '\r' ? '␍' : c == '\t' ? '␉' : c);
+            return sb.ToString();
+        }
 
         /// <summary>Parsage tolérant de la réponse : premier objet équilibré
         /// extrait (fences ``` et prose ignorés), section de la langue cible
@@ -606,7 +719,20 @@ namespace LLM_AI
         //  éphémère n'a pas besoin de persistance de sélection)
         // ------------------------------------------------------------------
 
-        private async Task<string> ChatAsync(string system, string user)
+        /// <summary>Appel LLM (fallback multi-backend — version minimaliste de
+        /// LlmAgentService.ChatAsync ; sans verrou de backend actif : un run
+        /// éphémère n'a pas besoin de persistance de sélection). Retourne le
+        /// contenu ET l'index du backend utilisé — <paramref name="startBackend"/>
+        /// permet l'ESCALADE parse-dead (commencer la chaîne à un backend
+        /// ultérieur : un backend qui rend un JSON imparsable via HTTP 200 a
+        /// déjà eu sa chance, voir RunDoseAsync).
+        /// <para><c>_llmCalls</c> est incrémenté ICI par TENTATIVE RÉELLE et
+        /// constitue le comptage fait foi — l'ancien double comptage
+        /// (72 appels rapportés pour 36 réels, constaté au terrain du
+        /// 2026-10-03) est corrigé : un seul incrément par appel réel, les
+        /// appelants n'ajoutent plus rien.</para></summary>
+        private async Task<(string Content, int Backend)> ChatAsync(
+            string system, string user, int startBackend = 0)
         {
             if (_backends.Count == 0)
                 throw new InvalidOperationException(Display("i18n.gen.err.backend"));
@@ -616,8 +742,9 @@ namespace LLM_AI
                 new() { Role = "user", Content = user }
             };
             Exception last = null;
-            foreach (var b in _backends)
+            for (int i = Math.Max(0, startBackend); i < _backends.Count; i++)
             {
+                var b = _backends[i];
                 _ct.ThrowIfCancellationRequested();
                 try
                 {
@@ -626,8 +753,9 @@ namespace LLM_AI
                         b.ProviderType == LlmProvider.OllamaCloud ? _ollamaKey :
                         b.ProviderType == LlmProvider.Gemini ? _geminiKey : null;
                     _backendsUsed.Add(b.Url + " / " + b.Model);
-                    return await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, _ct)
+                    var content = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, _ct)
                         .ConfigureAwait(false);
+                    return (content, i);
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -978,12 +1106,13 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
 2. Balises HTML (web/server seulement) : multiset IDENTIQUE, attributs compris — recopie <b>…</b> tel quel autour du texte traduit.
 3. Famille « ext » : TEXTE BRUT strict, AUCUNE balise HTML (rendu textContent).
 4. Entités HTML (&lt;movie&gt;) : elles RESTENT des entités, ne les dés-échappe pas.
-5. La chaîne nfo.airs.* s'assemble en UNE phrase du fichier .nfo : chaque fragment est un morceau de la même phrase.
-6. NE TRADUIS PAS les marques : AI Tonight, AI Suggestions, LLM_AI, Emby, TMDB, TVDB, Ollama, Gemini, SearXNG, nfo, .strm, plugin, backend — recopie exacte.
-7. Registre POLI et cohérent sur toute la langue (le FR source vouvoie — suis la même distance : usted en espagnol, etc.).
-8. Longueur proche de la native (boutons = 2 à 3 mots) — l'UI Emby est dense.
-9. Cohérence terminologique entre doses : même terme = même mot, sur toutes les doses.
-10. Sortie = UN SEUL objet JSON valide, sans un mot de prose autour, sans fence markdown.");
+5. Symboles à COPIER TELS QUELS dans les valeurs : [NL] = un saut de ligne, [QU] = un guillemet double. Le plugin les fournit à la place des caractères à échapper en JSON et les décode après validation — ne les traduis jamais, ne les remplace jamais, ne les supprime pas, ne les déplace pas (un [NL] en début de valeur reste au début). N'émets AUCUN échappement à leur place (pas de \n littéral, pas de quote échappée) : ton JSON doit rester propre sans eux.
+6. La chaîne nfo.airs.* s'assemble en UNE phrase du fichier .nfo : chaque fragment est un morceau de la même phrase.
+7. NE TRADUIS PAS les marques : AI Tonight, AI Suggestions, LLM_AI, Emby, TMDB, TVDB, Ollama, Gemini, SearXNG, nfo, .strm, plugin, backend — recopie exacte.
+8. Registre POLI et cohérent sur toute la langue (le FR source vouvoie — suis la même distance : usted en espagnol, etc.).
+9. Longueur proche de la native (boutons = 2 à 3 mots) — l'UI Emby est dense.
+10. Cohérence terminologique entre doses : même terme = même mot, sur toutes les doses.
+11. Sortie = UN SEUL objet JSON valide, sans un mot de prose autour, sans fence markdown.");
             sb.Append("\n\nGLOSSAIRE Emby (terminologie officielle du serveur");
             if (string.IsNullOrEmpty(glossarySource))
                 sb.Append(" — AUCUN fichier officiel trouvé pour cette langue : suit le sens, la terminologie ne peut pas être ancrée)");
@@ -1025,7 +1154,10 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
                 if (!frDict.TryGetValue(e.Key, out var fr) || string.IsNullOrWhiteSpace(fr)) continue;
                 frDict.TryGetValue(e.Key, out _);
                 string frCut = fr.Length > 160 ? fr.Substring(0, 157) + "…" : fr;
-                frLines.Add("· " + e.Key + " = " + frCut);
+                // Sentinelles aussi sur le FR : une valeur d'exemple porteuse
+                // de « ou de \n ne doit pas réapprendre au modèle les mauvais
+                // réflexes (règle 5 de la directive).
+                frLines.Add("· " + e.Key + " = " + I18nSentinel.Encode(frCut));
             }
             if (frLines.Count > 0)
             {
@@ -1041,7 +1173,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             }
             sb.Append(BuildDoseJson(dose, nats));
             sb.Append("\nRappel de sortie : UN SEUL objet JSON { \"").Append(langKey)
-              .Append("\": { \"web\"|\"server\"|\"ext\": { clé: traduction } } } — mêmes clés que la dose, aucune de plus, aucun texte autour.\n");
+              .Append("\": { \"web\"|\"server\"|\"ext\": { clé: traduction } } } — mêmes clés que la dose, aucune de plus, aucun texte autour ; les tokens [NL] et [QU] se recopient tels quels.\n");
             return sb.ToString();
         }
 
@@ -1070,7 +1202,11 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             {
                 if (!fams.TryGetValue(e.Sec, out var d))
                     fams[e.Sec] = d = new(StringComparer.Ordinal);
-                d[e.Key] = nats[e.Sec].TryGetValue(e.Key, out var en) ? en : "";
+                // Sentinelles sur les natives servies : le modèle ne voit
+                // JAMAIS un caractère qu'il échappe mal en JSON (ParseDose ne
+                // retrouve plus son compte) — les tokens se décodent après.
+                d[e.Key] = nats[e.Sec].TryGetValue(e.Key, out var en)
+                    ? I18nSentinel.Encode(en) : "";
             }
             var root = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.Ordinal)
             {
@@ -1189,7 +1325,10 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             if (g == null || g.Terms.Count == 0) return "";
             var sb = new StringBuilder();
             foreach (var (en, off) in g.Terms)
-                sb.Append("- ").Append(en).Append(" → ").Append(off).Append('\n');
+                // Sentinelle sur le terme officiel : un contexte porteur de "
+                // n'apprend pas au modèle l'échappement raté (règle 5).
+                sb.Append("- ").Append(en).Append(" → ")
+                  .Append(I18nSentinel.Encode(off)).Append('\n');
             return sb.ToString();
         }
 
