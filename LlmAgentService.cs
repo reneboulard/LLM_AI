@@ -900,8 +900,11 @@ namespace LLM_AI
         /// \uXXXX) pour tolérer les sorties malformées des LLM. Les contrôles
         /// hors-string (espaces/retours de formatage entre tokens) sont laissés
         /// intacts (le reader les ignore).
+        /// <para>internal (v1.17.0 T1b) : le moteur de génération de langues
+        /// (<see cref="I18nGenerator"/>) a le même besoin exact de béquilles
+        /// JSON pour les petits modèles.</para>
         /// </summary>
-        private static string SanitizeJsonControlChars(string json)
+        internal static string SanitizeJsonControlChars(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;
             var sb = new StringBuilder(json.Length);
@@ -958,8 +961,9 @@ namespace LLM_AI
         /// après un guillemet reste ambiguë — la désérialisation stricte du
         /// résultat tranche ; en cas d'échec on retombe sur le renvoi demandé
         /// au modèle (comportement antérieur, aucune régression).
+        /// <para>internal (v1.17.0 T1b) : réutilisé par <see cref="I18nGenerator"/>.</para>
         /// </summary>
-        private static string RepairUnescapedQuotes(string json)
+        internal static string RepairUnescapedQuotes(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;
             var sb = new StringBuilder(json.Length + 16);

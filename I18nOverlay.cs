@@ -675,18 +675,65 @@ namespace LLM_AI
             return ro;
         }
 
+        /// <summary>Regex du code de langue LIBRE — décision v1.17.0 (atelier
+        /// de langues) : au-delà de la table fermée du plugin, tout code de
+        /// 2-3 lettres a-z est accepté (le glossaire Emby sera peut-être vide,
+        /// l'atelier l'annonce au rapport). Sans cela, une langue générée mais
+        /// hors table ne résoudrait JAMAIS (fichier écrit, jamais servi).</summary>
+        private static readonly Regex FreeCodeRx =
+            new Regex("^[a-z]{2,3}$", RegexOptions.Compiled);
+
         /// <summary>Normalise une clé de langue d'overlay : « es », « es-ES »,
         /// « ESPANOL », « Español », « pt-br » → clé 2 lettres du plugin
-        /// (même table que <see cref="I18n"/>). Retourne null si non
-        /// reconnaissable.</summary>
+        /// (même table que <see cref="I18n"/>). Hors table → repli code libre
+        /// (v1.17.0) : 2-3 lettres a-z après repli des diacritiques (« Hâwai »
+        /// → haw). Retourne null si non reconnaissable.</summary>
         internal static string NormalizeLang(string name, out string note)
         {
             note = null;
             if (string.IsNullOrWhiteSpace(name)) return null;
             var key = I18n.ParseLangName(name);
-            if (key != null && !string.Equals(name.Trim(), key, StringComparison.OrdinalIgnoreCase))
+            if (key == null)
+            {
+                string freeNote;
+                key = FreeLangCode(name, out freeNote);
+                if (key == null) return null;
+                if (!string.Equals(name.Trim(), key, StringComparison.OrdinalIgnoreCase))
+                    note = "normalisée en « " + key + " »"
+                        + (freeNote != null ? " (" + freeNote + ")" : "");
+                return key;
+            }
+            if (!string.Equals(name.Trim(), key, StringComparison.OrdinalIgnoreCase))
                 note = "normalisée en « " + key + " »";
             return key;
+        }
+
+        /// <summary>Repli code libre : minuscule + diacritiques repliés (FormD
+        /// — l'accent combiné tombe, la lettre de base reste), filtrage a-z →
+        /// accepté si le résultat est un code de 2-3 lettres; sinon null.
+        /// « PL » → pl, « Hâwai » → haw, « ΕΛ » (grec) → null. Jamais d'erreur :
+        /// le pire cas est un code libre qui ne résoudra pas côté affichage.</summary>
+        private static string FreeLangCode(string name, out string note)
+        {
+            note = null;
+            try
+            {
+                var folded = name.Trim().ToLowerInvariant().Normalize(System.Text.NormalizationForm.FormD);
+                var sb = new System.Text.StringBuilder(folded.Length);
+                foreach (var c in folded)
+                    // a-z uniquement : les accents combinés (NonSpacingMark),
+                    // chiffres, séparateurs et autres écritures tombent.
+                    if (c >= 'a' && c <= 'z') sb.Append(c);
+                var code = sb.ToString();
+                if (FreeCodeRx.IsMatch(code))
+                {
+                    if (!string.Equals(name.Trim(), code, StringComparison.Ordinal))
+                        note = "code libre hors table du plugin";
+                    return code;
+                }
+            }
+            catch { /* repli jamais fatal */ }
+            return null;
         }
 
         /// <summary>Multiset des placeholders {n} d'une chaîne — miroir

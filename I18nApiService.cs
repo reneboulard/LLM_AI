@@ -271,14 +271,78 @@ namespace LLM_AI
             }
         }
 
+        // FR web : cache miroir (même ressource immuable, sous-objet « fr »).
+
+        private static readonly object s_webFrLock = new object();
+        private static Dictionary<string, string> s_webFr;       //null = jamais extrait
+        private static bool s_webFrFailed;                        // log d'échec déjà émis
+
+        /// <summary>STRINGS.fr extrait de l'embarqué — cache statique miroir
+        /// de WebEnExtracted (v1.17.0 T1b : la moitié FR des paires de contexte
+        /// des doses). Pas de compte attendu (le FR suit le EN par convention
+        /// de maintenance ; une dérive se verrait dans les comptes du ?base).</summary>
+        private static Dictionary<string, string> WebFrExtracted(ILogger logger)
+        {
+            if (s_webFr != null) return s_webFr;
+            lock (s_webFrLock)
+            {
+                if (s_webFr != null) return s_webFr;
+                Dictionary<string, string> extracted = null;
+                try
+                {
+                    var asm = typeof(I18nApiService).Assembly;
+                    using (var stream = asm.GetManifestResourceStream(I18nJsResource))
+                    {
+                        if (stream != null)
+                        {
+                            using (var reader = new StreamReader(stream))
+                                extracted = ExtractWebStringsLang(reader.ReadToEnd(), "fr");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (logger != null && !s_webFrFailed)
+                        logger.Warn("[LLM_AI] I18n : extraction web FR impossible ({0}) — doses servies sans paires FR pour la partie web.", ex.Message);
+                }
+                if (extracted == null)
+                {
+                    if (logger != null && !s_webFrFailed)
+                        logger.Warn("[LLM_AI] I18n : ancre « var STRINGS = { » / sous-objet « fr » introuvable dans {0} — doses sans paires FR web.", I18nJsResource);
+                    s_webFrFailed = true;
+                    s_webFr = new Dictionary<string, string>(StringComparer.Ordinal);
+                    return s_webFr;
+                }
+                if (logger != null)
+                    logger.Info("[LLM_AI] I18n : STRINGS.fr extrait du {0} embarqué — {1} clés.", I18nJsResource, extracted.Count);
+                s_webFr = extracted;
+                return s_webFr;
+            }
+        }
+
+        /// <summary>Table web native pour le moteur de génération (T1b) : « en »
+        /// = base formelle, « fr » = contexte auteur. Toute autre langue → EN
+        /// (pas de natif web au-delà des deux, par convention de maintenance).</summary>
+        internal static IReadOnlyDictionary<string, string> WebNativesLang(string lang, ILogger logger)
+            => lang == "fr" ? WebFrExtracted(logger) : WebEnExtracted(logger);
+
         /// <summary>Extraction bornée de <c>STRINGS.en</c> depuis le source du
-        /// module AMD i18n.js — SANS eval : ancre <c>var STRINGS = {</c>,
-        /// accolades équilibrées (chaînes + commentaires // et /* */ gérés),
-        /// sous-objet <c>en:</c>, paires "clé" : "valeur". Null si l'ancre ou
-        /// le sous-objet ne se trouvent pas (fail-open côté appelant).
-        /// Pur et statique : rejouable au harnais réflexion (symétrie des
-        /// comptes avec le kit).</summary>
+        /// module AMD i18n.js (spécialisation EN de
+        /// <see cref="ExtractWebStringsLang"/> — garde son nom pour la symétrie
+        /// du harnais réflexion avec le kit).</summary>
         internal static Dictionary<string, string> ExtractWebStringsEn(string js)
+            => ExtractWebStringsLang(js, "en");
+
+        /// <summary>Extraction bornée de <c>STRINGS.<paramref name="langHead"/></c>
+        /// depuis le source du module AMD i18n.js — SANS eval : ancre
+        /// <c>var STRINGS = {</c>, accolades équilibrées (chaînes + commentaires
+        /// // et /* */ gérés), sous-objet <c>lang:</c>, paires "clé" : "valeur".
+        /// Null si l'ancre ou le sous-objet ne se trouvent pas (fail-open côté
+        /// appelant). v1.17.0 T1b : généralisée EN+FR — le FR web vit dans
+        /// i18n.js exactement comme l'EN et sert la moitié FR des paires de
+        /// contexte des doses. Pur et statique : rejouable au harnais réflexion
+        /// (symétrie des comptes avec le kit).</summary>
+        internal static Dictionary<string, string> ExtractWebStringsLang(string js, string langHead)
         {
             if (string.IsNullOrEmpty(js)) return null;
             int anchor = js.IndexOf("var STRINGS = {", StringComparison.Ordinal);
@@ -288,7 +352,9 @@ namespace LLM_AI
             int objEnd = ScanJsObjectEnd(js, objStart);
             if (objEnd < 0) return null;
 
-            foreach (Match m in EnSubobjectRx.Matches(js.Substring(objStart, objEnd - objStart)))
+            // Le regex ne matche QUE la tête demandée (l'ancre « en » n'attrape
+            // pas « fr » et réciproquement — i18n.js a les deux sous-objets).
+            foreach (Match m in SubobjectRx(langHead).Matches(js.Substring(objStart, objEnd - objStart)))
             {
                 int subStart = objStart + m.Index + m.Length - 1; // le '{' du match (index relatif → absolu)
                 int subEnd = ScanJsObjectEnd(js, subStart);
@@ -300,12 +366,26 @@ namespace LLM_AI
             return null;
         }
 
-        /// <summary><c>en</c> au niveau zéro d'un objet JS (ancre de la
-        /// moitié web). Ancré en début de ligne : une valeur de chaîne
+        /// <summary>Ancre « <c>lang:</c> <c>{</c> » au niveau zéro d'un objet JS
+        /// (head = en OU fr). Ancré en début de ligne : une valeur de chaîne
         /// contenant « en: { » ne matche pas (i18n.js n'a pas de saut de
         /// ligne réel dans ses littéraux).</summary>
-        private static readonly Regex EnSubobjectRx =
-            new Regex(@"^[\t ]*en\s*:\s*\{", RegexOptions.Compiled | RegexOptions.Multiline);
+        private static readonly Dictionary<string, Regex> s_subobjectRx =
+            new Dictionary<string, Regex>(StringComparer.Ordinal);
+
+        private static Regex SubobjectRx(string langHead)
+        {
+            lock (s_subobjectRx)
+            {
+                if (!s_subobjectRx.TryGetValue(langHead, out var rx))
+                {
+                    rx = new Regex("^[\t ]*" + Regex.Escape(langHead) + @"\s*:\s*\{",
+                        RegexOptions.Compiled | RegexOptions.Multiline);
+                    s_subobjectRx[langHead] = rx;
+                }
+                return rx;
+            }
+        }
 
         /// <summary>Paire "clé" : "valeur" JS (échappements supportés).</summary>
         private static readonly Regex JsPairRx =

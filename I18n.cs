@@ -344,7 +344,10 @@ namespace LLM_AI
         }
 
         /// <summary>Nombre de clés du dictionnaire serveur EN natif — le dénominateur
-        /// « attendu » des lignes de log de l'overlay (≈136 clés au 2026-10-02).</summary>
+        /// « attendu » des lignes de log de l'overlay. Dérivé DYNAMIQUEMENT
+        /// (jamais hardcodé — leçon du kit : les chiffres figés se percent) ;
+        /// croît à chaque ajout de chaînes serveur (v1.17.0 T1b : +25 clés
+        /// i18n.gen.* de l'atelier → 176).</summary>
         internal static int EnServerKeyCount
             => s_res.TryGetValue(En, out var en) ? en.Count : 0;
 
@@ -354,6 +357,13 @@ namespace LLM_AI
         /// après l'init.</summary>
         internal static IReadOnlyDictionary<string, string> EnServerDict
             => s_res.TryGetValue(En, out var en) ? en : null;
+
+        /// <summary>Dictionnaire serveur natif d'une LANGUE donnée (ex. « fr »)
+        /// — v1.17.0 T1b : la moitié FR des paires EN+FR injectées dans chaque
+        /// dose de génération (le FR = rédaction auteur = intention). Null si
+        /// la langue n'a pas de natif serveur (seules fr et en en ont).</summary>
+        internal static IReadOnlyDictionary<string, string> ServerDictFor(string langKey)
+            => s_res.TryGetValue(langKey ?? string.Empty, out var d) ? d : null;
 
         // ------------------------------------------------------------------
         //  Accès à la base EN de la famille ext (validation overlay + ?base)
@@ -407,6 +417,20 @@ namespace LLM_AI
             {
                 { "fr", "fr" }, { "en", "en" }, { "es", "es" },
                 { "de", "de" }, { "it", "it" }, { "pt", "pt" },
+                // Élargie (v1.17.0, atelier de langues : code libre supporté)
+                // avec les langues attestées par les chaînes Emby du hôte
+                // (dashboard-ui/strings/*) — une langue hors table ne
+                // résoudrait jamais côté affichage même une fois générée. Le
+                // repli natif reste EN (les dictionnaires fr/en seuls existent).
+                { "ca", "ca" }, { "cs", "cs" }, { "da", "da" }, { "el", "el" },
+                { "et", "et" }, { "fa", "fa" }, { "fi", "fi" }, { "he", "he" },
+                { "hi", "hi" }, { "hr", "hr" }, { "hu", "hu" }, { "id", "id" },
+                { "is", "is" }, { "ja", "ja" }, { "kk", "kk" }, { "ko", "ko" },
+                { "lt", "lt" }, { "lv", "lv" }, { "mk", "mk" }, { "ms", "ms" },
+                { "nb", "nb" }, { "nl", "nl" }, { "pl", "pl" }, { "ro", "ro" },
+                { "ru", "ru" }, { "sk", "sk" }, { "sl", "sl" }, { "sq", "sq" },
+                { "sv", "sv" }, { "th", "th" }, { "tr", "tr" }, { "uk", "uk" },
+                { "vi", "vi" }, { "zh", "zh" }, { "ar", "ar" }, { "bg", "bg" },
             };
 
         // --- dictionnaires de ressources (FR + EN) -----------------------
@@ -598,6 +622,33 @@ namespace LLM_AI
                     ["tonight.err.nouser"] = "Utilisateur non résolu.",
                     ["tonight.err.noreco"] = "Le run LLM n'a pas produit de recommandation.",
                     ["tonight.err.noitems"] = "Toutes les recommandations pointaient vers des items introuvables (EPG expiré ou items supprimés).",
+                    // --- Atelier de langues (v1.17.0 T1b) : jalons + rapport
+                    // de génération — en langue d'AFFICHAGE, jamais la cible.
+                    ["i18n.gen.progress.collect"] = "Collecte de la base native et du glossaire…",
+                    ["i18n.gen.progress.dose"] = "Dose {0}/{1} — {2} ({3} clés)",
+                    ["i18n.gen.progress.repair"] = "Réparation ciblée — {0} clé(s)",
+                    ["i18n.gen.progress.write"] = "Assemblage et écriture du fichier…",
+                    ["i18n.gen.mode.full"] = "refaire la langue complète",
+                    ["i18n.gen.mode.missing"] = "compléter les clés manquantes et sautées",
+                    ["i18n.gen.mode.skipped"] = "re-traduire les clés sautées",
+                    ["i18n.gen.nokeys"] = "Aucune clé à traiter — la langue est déjà complète.",
+                    ["i18n.gen.title"] = "Génération de la langue « {0} » — {1}.",
+                    ["i18n.gen.doses"] = "{0} dose(s) pour {1} clés (cap {2} par dose) — campagne par doses obligatoire (la passe unique échoue : attention étirée, faux conforme « copie EN »).",
+                    ["i18n.gen.calls"] = "Appels LLM : {0} — backends : {1}.",
+                    ["i18n.gen.repair"] = "Réparation ciblée : {0} clé(s) re-traitée(s), {1} rattrapée(s).",
+                    ["i18n.gen.coverage"] = "Couverture après écriture — web {0}/{1}, server {2}/{3}, ext {4}/{5} (présentes / total natif).",
+                    ["i18n.gen.skipped"] = "Clés restées au repli natif ({0}) : {1}",
+                    ["i18n.gen.skipped.none"] = "Aucune clé au repli natif.",
+                    ["i18n.gen.suspects"] = "Valeurs identiques à l'anglais, à RELIRE ({0}) — souvent légitimes (marques, icônes) : {1}",
+                    ["i18n.gen.suspects.none"] = "Aucune valeur suspecte identique à l'anglais.",
+                    ["i18n.gen.glossary"] = "Glossaire : {0} terme(s) officiels Emby attestés ({1}).",
+                    ["i18n.gen.glossary.empty"] = "Glossaire vide — les chaînes officielles Emby pour « {0}.json » sont introuvables sur ce serveur : terminologie non ancrée.",
+                    ["i18n.gen.written"] = "Fichier écrit — {0} (précédent conservé en « .bak » ; effectif au prochain accès, sans restart).",
+                    ["i18n.gen.dosefail"] = "Doses en échec définitif ({0}) : {1}.",
+                    ["i18n.gen.err.nolang"] = "Code de langue « {0} » non reconnu — 2-3 lettres attendues (ex. es).",
+                    ["i18n.gen.err.novalue"] = "Aucune valeur exploitable dans les réponses LLM (réponses non parsables, doses mortes, ou backends tous indisponibles).",
+                    ["i18n.gen.err.backend"] = "Aucun backend LLM disponible (tous les serveurs activés ont échoué).",
+                    ["i18n.gen.err.write"] = "Écriture du fichier de langue impossible : {0}.",
                     ["task.category"] = "LLM AI",
                 },
                 ["en"] = new(StringComparer.Ordinal)
@@ -784,6 +835,33 @@ namespace LLM_AI
                     ["tonight.err.nouser"] = "Could not resolve the user.",
                     ["tonight.err.noreco"] = "The LLM run produced no recommendation.",
                     ["tonight.err.noitems"] = "All recommendations pointed to items that could not be found (expired EPG or deleted items).",
+                    // --- Language workshop (v1.17.0 T1b): milestones + report
+                    // — in the DISPLAY language, never the target language ---
+                    ["i18n.gen.progress.collect"] = "Gathering the native base and glossary…",
+                    ["i18n.gen.progress.dose"] = "Dose {0}/{1} — {2} ({3} keys)",
+                    ["i18n.gen.progress.repair"] = "Targeted repair — {0} key(s)",
+                    ["i18n.gen.progress.write"] = "Assembling and writing the file…",
+                    ["i18n.gen.mode.full"] = "redo the complete language",
+                    ["i18n.gen.mode.missing"] = "complete missing and skipped keys",
+                    ["i18n.gen.mode.skipped"] = "re-translate skipped keys",
+                    ["i18n.gen.nokeys"] = "Nothing to do — the language is already complete.",
+                    ["i18n.gen.title"] = "Language generation for “{0}” — {1}.",
+                    ["i18n.gen.doses"] = "{0} dose(s) for {1} keys (cap {2} per dose) — a split campaign is mandatory (the single pass fails: stretched attention, “EN copy” fake-compliance).",
+                    ["i18n.gen.calls"] = "LLM calls: {0} — backends: {1}.",
+                    ["i18n.gen.repair"] = "Targeted repair: {0} key(s) re-processed, {1} recovered.",
+                    ["i18n.gen.coverage"] = "Coverage after writing — web {0}/{1}, server {2}/{3}, ext {4}/{5} (present / native total).",
+                    ["i18n.gen.skipped"] = "Keys left on the native fallback ({0}): {1}",
+                    ["i18n.gen.skipped.none"] = "No key on the native fallback.",
+                    ["i18n.gen.suspects"] = "Values identical to English, worth REVIEWING ({0}) — often legitimate (brands, icons): {1}",
+                    ["i18n.gen.suspects.none"] = "No suspicious value identical to English.",
+                    ["i18n.gen.glossary"] = "Glossary: {0} attested official Emby term(s) ({1}).",
+                    ["i18n.gen.glossary.empty"] = "Empty glossary — the official Emby strings for “{0}.json” cannot be found on this server: terminology not anchored.",
+                    ["i18n.gen.written"] = "File written — {0} (previous one kept as “.bak”; effective at the next access, no restart).",
+                    ["i18n.gen.dosefail"] = "Definitely failed doses ({0}): {1}.",
+                    ["i18n.gen.err.nolang"] = "Language code “{0}” not recognized — expected 2-3 letters (e.g. es).",
+                    ["i18n.gen.err.novalue"] = "No usable value in the LLM responses (unparsable answers, dead doses, or all backends down).",
+                    ["i18n.gen.err.backend"] = "No LLM backend available (every enabled server failed).",
+                    ["i18n.gen.err.write"] = "Cannot write the language file: {0}.",
                     ["task.category"] = "LLM AI",
                 },
             };
