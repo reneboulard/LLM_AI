@@ -10,6 +10,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.0.0] — 2026-10-03
+
+### Added (FR)
+- **Atelier de langues — panneau « Langues d'interface »** (page de
+  configuration, admin) : génération/complétion d'une langue d'interface
+  d'un clic — code de langue libre 2-3 lettres persisté, modes **Générer**
+  (toutes les clés) / **Compléter** (manquantes + sautées, défaut) /
+  **Re-traduire les clés sautées**, couverture LIVE par famille (endpoints
+  `?base`/`?missing`), bouton → campagne en **tâche de fond** (single-flight,
+  résiliente à la fermeture d'onglet, reprise du fil + progression au
+  rechargement), rapport final rendu sur la page. 20 clés natives
+  `cfg.i18n.*` FR+EN (le panneau s'auto-traduit : dogfooding).
+- **Moteur de génération** (`I18nDoses` / `I18nGenerator`) : découpe en
+  **doses famille-atomiques** ≤ 50 clés (cohérence > cap), chaque dose servie
+  au LLM avec les **paires EN+FR en contexte** et le **glossaire officiel
+  Emby** (`dashboard-ui/strings/<lang>.json` du serveur quand il dispose de
+  la langue, sinon résolu par réflexion) ; parsing tolérant, **validation
+  miroir du chargeur** par clé (placeholders `{n}` + balises, `ext` texte
+  brut, clé inconnue) + détection anti-copie-EN (suspects rapportés), clés
+  refusées → **réparation ciblée** (≤ 3 tentatives avec raisons), fallback
+  multi-backend, fusion non destructive + **écriture atomique** tmp+move
+  + `.bak` (n'écrit que si ≥ 1 clé acceptée, autres langues conservées,
+  re-scan à chaud), rapport final persisté + événement SecurityMonitor.
+- **Endpoint `GET /Plugins/LLMAI/I18nGenerate`** (admin, sans flag config) :
+  `?Lang&Mode` démarre la campagne (run détaché, jalons structurés
+  localisés dans la langue d'affichage du poller — le moteur reste sans
+  opinion), `?Status=true` rend snapshot + dernier rapport dans la même
+  réponse ; 2 chaînes d'échec (`i18n.gen.err.timeout/fail`).
+- **Outils chat admin `i18n_get` / `i18n_set_key`** : revue des langues
+  générées — lecture complète d'une clé (natives EN+FR par famille, valeurs
+  d'overlay par langue avec verdict structurel + flag identique-EN, clé
+  inconnue → suggestions proches) et écriture directe validée (gates
+  déterministes C# identiques à la campagne, refus motivé, `.bak` + re-scan).
+- **Fiabilisation des doses** (constats terrain du 2026-10-03) : sortie du
+  LLM sous **tokens sentinelle** `[NL]`/`[QU]` (encode des sauts de ligne et
+  guillemets réels des natives — aucun caractère cassant un littéral JSON
+  dans le payload, décodage C# après le parse) ; une dose imparsable rendue
+  par un backend est **re-tentée sur les backends suivants** (l'escalade
+  couvre désormais le parse-dead, pas seulement les exceptions) ; dump
+  diagnostique **borné** de toute dose morte dans le journal (contrôles
+  visibles ␊/␍/␉) ; comptage affiché = **appels LLM réels** (double comptage
+  supprimé).
+- Nouvelles natives : web 393 → **413** (`cfg.i18n.*`), server 151 → **178**
+  (`i18n.gen.*`) ; langue complète = **626 clés** (web + server + ext).
+
+### Added (EN)
+- **Language workshop — « Interface languages » panel** (configuration
+  page, admin): generates or completes an interface language in one click —
+  free 2-3-letter language code (persisted), modes **Generate** (all keys) /
+  **Complete** (missing + skipped, default) / **Re-translate skipped keys**,
+  live per-family coverage (`?base`/`?missing` endpoints), Start button →
+  **detached background campaign** (single-flight, tab-close resilient,
+  thread + progress resume on reload), final report rendered on the page.
+  20 native `cfg.i18n.*` keys FR+EN (the panel translates itself:
+  dogfooding).
+- **Generation engine** (`I18nDoses` / `I18nGenerator`): splits targets into
+  **family-atomic doses** ≤ 50 keys (coherence over cap), each dose served
+  to the LLM with **EN+FR pairs in context** and the **official Emby
+  glossary** (`dashboard-ui/strings/<lang>.json` when the server ships the
+  language, else resolved by reflection); tolerant parsing, **loader-
+  mirroring per-key validation** (`{n}` placeholders + tags, `ext` plain
+  text, unknown key) + identical-to-EN copy detection (suspects listed in
+  the report), refused keys → **targeted repair** (≤ 3 attempts with
+  reasons), multi-backend fallback, non-destructive merge + **atomic
+  write** tmp+move + `.bak` (writes only if ≥ 1 key accepted, other
+  languages preserved, hot re-scan), persisted final report +
+  SecurityMonitor event.
+- **`GET /Plugins/LLMAI/I18nGenerate` endpoint** (admin, no config flag):
+  `?Lang&Mode` starts the campaign (detached run, structured milestones
+  localized in the poller's display language — the engine itself stays
+  opinion-free), `?Status=true` returns snapshot + last report in the same
+  response; 2 failure strings (`i18n.gen.err.timeout/fail`).
+- **Admin chat tools `i18n_get` / `i18n_set_key`**: reviewing generated
+  languages — full key read-out (EN+FR natives per family, overlay values
+  per language with structural verdict + identical-EN flag, unknown key →
+  near-miss suggestions) and validated direct write (deterministic C# gates
+  identical to the campaign, motivated refusals, `.bak` + re-scan).
+- **Dose hardening** (field findings, 2026-10-03): LLM output under
+  **sentinel tokens** `[NL]`/`[QU]` (encodes real line breaks and quotes —
+  no JSON-literal-breaking character ever reaches the payload, decoded in
+  C# after the parse); a dose a backend fails to render parsable is
+  **retried on the following backends** (escalation now covers parse-dead,
+  not just exceptions); **bounded** diagnostic dump of any dead dose to the
+  log (visible controls ␊/␍/␉); displayed count = **actual LLM calls**
+  (double counting removed).
+- New natives: web 393 → **413** (`cfg.i18n.*`), server 151 → **178**
+  (`i18n.gen.*`); a full language = **626 keys** (web + server + ext).
+
+---
+
 ## [1.16.0.0] — 2026-10-03
 
 ### Added (FR)

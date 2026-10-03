@@ -883,6 +883,10 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks and, since v1.15.0.2, the strings shown in the admin chat and the configuration page (cards, details, endpoint errors). |
 | `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (internal static) | **Community overlay** loader (v1.16.0, file `LLM_AI_i18n.json` — mtime-throttled re-read, no restart): `server`/`ext` families validated **per key** (placeholder `{n}` + HTML tag multiset vs EN natives; `ext` = plain text, `{n}` rules only) + the `web` slice served raw (validated client-side at merge); immutable snapshot swapped by reference, authoritative fr/en patches, unknown/invalid keys skipped + logged, load summary. |
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | i18n endpoints for translators (v1.16.0): `GET /Plugins/LLMAI/I18n` (overlay slices, fail-open), `?base=1` (hot EN native base — web extracted from the embedded i18n.js without eval, server + ext direct), `?missing=1&lang=xx` (diff of keys still to translate, paste-ready RAW output). |
+| `I18nDoses.cs` | `I18nDoses` / `I18nDoses.Split` / `Validate` (internal static) | Splits targets into **family-atomic doses** ≤ 50 keys (coherence over cap — faithful to the v1.16 dose kit) + loader-mirroring **per-key** validation (placeholder `{n}` multiset, HTML tags, `ext` = strict plain text, empty, unknown key) + dose-majority identical-to-EN guard (`TriviallyIdenticalEn`: icons, short strings, brands). (v1.17.0) |
+| `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, internal static) | **Language-workshop engine** (v1.17.0): 8 steps — natives + FR context, targets per mode (full/missing/skipped), official Emby glossary, dynamic-count directive, per-dose loop (2-message completion, LLM output under **sentinel tokens** `[NL]`/`[QU]` decoded in C# *after* the parse, per-key validation, targeted repair ≤ 3, **parse-dead escalation** to the following backends), non-destructive merge + atomic write (writes only if ≥ 1 key accepted), persisted report + SecurityMonitor. `BoundedDump` = bounded RAW dump of any dead dose (␊/␍/␉ visible). |
+| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Admin endpoint **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0): `?Lang&Mode` starts a campaign as a **detached run** (single-flight `I18nGenState`, survives tab close, 25-min CTS), backends resolved by the caller (disposable LlmRunner); `?Status=true` = snapshot + last persisted report (engine-written `i18n_gen_report.json`) in the same response. |
+| `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×2 | **Admin chat** tools (v1.17.0): `i18n_get` (full key read-out: EN+FR natives per family, overlay values per language with structural verdict + identical-EN flag, unknown key → suggestions) and `i18n_set_key` (validated direct write — the same deterministic gates as the campaign, motivated refusals, `.bak` + re-scan). Registered only when the tool-calling protocol is already active (thinking-model quirk). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side). See [Community interface languages](#community-interface-languages). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
@@ -2381,6 +2385,29 @@ drives the 🎤 voice).
 with the instruction: keep every `{0}…{n}` placeholder and HTML tag exactly
 as-is, output pure JSON. Control recipe: `?missing=1` for coverage, reload a
 page and read the load log (skipped keys are listed).
+
+**Language workshop (v1.17.0 — panel, admin)**: the **« Interface
+languages »** panel of the plugin configuration generates or completes a
+language in one click. Enter a free language code (`es`, `pt-BR`…), pick the
+mode — **Generate** (all keys) / **Complete** (missing + skipped keys, the
+default) / **Re-translate skipped keys** (staleness guard) — and hit
+**Start**: per-family coverage is shown live (endpoints above) and the
+campaign runs as a **detached background task** (survives closing the tab;
+resume the thread and progress by reloading the page), translating
+**family-atomic doses** (≤ 50 keys) served to the LLM with **EN+FR pairs in
+context** and the **official Emby glossary**
+(`dashboard-ui/strings/<lang>.json` on the server when available, else
+resolved by reflection); every key passes a **loader-mirroring validation**
+(`{n}` placeholders + tags, `ext` = plain text, identical-to-EN copy
+detection) and refused keys get a **targeted repair pass**. A dose that a
+backend fails to render parsable is **retried on the following backends**;
+only the number of **actual LLM calls** is displayed. End of campaign:
+**atomic write** tmp+move + `.bak` (writes only if ≥ 1 key was accepted —
+the other languages in the file are preserved) and a **final report**
+(accepted / refused / identical-EN suspects). **Human review** of generated
+values happens afterwards in the **admin chat** (`i18n_get` / `i18n_set_key`).
+As always: the workshop only touches the plugin's interface labels — no
+media, no library data is ever modified.
 
 **Staleness**: if an EN native text changes in a future plugin version, an
 overridden value whose placeholders no longer match is **skipped** at
