@@ -28,13 +28,14 @@ namespace LLM_AI
     ///   rien → natif, fail-open symétrique du chargeur). La section
     ///   <c>server</c> n'est JAMAIS servie ici.</item>
     /// <item><c>GET /Plugins/LLMAI/I18n?base</c> — base EN native générée à
-    ///   chaud (<c>{"en": {"web": {…}, "server": {…}}}</c>) : la moitié
-    ///   serveur vient directement de <see cref="I18n"/> ; la moitié web est
-    ///   EXTRAITE du module embarqué <c>i18n.js</c> (scan borné de
-    ///   <c>STRINGS.en</c> — ancre, accolades équilibrées, paires
+    ///   chaud (<c>{"en": {"web": {…}, "server": {…}, "ext": {…}}}</c>, P2b :
+    ///   une section « ext » en plus) : la moitié serveur vient directement
+    ///   de <see cref="I18n"/>, la famille ext de <see cref="I18n.EnExtDict"/> ;
+    ///   la moitié web est EXTRAITE du module embarqué <c>i18n.js</c> (scan
+    ///   borné de <c>STRINGS.en</c> — ancre, accolades équilibrées, paires
     ///   "clé" : "valeur" — approche de <c>extract_i18n.js</c>, sans eval).
-    ///   C'est le pivot de traduction : le traducteur remplit les deux
-    ///   sections pour sa langue.</item>
+    ///   C'est le pivot de traduction : le traducteur remplit les sections
+    ///   pour sa langue.</item>
     /// <item><c>GET /Plugins/LLMAI/I18n?missing&lang=es</c> — diff usager vs
     ///   EN natif : ne sert que les clés ABSENTES du fichier usager pour la
     ///   langue (même forme que <c>?base</c>, sous la langue demandée —
@@ -97,11 +98,14 @@ namespace LLM_AI
 
         /// <summary>Base EN native (+ éventuellement la diff « manquantes »).
         /// La forme de réponse est celle du fichier usager :
-        /// <c>{ "&lt;lang&gt;": { "web": {…}, "server": {…} } }</c> — collable direct.</summary>
+        /// <c>{ "&lt;lang&gt;": { "web": {…}, "server": {…}, "ext": {…} } }</c>
+        /// — collable direct (la section ext, v1.16.0 P2b, couvre la famille
+        /// du chat externe : chrome ext.* + messages Python srv.*).</summary>
         private object GetBase(I18nRequest request, bool missingOnly)
         {
             var enWeb = WebEnExtracted(Logger);
             var enServer = Materialize(I18n.EnServerDict);
+            var enExt = Materialize(I18n.EnExtDict);
 
             string langKey = null;
             if (missingOnly)
@@ -118,24 +122,27 @@ namespace LLM_AI
                     };
                 }
                 var userKeys = ReadUserOverlayKeys(langKey);
-                int webTotal = enWeb.Count, serverTotal = enServer.Count;
+                int webTotal = enWeb.Count, serverTotal = enServer.Count, extTotal = enExt.Count;
                 enWeb = enWeb.Where(kv => !userKeys.Web.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
                 enServer = enServer.Where(kv => !userKeys.Server.Contains(kv.Key))
                     .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
-                Logger.Info("[LLM_AI] GET /I18n ?missing « {0} » — manquantes web {1}/{2}, server {3}/{4}.",
-                    langKey, enWeb.Count, webTotal, enServer.Count, serverTotal);
+                enExt = enExt.Where(kv => !userKeys.Ext.Contains(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+                Logger.Info("[LLM_AI] GET /I18n ?missing « {0} » — manquantes web {1}/{2}, server {3}/{4}, ext {5}/{6}.",
+                    langKey, enWeb.Count, webTotal, enServer.Count, serverTotal, enExt.Count, extTotal);
             }
             else
             {
-                Logger.Info("[LLM_AI] GET /I18n ?base — web {0} clés, server {1} clés.",
-                    enWeb.Count, enServer.Count);
+                Logger.Info("[LLM_AI] GET /I18n ?base — web {0} clés, server {1} clés, ext {2} clés.",
+                    enWeb.Count, enServer.Count, enExt.Count);
             }
 
             var section = new Dictionary<string, object>(StringComparer.Ordinal)
             {
                 ["web"] = enWeb,
-                ["server"] = enServer
+                ["server"] = enServer,
+                ["ext"] = enExt
             };
             return new Dictionary<string, object>(StringComparer.Ordinal)
             {
@@ -151,11 +158,14 @@ namespace LLM_AI
         /// tolérant — indépendant de la validation du chargeur : une clé
         /// présente mais fautive n'est pas « manquante », elle est déjà
         /// signalée par le log du chargeur). Fichier absent/illisible/JSON
-        /// cassé → sets vides (tout manquant = template complet).</summary>
-        private static (HashSet<string> Web, HashSet<string> Server) ReadUserOverlayKeys(string langKey)
+        /// cassé → sets vides (tout manquant = template complet). Les trois
+        /// sections du fichier sont lues (web/server/ext — P2b).</summary>
+        private static (HashSet<string> Web, HashSet<string> Server, HashSet<string> Ext)
+            ReadUserOverlayKeys(string langKey)
         {
             var web = new HashSet<string>(StringComparer.Ordinal);
             var server = new HashSet<string>(StringComparer.Ordinal);
+            var ext = new HashSet<string>(StringComparer.Ordinal);
             string raw = null;
             try
             {
@@ -164,13 +174,14 @@ namespace LLM_AI
                     raw = File.ReadAllText(path);
             }
             catch { raw = null; }
-            if (raw == null) return (web, server);
+            if (raw == null) return (web, server, ext);
 
             try
             {
                 using (var doc = JsonDocument.Parse(raw))
                 {
-                    if (doc.RootElement.ValueKind != JsonValueKind.Object) return (web, server);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                        return (web, server, ext);
                     foreach (var prop in doc.RootElement.EnumerateObject())
                     {
                         if (!string.Equals(I18nOverlay.NormalizeLang(prop.Name, out _), langKey,
@@ -182,11 +193,14 @@ namespace LLM_AI
                         if (prop.Value.TryGetProperty("server", out var sv)
                             && sv.ValueKind == JsonValueKind.Object)
                             foreach (var e in sv.EnumerateObject()) server.Add(e.Name);
+                        if (prop.Value.TryGetProperty("ext", out var ev3)
+                            && ev3.ValueKind == JsonValueKind.Object)
+                            foreach (var e in ev3.EnumerateObject()) ext.Add(e.Name);
                     }
                 }
             }
             catch { /* JSON cassé → sets vides (tout manquant) */ }
-            return (web, server);
+            return (web, server, ext);
         }
 
         // ------------------------------------------------------------------

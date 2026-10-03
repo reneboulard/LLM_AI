@@ -16,14 +16,16 @@ namespace LLM_AI
     /// voir TODO.md). Ajouter une langue d'interface = déposer ce fichier à
     /// côté de <c>LLM_AI.xml</c> (PluginConfigurationsPath) — zéro code, zéro
     /// recompile, pas de fork pour le traducteur. Format :
-    /// <c>{ "es": { "web": {…}, "server": {…} }, "fr": {…} }</c> — une clé de
-    /// langue par section de tête, chaque langue portant une section
-    /// <c>server</c> (fusionnée au lookup par <see cref="I18n"/>) et une
-    /// section <c>web</c> (servie aux pages web par l'endpoint /I18n,
-    /// v1.16.0 à venir). Les DEUX sections sont attendues par convention (les
-    /// namespaces se chevauchent : « chat.* » existe des deux côtés) mais
-    /// chacune est consommée indépendamment — une section manquante
-    /// signifie « pas d'overlay pour ce consommateur », pas une erreur.
+    /// <c>{ "es": { "web": {…}, "server": {…}, "ext": {…} }, "fr": {…} }</c> —
+    /// une clé de langue par section de tête ; les sections <c>server</c>
+    /// (fusionnée au lookup par <see cref="I18n"/>) et <c>web</c> (servie aux
+    /// pages web par l'endpoint /I18n, v1.16.0) sont attendues par convention
+    /// (les namespaces se chevauchent : « chat.* » existe des deux côtés)
+    /// mais chacune est consommée indépendamment — une section manquante
+    /// signifie « pas d'overlay pour ce consommateur », pas une erreur ; la
+    /// section <c>ext</c> (v1.16.0 P2b — chat externe, chrome ext.* +
+    /// messages Python srv.*) est OPTIONNELLE, servie par /I18nExt à la
+    /// langue résolue.
     /// <list type="bullet">
     /// <item><b>Fail-open total</b> : sans fichier, ou fichier illisible /
     /// JSON cassé → dictionnaires natifs FR+EN seuls (comportement
@@ -47,7 +49,9 @@ namespace LLM_AI
     /// serveur (souvent un glissement web→server) → sautée + log. La
     /// section <c>web</c> n'est PAS validée ici : elle est validée côté
     /// client (JS, au merge — drop + console.warn) car le dictionnaire web
-    /// EN natif vit dans i18n.js, pas dans la DLL.</item>
+    /// EN natif vit dans i18n.js, pas dans la DLL. La section <c>ext</c>
+    /// (P2b) est validée ici, règle {n}-SEULE contre s_ext["en"] — famille
+    /// texte brut (textContent / str.format), pas de règle balises.</item>
     /// <item><b>Patch fr/en supporté</b> (feature documentée) : l'overlay
     /// est autoritaire par langue — une section "fr" ou "en" remplace la
     /// valeur native pour les clés qu'elle porte, et le repli EN par défaut
@@ -134,16 +138,25 @@ namespace LLM_AI
             /// /I18n (v1.16.0) — PAS validée ici (règle client au merge).</summary>
             internal readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Web;
 
+            /// <summary>Section "ext" (v1.16.0 P2b) : chaînes du chat externe
+            /// (chrome ext.* + messages Python srv.*) — servies par l'endpoint
+            /// /I18nExt à la langue résolue (cascade UICulture). Validée ICI,
+            /// règle {n}-seule (famille texte brut : pas de règle balises —
+            /// rendu textContent / str.format).</summary>
+            internal readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Ext;
+
             /// <summary>Instant du chargement (diagnostic).</summary>
             internal readonly DateTimeOffset LoadedAtUtc;
 
             internal Snapshot(
                 IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> server,
                 IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> web,
+                IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> ext,
                 DateTimeOffset loadedAtUtc, string report)
             {
                 Server = server;
                 Web = web;
+                Ext = ext;
                 LoadedAtUtc = loadedAtUtc;
                 Report = report;
             }
@@ -398,10 +411,12 @@ namespace LLM_AI
         /// <summary>Charge le fichier et construit le snapshot : section
         /// "server" validée par clé contre la base EN native (règles 4-5 du
         /// kit : multiset placeholders + multiset balises HTML), section
-        /// "web" acceptée sans validation (règle client au merge). Les clés
-        /// fautives sont sautées (jamais d'échec global pour une clé) ; un
-        /// fichier structurellement cassé (JSON, racine non-objet, aucune
-        /// langue exploitable) → ParseError posé.</summary>
+        /// "web" acceptée sans validation (règle client au merge), section
+        /// "ext" validée {n}-seule contre s_ext["en"] (famille texte brut :
+        /// pas de règle balises, v1.16.0 P2b). Les clés fautives sont
+        /// sautées (jamais d'échec global pour une clé) ; un fichier
+        /// structurellement cassé (JSON, racine non-objet, aucune langue
+        /// exploitable) → ParseError posé.</summary>
         internal static LoadResult LoadFrom(string path)
         {
             var res = new LoadResult
@@ -424,14 +439,16 @@ namespace LLM_AI
             {
                 if (doc.RootElement.ValueKind != JsonValueKind.Object)
                 {
-                    res.ParseError = "racine non-objet (attendu { \"<lang>\": { \"web\": {…}, \"server\": {…} } })";
+                    res.ParseError = "racine non-objet (attendu { \"<lang>\": { \"web\": {…}, \"server\": {…}, \"ext\": {…}? } })";
                     return res;
                 }
 
                 int expectedServer = I18n.EnServerKeyCount;
+                int expectedExt = I18n.EnExtKeyCount;
 
                 var server = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
                 var web = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+                var ext = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
                 var summary = new List<string>();
 
                 foreach (var langProp in doc.RootElement.EnumerateObject())
@@ -540,12 +557,64 @@ namespace LLM_AI
                     }
                     else wOk = wBad = -1;                  // section absente
 
-                    if (sOk == -1 && wOk == -1)
+                    // Section "ext" (v1.16.0 P2b) : chat externe — validation
+                    // {n}-SEULE contre s_ext["en"] (famille texte brut : le
+                    // rendu est textContent côté page et str.format côté
+                    // Python — pas de balises, donc pas de règle balises).
+                    // Section optionnelle et additive (web/server obligatoires
+                    // par convention, ext nouvelle).
+                    int eOk, eBad;
+                    if (langProp.Value.TryGetProperty("ext", out var ev2)
+                        && ev2.ValueKind == JsonValueKind.Object)
+                    {
+                        eOk = 0; eBad = 0;
+                        var dict = ServerGetOrAdd(ext, langKey);
+                        foreach (var entry in ev2.EnumerateObject())
+                        {
+                            if (entry.Value.ValueKind != JsonValueKind.String)
+                            {
+                                eBad++;
+                                res.FailedKeys.Add("[ext." + langKey + "] " + entry.Name
+                                    + " — valeur non-chaîne, clé sautée.");
+                                continue;
+                            }
+                            var val = entry.Value.GetString();
+                            if (string.IsNullOrWhiteSpace(val))
+                            {
+                                eBad++;
+                                res.FailedKeys.Add("[ext." + langKey + "] " + entry.Name
+                                    + " — valeur vide, clé sautée.");
+                                continue;
+                            }
+                            if (!I18n.TryEnExtString(entry.Name, out string enVal))
+                            {
+                                eBad++;
+                                res.FailedKeys.Add("[ext." + langKey + "] " + entry.Name
+                                    + " — clé inconnue du dictionnaire ext (glissement web/server→ext ?), clé sautée.");
+                                continue;
+                            }
+                            string phEn = PlaceholderSig(enVal), phV = PlaceholderSig(val);
+                            if (phEn != phV)
+                            {
+                                eBad++;
+                                res.FailedKeys.Add("[ext." + langKey + "] " + entry.Name
+                                    + " — placeholders divergents (EN " + SigOrNone(phEn)
+                                    + " vs soumis " + SigOrNone(phV) + "), clé sautée.");
+                                continue;
+                            }
+                            dict[entry.Name] = val;
+                            eOk++;
+                        }
+                        if (eOk == 0) ext.Remove(langKey);
+                    }
+                    else eOk = eBad = -1;                  // section absente
+
+                    if (sOk == -1 && wOk == -1 && eOk == -1)
                     {
                         res.LogLines.Add("langue « " + langKey + " » sans aucune section — ignorée.");
                         continue;
                     }
-                    if (sOk == 0 && wOk == 0)
+                    if (sOk == 0 && wOk == 0 && eOk == 0)
                     {
                         res.LogLines.Add("langue « " + langKey + " » sans clés exploitables — ignorée.");
                         continue;
@@ -553,13 +622,16 @@ namespace LLM_AI
                     summary.Add(langKey
                         + ": server " + SectionCount(sOk) + "/" + expectedServer
                         + " (sautées " + SectionCount(sBad) + ") ; web "
-                        + SectionCount(wOk) + " (sautées " + SectionCount(wBad) + ")");
+                        + SectionCount(wOk) + " (sautées " + SectionCount(wBad) + ")"
+                        + (eOk == -1 ? "" : " ; ext " + eOk + "/" + expectedExt
+                            + " (sautées " + SectionCount(eBad) + ")"));
 
                     // Signal si la même langue réapparaît (ex. "es-ES" puis
                     // "es" normalisés ensemble) : fusion en cours, dernier
                     // gagne par clé — bénin, mais lisible dans le log.
                     if ((sOk > 0 && server.ContainsKey(langKey) && server[langKey].Count > sOk)
-                        || (wOk > 0 && web.ContainsKey(langKey) && web[langKey].Count > wOk))
+                        || (wOk > 0 && web.ContainsKey(langKey) && web[langKey].Count > wOk)
+                        || (eOk > 0 && ext.ContainsKey(langKey) && ext[langKey].Count > eOk))
                         res.LogLines.Add("langue « " + langKey + " » présente plusieurs fois — valeurs fusionnées, dernier gagne.");
                 }
 
@@ -569,7 +641,7 @@ namespace LLM_AI
                     return res;
                 }
                 res.Snap = new Snapshot(
-                    FreezeNonEmpty(server), FreezeNonEmpty(web),
+                    FreezeNonEmpty(server), FreezeNonEmpty(web), FreezeNonEmpty(ext),
                     DateTimeOffset.UtcNow,
                     "chargé (" + Path.GetFileName(path) + ") — "
                         + string.Join(" ; ", summary));

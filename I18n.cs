@@ -355,6 +355,31 @@ namespace LLM_AI
         internal static IReadOnlyDictionary<string, string> EnServerDict
             => s_res.TryGetValue(En, out var en) ? en : null;
 
+        // ------------------------------------------------------------------
+        //  Accès à la base EN de la famille ext (validation overlay + ?base)
+        // ------------------------------------------------------------------
+
+        /// <summary>Chaîne EN native de la famille ext (s_ext["en"]) —
+        /// référence de la validation {n}-seule de la section "ext" de
+        /// l'overlay. False si la clé ne fait pas partie du dictionnaire
+        /// (→ sautée, log « clé inconnue »).</summary>
+        internal static bool TryEnExtString(string key, out string value)
+        {
+            value = null;
+            return s_ext.TryGetValue(En, out var en) && en.TryGetValue(key, out value);
+        }
+
+        /// <summary>Nombre de clés ext EN natives (dénominateur des logs —
+        /// 33 clés au 2026-10-03 : 26 ext.* + 7 srv.*).</summary>
+        internal static int EnExtKeyCount
+            => s_ext.TryGetValue(En, out var en) ? en.Count : 0;
+
+        /// <summary>Dictionnaire ext EN natif COMPLET (v1.16.0 P2b — la
+        /// section « ext » du « ?base » + pivot du « ?missing »). Lecture
+        /// seule par convention : jamais mutée après l'init.</summary>
+        internal static IReadOnlyDictionary<string, string> EnExtDict
+            => s_ext.TryGetValue(En, out var en) ? en : null;
+
         /// <summary>
         /// Libellé localisé <paramref name="key"/> dans la langue d'affichage
         /// résolue depuis <paramref name="host"/> — raccourci monolithe pour
@@ -760,6 +785,59 @@ namespace LLM_AI
                     ["tonight.err.noreco"] = "The LLM run produced no recommendation.",
                     ["tonight.err.noitems"] = "All recommendations pointed to items that could not be found (expired EPG or deleted items).",
                     ["task.category"] = "LLM AI",
+                },
+            };
+
+        // --- ressources EN de la famille "ext" (chat externe) -------------
+        //
+        // Natives EN SEULE (pas de FR ici) : le repli FR vit dans
+        // chat_external.py (littéraux embarqués de la page et messages
+        // serveur), pivot EN déclaré ici pour le « ?base » des traducteurs
+        // (même pattern de maintenance que i18n.js + I18n.cs). Les clés
+        // ext.* = chrome de la page ; srv.* = messages JSON produits par le
+        // serveur Python. Chaînes = TEXTE BRUT (textContent / str.format —
+        // pas de HTML : seules les règles {0} s'appliquent à la validation).
+
+        private static readonly Dictionary<string, Dictionary<string, string>> s_ext =
+            new(StringComparer.Ordinal)
+            {
+                ["en"] = new(StringComparer.Ordinal)
+                {
+                    // --- chrome de la page (ext.*) ---
+                    ["ext.title"] = "Emby Chat",
+                    ["ext.login.user.ph"] = "Emby username",
+                    ["ext.login.pwd.ph"] = "Emby password",
+                    ["ext.login.submit"] = "Sign in",
+                    ["ext.autotts.title"] = "Auto-read replies",
+                    ["ext.autotts.label"] = "🔊 Auto",
+                    ["ext.new"] = "➕ New",
+                    ["ext.quit"] = "Exit",
+                    ["ext.msg.ph"] = "Your message…",
+                    ["ext.mic.title"] = "Voice input",
+                    ["ext.send"] = "Send",
+                    ["ext.weblink"] = "↗ web page",
+                    ["ext.speak.title"] = "Read aloud",
+                    ["ext.err.required"] = "Username and password required.",
+                    ["ext.err.connrefused"] = "Sign-in rejected.",
+                    ["ext.hello"] = "Hello {0}! Ask me about your media library, what's on tonight, or request a suggestion. 🎬",
+                    ["ext.newsession"] = "New conversation. How can I help? 🎬",
+                    ["ext.reply.empty"] = "(empty reply)",
+                    ["ext.err.srvdown"] = "Server unreachable.",
+                    ["ext.tts.none"] = "⚠️ Nothing to read in this reply.",
+                    ["ext.tts.auto.on"] = "🔊 Auto-read enabled.",
+                    ["ext.tts.auto.off"] = "Auto-read disabled.",
+                    ["ext.show.ok"] = "📺 Now playing on \"{0}\" ({1})",
+                    ["ext.mic.denied"] = "🎤 Microphone denied — allow it in the address bar.",
+                    ["ext.mic.fail"] = "🎤 Voice input unavailable ({0}).",
+                    ["ext.mic.https"] = "🎤 Voice input unavailable here (HTTPS required for the mic).",
+                    // --- messages serveur Python (srv.*) ---
+                    ["srv.err.badrequest"] = "Invalid request.",
+                    ["srv.err.creds"] = "Username and password required.",
+                    ["srv.err.auth"] = "Sign-in rejected (invalid Emby credentials).",
+                    ["srv.err.empty"] = "Empty message.",
+                    ["srv.err.toolong"] = "Message too long ({0} characters maximum).",
+                    ["srv.err.embydown"] = "Emby unreachable ({0}).",
+                    ["srv.err.noitem"] = "Missing item.",
                 },
             };
 

@@ -37,6 +37,12 @@ namespace LLM_AI
     ///   la déclare pas — cf. validé live 2026-09-13 sur « Emby for
     ///   Android » : route REST <c>POST /Sessions/{Id}/Command</c>, le
     ///   plugin, lui, passe par <c>ISessionManager.SendGeneralCommand</c>).</item>
+    /// <item><c>GET /Plugins/LLMAI/I18nExt</c> (v1.16.0, plan P2b) — chaînes
+    ///   de la section « ext » de l'overlay communautaire pour la langue
+    ///   résolue (cascade UICulture) + méta <c>_lang</c> : traduction du
+    ///   chrome de la page <c>ext.*</c> et des messages serveur Python
+    ///   <c>srv.*</c>. Même gate (loopback sans XFF + secret) SANS la liste
+    ///   d'usagers — cf. handler Get(I18nExtRequest).</item>
     /// </list>
     /// Sécurité (design validé 2026-09-13) :
     /// <list type="bullet">
@@ -312,6 +318,27 @@ namespace LLM_AI
             public string Device { get; set; }
             public string Command { get; set; }
             public string Error { get; set; }
+        }
+
+        /// <summary>
+        /// Requête GET <c>/Plugins/LLMAI/I18nExt</c> (v1.16.0, plan P2b) :
+        /// traductions communautaires de l'écosystème chat externe (chrome
+        /// <c>ext.*</c> de la page + messages <c>srv.*</c> du serveur Python),
+        /// section « ext » de LLM_AI_i18n.json. Appelée par
+        /// <c>chat_external.py</c> (PAS de token Emby — même modèle que Chat
+        /// Externe : [Unauthenticated] + gate loopback/secret), elle sert la
+        /// section pour la langue résolue (cascade UICulture) + méta
+        /// « _lang ». Réponse jamais mise en cache : Cache-Control no-store
+        /// posé sur la réponse (le force-refresh sert du frais au GET).
+        /// </summary>
+        [Route("/Plugins/LLMAI/I18nExt", "GET")]
+        [Unauthenticated]
+        public class I18nExtRequest : IReturn<object>
+        {
+            /// <summary>Jeton secret partagé (config <c>ExternalChatSecret</c>) —
+            /// comparé à temps constant ; la liste des usagers ne s'applique PAS
+            /// ici (l'i18n ne révèle rien d'usager-spécifique).</summary>
+            public string Token { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -666,6 +693,59 @@ namespace LLM_AI
                 Device = session.DeviceName,
                 Command = command
             };
+        }
+
+        // ------------------------------------------------------------------
+        //  Handler — i18n du chat externe (v1.16.0, plan P2b)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Sert la section « ext » de l'overlay pour la langue résolue
+        /// (cascade UICulture) + méta <c>_lang</c>. Gate = la MÊME que Chat
+        /// Externe (loopback sans X-Forwarded-For, secret à temps constant)
+        /// SANS la liste d'usagers (aucune donnée usager-spécifique ici).
+        /// Le consommateur (<c>chat_external.py</c>) encapsule le JSON dans
+        /// <c>window.LLMAI_EXT_I18N = {…}</c> ; la page applique ensuite le
+        /// repli par clé sur ses littéraux FR embarqués (fail-open : seul
+        /// <c>_lang</c> si l'overlay ne porte pas d'ext pour la langue
+        /// résolue — jamais d'échec dur).
+        /// </summary>
+        public object Get(I18nExtRequest req)
+        {
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return NoStore(new Dictionary<string, object>(StringComparer.Ordinal)
+                    { ["Error"] = I18n.S("err.noconfig", lang) });
+
+            string gateError = GateError(cfg, req?.Token, lang);
+            if (gateError != null)
+                return NoStore(new Dictionary<string, object>(StringComparer.Ordinal)
+                    { ["Error"] = gateError });
+
+            var snap = I18nOverlay.TryRefresh();
+            var payload = new Dictionary<string, object>(StringComparer.Ordinal);
+            if (snap?.Ext != null && snap.Ext.TryGetValue(lang, out var dict) && dict != null)
+            {
+                foreach (var kv in dict) payload[kv.Key] = kv.Value;
+            }
+            payload["_lang"] = lang;
+            Logger.Info("[LLM_AI] [CHAT-EXT] GET /I18nExt — langue « {0} », {1} chaînes ext servies.",
+                lang, payload.Count - 1);
+            return NoStore(payload);
+        }
+
+        /// <summary>Réponse avec <c>Cache-Control: no-store</c> (les chaînes
+        /// servent le rendu immédiat d'une page hors Emby ; aucune
+        /// intermédiaire ne doit les garder — le force-refresh du loader sert
+        /// du frais au GET). Fabriquée par l'usine hôte
+        /// (<see cref="BaseApiService.ResultFactory"/>, pattern du contrôleur
+        /// Emby — l'app compagne annonce Accept: application/json, la
+        /// négociation sérialise le DTO en JSON).</summary>
+        private object NoStore(object payload)
+        {
+            return ResultFactory.GetResult(Request, payload,
+                new Dictionary<string, string> { { "Cache-Control", "no-store" } });
         }
 
         // ------------------------------------------------------------------
