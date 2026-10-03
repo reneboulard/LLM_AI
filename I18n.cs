@@ -296,16 +296,57 @@ namespace LLM_AI
         /// substituants ({0}, {1}…) sont renvoyés tels quels — l'appelant applique
         /// <c>string.Format</c>.
         /// </summary>
+        /// <remarks>
+        /// <para><b>Chaîne de rendu (v1.16.0, overlay communautaires)</b> :
+        /// overlay du fichier <c>LLM_AI_i18n.json</c> pour <paramref name="langKey"/>
+        /// → natif <paramref name="langKey"/> → overlay « en » (le fichier peut
+        /// patcher le repli EN — feature documentée) → natif EN → clé brute.
+        /// Sans le fichier, l'overlay est inactif et la chaîne native reste
+        /// strictement identique (invariant : le chargeur est invisible sans
+        /// donnée). Le re-scan du fichier est throttlé 30 s (piggyback —
+        /// voir <see cref="I18nOverlay"/>) ; zéro call-site touché par
+        /// l'ajout de l'étage.</para>
+        /// <para>Le repli EN reste <b>per clé, au lookup</b> (décision
+        /// 2026-10-03) — pas de matérialisation dans un fichier : une
+        /// traduction partielle est un état de release légitime (Emby livre
+        /// pire : clés fr-CA 16 % anglaises).</para>
+        /// </remarks>
         internal static string S(string key, string langKey)
         {
+            // Étage overlay : la donnée prime sur le natif (patch fr/en supporté).
+            if (!string.IsNullOrEmpty(langKey)
+                && I18nOverlay.TryLookup(langKey, key, out var ov))
+                return ov;
             if (!string.IsNullOrEmpty(langKey)
                 && s_res.TryGetValue(langKey, out var dict)
                 && dict.TryGetValue(key, out var v))
                 return v;
+            // Repli EN : l'overlay peut patcher « en » avant le natif.
+            if (I18nOverlay.TryLookup(En, key, out ov))
+                return ov;
             if (s_res.TryGetValue(En, out var en) && en.TryGetValue(key, out var ev))
                 return ev;
             return key;
         }
+
+        // ------------------------------------------------------------------
+        //  Accès de l'overlay à la base EN native (validation v1.16.0)
+        // ------------------------------------------------------------------
+
+        /// <summary>Chaîne EN native du dictionnaire serveur (s_res["en"]) —
+        /// référence de la validation par clé de l'overlay (règles 4-5 du
+        /// kit : placeholders + balises HTML). False si la clé ne fait pas
+        /// partie du dictionnaire (→ sautée, log « clé inconnue »).</summary>
+        internal static bool TryEnServerString(string key, out string value)
+        {
+            value = null;
+            return s_res.TryGetValue(En, out var en) && en.TryGetValue(key, out value);
+        }
+
+        /// <summary>Nombre de clés du dictionnaire serveur EN natif — le dénominateur
+        /// « attendu » des lignes de log de l'overlay (≈136 clés au 2026-10-02).</summary>
+        internal static int EnServerKeyCount
+            => s_res.TryGetValue(En, out var en) ? en.Count : 0;
 
         /// <summary>
         /// Libellé localisé <paramref name="key"/> dans la langue d'affichage

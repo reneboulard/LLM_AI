@@ -55,6 +55,10 @@ namespace LLM_AI
             // Le moniteur de sécurité logge [LLM_AI][SEC] via ce logger (posé
             // une fois — idempotent, premier non null gagne).
             SecurityMonitor.SetLogger(logger);
+            // Le chargeur d'overlay i18n (v1.16.0) logge [LLM_AI] I18n overlay
+            // via ce logger (même pattern — les lignes pré-enregistrement sont
+            // mises en tampon et vidées ici).
+            I18nOverlay.SetLogger(logger);
         }
 
         /// <summary>

@@ -17,6 +17,15 @@
     <FileVersion>1.15.0.5</FileVersion>
   </PropertyGroup>
 
+  <!-- Kit de tradution local (gitignored i18n-kit/) : ses .cs sont des
+       harnais à top-level statements (exécutables autonomes), pas des
+       sources du plugin — exclus du Compile (gitignore n'exclut pas du
+       build; le ramassage implicite **/*.cs les captait sinon). -->
+  <ItemGroup>
+    <Compile Remove="i18n-kit/**" />
+    <None Remove="i18n-kit/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="MediaBrowser.Model">
       <HintPath>libs/MediaBrowser.Model.dll</HintPath>
