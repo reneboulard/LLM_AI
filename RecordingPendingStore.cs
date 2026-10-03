@@ -248,9 +248,7 @@ namespace LLM_AI
                     }
                     error = string.Format(CultureInfo.CurrentUICulture,
                         I18n.S("rec.notice.wrong", langKey), p.FailedAttempts, MaxFailedAttempts)
-                        + " " + (langKey == I18n.Fr
-                            ? "Demandez-le à l'usager ; ne devinez, n'inventez et ne réessayez pas d'autres codes."
-                            : "Ask the user for it; never guess, invent or try other codes.");
+                        + " " + I18n.S("rec.notice.wrong.hint", langKey);
                     SetNoticeLocked(user, string.Format(CultureInfo.CurrentUICulture,
                         I18n.S("rec.notice.wrong", langKey), p.FailedAttempts, MaxFailedAttempts));
                     return false;

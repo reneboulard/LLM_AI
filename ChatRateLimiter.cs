@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 
 namespace LLM_AI
@@ -29,6 +30,15 @@ namespace LLM_AI
     /// foyer), le pattern test-puis-écrit sous lock est celui de
     /// <see cref="ActivateFeedback"/> (simple et race-free).
     /// </summary>
+    /// <remarks>
+    /// <para><b>Langue des messages (v1.16.0 P1.5)</b> : les messages usager
+    /// retournés dans <c>error</c> passent par <see cref="I18n.S"/> (clés
+    /// <c>chatext.rate.*</c>, repli EN par clé) selon le
+    /// <paramref name="langKey"/> optionnel du bucket interface ; sans
+    /// <c>langKey</c>, FR natif (comportement historique). Les notes
+    /// <c>SecurityMonitor</c> restent composées en FR VOLONTAIREMENT — les
+    /// lignes de log du serveur ne suivent pas la langue d'affichage.</para>
+    /// </remarks>
     public static class ChatRateLimiter
     {
         /// <summary>Plafond anti-rafale de la projection Show (par usager,
@@ -76,13 +86,17 @@ namespace LLM_AI
         /// n'est pas compté. <paramref name="maxPerMinute"/> et
         /// <paramref name="maxPerDay"/> &lt;= 0 = fenêtre illimitée.
         /// </summary>
+        /// <param name="langKey">Clé de langue optionnelle (bucket interface,
+        /// v1.16.0 P1.5) pour le message usager retourné dans
+        /// <paramref name="error"/> — les notes SecurityMonitor restent FR.
+        /// Null/ vide = FR natif (comportement historique).</param>
         public static bool TryConsumeTurn(string user, int maxPerMinute, int maxPerDay,
-            out string error)
+            out string error, string langKey = null)
         {
             error = null;
             if (string.IsNullOrWhiteSpace(user))
             {
-                error = "Usager invalide.";
+                error = Msg("chatext.rate.invaliduser", langKey);
                 return false;
             }
             var now = DateTimeOffset.UtcNow;
@@ -105,16 +119,16 @@ namespace LLM_AI
                     // minute sorte de la fenêtre (les tours plus récents
                     // sortiront après lui).
                     int wait = SecondsUntilFree(window, minuteCutoff, MinuteSeconds, now);
-                    error = "Trop de messages — patientez " + Math.Max(1, wait)
-                            + " s (limite : " + maxPerMinute + " par minute).";
-                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
+                    error = Msg("chatext.rate.turn", langKey, Math.Max(1, wait), maxPerMinute);
+                    SecurityMonitor.Record("CHAT_REFUSE",
+                        user + " — " + Msg("chatext.rate.turn", I18n.Fr, Math.Max(1, wait), maxPerMinute));
                     return false;
                 }
                 if (!unlimitedDay && lastDay >= maxPerDay)
                 {
-                    error = "Quota du jour atteint (" + lastDay + " messages) — "
-                            + "réessayez plus tard.";
-                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
+                    error = Msg("chatext.rate.quota", langKey, lastDay);
+                    SecurityMonitor.Record("CHAT_REFUSE",
+                        user + " — " + Msg("chatext.rate.quota", I18n.Fr, lastDay));
                     return false;
                 }
 
@@ -152,22 +166,24 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>Fenêtre glissante fixe (30/min/usager) pour la projection.</summary>
-        public static bool TryConsumeShow(string user, out string error)
+        /// <param name="langKey">Clé de langue du bucket interface pour le
+        /// message usager (v1.16.0 P1.5) — notes SecurityMonitor en FR.
+        /// Null/ vide = FR natif.</param>
+        public static bool TryConsumeShow(string user, out string error, string langKey = null)
         {
-            return TryConsumeWindow(s_shows, user, MaxShowPerMinute,
-                "Trop de demandes de projection — patientez {0} s.", out error);
+            return TryConsumeWindow(s_shows, user, MaxShowPerMinute, langKey, out error);
         }
 
         /// <summary>Fenêtre glissante unique à plafond fixe (pattern commun
         /// de TryConsumeTurn/TryConsumeShow pour l'attente calculée).
         /// <paramref name="store"/> isole la fenêtre (tours ≠ projections).</summary>
         private static bool TryConsumeWindow(ConcurrentDictionary<string, List<long>> store,
-            string user, int max, string errorFormat, out string error)
+            string user, int max, string langKey, out string error)
         {
             error = null;
             if (string.IsNullOrWhiteSpace(user))
             {
-                error = "Usager invalide.";
+                error = Msg("chatext.rate.invaliduser", langKey);
                 return false;
             }
             var now = DateTimeOffset.UtcNow;
@@ -182,15 +198,23 @@ namespace LLM_AI
                 if (cnt >= max)
                 {
                     int wait = SecondsUntilFree(window, cutoff, MinuteSeconds, now);
-                    error = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                        errorFormat, Math.Max(1, wait));
-                    SecurityMonitor.Record("CHAT_REFUSE", user + " — " + error);
+                    error = Msg("chatext.rate.show", langKey, Math.Max(1, wait));
+                    SecurityMonitor.Record("CHAT_REFUSE",
+                        user + " — " + Msg("chatext.rate.show", I18n.Fr, Math.Max(1, wait)));
                     return false;
                 }
                 window.Add(now.UtcTicks);
                 return true;
             }
         }
+
+        /// <summary>Message usager du limiteur, composé depuis la clé
+        /// interface (repli EN par clé — cf. <see cref="I18n.S"/>) ;
+        /// <paramref name="langKey"/> null/vide = FR natif (comportement
+        /// historique). Formatage InvariantCulture pour les substituants
+        /// numériques (convention du dépôt).</summary>
+        private static string Msg(string key, string langKey, params object[] args)
+            => string.Format(CultureInfo.InvariantCulture, I18n.S(key, langKey ?? I18n.Fr), args);
 
         // ------------------------------------------------------------------
         //  Helpers fenêtres

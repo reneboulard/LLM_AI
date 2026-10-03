@@ -348,6 +348,13 @@ namespace LLM_AI
         internal static int EnServerKeyCount
             => s_res.TryGetValue(En, out var en) ? en.Count : 0;
 
+        /// <summary>Dictionnaire serveur EN natif COMPLET (v1.16.0 P2 — la
+        /// moitié serveur du « ?base » translatable + pivot du « ?missing »).
+        /// Lecture seule par convention : la table statique n'est jamais mutée
+        /// après l'init.</summary>
+        internal static IReadOnlyDictionary<string, string> EnServerDict
+            => s_res.TryGetValue(En, out var en) ? en : null;
+
         /// <summary>
         /// Libellé localisé <paramref name="key"/> dans la langue d'affichage
         /// résolue depuis <paramref name="host"/> — raccourci monolithe pour
@@ -430,6 +437,7 @@ namespace LLM_AI
                     ["rec.notice.none"] = "⚠️ Aucun code en attente (ou expiré) — AUCUN enregistrement créé.",
                     ["rec.notice.locked"] = "⚠️ 3 codes erronés — outil verrouillé, AUCUN enregistrement créé.",
                     ["rec.notice.wrong"] = "⚠️ Code incorrect ({0}/{1}) — AUCUN enregistrement créé.",
+                    ["rec.notice.wrong.hint"] = "Demandez-le à l'usager ; ne devinez, n'inventez et ne réessayez pas d'autres codes.",
                     ["rec.pending.none"] = "Aucun enregistrement en attente (ou code expiré) — demandez-le de nouveau.",
                     ["rec.quota"] = "Limite de {0} enregistrement(s) par jour atteinte pour cet usager.",
                     ["rec.quota.notice"] = "⚠️ Quota du jour atteint — AUCUN enregistrement créé.",
@@ -449,6 +457,20 @@ namespace LLM_AI
                     ["err.noconfig"] = "Configuration du plugin indisponible.",
                     ["err.emptymsg"] = "Message vide.",
                     ["err.chatext.disabled"] = "Chat externe désactivé.",
+                    ["err.chatext.user"] = "Usager non autorisé pour le chat externe.",
+                    ["err.chatext.toolong"] = "Message trop long ({0} caractères maximum).",
+                    ["err.chatext.turnbusy"] = "Une réponse est déjà en cours pour cet usager — patientez un instant.",
+                    ["err.chatext.notfound"] = "Item introuvable.",
+                    ["err.chatext.parental"] = "Cet item n'est pas autorisé pour cet usager.",
+                    ["err.chatext.nosession"] = "Aucune session Emby active pour cet usager (ouvrir l'app Emby sur l'appareil).",
+                    ["err.chatext.cmdfail"] = "Commande non livrée au client : {0}",
+                    ["err.chatext.gateorigin"] = "Requête non locale rejetée.",
+                    ["err.chatext.gatetoken"] = "Jeton invalide.",
+                    ["chatext.rate.invaliduser"] = "Usager invalide.",
+                    ["chatext.rate.turn"] = "Trop de messages — patientez {0} s (limite : {1} par minute).",
+                    ["chatext.rate.quota"] = "Quota du jour atteint ({0} messages) — réessayez plus tard.",
+                    ["chatext.rate.show"] = "Trop de demandes de projection — patientez {0} s.",
+                    ["err.i18n.badlang"] = "Langue non reconnue : « {0} ».",
                     ["err.llmtimeout"] = "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez.",
                     ["err.chatfail"] = "Échec du chat : ",
                     ["err.chatnobackend"] = "Aucun backend LLM configuré/activé — impossible de discuter.",
@@ -601,6 +623,7 @@ namespace LLM_AI
                     ["rec.notice.none"] = "⚠️ No pending code (or expired) — NO recording created.",
                     ["rec.notice.locked"] = "⚠️ 3 wrong codes — tool locked, NO recording created.",
                     ["rec.notice.wrong"] = "⚠️ Wrong code ({0}/{1}) — NO recording created.",
+                    ["rec.notice.wrong.hint"] = "Ask the user for it; never guess, invent or try other codes.",
                     ["rec.pending.none"] = "No recording awaiting confirmation (or code expired) — ask for it again.",
                     ["rec.quota"] = "Per-day limit of {0} recording(s) reached for this user.",
                     ["rec.quota.notice"] = "⚠️ Daily quota reached — NO recording created.",
@@ -620,6 +643,20 @@ namespace LLM_AI
                     ["err.noconfig"] = "Plugin configuration unavailable.",
                     ["err.emptymsg"] = "Empty message.",
                     ["err.chatext.disabled"] = "External chat disabled.",
+                    ["err.chatext.user"] = "User not authorized for the external chat.",
+                    ["err.chatext.toolong"] = "Message too long ({0} characters maximum).",
+                    ["err.chatext.turnbusy"] = "A reply is already in progress for this user — wait a moment.",
+                    ["err.chatext.notfound"] = "Item not found.",
+                    ["err.chatext.parental"] = "This item is not allowed for this user.",
+                    ["err.chatext.nosession"] = "No active Emby session for this user (open the Emby app on the device).",
+                    ["err.chatext.cmdfail"] = "Command not delivered to the client: {0}",
+                    ["err.chatext.gateorigin"] = "Non-local request rejected.",
+                    ["err.chatext.gatetoken"] = "Invalid token.",
+                    ["chatext.rate.invaliduser"] = "Invalid user.",
+                    ["chatext.rate.turn"] = "Too many messages — wait {0} s (limit: {1} per minute).",
+                    ["chatext.rate.quota"] = "Daily quota reached ({0} messages) — try again later.",
+                    ["chatext.rate.show"] = "Too many projection requests — wait {0} s.",
+                    ["err.i18n.badlang"] = "Unrecognized language: \"{0}\".",
                     ["err.llmtimeout"] = "The LLM did not respond in time (timeout exceeded). Try again.",
                     ["err.chatfail"] = "Chat failed: ",
                     ["err.chatnobackend"] = "No LLM backend configured/enabled — chat is unavailable.",

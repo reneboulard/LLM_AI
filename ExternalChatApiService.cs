@@ -332,20 +332,21 @@ namespace LLM_AI
             // Gate commune (origine + secret + usager). Toute erreur est une
             // réponse JSON — jamais de 401/403 ServiceStack (l'app compagnon lit le
             // champ Error, et un scan n'apprend rien du serveur).
-            string gateError = GateError(cfg, req?.Token);
+            string gateError = GateError(cfg, req?.Token, lang);
             if (gateError != null)
                 return new ChatExternalResponse { Enabled = true, Error = gateError };
 
             var user = ResolveAllowedUser(cfg, req?.User);
             if (user == null)
-                return new ChatExternalResponse { Enabled = true, Error = "Usager non autorisé pour le chat externe." };
+                return new ChatExternalResponse { Enabled = true, Error = I18n.S("err.chatext.user", lang) };
 
             string message = (req?.Message ?? string.Empty).Trim();
             if (message.Length == 0)
                 return new ChatExternalResponse { Enabled = true, Error = I18n.S("err.emptymsg", lang) };
             if (message.Length > MaxMessageChars)
                 return new ChatExternalResponse { Enabled = true, Error =
-                    "Message trop long (" + MaxMessageChars + " caractères maximum)." };
+                    string.Format(CultureInfo.InvariantCulture,
+                        I18n.S("err.chatext.toolong", lang), MaxMessageChars) };
 
             // Anti-spam (v1.13.21.2) : fenêtres glissantes PAR USAGER RÉSOLU
             // (pas d'IP : tout arrive du loopback de l'app compagnon), puis
@@ -353,7 +354,7 @@ namespace LLM_AI
             // compté ; le compteur est en mémoire (reset au restart Emby).
             if (!ChatRateLimiter.TryConsumeTurn(user.Name,
                     cfg.ExternalChatMaxPerMinute, cfg.ExternalChatMaxPerDay,
-                    out string rateError))
+                    out string rateError, lang))
             {
                 Logger.Info("[LLM_AI] [CHAT-EXT] Tour refusé (rate limit) — usager {0} : {1}",
                     user.Name, rateError);
@@ -364,7 +365,7 @@ namespace LLM_AI
                 Logger.Info("[LLM_AI] [CHAT-EXT] Tour refusé (réponse en cours) — usager {0}.",
                     user.Name);
                 return new ChatExternalResponse { Enabled = true, Error =
-                    "Une réponse est déjà en cours pour cet usager — patientez un instant." };
+                    I18n.S("err.chatext.turnbusy", lang) };
             }
 
             string userId = user.Id.ToString();
@@ -464,7 +465,7 @@ namespace LLM_AI
                 Logger.Info("[LLM_AI] [CHAT-EXT] Requête annulée (délai backend LLM) — usager {0}.",
                     user.Name);
                 return new ChatExternalResponse { Enabled = true, Error =
-                    "Le LLM n'a pas répondu à temps (délai dépassé). Réessayez." };
+                    I18n.S("err.llmtimeout", lang) };
             }
             catch (OperationCanceledException)
             {
@@ -564,18 +565,18 @@ namespace LLM_AI
             if (!cfg.ExternalChatEnabled)
                 return new ExternalShowResponse { Error = I18n.S("err.chatext.disabled", lang) };
 
-            string gateError = GateError(cfg, req?.Token);
+            string gateError = GateError(cfg, req?.Token, lang);
             if (gateError != null)
                 return new ExternalShowResponse { Error = gateError };
 
             var user = ResolveAllowedUser(cfg, req?.User);
             if (user == null)
-                return new ExternalShowResponse { Error = "Usager non autorisé pour le chat externe." };
+                return new ExternalShowResponse { Error = I18n.S("err.chatext.user", lang) };
 
             // Anti-rafale de la projection (v1.13.21.2) : fenêtre glissante
             // fixe généreuse (30/min/usager) — la projection ne coûte pas de
             // LLM, on ne vise que l'abus du client.
-            if (!ChatRateLimiter.TryConsumeShow(user.Name, out string showRateError))
+            if (!ChatRateLimiter.TryConsumeShow(user.Name, out string showRateError, lang))
             {
                 Logger.Info("[LLM_AI] [CHAT-EXT] Show refusé (rate limit) — usager {0} : {1}",
                     user.Name, showRateError);
@@ -586,7 +587,7 @@ namespace LLM_AI
             // tolérante commune (ItemIdResolver).
             var item = ItemIdResolver.Resolve(LibraryManager, (req?.ItemId ?? "").Trim());
             if (item == null)
-                return new ExternalShowResponse { Error = "Item introuvable." };
+                return new ExternalShowResponse { Error = I18n.S("err.chatext.notfound", lang) };
 
             // Double porte : la policy parentale de l'usager jugé est la loi
             // — un item refusé n'est projeté nulle part, et la raison n'est
@@ -595,7 +596,7 @@ namespace LLM_AI
             {
                 Logger.Info("[LLM_AI] [CHAT-EXT] Show refusé (parental) — usager {0}, item {1}.",
                     user.Name, item.Name);
-                return new ExternalShowResponse { Error = "Cet item n'est pas autorisé pour cet usager." };
+                return new ExternalShowResponse { Error = I18n.S("err.chatext.parental", lang) };
             }
 
             // Session bornée : la SEULE session ciblable est celle DONT
@@ -610,7 +611,7 @@ namespace LLM_AI
             var session = candidates.FirstOrDefault();
             if (session == null)
                 return new ExternalShowResponse { Error =
-                    "Aucune session Emby active pour cet usager (ouvrir l'app Emby sur l'appareil)." };
+                    I18n.S("err.chatext.nosession", lang) };
 
             string itemIdArg = item.InternalId.ToString();
             bool hasDisplayContent = (session.SupportedCommands ?? Array.Empty<string>())
@@ -650,7 +651,9 @@ namespace LLM_AI
             {
                 Logger.ErrorException("[LLM_AI] [CHAT-EXT] Show : commande non livrée (session {0}, client {1}) : {2}",
                     ex, session.Id, session.DeviceName, ex.Message);
-                return new ExternalShowResponse { Error = "Commande non livrée au client : " + ex.Message };
+                return new ExternalShowResponse { Error = string.Format(
+                    CultureInfo.InvariantCulture,
+                    I18n.S("err.chatext.cmdfail", lang), ex.Message) };
             }
 
             string command = hasDisplayContent ? "DisplayContent" : "DisplayMessage";
@@ -679,7 +682,7 @@ namespace LLM_AI
         /// temps constant (secret vide = fail-closed même opt-in).
         /// Retourne null si la gate passe, sinon le message d'erreur.
         /// </summary>
-        private string GateError(PluginConfiguration cfg, string token)
+        private string GateError(PluginConfiguration cfg, string token, string lang)
         {
             // Origine : loopback uniquement.
             bool local = false;
@@ -694,7 +697,7 @@ namespace LLM_AI
             {
                 Logger.Warn("[LLM_AI] [CHAT-EXT] Requête non locale rejetée (origine : {0}).",
                     SafeRemoteAddress());
-                return "Requête non locale rejetée.";
+                return I18n.S("err.chatext.gateorigin", lang);
             }
 
             // Toute requête passée par un reverse proxy porte un
@@ -706,7 +709,7 @@ namespace LLM_AI
                 if (!string.IsNullOrWhiteSpace(xff))
                 {
                     Logger.Warn("[LLM_AI] [CHAT-EXT] Requête avec X-Forwarded-For rejetée (proxy).");
-                    return "Requête non locale rejetée.";
+                    return I18n.S("err.chatext.gateorigin", lang);
                 }
             }
             catch { /* lecture tolérante */ }
@@ -714,7 +717,7 @@ namespace LLM_AI
             // Secret partagé dédié (à temps constant — pattern Activate).
             if (string.IsNullOrWhiteSpace(cfg.ExternalChatSecret) ||
                 !ConstantTimeEquals(token, cfg.ExternalChatSecret))
-                return "Jeton invalide.";
+                return I18n.S("err.chatext.gatetoken", lang);
 
             return null;
         }
