@@ -697,19 +697,13 @@ namespace LLM_AI
             Dictionary<string, Dictionary<string, string>> curSection,
             Dictionary<(string Sec, string Key), string> results)
         {
-            string path;
-            try { path = I18nOverlay.OverlayPath; }
-            catch { path = null; }
-            if (string.IsNullOrEmpty(path))
-                throw new InvalidOperationException("chemin overlay introuvable");
-
             var overlay = ReadOverlayValues();
-            var root = new JsonObject();
+            var canonical = new Dictionary<string, Dictionary<string, Dictionary<string, string>>>(StringComparer.Ordinal);
 
             void AddLang(string lang)
             {
                 bool isTarget = string.Equals(lang, langKey, StringComparison.Ordinal);
-                var fams = new JsonObject();
+                var fams = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
                 foreach (var sec in new[] { "web", "server", "ext" })
                 {
                     Dictionary<string, string> dict = null;
@@ -727,18 +721,69 @@ namespace LLM_AI
                         overlay.TryGetValue(lang, out var of);
                         of?.TryGetValue(sec, out dict);
                     }
-                    if (dict == null || dict.Count == 0) continue;
-                    var jo = new JsonObject();
-                    foreach (var kv in dict) jo[kv.Key] = kv.Value;
-                    fams[sec] = jo;
+                    if (dict != null && dict.Count > 0) fams[sec] = dict;
                 }
-                if (fams.Count() > 0) root[lang] = fams;
+                if (fams.Count > 0) canonical[lang] = fams;
             }
 
             AddLang(langKey);                       // la langue générée en tête
             foreach (var lang in overlay.Keys)
                 if (!string.Equals(lang, langKey, StringComparison.Ordinal))
                     AddLang(lang);
+
+            return WriteOverlayFile(canonical);
+        }
+
+        /// <summary>Écriture D'UNE CLÉ (revue chat T1d — décision « clé unique
+        /// directe ») : la valeur validée par l'appelant remplace (ou ajoute)
+        /// exactement une entrée ; TOUT le reste du fichier est préservé à
+        /// l'IDENTIQUE (les correctifs admin sont intouchables, contrairement
+        /// au mode full ci-dessus qui reconstruit la section cible). Langue
+        /// inconnue du fichier → insérée en fin (ReadOverlayValues a déjà
+        /// normalisé les codes de tête). Atomique + .bak + re-scan forcé via
+        /// <see cref="WriteOverlayFile"/>. Ne valide PAS : les tools i18n
+        /// valident AVANT (le mode manuel reste maître du contenu).</summary>
+        internal static void WriteOverlayKey(string langKey, string sec, string key, string value)
+        {
+            var overlay = ReadOverlayValues();
+            if (!overlay.TryGetValue(langKey, out var fams)
+                || fams == null)
+                overlay[langKey] = fams = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+            if (!fams.TryGetValue(sec, out var dict) || dict == null)
+                fams[sec] = dict = new Dictionary<string, string>(StringComparer.Ordinal);
+            dict[key] = value;
+            WriteOverlayFile(overlay);
+        }
+
+        /// <summary>SÉRIALISATION + écriture atomique communes (batch campagne
+        /// ET édition clé unique — un seul point de write : les deux chemins
+        /// produisent la même forme canonique lang → fams web/server/ext →
+        /// valeurs, . précédent conservé en .bak, tmp+move, re-scan forcé
+        /// (effectif au prochain accès, sans restart). Retourne le chemin
+        /// écrit ; les échecs IO propagent (l'appelant catche et localise).</summary>
+        private static string WriteOverlayFile(
+            Dictionary<string, Dictionary<string, Dictionary<string, string>>> canonical)
+        {
+            string path;
+            try { path = I18nOverlay.OverlayPath; }
+            catch { path = null; }
+            if (string.IsNullOrEmpty(path))
+                throw new InvalidOperationException("chemin overlay introuvable");
+
+            var root = new JsonObject();
+            foreach (var langKv in canonical)
+            {
+                var fams = new JsonObject();
+                foreach (var sec in new[] { "web", "server", "ext" })
+                {
+                    if (!langKv.Value.TryGetValue(sec, out var dict) || dict == null || dict.Count == 0)
+                        continue;
+                    var jo = new JsonObject();
+                    foreach (var kv in dict) jo[kv.Key] = kv.Value;
+                    fams[sec] = jo;
+                }
+                if (fams.Count() > 0) root[langKv.Key] = fams;
+            }
 
             var opts = new System.Text.Json.JsonSerializerOptions
             {
@@ -798,13 +843,7 @@ namespace LLM_AI
         private string Display(string key) => I18n.S(key, DisplayLang(_host));
 
         private string FormatDisplay(string key, params object[] args)
-        {
-            string s = I18n.S(key, DisplayLang(_host));
-            for (int i = 0; i < args.Length; i++)
-                s = s.Replace("{" + i + "}",
-                    Convert.ToString(args[i], CultureInfo.InvariantCulture) ?? "");
-            return s;
-        }
+            => I18n.SFormatDisplay(key, _host, args);
 
         /// <summary>Nom FR de la langue pour la directive (le prompt est
         /// rédigé en français). Inconnu → forme générique.</summary>

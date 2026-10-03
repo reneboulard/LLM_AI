@@ -297,6 +297,21 @@ namespace LLM_AI
                 Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts).");
             }
 
+            // Atelier de langues (v1.17.0 T1d) : revue/correction des langues
+            // générées — i18n_get (lecture complète d'une clé) +
+            // i18n_set_key (écriture unique VALIDÉE, .bak + re-scan). Ajoutés
+            // SEULEMENT si le protocole tool-calling est déjà actif (budget
+            // d'actions ou édition de prompts) : jamais initié pour eux seuls
+            // — le protocole JSON tableau n'est fiable qu'avec les modèles
+            // non-thinking, et un chat sans aucune couche outil n'a aucune
+            // raison d'y entrer (le chat reste réservé aux administrateurs).
+            if (actionTools != null)
+            {
+                actionTools.Add(new I18nGetTool(Logger));
+                actionTools.Add(new I18nSetKeyTool(Logger));
+                Logger.Info("[LLM_AI] [CHAT] Atelier de langues actif (i18n_get, i18n_set_key).");
+            }
+
             string reply;
             try
             {
