@@ -10,6 +10,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.16.0.0] — 2026-10-03
+
+### Added (FR)
+- **Langues d'interface communautaires** : un fichier overlay
+  `LLM_AI_i18n.json` déposé dans le dossier de configuration du plugin ajoute
+  des langues d'interface à toutes les surfaces — pages web (`web`), chaînes
+  serveur (`server`), app compagnon du chat externe (`ext`) — sans rebuild ni
+  redémarrage (relecture throttle mtime). Validation **par clé** (multiset des
+  placeholders `{n}` et des balises HTML vs natives EN ; `ext` en texte brut,
+  règles `{n}` seules), clés invalides/inconnues sautées avec ligne de log,
+  repli natif par clé, patches `fr`/`en` autoritaires. La langue résolue =
+  langue d'affichage du serveur Emby — basculer le tableau de bord bascule
+  tout, pages comme app compagnon.
+- **Endpoints traducteurs** : `GET /Plugins/LLMAI/I18n` — slices de
+  l'overlay, `?base=1` (base EN native générée à chaud, symétrique au
+  chargeur) et `?missing=1&lang=xx` (clés restant à traduire, sortie RAW
+  collable — sert aux nouveautés de version) ; `GET /Plugins/LLMAI/I18nExt` —
+  tranche `ext` de la langue résolue servie à l'app compagnon (gate loopback
+  + secret partagé, `[Unauthenticated]`, `Cache-Control: no-store`, méta
+  `_lang`).
+- **Fusion client de l'overlay** dans les pages plugin (`i18n.js`) : fetch
+  parallèle + validation par clé au merge (miroir exact des règles du
+  chargeur), ajout de langues data-driven (`pickLang`), langue dont toutes
+  les clés sont invalides non rattachée, double init sûre.
+- **App compagnon du chat externe localisée** (`chat-external/chat_external.py`) :
+  fetch `/api/i18n.js` (wrap `window.LLMAI_EXT_I18N`, `no-store`, micro-cache
+  30 s), chrome de page et messages serveur traduits par clé avec repli
+  français embarqué (fail-open), `<html lang>` posé par la méta `_lang` ;
+  langue résolue **côté plugin** (l'app ne décide rien).
+- **Localisation du chat externe côté plugin** : les 14 chaînes visibles des
+  endpoints ChatExternal/Show (usager non autorisé, message trop long, tour
+  occupé, quotas, parental, session, commandes et gates) suivent la langue
+  d'affichage (famille `server`) ; le marqueur du filtre mémoire
+  (`err.chatfail`) reste invariant par langue (le filtre fonctionne dans
+  toutes les langues). Notes internes de sécurité : toujours FR (convention).
+
+### Added (EN)
+- **Community interface languages**: an overlay file `LLM_AI_i18n.json`
+  dropped into the plugin's configuration folder adds interface languages to
+  every surface — web pages (`web`), server strings (`server`), the
+  external-chat companion app (`ext`) — with no rebuild and no restart
+  (mtime-throttled re-read). **Per-key** validation (placeholder `{n}` and
+  HTML-tag multiset vs EN natives; `ext` is plain text, `{n}` rules only),
+  invalid/unknown keys skipped with a log line, per-key native fallback,
+  authoritative `fr`/`en` patches. The resolved language = the Emby server's
+  display language — switching the dashboard switches everything, pages and
+  companion app alike.
+- **Translator endpoints**: `GET /Plugins/LLMAI/I18n` — overlay slices,
+  `?base=1` (EN native base generated hot, symmetrical with the loader) and
+  `?missing=1&lang=xx` (keys still to translate, paste-ready RAW output —
+  also for new-version keys); `GET /Plugins/LLMAI/I18nExt` — the resolved
+  language's `ext` slice served to the companion app (loopback gate + shared
+  secret, `[Unauthenticated]`, `Cache-Control: no-store`, `_lang` meta).
+- **Client-side overlay merge** in the plugin pages (`i18n.js`): parallel
+  fetch + per-key validation at merge (exact mirror of the loader rules),
+  data-driven language additions (`pickLang`), a language whose keys are all
+  invalid is not adopted, double-init safe.
+- **Localized external-chat companion app** (`chat-external/chat_external.py`):
+  fetches `/api/i18n.js` (wrap `window.LLMAI_EXT_I18N`, `no-store`, 30 s
+  micro-cache), page chrome and server messages translated per key with an
+  embedded French fallback (fail-open), `<html lang>` set from the `_lang`
+  meta; language resolved **plugin-side** (the app decides nothing).
+- **External chat localization plugin-side**: the 14 user-visible strings of
+  the ChatExternal/Show endpoints (unauthorized user, message too long, turn
+  busy, quotas, parental, session, commands and gates) follow the display
+  language (`server` family); the memory-filter marker (`err.chatfail`) stays
+  language-invariant (the filter works in every language). Security notes
+  remain French by convention.
+
+---
+
 ## [1.15.0.5] — 2026-10-02
 
 ### Fixed (FR)

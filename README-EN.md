@@ -182,8 +182,9 @@ button, taste signals feeding the same journal, see
 15. [Reflective memory](#reflective-memory)
 16. [HTTP API](#http-api)
 17. [i18n (FR / EN)](#i18n-fr--en)
-18. [Troubleshooting](#troubleshooting)
-19. [Changelog](#changelog)
+18. [Community interface languages](#community-interface-languages)
+19. [Troubleshooting](#troubleshooting)
+20. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -880,6 +881,9 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks and, since v1.15.0.2, the strings shown in the admin chat and the configuration page (cards, details, endpoint errors). |
+| `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (internal static) | **Community overlay** loader (v1.16.0, file `LLM_AI_i18n.json` — mtime-throttled re-read, no restart): `server`/`ext` families validated **per key** (placeholder `{n}` + HTML tag multiset vs EN natives; `ext` = plain text, `{n}` rules only) + the `web` slice served raw (validated client-side at merge); immutable snapshot swapped by reference, authoritative fr/en patches, unknown/invalid keys skipped + logged, load summary. |
+| `I18nApiService.cs` | `I18nApiService : BaseApiService` | i18n endpoints for translators (v1.16.0): `GET /Plugins/LLMAI/I18n` (overlay slices, fail-open), `?base=1` (hot EN native base — web extracted from the embedded i18n.js without eval, server + ext direct), `?missing=1&lang=xx` (diff of keys still to translate, paste-ready RAW output). |
+| `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side). See [Community interface languages](#community-interface-languages). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (internal static) | **Security monitor** (detection, v1.14.0.6): in-process counters (web_fetch/web_search calls, blocked SSRF, malformed/unknown tool calls, LLM backend failures, refused chat turns, deposited/approved/refused actions) + bounded security event journal (200 events). Zero configuration, in-memory (reset on restart); every event is durably logged as `LLM_AI[SEC]` in the Emby log. Never throws. |
@@ -2249,6 +2253,36 @@ curl -H "X-Emby-Token: <token>" \
   "http://localhost:8096/emby/Plugins/LLMAI/Update?Force=1"
 ```
 
+```
+GET /Plugins/LLMAI/I18n[?base=1][?missing=1&lang=<key>]
+```
+
+**i18n** (v1.16.0): without flags — the community overlay's slices for the valid
+languages (`{ fr: {…}, es: {…} }`, fail-open `{}`) **;** `?base=1` — the hot EN
+native base (`{ web: …, server: …, ext: … }`) **;** `?missing=1&lang=es` — the EN
+keys without an es value in the overlay, in paste-ready RAW form. Canonical flag
+form: `?base=1` (a bare parameter is not bound — always write `=1`).
+
+**Response:** JSON object by family and language.
+
+**Authentication:** standard (session token or API key — UI labels only, no
+secrets).
+
+```
+GET /Plugins/LLMAI/I18nExt?Token=<secret>
+```
+
+**Companion-app i18n** (v1.16.0): the resolved language's `ext` slice
+plugin-side (`ext.*` page chrome + `srv.*` Python messages) + the `_lang` meta.
+Dedicated gate (loopback without XFF + shared secret, `[Unauthenticated]` — the
+app has no Emby token), `Cache-Control: no-store`. Failure/gate →
+`{ "Error": … }` without `_lang` (the app falls back to French).
+
+**Response:** `{ "<key>": "<text>", …, "_lang": "es" }`.
+
+**Authentication:** external-chat shared secret (`Token` parameter), loopback
+calls only.
+
 ---
 
 ## i18n (FR / EN)
@@ -2276,6 +2310,87 @@ human name for the LLM translation target). Data-driven extensibility: add an `I
 entry (languages without a dictionary fall back to English for short labels; the TMDB
 overview and LLM prose stay in the user's language via the TMDB cascade + LLM translation
 as a last resort).
+
+---
+
+## Community interface languages
+
+A **community overlay file** `LLM_AI_i18n.json`, dropped into the plugin's
+configuration folder (the same one as `LLM_AI.xml`), adds **interface
+languages** to every surface — no rebuild, no restart: the loader re-reads
+the file as soon as its content changes.
+
+Three families (sections are optional per language — a language may carry
+only one of them):
+
+- **`web`** — the plugin pages (configuration, recommendations…);
+- **`server`** — the C# server strings: scheduled tasks, admin chat,
+  endpoint errors, the health-audit window, localized external-chat replies;
+- **`ext`** — the external-chat **companion app** ([`chat-external/`](chat-external/)):
+  its page chrome (`ext.*`) and its Python server messages (`srv.*`).
+
+```json
+{
+  "es": {
+    "web":    { "…": "…EN native keys → es translations…" },
+    "server": { "err.chatext.user": "Usuario no autorizado para el chat externo." },
+    "ext":    { "ext.title": "🤖 Chat de Emby",
+                "ext.hello": "¡Hola {0}! …",
+                "srv.err.badrequest": "Solicitud no válida." }
+  }
+}
+```
+
+**Rules**:
+
+- Key names are always the **EN-native labels** (source of truth); sections
+  are **optional**.
+- **Per-key validation** at load: the multiset of `{0}…{n}` placeholders —
+  and of HTML tags for `web`/`server` — must be **identical** to the EN
+  native text; `ext` = plain text, `{n}` rules only. An invalid or unknown
+  key is **skipped** with a log line — the rest of the language keeps being
+  served; a language with no valid key at all is not adopted.
+- **Per-key fallback**: a missing or skipped key falls back to the native
+  (EN — or the embedded French for the app's page); no missing text, and a
+  whole file is never rejected because of one bad key.
+- **`fr`/`en` patches accepted**: an fr or en section **replaces** native
+  values key by key (local tweaks).
+
+**Language resolution**: the **Emby server display language**
+(dashboard → General) drives everything — switching the dashboard language
+switches the pages, the server strings **and** the companion app in one
+reload (the app resolves the language **plugin-side**; the browser only
+drives the 🎤 voice).
+
+**Endpoints for translators** (standard authentication):
+
+- `GET /Plugins/LLMAI/I18n?base=1` — the complete **EN native base**,
+  generated hot (web + server + ext): the starting point for a language;
+- `GET /Plugins/LLMAI/I18n?missing=1&lang=es` — the **diff of keys still to
+  translate** once your overlay is in place (RAW output, paste-ready); also
+  used for **new keys**: keys added by a newer plugin version are not in
+  your overlay — the diff lists them;
+- `GET /Plugins/LLMAI/I18n` — the slices actually served (natives + your
+  patches);
+- `GET /Plugins/LLMAI/I18nExt?Token=<external chat secret>` — the resolved
+  language's `ext` slice, served to the companion app (loopback gate +
+  shared secret — mostly useful for debugging).
+
+**LLM-assisted translation**: feed the EN base (`?base=1`) to your LLM in
+**blocks** (one family or sub-domain at a time — fewer placeholder slips),
+with the instruction: keep every `{0}…{n}` placeholder and HTML tag exactly
+as-is, output pure JSON. Control recipe: `?missing=1` for coverage, reload a
+page and read the load log (skipped keys are listed).
+
+**Staleness**: if an EN native text changes in a future plugin version, an
+overridden value whose placeholders no longer match is **skipped** at
+validation → the key falls back to EN native until re-translated; the load
+log line lists the keys involved.
+
+**Companion app** (details): on page load it fetches `/api/i18n.js`
+(wrapped as `window.LLMAI_EXT_I18N`, `no-store`, 30 s app-side micro-cache);
+unreachable plugin or missing language → per-key French fallback, the app
+stays usable.
 
 ---
 
