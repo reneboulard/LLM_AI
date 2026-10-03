@@ -56,7 +56,11 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>Requête GET <c>/Plugins/LLMAI/I18n</c> : sans paramètre =
-        /// overlay ; <c>?base</c> = base EN ; <c>?missing&lang=…</c> = diff.</summary>
+        /// overlay ; <c>?base=1</c> = base EN native ; <c>?missing=1&amp;lang=…</c> =
+        /// diff. Forme canonique AVEC valeur (constat déploiement 2026-10-03 :
+        /// le binder Emby/ServiceStack ne lie pas un paramètre nu —
+        /// <c>?base</c> sans <c>=</c> retombe sur le payload par défaut ;
+        /// vérifié live). La valeur du drapeau est ignorée.</summary>
         [Route("/Plugins/LLMAI/I18n", "GET")]
         public class I18nRequest : IReturn<object>
         {
