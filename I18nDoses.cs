@@ -30,6 +30,17 @@ namespace LLM_AI
         /// <summary>Seuil de fusion des doses trop petites (kit : &lt; 12).</summary>
         internal const int MinMergeSize = 12;
 
+        /// <summary>Cap des doses « tags » (valeurs dont la native EN porte
+        /// des balises HTML) : plus bas que <see cref="Cap"/> — la classe
+        /// existe pour l'attention ET la représentation (bloc de règles
+        /// balises dans DoseUser), pas pour la compacité. Terrain
+        /// 2026-10-04 : la valeur la plus balisée (cfg.extchat.desc, 10
+        /// balises) a été refusée 2× par gemma4:latest en dose mélangée PUIS
+        /// en réparation avec la raison pourtant affichée — la cause était
+        /// la représentation des balises, pas l'attention ; population
+        /// mesurée 2026-10-04 : 40 clés / 626, toutes web, moy. 416 car.</summary>
+        internal const int TagCap = 15;
+
         /// <summary>Une dose : un domaine sémantique (+ part « _pN »), familles
         /// atomiques, ordre stable (web d'abord, puis server, puis ext).</summary>
         internal sealed class Dose
@@ -39,6 +50,12 @@ namespace LLM_AI
 
             /// <summary>(section, clé) dans l'ordre de collecte.</summary>
             internal readonly List<(string Sec, string Key)> Entries = new();
+
+            /// <summary>Dose « tags » : réservée aux valeurs balisées HTML —
+            /// DoseUser y branche le bloc de règles balises + l'inventaire
+            /// exact par clé (le rappel final y ajoute la contrainte
+            /// multiset).</summary>
+            internal bool Tagged;
 
             internal int Size => Entries.Count;
         }
@@ -69,21 +86,60 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Découpe la liste (section, clé) en doses : 1) familles ; 2) domaines
-        /// ; 3) empaquetage premier-satisfait par domaine (familles triées par
-        /// taille décroissante, bins ≤ cap) ; 4) fusion des doses trop
-        /// petites ; 5) nommage (dom / dom_pN ; doses triées par taille
-        /// décroissante comme au kit). Déterministe : mêmes entrées → mêmes
-        /// doses (les dictionnaires sont parcourus dans l'ordre de déposition).
+        /// Découpe la liste (section, clé) en doses : 0) classe optionnelle
+        /// « tags » — les entrées balisées (décidées par l'APPELANT, via
+        /// <paramref name="tagged"/> : Split n'a pas les natives) partent dans
+        /// des doses dédiées, au niveau ENTRÉE (pas à la famille : une
+        /// famille cfg.X mêle naturellement des clés balisées — les desc
+        /// longues — et nues — les libellés), cap <see cref="TagCap"/>, sans
+        /// fusion MinMergeSize, émises EN TÊTE (les plus fragiles d'abord,
+        /// modèle frais) ; 1) familles ; 2) domaines ; 3) empaquetage
+        /// premier-satisfait par domaine (familles triées par taille
+        /// décroissante, bins ≤ cap) ; 4) fusion des doses trop petites ;
+        /// 5) nommage (dom / dom_pN ; doses triées par taille décroissante
+        /// comme au kit). Déterministe : mêmes entrées → mêmes doses (les
+        /// dictionnaires sont parcourus dans l'ordre de déposition).
         /// </summary>
-        internal static List<Dose> Split(List<(string Sec, string Key)> all)
+        internal static List<Dose> Split(List<(string Sec, string Key)> all,
+            Func<(string, string), bool> tagged = null)
         {
             var doses = new List<Dose>();
             if (all == null || all.Count == 0) return doses;
 
+            // 0) extraction de la classe « tags » (niveau ENTRÉE, ordre de
+            //    collecte conservé) + empaquetage greed ≤ TagCap + nommage
+            //    tags / tags_pN (convention du 5 : pas de _p1 quand une seule).
+            List<(string Sec, string Key)> rest = all;
+            if (tagged != null)
+            {
+                var tagEntries = new List<(string, string)>();
+                rest = new List<(string, string)>();
+                foreach (var e in all)
+                    (tagged(e) ? tagEntries : rest).Add(e);
+                if (tagEntries.Count > 0)
+                {
+                    var tagBins = new List<Dose>();
+                    Dose cur = null;
+                    int taken = TagCap; // force un bin neuf au premier élément
+                    foreach (var e in tagEntries)
+                    {
+                        if (taken >= TagCap)
+                        {
+                            tagBins.Add(cur = new Dose { Tagged = true });
+                            taken = 0;
+                        }
+                        cur.Entries.Add(e);
+                        taken++;
+                    }
+                    for (int i = 0; i < tagBins.Count; i++)
+                        tagBins[i].Name = tagBins.Count > 1 ? "tags_p" + (i + 1) : "tags";
+                    doses.AddRange(tagBins);
+                }
+            }
+
             // 1) familles → entrées (ordre de collecte conservé).
             var fams = new Dictionary<string, List<(string, string)>>(StringComparer.Ordinal);
-            foreach (var e in all)
+            foreach (var e in rest)
             {
                 var f = FamilyOf(e.Item2);
                 if (!fams.TryGetValue(f, out var list))

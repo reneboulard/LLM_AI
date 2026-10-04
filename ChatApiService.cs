@@ -134,6 +134,11 @@ namespace LLM_AI
             /// par les endpoints ChatAction, jamais par le LLM. Null si
             /// aucune.</summary>
             public List<ChatPendingActionInfo> PendingActions { get; set; }
+            /// <summary>Proposition d'écriture i18n en attente d'approbation
+            /// (atelier de langues, two phases v1.17.0.2) — la page rend la
+            /// carte Approuver/Refuser de l'atelier ; l'écriture passe par les
+            /// endpoints I18nKey, jamais par le LLM. Null si aucune.</summary>
+            public PendingI18nInfo PendingI18n { get; set; }
         }
 
         /// <summary>
@@ -169,6 +174,28 @@ namespace LLM_AI
             /// <summary>Avertissement de divergence (null si aucun) : le
             /// nouveau texte recouvre peu le texte courant — la carte de
             /// diff l'affiche en bandeau (v1.13.9).</summary>
+            public string Warning { get; set; }
+        }
+
+        /// <summary>
+        /// Descriptif d'une proposition d'écriture i18n en attente
+        /// d'approbation (atelier de langues, two phases v1.17.0.2) : la page
+        /// rend la carte Avant/Après Approuver/Refuser ; le clic n'envoie QUE
+        /// <see cref="ActionId"/> — clé, langue et valeur restent côté serveur
+        /// (<see cref="ChatI18nStore"/>, expiration 10 min).
+        /// </summary>
+        public class PendingI18nInfo
+        {
+            public string ActionId { get; set; }
+            public string Key { get; set; }
+            public string Lang { get; set; }
+            public string Family { get; set; }
+            /// <summary>Valeur au moment du dépôt (null si première écriture
+            /// de cette langue — la carte l'affiche comme telle).</summary>
+            public string OldValue { get; set; }
+            public string NewValue { get; set; }
+            /// <summary>Avertissements du dépôt (identique-EN, langue native
+            /// de code…) — null si aucun.</summary>
             public string Warning { get; set; }
         }
 
@@ -297,19 +324,26 @@ namespace LLM_AI
                 Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts).");
             }
 
-            // Atelier de langues (v1.17.0 T1d) : revue/correction des langues
-            // générées — i18n_get (lecture complète d'une clé) +
-            // i18n_set_key (écriture unique VALIDÉE, .bak + re-scan). Ajoutés
-            // SEULEMENT si le protocole tool-calling est déjà actif (budget
-            // d'actions ou édition de prompts) : jamais initié pour eux seuls
-            // — le protocole JSON tableau n'est fiable qu'avec les modèles
-            // non-thinking, et un chat sans aucune couche outil n'a aucune
-            // raison d'y entrer (le chat reste réservé aux administrateurs).
-            if (actionTools != null)
+            // Atelier de langues (v1.17.0 T1d ; mode déroulant v1.17.0.2) :
+            // revue/correction des langues générées — i18n_search (recherche
+            // PAR TEXTE), i18n_get (lecture complète) et i18n_set_key
+            // (DÉPÔT deux phases : la carte « Approuver / Refuser » porte
+            // l'écriture, les endpoints I18nKey exécutent en C# déterministe).
+            // Enregistrés quand le protocole tool-calling est déjà actif
+            // (budget/prompts) OU quand le mode « Modification texte UI » est
+            // sélectionné (opt-in explicite du dropdown — protocole initié
+            // POUR lui). Hors mode, i18n_set_key refuse le dépôt avec la
+            // consigne : la modification des chaînes est exclue sans le mode
+            // (décision usager 2026-10-04).
+            bool i18nMode = string.Equals(contextId, ChatContexts.I18nEditModeId, StringComparison.Ordinal);
+            if (actionTools != null || i18nMode)
             {
+                actionTools ??= new List<ILlmTool>();
+                actionTools.Add(new I18nSearchTool(Logger));
                 actionTools.Add(new I18nGetTool(Logger));
-                actionTools.Add(new I18nSetKeyTool(Logger));
-                Logger.Info("[LLM_AI] [CHAT] Atelier de langues actif (i18n_get, i18n_set_key).");
+                actionTools.Add(new I18nSetKeyTool(sessionId, userId, contextId, Logger));
+                Logger.Info("[LLM_AI] [CHAT] Atelier de langues actif{0} (i18n_search, i18n_get, i18n_set_key — dépôt).",
+                    i18nMode ? " en mode « Modification texte UI »" : "");
             }
 
             string reply;
@@ -355,7 +389,8 @@ namespace LLM_AI
             //  une question posée à l'usager). Un set déjà soumis (proposition
             //  en attente) ou une réponse d'échec ne déclenchent pas le filet.
             //  ------------------------------------------------------------------
-            if (contextBlock.Length > 0 && cfg.ChatPromptsEnabled
+            if (contextBlock.Length > 0 && ChatContexts.FieldFor(contextId).Length > 0
+                && cfg.ChatPromptsEnabled
                 && !string.IsNullOrWhiteSpace(reply)
                 && !reply.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal)
                 && ChatPromptStore.PeekPagePending(sessionId) == null
@@ -447,6 +482,24 @@ namespace LLM_AI
                     }).ToList()
                 : null;
 
+            // Proposition i18n déposée pendant le tour (i18n_set_key, deux
+            // phases) : la page rend la carte Approuver/Refuser de l'atelier
+            // de langues — comme pour les cartes de prompt et d'action, la
+            // page ne parse JAMAIS le texte du LLM pour la découvrir.
+            var i18nInfo = (PendingI18nInfo)null;
+            var i18nPending = ChatI18nStore.TakePagePending(sessionId);
+            if (i18nPending != null)
+                i18nInfo = new PendingI18nInfo
+                {
+                    ActionId = i18nPending.ActionId,
+                    Key = i18nPending.Key,
+                    Lang = i18nPending.Lang,
+                    Family = i18nPending.Sec,
+                    OldValue = i18nPending.OldValue,
+                    NewValue = i18nPending.NewValue,
+                    Warning = i18nPending.Warn
+                };
+
             return new ChatResponse
             {
                 Enabled = true,
@@ -455,7 +508,8 @@ namespace LLM_AI
                 Session = savedSession,
                 Actions = turnActions.Count > 0 ? turnActions : null,
                 Pending = pendingInfo,
-                PendingActions = pendingActions
+                PendingActions = pendingActions,
+                PendingI18n = i18nInfo
             };
         }
 
@@ -714,6 +768,120 @@ namespace LLM_AI
 
             ChatPromptStore.Discard(req?.ActionId, Logger);
             return new ChatPromptDecisionResponse { Ok = true };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/I18nKey/Approve</c> — approbation par
+        /// l'admin d'une correction d'overlay i18n déposée par le chat
+        /// (atelier de langues, two phases v1.17.0.2). Le navigateur n'envoie
+        /// QUE <c>ActionId</c> : la clé, la langue et la valeur viennent du
+        /// store serveur (<see cref="ChatI18nStore"/>, expiration 10 min,
+        /// proposition liée à la session ET à l'usager approbateur) —
+        /// anti-détournement. Les gates structurelles sont RE-courues à
+        /// l'exécution contre la native EN fraîche (elle peut avoir changé
+        /// entre le dépôt et le clic), puis écriture déterministe
+        /// (<see cref="I18nGenerator.WriteOverlayKey"/>, .bak + re-scan,
+        /// trace SecurityMonitor) — le LLM n'a aucun rôle dans l'exécution.
+        /// </summary>
+        [Route("/Plugins/LLMAI/I18nKey/Approve", "POST")]
+        public class I18nKeyApproveRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public class I18nKeyDecisionResponse
+        {
+            public bool Ok { get; set; }
+            public string Key { get; set; }
+            public string Lang { get; set; }
+            /// <summary>Ce que le serveur SERVIT après re-scan (preuve
+            /// d'effet, affichée sur la carte) — null si erreur.</summary>
+            public string Served { get; set; }
+            public string Error { get; set; }
+        }
+
+        public object Post(I18nKeyApproveRequest req)
+        {
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new I18nKeyDecisionResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return new I18nKeyDecisionResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
+
+            var action = ChatI18nStore.Consume(req?.ActionId, RequestSessionHint(),
+                admin.Id.ToString(), Logger);
+            if (action == null)
+            {
+                // Branche sinon muette : mismatch session dépôt/clic ou TTL —
+                // même diagnostic que les cartes de prompt et d'action.
+                Logger.Info("[LLM_AI] Chat i18n Approve : pending introuvable/expiré " +
+                    "(action_id={0}, session={1}, usager={2}).",
+                    req?.ActionId, RequestSessionHint(), admin.Name);
+                return new I18nKeyDecisionResponse { Error =
+                    I18n.SDisplay("err.pending.expired.save", ApplicationHost) };
+            }
+
+            // Gates RE-courues à l'exécution (jamais confiance au payload
+            // déposé en dernier ressort) : la clé doit toujours exister dans
+            // les natives avec la MÊME famille, et la valeur passer la
+            // validation structurelle (la native EN peut avoir changé entre
+            // dépôt et approbation).
+            var (sec, en, _) = I18nChatKeys.ResolveNative(action.Key, Logger);
+            if (sec == null || en == null ||
+                !string.Equals(sec, action.Sec, StringComparison.Ordinal) ||
+                (action.NewValue ?? string.Empty).Length == 0 ||
+                (action.NewValue ?? string.Empty).Length > I18nSetKeyTool.MaxValueChars ||
+                I18nDoses.Validate(en, action.NewValue) != I18nDoses.Verdict.Ok)
+            {
+                Logger.Warn("[LLM_AI] Chat i18n Approve : proposition invalide à l'exécution " +
+                    "(action_id={0}, clé={1}) — native ou gates divergentes.", action.ActionId, action.Key);
+                return new I18nKeyDecisionResponse { Error =
+                    I18n.SDisplay("err.proposal.invalid", ApplicationHost) };
+            }
+
+            I18nGenerator.WriteOverlayKey(action.Lang, sec, action.Key, action.NewValue);
+            Logger.Info("[LLM_AI] Chat i18n : clé {0} écrite par approbation de l'admin " +
+                "({1}/{2}, {3} caractères, action_id={4}).",
+                action.Key, action.Lang, sec, action.NewValue.Length, action.ActionId);
+            SecurityMonitor.Record("I18N_CLE_MODIFIEE",
+                action.Lang + "/" + sec + " " + action.Key + " (approbation chat, "
+                + action.NewValue.Length + " caractères)");
+
+            return new I18nKeyDecisionResponse
+            {
+                Ok = true,
+                Key = action.Key,
+                Lang = action.Lang,
+                // Ce que le serveur SERVIT après re-scan : la preuve d'effet,
+                // affichée sur la carte et poussée dans le fil.
+                Served = I18n.S(action.Key, action.Lang) ?? action.NewValue
+            };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/I18nKey/Refuse</c> — retire la proposition
+        /// i18n en attente (la conversation peut continuer, une nouvelle
+        /// proposition créera un nouveau pending). Le refus n'écrit rien.
+        /// </summary>
+        [Route("/Plugins/LLMAI/I18nKey/Refuse", "POST")]
+        public class I18nKeyRefuseRequest : IReturn<object>
+        {
+            public string ActionId { get; set; }
+        }
+
+        public object Post(I18nKeyRefuseRequest req)
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new I18nKeyDecisionResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            ChatI18nStore.Discard(req?.ActionId, Logger);
+            return new I18nKeyDecisionResponse { Ok = true };
         }
 
         // ------------------------------------------------------------------

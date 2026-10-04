@@ -181,7 +181,21 @@ namespace LLM_AI
                 AppendLine(noop, "- " + Display("i18n.gen.nokeys"));
                 return (true, null, noop.ToString());
             }
-            var doses = I18nDoses.Split(targets);
+            // Terrain 2026-10-04 : les valeurs balisées HTML (40/626, toutes
+            // web, moy. 416 car.) ont leur propore classe de doses (TagCap 15
+            // + bloc de règles balises dans DoseUser) — gemma4:latest avait
+            // refusé 2× la valeur la plus balisée (cfg.extchat.desc, 10
+            // balises) en dose mélangée PUIS en réparation avec la raison
+            // pourtant affichée : la cause était la REPRÉSENTATION des
+            // balises, pas l'attention (la réparation était déjà une dose de
+            // 1). Le prédicat rejoue SUR LES NATIVES EN le même test que la
+            // porte de validation (HtmlTagSig) — une seule définition du
+            // « balisé », zéro désynchronisation possible.
+            Func<(string Sec, string Key), bool> IsTagged = k =>
+                nats.TryGetValue(k.Sec, out var dict) && dict.TryGetValue(k.Key, out var enVal)
+                && I18nOverlay.HtmlTagSig(enVal) != "";
+            var doses = I18nDoses.Split(targets, IsTagged);
+
             _logger?.Info("[LLM_AI] I18n génération : « {0} » mode {1} — {2} dose(s), {3} clé(s) visée(s) (cap {4}).",
                 langKey, mode, doses.Count, targets.Count, I18nDoses.Cap);
 
@@ -241,8 +255,17 @@ namespace LLM_AI
                 {
                     deadDoses.Add(dose.Name);
                     lastDoseError = retry.vals.LastError ?? lastDoseError;
+                    // Raisons RÉELLES quand connues (1re puis tent. durcie)
+                    // au lieu du générique « dose en échec » — la réparation
+                    // (et la passe 2 singleton) montre la raison au modèle :
+                    // un « balises HTML divergentes » ciblé instruit, un
+                    // motif neutre non. (Le journal imprime les mêmes raisons.)
+                    var reasonOf = new Dictionary<(string Sec, string Key), string>();
+                    foreach (var e2 in first.errs) reasonOf[(e2.Sec, e2.Key)] = e2.Reason;
+                    foreach (var e2 in retry.errs) reasonOf[(e2.Sec, e2.Key)] = e2.Reason;
                     foreach (var e in dose.Entries)
-                        repairs.Add((e.Sec, e.Key, "dose en échec"));
+                        repairs.Add((e.Sec, e.Key,
+                            reasonOf.TryGetValue((e.Sec, e.Key), out var rr) ? rr : "dose en échec"));
                 }
             }
 
@@ -257,7 +280,7 @@ namespace LLM_AI
                 var repairReasons = repairs
                     .GroupBy(r => (r.Sec, r.Key))
                     .ToDictionary(g => g.Key, g => g.First().Reason);
-                foreach (var dose in I18nDoses.Split(repairTargets))
+                foreach (var dose in I18nDoses.Split(repairTargets, IsTagged))
                 {
                     var (vals, _) = await RunDoseAsync(dose, system, langKey, nats, frs, "repair", repairReasons)
                         .ConfigureAwait(false);
@@ -272,11 +295,86 @@ namespace LLM_AI
                 }
             }
 
+            // ---- 6b) réparation passe 2 : SINGLETONS (1 clé/dose) -----------
+            // Terrain 2026-10-04 (gemma4:latest) : la réparation groupée a
+            // refusé ENTIÈREMENT deux doses de suite (tags de 4 clés puis
+            // crosskind) — 0/5 récupérées — alors que la forme singleton n'a
+            // jamais perdu au terrain (Compléter d'une clé passé du premier
+            // coup sur les deux modèles). Une dose — donc un appel — par clé
+            // restée, au plus : borné, déclenché seulement s'il reste des
+            // clés. Les singletons portent la raison réelle +, pour les
+            // balisées, le bloc tags/inventaire de DoseUser. Ce qui résiste
+            // encore tombe au repli natif (le journal final les nomme).
+            if (repairs.Count > 0)
+            {
+                try { _progress?.Invoke("repair", 0, 0, null, repairs.Count); }
+                catch { }
+                var soloTargets = repairs
+                    .GroupBy(r => (r.Sec, r.Key))
+                    .ToDictionary(g => g.Key, g => g.First().Reason)
+                    .OrderBy(k => k.Key.Sec, StringComparer.Ordinal)
+                    .ThenBy(k => k.Key.Key, StringComparer.Ordinal)
+                    .ToList();
+                repairAttempted += soloTargets.Count;
+                foreach (var tgt in soloTargets)
+                {
+                    var solo = new I18nDoses.Dose
+                    {
+                        Name = "solo_" + I18nDoses.DomainOf(I18nDoses.FamilyOf(tgt.Key.Key)),
+                        Tagged = IsTagged((tgt.Key.Sec, tgt.Key.Key))
+                    };
+                    solo.Entries.Add((tgt.Key.Sec, tgt.Key.Key));
+                    var soloReasons = new Dictionary<(string, string), string>
+                    {
+                        [(tgt.Key.Sec, tgt.Key.Key)] = tgt.Value
+                    };
+                    var (vals2, _) = await RunDoseAsync(solo, system, langKey, nats, frs, "repair", soloReasons)
+                        .ConfigureAwait(false);
+                    if (vals2.Accepted == null) continue;
+                    foreach (var kv in vals2.Accepted)
+                    {
+                        results[(kv.Sec, kv.Key)] = kv.Value;
+                        repairCaught++;
+                        repairs.RemoveAll(r => r.Sec == kv.Sec && r.Key == kv.Key);
+                    }
+                    foreach (var s in vals2.Suspects) suspects.Add(s);
+                }
+            }
+
             var stillMissing = targets.Where(t => !results.ContainsKey(t)).ToList();
+            // Terrain 2026-10-04 08:56 : une dose « morte » du loop principal
+            // peut être rattrapée par la réparation (crosskind réparée 1/1
+            // après 2 refus totaux) — ne nommer que celles dont des clés
+            // restent absentes du résultat final, sinon le rapport annonce
+            // « doses fallidas definitivamente » et « ninguna clave en el
+            // fallback nativo » dans le même souffle.
+            var deadNames = doses
+                .Where(d => deadDoses.Contains(d.Name))
+                .Where(d => d.Entries.Any(e => !results.ContainsKey((e.Sec, e.Key))))
+                .Select(d => d.Name)
+                .Distinct()
+                .ToList();
             var suspectsUniq = suspects.Distinct().ToList();
             _logger?.Info("[LLM_AI] I18n génération : « {0} » — {1} clé(s) acceptée(s), {2} au repli natif, {3} appel(s) LLM{4}.",
                 langKey, results.Count, stillMissing.Count, _llmCalls,
-                deadDoses.Count > 0 ? ", doses mortes : " + string.Join(",", deadDoses) : "");
+                deadNames.Count > 0 ? ", doses mortes : " + string.Join(",", deadNames) : "");
+
+            // Terrain 2026-10-04 : même information au VERDICT FINAL — les
+            // clés au repli natif avec leur raison, liste actionnable pour la
+            // retouche chat admin. Pilotée par stillMissing (le rapport
+            // liste les mêmes clés) et non par « repairs », qui peut garder
+            // l'entrée d'une tentative depuis rattrapée par la re-tentative
+            // durcie — sans l'intersection, le log mentirait par excès.
+            var refusalReasons = repairs
+                .GroupBy(r => (r.Sec, r.Key))
+                .ToDictionary(g => g.Key, g => g.First().Reason);
+            var leftoverDetail = stillMissing
+                .Where(t => refusalReasons.ContainsKey((t.Item1, t.Item2)))
+                .Select(t => t.Item1 + "." + t.Item2 + " (" + refusalReasons[(t.Item1, t.Item2)] + ")")
+                .ToList();
+            if (leftoverDetail.Count > 0)
+                _logger?.Warn("[LLM_AI] I18n génération : « {0} » au repli natif — {1} — retouche : chat admin (i18n_get / i18n_set_key).",
+                    langKey, string.Join(" ; ", leftoverDetail));
 
             if (results.Count == 0)
                 return Fail(lastDoseError != null
@@ -329,8 +427,8 @@ namespace LLM_AI
                 ? FormatDisplay("i18n.gen.glossary.empty", langKey)
                 : FormatDisplay("i18n.gen.glossary", glossary.Terms.Count, glossary.Source)));
             AppendLine(report, "- " + FormatDisplay("i18n.gen.written", writtenPath));
-            if (deadDoses.Count > 0)
-                AppendLine(report, "- " + FormatDisplay("i18n.gen.dosefail", deadDoses.Count, string.Join(", ", deadDoses)));
+            if (deadNames.Count > 0)
+                AppendLine(report, "- " + FormatDisplay("i18n.gen.dosefail", deadNames.Count, string.Join(", ", deadNames)));
 
             var md = report.ToString();
             I18nGenReportStore.Save(new LastI18nGenReport
@@ -437,6 +535,14 @@ namespace LLM_AI
         // ------------------------------------------------------------------
         //  Exécution d'une dose
         // ------------------------------------------------------------------
+
+        /// <summary>Multiset de balises borné pour la raison de refus (les
+        /// raisons voyagent au journal ET dans le prompt de réparation) —
+        /// noms techniques uniquement, valeur vide → « aucune ».</summary>
+        private static string BoundedSig(string sig)
+            => string.IsNullOrEmpty(sig) ? "aucune"
+            : sig.Length <= 60 ? sig
+            : sig.Substring(0, 57) + "…";
 
         private sealed class AcceptedVal
         {
@@ -556,11 +662,31 @@ namespace LLM_AI
                 var verdict = I18nDoses.Validate(enNative, val);
                 if (verdict != I18nDoses.Verdict.Ok)
                 {
-                    refused.Add((e.Sec, e.Key,
-                        verdict == I18nDoses.Verdict.PlaceholderMismatch ? "placeholders {n} divergents"
-                        : verdict == I18nDoses.Verdict.TagMismatch ? "balises HTML divergentes"
-                        : verdict == I18nDoses.Verdict.Empty ? "valeur vide"
-                        : "clé inconnue"));
+                    // La raison est aussi une CONSIGNE : elle voyage dans la
+                    // liste de réparation (DoseUser la montre au modèle) —
+                    // nommer le mécanisme, pas seulement le verdict.
+                    string reason;
+                    if (verdict == I18nDoses.Verdict.TagMismatch)
+                    {
+                        var sigEn = I18nOverlay.HtmlTagSig(enNative);
+                        var sigV = I18nOverlay.HtmlTagSig(val);
+                        // Cas terrain (cfg.crosskind.convert.hint, refusée 5×
+                        // d'affilée par gemma4:latest) : la native est NUE — le
+                        // modèle dés-échappe une entité HTML (« &lt;movie&gt; »
+                        // devient « <movie> », balise vraie) et la porte
+                        // refuse. « attendu aucune / reçu X » seul laisse le
+                        // modèle deviner ; nommer le dés-échappement dit quoi
+                        // corriger.
+                        reason = sigEn.Length == 0
+                            ? "balises HTML ajoutées (la native n'en porte AUCUNE ; recopie les entités HTML &lt;…&gt; à l'identique — les dés-échapper crée une balise vraie et est refusé)"
+                            : "balises HTML divergentes (attendu « " + BoundedSig(sigEn)
+                                + " » ; reçu « " + BoundedSig(sigV) + " »)";
+                    }
+                    else
+                        reason = verdict == I18nDoses.Verdict.PlaceholderMismatch ? "placeholders {n} divergents"
+                            : verdict == I18nDoses.Verdict.Empty ? "valeur vide"
+                            : "clé inconnue";
+                    refused.Add((e.Sec, e.Key, reason));
                     continue;
                 }
                 if (string.Equals(val, enNative, StringComparison.Ordinal)
@@ -576,7 +702,19 @@ namespace LLM_AI
             if (outcome.Accepted == null || outcome.Accepted.Count == 0)
             {
                 outcome.LastError = "aucune clé valide dans la réponse";
-                return (outcome, noErrs);
+                // Terrain 2026-10-04 : les raisons partaient au rebut dans ce
+                // chemin (noErrs) — or un refus GÉNÉRAL est le cas où le
+                // diagnostic compte le plus (« TagMismatch ×6 » vs « dose en
+                // échec » ne conduit pas la même retouche chat admin).
+                if (refused.Count > 0)
+                    _logger?.Warn("[LLM_AI] I18n génération : refus dose {0} (totale) — {1}.",
+                        dose.Name, string.Join(" ; ", refused.Select(f => f.Sec + "." + f.Key + " (" + f.Reason + ")")));
+                // Les raisons par clé REMONTENT au caller : quand la re-tentative
+                // durcie échoue à son tour, la réparation (groupée puis
+                // singleton) reçoit la vraie raison par clé au lieu du
+                // générique « dose en échec ». (Collect ne collecte les errs
+                // QUE si des clés furent acceptées — zéro doublon possible.)
+                return (outcome, refused);
             }
 
             // Garde anti-copie-EN : une DOSE (pas une clé) qui recopie
@@ -596,6 +734,15 @@ namespace LLM_AI
 
             _logger?.Info("[LLM_AI] I18n génération : dose {0} — {1}/{2} clés validées ({3} refusée(s), {4} suspecte(s) identiques-EN).",
                 dose.Name, outcome.Accepted.Count, dose.Size, refused.Count, outcome.Suspects.Count);
+
+            // Terrain 2026-10-04 (cfg.extchat.desc refusée 2× — dose puis
+            // réparation — sans que le log dise QUI ni POURQUOI : la ligne ne
+            // portait que le décompte « 1 refusée(s) »). Le nom + la raison
+            // de chaque refusée rendent la retouche ciblée possible depuis le
+            // chat admin (i18n_get / i18n_set_key) sans diagnostic à l'aveugle.
+            if (refused.Count > 0)
+                _logger?.Info("[LLM_AI] I18n génération : refus dose {0} — {1}.",
+                    dose.Name, string.Join(" ; ", refused.Select(f => f.Sec + "." + f.Key + " (" + f.Reason + ")")));
             return (outcome, refused);
         }
 
@@ -731,13 +878,13 @@ namespace LLM_AI
         /// (72 appels rapportés pour 36 réels, constaté au terrain du
         /// 2026-10-03) est corrigé : un seul incrément par appel réel, les
         /// appelants n'ajoutent plus rien.</para></summary>
-        /// <summary>Timeout PAR APPEL des doses (5 min) : les grosses doses
+        /// <summary>Timeout PAR APPEL des doses (10 min) : les grosses doses
         /// de tête (56 clés) sur un modèle local lent dépassaient le global
         /// 2 min de LlmClient → TaskCanceledException sans ct annulé =
         /// tout le run mourait « timeout 25 min » sans escalade (terrain
-        /// 2026-10-03, run « de » gemma4:26b) ; 5 min couvre ~56 clés à
+        /// 2026-10-03, run « de » gemma4:26b) ; 10 min couvre ~56 clés à
         /// >5 s/clé — le CTS 25 min du run reste le filet run-level.</summary>
-        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(10);
 
         private async Task<(string Content, int Backend)> ChatAsync(
             string system, string user, int startBackend = 0)
@@ -1117,7 +1264,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
 1. Placeholders {0} {1} {2}… : multiset IDENTIQUE à la native EN (ni omis, ni doublé). Un {0} en début de chaîne reste en début.
 2. Balises HTML (web/server seulement) : multiset IDENTIQUE, attributs compris — recopie <b>…</b> tel quel autour du texte traduit.
 3. Famille « ext » : TEXTE BRUT strict, AUCUNE balise HTML (rendu textContent).
-4. Entités HTML (&lt;movie&gt;) : elles RESTENT des entités, ne les dés-échappe pas.
+4. Entités HTML (&lt;movie&gt;) : elles RESTENT des entités — ne les dés-échappe JAMAIS : une entité devenue balise vraie est REFUSÉE par la validation (écrire « <movie> » au lieu de « &lt;movie&gt; » est un refus garanti). Et symétriquement : n'ajoute JAMAIS une balise à une valeur EN qui n'en porte aucune.
 5. Symboles à COPIER TELS QUELS dans les valeurs : [NL] = un saut de ligne, [QU] = un guillemet double. Le plugin les fournit à la place des caractères à échapper en JSON et les décode après validation — ne les traduis jamais, ne les remplace jamais, ne les supprime pas, ne les déplace pas (un [NL] en début de valeur reste au début). N'émets AUCUN échappement à leur place (pas de \n littéral, pas de quote échappée) : ton JSON doit rester propre sans eux.
 6. La chaîne nfo.airs.* s'assemble en UNE phrase du fichier .nfo : chaque fragment est un morceau de la même phrase.
 7. NE TRADUIS PAS les marques : AI Tonight, AI Suggestions, LLM_AI, Emby, TMDB, TVDB, Ollama, Gemini, SearXNG, nfo, .strm, plugin, backend — recopie exacte.
@@ -1136,18 +1283,22 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             return sb.ToString();
         }
 
-        /// <summary>Prompt utilisateur d'une dose : fiche de domaine, paires
-        /// EN+FR (contexte auteur), variantes (hardened = avertissement anti-
-        /// copie ; repair = raisons de rejet par clé), puis le JSON de la dose
-        /// et le rappel de schéma STRICT (règle gemma4 : schéma dans le user).</summary>
+        /// <summary>Prompt utilisateur d'une dose : fiche de domaine (ou
+        /// bloc de règles balises + inventaire par clé pour les doses
+        /// « tags »), paires EN+FR (contexte auteur), variantes (hardened =
+        /// avertissement anti-copie ; repair = raisons de rejet par clé),
+        /// puis le JSON de la dose et le rappel de schéma STRICT (règle
+        /// gemma4 : schéma dans le user).</summary>
         internal static string DoseUser(I18nDoses.Dose dose, string langKey,
             Dictionary<string, IReadOnlyDictionary<string, string>> nats,
             Dictionary<string, IReadOnlyDictionary<string, string>> frs,
             bool hardened, Dictionary<(string Sec, string Key), string> repairReasons)
         {
-            var note = DomainNoteFor(dose.Name);
             var sb = new StringBuilder();
-            sb.Append("Fiche de domaine — ").Append(note).Append("\n");
+            if (dose.Tagged)
+                sb.Append("Dose spécialisée « balises HTML » — valeurs longues et structurées ; chaque balise doit survivre EXACTEMENT (règles ci-dessous).\n");
+            else
+                sb.Append("Fiche de domaine — ").Append(DomainNoteFor(dose.Name)).Append("\n");
             if (hardened)
                 sb.Append("\nAVERTISSEMENT : ta réponse précédente recopiait quasi intégralement l'anglais. Produis de VRAIES traductions — un seul objet JSON, sans texte autour.\n");
             if (repairReasons != null && repairReasons.Count > 0)
@@ -1155,6 +1306,22 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
                 sb.Append("\nClés rejetées à la validation précédente (corrige la raison) :\n");
                 foreach (var r in repairReasons)
                     sb.Append("- « ").Append(r.Key.Key).Append(" » : ").Append(r.Value).Append('\n');
+            }
+
+            // Dose « tags » : règles + inventaire EXPLICITE par clé — le
+            // modèle vérifie ses balises contre un contrat listé au lieu de
+            // les « retoucher » en réécrivant du long HTML (terrain
+            // 2026-10-04 : la raison seule, même en dose singleton de
+            // réparation, n'a pas suffi — la cause était la représentation).
+            if (dose.Tagged)
+            {
+                sb.Append("\nRÈGLES BALISES :\n");
+                sb.Append("- Recopie chaque balise caractère par caractère, autour des MÊMES segments de texte — aucune ajoutée, aucune retirée ; ne transforme jamais <code> en <pre> ni <b> en <strong>.\n");
+                sb.Append("- Ne traduis JAMAIS le contenu des <code>…</code> (endpoints, chemins, noms d'option — purement techniques).\n");
+                sb.Append("- Inventaire exact par clé — ta sortie doit reproduire EXACTEMENT chaque inventaire :\n");
+                foreach (var e in dose.Entries)
+                    sb.Append("· ").Append(e.Key).Append(" = ")
+                        .Append(TagInventory(nats[e.Sec].TryGetValue(e.Key, out var v) ? v : null)).Append('\n');
             }
 
             // Paires EN+FR : intention mainteneur (contexte, pas cible formelle).
@@ -1185,12 +1352,33 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             }
             sb.Append(BuildDoseJson(dose, nats));
             sb.Append("\nRappel de sortie : UN SEUL objet JSON { \"").Append(langKey)
-              .Append("\": { \"web\"|\"server\"|\"ext\": { clé: traduction } } } — mêmes clés que la dose, aucune de plus, aucun texte autour ; les tokens [NL] et [QU] se recopient tels quels.\n");
+              .Append("\": { \"web\"|\"server\"|\"ext\": { clé: traduction } } } — mêmes clés que la dose, aucune de plus, aucun texte autour ; les tokens [NL] et [QU] se recopient tels quels");
+            if (dose.Tagged)
+                sb.Append(" ; les balises de CHAQUE valeur se recopient exactement — l'inventaire ci-dessus est un contrat");
+            sb.Append(".\n");
             return sb.ToString();
         }
 
+        /// <summary>Inventaire compact des balises d'une native — délègue à
+        /// <see cref="I18nOverlay.Inventory"/> (une seule définition du
+        /// format, partagée avec le contrat de l'atelier de langues) ;
+        /// ordre de première apparition, comptage par balise EXACTE
+        /// (attributs compris, p.ex. « 2×&lt;b&gt;, 2×&lt;/b&gt; ») : aliment le
+        /// bloc de règles des doses « tags ». La validation utilise la même
+        /// regex (HtmlTagSig) — l'inventaire liste exactement ce que la porte
+        /// exigera.</summary>
+        private static string TagInventory(string en)
+        {
+            var tags = I18nOverlay.HtmlTagsInOrder(en);
+            return tags.Count == 0
+                ? "(aucune balise — texte brut)"
+                : I18nOverlay.Inventory(tags);
+        }
+
         /// <summary>Note de domaine (les doses « chat_p2 » résolvent leur base
-        /// « chat » ; une dose fusionnée liste ses deux fiches).</summary>
+        /// « chat » ; une dose fusionnée liste ses deux fiches ; les doses
+        /// « tags » n'appellent pas cette note — leur bloc de règles remplace
+        /// la fiche).</summary>
         private static string DomainNoteFor(string doseName)
         {
             var parts = (doseName ?? "").Split('_');

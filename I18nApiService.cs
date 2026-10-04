@@ -215,10 +215,12 @@ namespace LLM_AI
         private const string I18nJsResource = "LLM_AI.i18n.js";
 
         /// <summary>Compte attendu des clés web EN (kit 2026-10-02 : 393 ;
-        /// T1a 2026-10-03 : +20 clés du panneau « Langues » = 413) —
+        /// T1a 2026-10-03 : +20 clés du panneau « Langues » = 413 ;
+        /// v1.17.0.2 2026-10-04 : +12 clés de la carte i18n du chat
+        /// (chat.i18n.pending.*, chat.note.i18n.*) = 425) —
         /// la ligne de log d'extraction le rapporte pour l'œil du
         /// mainteneur ; un écart signalé = i18n.js a dérivé du kit.</summary>
-        private const int ExpectedWebKeys = 413;
+        private const int ExpectedWebKeys = 425;
 
         private static readonly object s_webEnLock = new object();
         private static Dictionary<string, string> s_webEn;       //null = jamais extrait

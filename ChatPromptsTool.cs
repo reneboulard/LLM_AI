@@ -146,6 +146,15 @@ namespace LLM_AI
                         return Task.FromResult(Json(new { status = "refused",
                             detail = "Aucun mode d'édition actif — sélectionnez un mode « Éditer — … » " +
                                      "dans la liste déroulante de la page chat, puis réessayez." }));
+                    // Le mode atelier de langues (« Modification texte UI »,
+                    // v1.17.0.2) ne couvre AUCUN prompt : redirige le LLM vers
+                    // l'outil de l'atelier au lieu du message générique.
+                    if (mode.Field.Length == 0)
+                        return Task.FromResult(Json(new { status = "refused",
+                            detail = "Le mode actif « " + mode.Label + " » couvre l'atelier de langues, " +
+                                     "pas les prompts — la modification de chaînes i18n passe par " +
+                                     "i18n_set_key ; la modification d'un prompt exige un mode " +
+                                     "« Éditer — … » dans la liste déroulante." }));
                     if (!string.Equals(mode.Field, field.Trim(), StringComparison.Ordinal))
                         return Task.FromResult(Json(new { status = "refused",
                             detail = "Champ « " + field.Trim() + " » hors du mode actif « " + mode.Label +

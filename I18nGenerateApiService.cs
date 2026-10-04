@@ -43,6 +43,21 @@ namespace LLM_AI
         private readonly IJsonSerializer _json;
         private readonly ILiveTvManager _liveTv;
 
+        /// <summary>Timeout dur de sécurité du run, en minutes — <b>source
+        /// unique</b> : alimente le CTS ci-dessous, la ligne de log
+        /// d'annulation ET le message localisé <c>i18n.gen.err.timeout</c>
+        /// (placeholder <c>{0}</c>). Avant elle, la chaîne localisée
+        /// hardcodait « 25 minutes » et mentait dès que la valeur bougeait.
+        /// Terrain 2026-10-04 (gemma4:26b local, partiellement déchargé —
+        /// rythme ~1,8 min/dose) : 25 min tuait une campagne complète à
+        /// ~14/27 doses, tout perdu (l'écriture n'a lieu qu'en fin de
+        /// campagne) ; gemma4:latest tient le même full en ~13 min 30.
+        /// Mesuré le même jour sur le 26b avec ces valeurs : full 626 clés
+        /// en 36 min 35 s, 28 appels, zéro escalade — 55 min passe avec
+        /// ~18 min de marge. 55 min couvre aussi une revalidation 26b en
+        /// mode « Compléter » (1 dose).</summary>
+        private const int RunTimeoutMinutes = 55;
+
         public I18nGenerateApiService(IJsonSerializer json, ILiveTvManager liveTv)
         {
             _json = json;
@@ -138,11 +153,12 @@ namespace LLM_AI
                 return StatusResponse(I18nGenState.Snapshot(), I18nGenReportStore.Load());
             }
 
-            // Timeout dur de sécurité (25 min, gabarit audit) : sans lui, un
-            // backend muet laisserait l'état « running » pour toujours et
-            // bloquerait le single-flight. Le token traverse le moteur (chaque
-            // appel LLM le porte) — les doses en cours sont jetées avec le run.
-            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(25));
+            // Timeout dur de sécurité (RunTimeoutMinutes, gabarit audit) :
+            // sans lui, un backend muet laisserait l'état « running » pour
+            // toujours et bloquerait le single-flight. Le token traverse le
+            // moteur (chaque appel LLM le porte) — les doses en cours sont
+            // jetées avec le run.
+            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(RunTimeoutMinutes));
 
             // Backends résolus PAR L'APPELANT (T1c) : le moteur reçoit la
             // liste + les clés en ctor — zéro accès config à l'intérieur du
@@ -167,14 +183,14 @@ namespace LLM_AI
                 }
                 catch (OperationCanceledException)
                 {
-                    // N'arrive plus QUE pour une vraie annulation (CTS 25 min
+                    // N'arrive plus QUE pour une vraie annulation (CTS du run
                     // — le filtre when (_ct.IsCancellationRequested) du moteur
                     // rejette toute autre OCE vers l'échec backend normal ;
                     // depuis le terrain 2026-10-03 : le dépassement du
                     // HttpClient de 2 min tuait le run entier « timeout 25 min
                     // ou arrêt » — message faux, sans escalade).
-                    Logger?.Warn("[LLM_AI] I18n génération annulée (timeout 25 min du run) — le fichier de langue précédent reste en place (.bak au dernier write).");
-                    I18nGenState.FinishError(I18n.SDisplay("i18n.gen.err.timeout", ApplicationHost));
+                    Logger?.Warn("[LLM_AI] I18n génération annulée (timeout {0} min du run) — le fichier de langue précédent reste en place (.bak au dernier write).", RunTimeoutMinutes);
+                    I18nGenState.FinishError(I18n.SFormatDisplay("i18n.gen.err.timeout", ApplicationHost, RunTimeoutMinutes));
                 }
                 catch (Exception ex)
                 {

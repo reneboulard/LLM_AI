@@ -489,6 +489,13 @@ define([], function () {
                                 }
                             }
                         }
+                        // Proposition i18n en attente (v1.17.0.2, deux phases) :
+                        // carte Avant/Après Approuver/Refuser de l'atelier de
+                        // langues — l'écriture passe par l'endpoint I18nKey,
+                        // le LLM n'a aucun rôle.
+                        if (data.PendingI18n && data.PendingI18n.ActionId) {
+                            appendI18nCard(data.PendingI18n);
+                        }
                         // Identifiant de session (mémoire de conversation) :
                         // retourné à chaque tour, rejoué au suivant.
                         if (data.Session) chatSessionId = data.Session;
@@ -666,6 +673,120 @@ define([], function () {
                                 return i18n.t("chat.note.prompt.refused",
                                     (pending.Label || pending.Field));
                             });
+                    });
+                }
+
+                // ------------------------------------------------------------------
+                //  Carte i18n en attente (v1.17.0.2, deux phases) : la
+                //  correction d'une chaîne (atelier de langues) déposée par
+                //  i18n_set_key — Avant/Après + Approuver/Refuser ; les
+                //  paramètres de l'écriture restent côté serveur, le clic
+                //  n'envoie que l'ActionId. La réponse d'approbation porte la
+                //  valeur SERVIE après re-scan (preuve d'effet affichée puis
+                //  poussée dans le fil pour le LLM).
+                // ------------------------------------------------------------------
+                function appendI18nCard(pending) {
+                    if (!chatLog) return;
+                    // Une seule carte i18n active par session (la nouvelle
+                    // remplace l'ancienne côté serveur) : on verrouille les
+                    // précédentes — sélecteur propre à ce type (les cartes de
+                    // prompt et d'action ne sont pas supplantées ici).
+                    var previous = chatLog.querySelectorAll(".chatPendingI18n");
+                    for (var i = 0; i < previous.length; i++) lockStaleCard(previous[i]);
+                    var card = document.createElement("div");
+                    card.className = "chatPending chatPendingI18n";
+                    card.innerHTML =
+                        '<div class="chatPendingTitle">🌐 ' + esc(i18n.t("chat.i18n.pending.title")) + '</div>' +
+                        (pending.Warning
+                            ? '<div class="chatPendingWarn">' + esc(pending.Warning) + '</div>'
+                            : '') +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.i18n.pending.key")) + ' : ' +
+                            esc(pending.Key || "?") + '</div>' +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.i18n.pending.lang")) + ' : ' +
+                            esc(pending.Lang || "?") + ' · ' + esc(pending.Family || "?") + '</div>' +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.i18n.pending.before")) + '</div>' +
+                        '<pre class="chatPendingText"></pre>' +
+                        '<div class="chatPendingLabel">' + esc(i18n.t("chat.i18n.pending.after")) + '</div>' +
+                        '<pre class="chatPendingText"></pre>' +
+                        '<div class="chatPendingButtons">' +
+                            '<button is="emby-button" type="button" class="raised btnApproveI18n" data-i18n="chat.i18n.pending.approve">Approuver</button>' +
+                            '<button is="emby-button" type="button" class="raised btnRefuseI18n" data-i18n="chat.i18n.pending.refuse">Refuser</button>' +
+                        '</div>' +
+                        '<div class="chatPendingResult" hidden></div>';
+                    var texts = card.querySelectorAll(".chatPendingText");
+                    // textContent (jamais innerHTML) : la valeur est affichée
+                    // brute, quel que soit son contenu.
+                    if (texts[0]) texts[0].textContent = pending.OldValue ||
+                        i18n.t("chat.i18n.pending.absent");
+                    if (texts[1]) texts[1].textContent = pending.NewValue || "";
+                    chatLog.appendChild(card);
+                    chatLog.scrollTop = chatLog.scrollHeight;
+
+                    var actionId = String(pending.ActionId || "");
+                    function decide(url, doneFn) {
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl(url, { session: chatSessionId || "" }),
+                            type: "POST",
+                            data: JSON.stringify({ ActionId: actionId }),
+                            contentType: "application/json",
+                            dataType: "json"
+                        }).then(function (resp) {
+                            resp = resp || {};
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                var html = doneFn(resp);
+                                if (html) {
+                                    res.textContent = html;
+                                    res.style.color = "";
+                                } else {
+                                    res.textContent = i18n.t("chat.pending.error") +
+                                        " : " + (resp.Error || "?");
+                                    res.style.color = "#e57373";
+                                }
+                                res.hidden = false;
+                            }
+                            var note = resp.Ok ? doneFn(resp, true) : null;
+                            if (note) chatHistory.push({ role: "user", content: note });
+                        }, function (err) {
+                            var res = card.querySelector(".chatPendingResult");
+                            card.querySelector(".chatPendingButtons").hidden = true;
+                            if (res) {
+                                res.textContent = i18n.t("chat.pending.error") +
+                                    " : " + (err && err.status ? "HTTP " + err.status : "?");
+                                res.style.color = "#e57373";
+                                res.hidden = false;
+                            }
+                        });
+                    }
+
+                    var approveBtn = card.querySelector(".btnApproveI18n");
+                    var refuseBtn = card.querySelector(".btnRefuseI18n");
+                    if (approveBtn) approveBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decide("Plugins/LLMAI/I18nKey/Approve", function (resp, forNote) {
+                            if (!resp || !resp.Ok) return null;
+                            var base = i18n.t("chat.i18n.pending.approved",
+                                resp.Served || "(?)");
+                            if (forNote) {
+                                return i18n.t("chat.note.i18n.approved",
+                                    (pending.Key || "?"), (pending.Lang || "?"),
+                                    (pending.Family || "?"), (resp.Served || "(?)"));
+                            }
+                            return base;
+                        });
+                    });
+                    if (refuseBtn) refuseBtn.addEventListener("click", function () {
+                        if (chatBusy) return;
+                        decide("Plugins/LLMAI/I18nKey/Refuse", function (resp, forNote) {
+                            if (!resp || !resp.Ok) return null;
+                            if (forNote) {
+                                return i18n.t("chat.note.i18n.refused",
+                                    (pending.Key || "?"), (pending.Lang || "?"),
+                                    (pending.Family || "?"));
+                            }
+                            return i18n.t("chat.i18n.pending.refused");
+                        });
                     });
                 }
 

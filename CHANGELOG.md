@@ -10,6 +10,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.1] — 2026-10-04
+
+### Fixed (FR)
+- **Atelier : le LLM ne voyait jamais une vraie balise** — `i18n_get`/
+  `i18n_search`/`i18n_set_key` sérialisaient leurs réponses avec
+  l'échappement JSON par défaut : chaque `<` partait en `\u003C` (`<b>`
+  → `\u003Cb\u003E`), native comme directive du contrat. Un petit modèle
+  ne décode pas cette soupe d'échappements : terrain 2026-10-04 — même
+  l'original redemandé au chat sortait SANS balises (le modèle n'en
+  avait jamais vu une vraie, donc n'en recopiait aucune au dépôt). Le
+  sérialiseur des tools i18n passe à l'encodeur **relaxé** déjà utilisé
+  par la campagne de génération (qui tient 626/626 avec balises
+  intactes) et par le fil du chat externe (`RelaxedJsonOpts`) — le JSON
+  part au LLM et aux logs, jamais embarqué dans une page HTML ; les
+  valeurs restent identiques après parse. La page chat, elle, échappe
+  déjà tout HTML rendu (`esc()` sur la prose ET les blocs de code) : le
+  rendu n'était pas en cause.
+
+### Fixed (EN)
+- **Workshop: the LLM never saw a real tag** — `i18n_get`/`i18n_search`/
+  `i18n_set_key` serialized their responses with the default JSON
+  escaping: every `<` left as `\u003C` (`<b>` → `\u003Cb\u003E`), native
+  and contract directive alike. A small model does not decode that
+  escape soup: field finding 2026-10-04 — even the original re-asked in
+  chat came out WITHOUT tags (the model had never seen a real one, so it
+  recopied none at deposit time). The i18n tool serializer now uses the
+  **relaxed** encoder already used by the generation campaign (which
+  holds 626/626 with tags intact) and by the external-chat thread
+  (`RelaxedJsonOpts`) — the JSON goes to the LLM and the logs, never
+  embedded into an HTML page; values are identical after parsing. The
+  chat page already escapes all rendered HTML (`esc()` on prose AND code
+  blocks): rendering was not the culprit.
+
+## [1.17.1.0] — 2026-10-04
+
+### Added (FR)
+- **Atelier de langues : contrat structurel montré au LLM AVANT le dépôt** —
+  motif du terrain 2026-10-04 : corriger une clé dont la native porte des
+  balises HTML échouait en rafale au dépôt (`i18n_set_key` refuse toute
+  divergence de balises/placeholders — la sauvegarde devient impossible
+  tant que le modèle ne recopie pas le contrat), car le modèle « retouche »
+  les balises de mémoire : la raison de refus seule ne suffit pas, la
+  cause était la représentation. `i18n_get` renvoie désormais un bloc
+  **`contract`** quand la native porte des éléments immuables :
+  inventaire EXACT (`"tags": "2×<b>, 2×</b>"`, placeholders `{n}` comptés,
+  flag `multiline`) + directive impérative (recopier chaque balise caractère
+  par caractère, une ouvrante = sa fermante, jamais `<b>` en `<strong>`;
+  traduire le TEXTE entre les balises, jamais les balises ; contenu de
+  `<code>…</code>` non traduit ; raccourcir le texte est permis, pas le
+  contrat ; entités `&lt;…&gt;` copiées à l'identique — les dés-échapper
+  crée une balise vraie et est refusé ; famille `ext` = texte brut, aucune
+  balise). Le bloc est omis pour une clé sans contrainte : un contrat
+  partout n'est plus un signal. Miroir des doses « tags » de la campagne de
+  génération (inventaire ↔ porte de validation : une seule définition du
+  balisé via `I18nOverlay.Inventory`). Règle « CONTRAT STRUCTUREL » ajoutée
+  au guide du mode « Modification texte UI » + descriptions des tools
+  `i18n_get`/`i18n_set_key` (et schéma de l'argument `value`) reliées au
+  contrat. Les portes ne changent pas (le refus motivé reste le filet ;
+  le contrat est la prévention). Build 0/0 ; harnais réflexion 15 checks
+  verts (inventaire, entités, ext, multi-lignes, omission clé nue,
+  i18n_get porte/n'imite pas le bloc, contrat conforme ⇒ porte `Ok`,
+  contrat brisé ⇒ refus).
+
+### Added (EN)
+- **Language workshop: structural contract shown to the LLM BEFORE the
+  deposit** — field finding 2026-10-04: fixing a key whose native carries
+  HTML tags failed in bursts at deposit time (`i18n_set_key` refuses any
+  tag/placeholder divergence — the save becomes impossible until the model
+  recopies the contract), because the model "retouches" tags from memory:
+  the refusal reason alone is not enough, the cause was the representation.
+  `i18n_get` now returns a **`contract`** block when the native carries
+  immutable elements: EXACT inventory (`"tags": "2×<b>, 2×</b>"`, counted
+  `{n}` placeholders, `multiline` flag) + an imperative directive (recopy
+  each tag character by character, one opening = its closing, never `<b>`
+  into `<strong>`; translate the TEXT between the tags, never the tags;
+  `<code>…</code>` content stays untranslated; shortening the text is
+  allowed, breaking the tag contract is not; `&lt;…&gt;` entities copied
+  as-is — un-escaping them creates a real tag and is refused; `ext` family
+  = plain text, no tags). The block is omitted for a key with no
+  constraints: a contract everywhere is no longer a signal. Mirror of the
+  generation campaign's "tags" doses (inventory ↔ validation gate: a
+  single definition of the tag contract via `I18nOverlay.Inventory`).
+  "STRUCTURAL CONTRACT" rule added to the "UI text modification" mode
+  guide + the `i18n_get`/`i18n_set_key` tool descriptions (and the `value`
+  argument schema) now point at the contract. The gates are unchanged
+  (the motivated refusal remains the net; the contract is the prevention).
+  Build 0/0; reflection harness 15 green checks (inventory, entities, ext,
+  multi-line, bare-key omission, i18n_get carries/omits the block,
+  contract-compliant ⇒ gate `Ok`, broken contract ⇒ refusal).
+
+## [1.17.0.2] — 2026-10-04
+
+### Added (FR)
+- **Modification des chaînes i18n : two phases avec carte de confirmation**
+  (pattern `plugin_prompts`) — `i18n_set_key` ne touche JAMAIS l'overlay : il
+  valide (gates structurelles, clé réelle, langue normalisée) puis DÉPOSE la
+  proposition dans `ChatI18nStore` (`chat_pending_i18n.json`, TTL 10 min,
+  liée à la session ET à l'usager) ; la page chat rend la carte
+  Avant/Après « Approuver / Refuser » (`chatPendingI18n`, verrouillage des
+  cartes antérieures) ; les endpoints
+  `POST /Plugins/LLMAI/I18nKey/Approve|Refuse` exécutent en C# déterministe
+  — gates RE-courues à l'approbation contre la native EN fraîche, écriture
+  via `WriteOverlayKey` (.bak + re-scan), trace SecurityMonitor « approbation
+  chat », valeur SERVIE retournée à la page (preuve d'effet) et poussée dans
+  le fil pour le LLM. Motif (terrain 2026-10-04) : l'unique preuve d'écriture
+  était la prose du modèle, ici dérivée en espagnol — un admin non-hispano-
+  phone ne voyait pas que la modification avait été faite.
+- **Mode déroulant « Modification texte UI »** (`context_id = i18n_edit`) :
+  premier mode du registre SANS prompt éditable (`GuideOnly` — le guide seul
+  est injecté, ni « TEXTE ACTUEL » ni « LANGUE CIBLE »). La modification des
+  chaînes (`i18n_set_key`) n'y est déposable QUE dans ce mode (validation
+  croisée, refus consigné hors mode) ; le mode initie aussi le protocole
+  tool-calling pour l'atelier même sans budget d'actions ni édition de
+  prompts. En mode i18n, `plugin_prompts set` refuse avec la redirection
+  (miroir de la validation champ ↔ mode des prompts) ; le filet anti-différence
+  des prompts ne se déclenche pas dans ce mode (il cible la clôture `text`).
+  Nouvelles chaînes web FR+EN (`chat.i18n.pending.*`, `chat.note.i18n.*`) —
+  bump de version obligatoire pour le cache-busting navigateur (le stamp suit
+  `<Version>`).
+- **Refus de dépôt `i18n_set_key` observables et consignés** : chaque refus
+  structurel est loggé (Warn : raison enrichie, clé, langue, extrait de
+  valeur ≤100 car.) avec la MÊME raison que la campagne (native nue →
+  dés-échappement nommé ; sinon multisets de balises attendu/reçu bornés +
+  « raccourcir le TEXTE est permis, le contrat de balises non »). Terrain :
+  4 dépôts refusés d'affilée n'avaient laissé AUCUNE trace loggable. Natives
+  web attendues 413 → 425 (les 12 clés de la carte rejoignent l'atelier — le
+  prochain « Compléter » les traduit).
+
+### Added (EN)
+- **i18n string edits: two-phase with confirmation card** (the
+  `plugin_prompts` pattern) — `i18n_set_key` NEVER touches the overlay: it
+  validates (structural gates, real key, normalized language) then DEPOSITS
+  the proposal into `ChatI18nStore` (`chat_pending_i18n.json`, 10-min TTL,
+  bound to session AND user); the chat page renders an
+  Before/After "Approve / Refuse" card (`chatPendingI18n`, stale cards
+  locked); the `POST /Plugins/LLMAI/I18nKey/Approve|Refuse` endpoints execute
+  deterministic C# — gates RE-run at approval against the fresh EN native,
+  write via `WriteOverlayKey` (.bak + re-scan), SecurityMonitor trace "chat
+  approval", SERVED value returned to the page (proof of effect) and pushed
+  into the thread for the LLM. Trigger (field finding 2026-10-04): the only
+  write proof was model prose, which drifted to Spanish — a non-Spanish
+  admin could not see that the edit had happened.
+- **"UI text modification" dropdown mode** (`context_id = i18n_edit`): the
+  first registry mode WITHOUT an editable prompt (`GuideOnly` — the guide
+  alone is injected, no "CURRENT TEXT" / "TARGET LANGUAGE" sections). String
+  edits (`i18n_set_key`) can only be deposited IN this mode (cross-validation
+  refusal outside it); the mode also starts the tool-calling protocol for the
+  workshop even with zero action budget and prompts editing off. In i18n
+  mode, `plugin_prompts set` refuses with a redirect (mirror of the prompt
+  field ↔ mode validation); the prompt anti-deference net does not fire in
+  this mode (it targets the `text` fence). New FR+EN web strings
+  (`chat.i18n.pending.*`, `chat.note.i18n.*`) — version bump mandatory for
+  browser cache-busting (the stamp follows `<Version>`).
+- **Observable, logged `i18n_set_key` refusals**: every structural refusal is
+  logged (Warn: enriched reason, key, language, ≤100-char value excerpt) with
+  the SAME reason as the campaign (bare native → un-escaping named; else
+  bounded expected/received tag multisets + "shortening the TEXT is allowed,
+  the tag contract is not"). Field finding: 4 refusals in a row had left NO
+  loggable trace. Expected web natives 413 → 425 (the 12 card keys join the
+  workshop — the next "Complete" run translates them).
+
 ## [1.17.0.1] — 2026-10-04
 
 ### Fixed (FR)
@@ -52,6 +213,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   per-page-load cache-buster keeps the live-editable overlay fresh (the
   endpoint response carries no freshness header). The `server` and `ext`
   sections were unaffected (served server-side, token present).
+
+### Added (FR)
+- **Raisons de refus enrichies — la raison devient consigne** : un refus de
+  balises nomme désormais les multisets attendu/reçu (bornés), et le cas «
+  native nue » nomme le mécanisme (entité HTML dés-échappée → balise vraie).
+  Les raisons voyagent aussi dans le prompt de réparation : le modèle reçoit
+  une correction, pas un verdict. Les refus **totaux** remontent leurs
+  raisons par clé jusqu'à la réparation (groupée et singleton) — le
+  générique « dose en échec » ne sert plus que si rien n'a été parsé ; la
+  règle 4 de la directive interdit explicitement le dés-échappement ET
+  l'ajout de balises. Déclencheur (terrain 2026-10-04, `gemma4:latest`) :
+  `cfg.crosskind.convert.hint` refusée 5× d'affilée — sa native contient
+  `&lt;movie&gt;` que le modèle transformait en balise vraie, et elle n'a
+  AUCUNE balise.
+- **Rapport honnête sur les doses « mortes »** : une dose du loop principal
+  peut être rattrapée par la réparation (terrain 08:56 : `crosskind`
+  réparée 1/1 après 2 refus totaux) — elle n'est plus nommée « definitivamente
+  en échec » que si des clés restent absentes du résultat final.
+- **Outil chat admin `i18n_search`** : recherche PAR TEXTE (sous-chaîne
+  insensible à la casse) dans les natives EN/FR et les valeurs d'overlay de
+  toutes les langues générées — l'admin voit le texte non conforme à l'écran
+  sans connaître la clé (« trouve la clé contenant 'anterior se mantiene' »)
+  : liste clé, famille, langue(s), extrait ; natives toujours sondées même
+  avec filtre de langue (le texte vu peut être un repli natif) ; texte
+  absent partout → réponse explicite « ne vient pas du plugin ». Suite du
+  flux : `i18n_get` (contexte) puis `i18n_set_key` (correction validée).
+- **Réparation passe 2 en singletons** : après la réparation groupée, les
+  clés toujours manquantes repartent **une par dose** (au plus un appel par
+  clé restée — borné, déclenché seulement s'il reste des clés), avec la
+  raison réelle et, pour les balisées, le bloc tags + inventaire ; nom de
+  dose `solo_<domaine>` au journal. Motivation (terrain 2026-10-04,
+  `gemma4:latest`) : la réparation groupée a refusé **0/5 en totalité**
+  (dose tags de 4 clés, puis dose crosskind) là où la forme singleton n'a
+  jamais perdu (Compléter d'une clé passé du premier coup sur les deux
+  modèles). Au passage, les clés des doses mortes arrivent en réparation
+  avec leur raison réelle (1re tentative puis durcie) au lieu du générique
+  « dose en échec ».
+- **Doses spécialisées « balises HTML »** : les clés dont la native EN porte
+  des balises (40/626, toutes `web`, moy. 416 car.) partent dans des doses
+  dédiées (cap 15, émises en tête de campagne, sans fusion de compacité) qui
+  portent un bloc de règles balises (recopie caractère par caractère, contenu
+  des `<code>` jamais traduit) et un **inventaire exact par clé** (« 2×`<b>`,
+  2×`</b>`… ») que la sortie doit reproduire — le contrat liste ce que la
+  porte de validation exigera, avec la même regex. La réparation ciblée en
+  profite aussi (le mot-clé de la raison `balises HTML divergentes` vient
+  désormais avec le mode d'emploi). Motivation (terrain 2026-10-04) :
+  `cfg.extchat.desc`, 10 balises, refusée 2× par `gemma4:latest` — en dose
+  mélangée puis en réparation, la cause étant la représentation des balises,
+  pas l'attention. Première validation live le même jour : la dernière clé
+  manquante du « es » est passée du premier coup en dose « tags » singleton
+  — inventaire servi au contrat, 1 appel LLM, couverture 626/626.
+
+### Changed (FR)
+- **Diagnostic des refus de validation** : chaque clé refusée est désormais
+  journalisée avec son nom et sa raison (ex. `cfg.extchat.desc (balises HTML
+  divergentes)`), au niveau de la dose — y compris le refus total — et au
+  verdict final, où la liste des clés au repli natif devient directement
+  actionnable depuis le chat admin (`i18n_get` / `i18n_set_key`). Auparavant
+  le log ne portait que le décompte (« 1 refusée(s) ») : la retouche ciblée
+  partait à l'aveugle (terrain 2026-10-04, `cfg.extchat.desc` refusée 2×).
+  Validé en production dans la foulée : les refus des balises (4), les
+  absentes de réponse (2) et la clé au repli natif avec sa raison sont tous
+  nommés dans le journal.
+- **Timeouts de la génération de langues, source unique** : le run détaché
+  passe de 25 à **55 min** et l'appel de dose de 5 à **10 min** (constate
+  terrain 2026-10-04 : une campagne complète sur `gemma4:26b` local —
+  partiellement déchargé de la VRAM, ~1,8 min/dose — était tuée à 25 min
+  pile vers la 14e dose sur 27, tout perdu car l'écriture n'a lieu qu'en
+  fin de campagne ; `gemma4:latest` tient le même full en ~13 min 30).
+  **Validé dans la foulée sur le 26b avec ces valeurs** : full 626 clés en
+  **36 min 35 s** (28 appels, zéro escalade cloud, 5/6 récupérées en
+  réparation) — 55 min passe avec ~18 min de marge.
+  La durée vit désormais dans une constante unique côté endpoint qui
+  alimente le CTS, la ligne de log d'annulation ET le message localisé
+  `i18n.gen.err.timeout` (placeholder `{0}`) — le libellé hardcodait
+  « 25 minutes » et aurait menti après le changement de valeur.
+
+### Added (EN)
+- **Enriched rejection reasons — the reason becomes an instruction**: a tag
+  rejection now names the expected/received multisets (bounded), and the
+  "bare native" case names the mechanism (an unescaped HTML entity
+  becoming a real tag). The reasons also travel into the repair prompt: the
+  model receives a correction, not a verdict. **Total refusals** now carry
+  their per-key reasons down to repair (grouped and singleton) — the
+  generic "dose in failure" only remains when nothing was parsed; directive
+  rule 4 now explicitly forbids un-escaping AND tag-adding. Trigger (field
+  finding 2026-10-04, `gemma4:latest`): `cfg.crosskind.convert.hint`
+  rejected 5 times in a row — its native contains `&lt;movie&gt;` which the
+  model kept turning into a real tag, and it carries NO tags.
+- **Honest reporting of "dead" doses**: a dose from the main loop can be
+  recovered by repair (field finding 08:56: `crosskind` repaired 1/1 after
+  2 total refusals) — it is only reported as "definitively failed" if some
+  keys are still absent from the final result.
+- **Admin chat tool `i18n_search`**: text search (case-insensitive
+  substring) across EN/FR natives and the overlay values of every generated
+  language — the admin sees a non-conforming on-screen text without knowing
+  the key ("find the key containing 'anterior se mantiene'"): lists key,
+  family, language(s), excerpt; natives always scanned even with a language
+  filter (the seen text may be a native fallback); text absent everywhere →
+  explicit "not from the plugin" answer. Flow continues with `i18n_get`
+  (context) then `i18n_set_key` (validated fix).
+- **Repair pass 2 as singletons**: after the grouped repair, still-missing
+  keys go back **one per dose** (at most one call per remaining key —
+  bounded, fires only when keys remain), with the real reason and, for
+  tagged ones, the tags block + inventory; dose name `solo_<domain>` in the
+  log. Motivation (field finding 2026-10-04, `gemma4:latest`): the grouped
+  repair refused **0/5 wholesale** (a 4-key tags dose, then a crosskind
+  dose) where the singleton shape never lost (a one-key Compléter passed
+  first try on both models). Along the way, keys from dead doses reach
+  repair with their real reason (first attempt then hardened) instead of
+  the generic "dose in failure".
+- **Specialized "HTML tags" doses**: keys whose EN native carries HTML tags
+  (40/626, all `web`, avg 416 chars) go into dedicated doses (cap 15, emitted
+  first in the campaign, no compaction merge) carrying a tag-rules block
+  (character-exact copy, `<code>` contents never translated) and an
+  **exact per-key inventory** ("2×`<b>`, 2×`</b>`…") the output must
+  reproduce — the contract lists what the validation gate will demand, using
+  the same regex. Targeted repair benefits too (the `HTML tags diverge`
+  rejection reason now ships with the how-to). Motivation (field finding
+  2026-10-04): `cfg.extchat.desc`, 10 tags, rejected twice by
+  `gemma4:latest` — mixed dose then repair, the cause being tag
+  representation, not attention. First live validation the same day: the
+  last missing key of "es" passed first try as a singleton `tags` dose —
+  inventory served per contract, 1 LLM call, coverage 626/626.
+
+### Changed (EN)
+- **Validation-rejection diagnostics**: every rejected key is now logged
+  with its name and reason (e.g. `cfg.extchat.desc (HTML tags diverge)`), at
+  dose level — including total-dose refusal — and at the final verdict, where
+  the native-fallback key list becomes directly actionable from the admin
+  chat (`i18n_get` / `i18n_set_key`). Previously the log only carried the
+  count ("1 rejected"): targeted fixes started blind (field finding
+  2026-10-04, `cfg.extchat.desc` rejected twice). Verified in production in
+  the same session: tag rejections (4), missing-from-response (2) and the
+  native-fallback key with its reason are all named in the log.
+- **Language generation timeouts, single source**: the detached run goes
+  from 25 to **55 min** and the per-dose call from 5 to **10 min** (field
+  finding 2026-10-04: a full campaign on local `gemma4:26b` — partially
+  offloaded from VRAM, ~1.8 min/dose — was killed at exactly 25 min around
+  dose 14 of 27, everything lost since the write only happens at campaign
+  end; `gemma4:latest` completes the same full run in ~13 min 30).
+  **Validated the same day on the 26b with these values**: full 626 keys in
+  **36 min 35 s** (28 calls, zero cloud escalation, 5/6 recovered in
+  repair) — 55 min passes with ~18 min of margin.
+  The duration now lives in a single endpoint-side constant feeding the CTS,
+  the cancellation log line AND the localized `i18n.gen.err.timeout`
+  message (`{0}` placeholder) — the label hardcoded "25 minutes" and would
+  have lied after the value change.
 
 ---
 

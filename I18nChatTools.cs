@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,8 +9,9 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     /// <summary>Résolution des natives + overlay et plomberie de réponse pour
-    /// les tools d'atelier (T1d) — partagée par <see cref="I18nGetTool"/> et
-    /// <see cref="I18nSetKeyTool"/> : une clé d'interface vit dans UNE famille
+    /// les tools d'atelier (T1d) — partagée par <see cref="I18nSearchTool"/>,
+    /// <see cref="I18nGetTool"/> et <see cref="I18nSetKeyTool"/> : une clé
+    /// d'interface vit dans UNE famille
     /// (web | server | ext) déterminée par les natives EN ; l'overlay ne
     /// sert que ce qui copie cette forme. Les fonctions de résolution sont
     /// pures en lecture (l'écriture vit dans <see cref="I18nGenerator"/>).</summary>
@@ -98,12 +100,27 @@ namespace LLM_AI
         }
 
         /// <summary>Sérialisation de réponse tool (jamais levante — repli :
-        /// mini-JSON d'échec que la boucle de l'agent sait afficher).</summary>
+        /// mini-JSON d'échec que la boucle de l'agent sait afficher).
+        /// Encodeur RELAXÉ (miroir <see cref="I18nGenerator"/>.Serialize et
+        /// <c>LlmAgentService.RelaxedJsonOpts</c>) : l'échappement par défaut
+        /// transforme chaque <c>&lt;</c> en <c>\u003C</c> — les balises
+        /// natives et la directive du contrat partaient en SOUPE
+        /// D'ÉCHAPPEMENTS que les petits modèles ne décodent pas (terrain
+        /// 2026-10-04 : l'original redemandé au chat sortait sans balises —
+        /// le modèle n'en avait jamais vu une vraie, donc n'en recopiait
+        /// aucune ; la campagne de génération, elle, sérialise relaxé et
+        /// tient 626/626). Le JSON part au LLM et aux logs, jamais
+        /// embarqué dans une page HTML.</summary>
         internal static string Json(object o)
         {
-            try { return System.Text.Json.JsonSerializer.Serialize(o); }
+            try { return System.Text.Json.JsonSerializer.Serialize(o, s_relaxedJson); }
             catch { return "{\"status\":\"failed\",\"detail\":\"sérialisation\"}"; }
         }
+
+        private static readonly System.Text.Json.JsonSerializerOptions s_relaxedJson = new()
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
 
         /// <summary>Étiquette stable (pour le LLM) d'un verdict du
         /// validateur — miroir des règles du chargeur, pas une prose
@@ -114,13 +131,141 @@ namespace LLM_AI
             : v == I18nDoses.Verdict.Empty ? "vide"
             : v == I18nDoses.Verdict.PlaceholderMismatch ? "placeholders divergents"
             : "balises divergentes";
+
+        /// <summary>Sig borné (miroir I18nGenerator.BoundedSig, cap 60) —
+        /// une raison de refus ne doit pas noyer un petit modèle.</summary>
+        internal static string BoundedSig(string sig)
+        {
+            if (string.IsNullOrEmpty(sig)) return "";
+            return sig.Length <= 60 ? sig : sig.Substring(0, 57) + "…";
+        }
+
+        /// <summary>Raison de refus structurel — la MÊME consigne que la
+        /// campagne : native NUE → nommer le dés-échappement (terrain
+        /// cfg.crosskind.convert.hint) ; sinon multisets de balises
+        /// attendu/reçu bornés + la règle « raccourcir le texte oui, le
+        /// contrat de balises non » (terrain 2026-10-04,
+        /// cfg.orphan.firstpass.desc : 4 dépôts refusés d'affilée — le
+        /// modèle abandonnait au lieu de re-poser la balise sur son texte
+        /// écourté, faute d'inventaire explicite dans la raison générique).
+        /// </summary>
+        internal static string RefusalReason(I18nDoses.Verdict verdict, string en, string val)
+        {
+            if (verdict == I18nDoses.Verdict.TagMismatch)
+            {
+                var sigEn = I18nOverlay.HtmlTagSig(en);
+                var sigV = I18nOverlay.HtmlTagSig(val);
+                return sigEn.Length == 0
+                    ? "balises HTML ajoutées (la native n'en porte AUCUNE ; recopie les entités " +
+                      "HTML &lt;…&gt; à l'identique — les dés-échapper crée une balise vraie et est refusé)"
+                    : "balises HTML divergentes (native EN : « " + BoundedSig(sigEn) +
+                      " » ; ta valeur : « " + BoundedSig(sigV) + " ») — recopie chaque balise " +
+                      "caractère par caractère, une ouvrante = sa fermante, même nombre ; le " +
+                      "raccourcissement du TEXTE est permis, celui du CONTRAT de balises non — " +
+                      "pose la balise sur le segment équivalent (ex. la phrase mise en gras)";
+            }
+            if (verdict == I18nDoses.Verdict.PlaceholderMismatch)
+                return "placeholders {n} divergents — recopie EXACTEMENT les {n} de la native EN " +
+                       "(raccourcissement du texte permis, du contrat {n} non)";
+            return verdict == I18nDoses.Verdict.Empty ? "valeur vide" : "refus structurel";
+        }
+
+        /// <summary>Construit le bloc « contract » de la réponse
+        /// <c>i18n_get</c> pour une clé (null = bloc OMIS : rien
+        /// d'immuable, le contrat doit rester un signal, pas du bruit —
+        /// une clé de texte simple n'en porte pas). C'est la pièce
+        /// proactive de l'atelier : le modèle lit le contrat AVANT de
+        /// construire la valeur, au lieu de découvrir la règle dans un
+        /// refus. Miroir des doses « tags » de la campagne (DoseUser) —
+        /// terrain 2026-10-04 : sans inventaire explicite, le modèle
+        /// « retouche » les balises de mémoire (4 dépôts refusés
+        /// d'affilée puis abandon) ; l'inventaire liste EXACTEMENT ce
+        /// que la porte <see cref="I18nDoses.Validate"/> exigera au
+        /// <c>i18n_set_key</c> (même regex, même comptage) — le refus
+        /// motivé reste le filet, le contrat est la prévention.</summary>
+        internal static object ContractFor(string family, string en)
+        {
+            if (en == null) return null;
+            var rules = new List<string>();
+            var contract = new Dictionary<string, object>(StringComparer.Ordinal);
+
+            if (string.Equals(family, "ext", StringComparison.Ordinal))
+            {
+                // Famille texte brut : la porte interdit LITTÉRALEMENT le
+                // HTML (native ext sans balise → toute balise ajoutée est
+                // divergente) — le rendu textContent/str.format afficherait
+                // la balise en clair.
+                rules.Add("famille ext = texte BRUT : aucune balise HTML dans la " +
+                          "valeur (le rendu est textuel, une balise s'afficherait " +
+                          "littéralement)");
+            }
+            else
+            {
+                var tags = I18nOverlay.HtmlTagsInOrder(en);
+                if (tags.Count > 0)
+                {
+                    contract["tags"] = I18nOverlay.Inventory(tags);
+                    rules.Add("balises HTML immuables : recopie chaque balise " +
+                              "CARACTÈRE PAR CARACTÈRE, même compte, même forme exacte " +
+                              "(jamais <b> en <strong>, aucun attribut inventé) ; une " +
+                              "balise ouvrante = sa fermante, autour des mêmes segments " +
+                              "de texte ; traduis le TEXTE entre les balises, jamais les " +
+                              "balises, et le contenu de <code>…</code> ne se traduit " +
+                              "pas ; raccourcir le texte est permis, pas le contrat de " +
+                              "balises");
+                }
+                else if (en.Contains("&lt;"))
+                {
+                    // Piège attesté (cfg.crosskind.convert.hint, 5 refus
+                    // d'affilée en campagne) : le modèle dés-échappe
+                    // l'entité → balise vraie → porte divergente.
+                    rules.Add("entités HTML immuables : recopie &lt; &gt; &amp; " +
+                              "À L'IDENTIQUE — les dés-échapper (ex. &lt;movie&gt; " +
+                              "devient <movie>) crée une balise vraie et le dépôt " +
+                              "sera refusé");
+                }
+            }
+
+            var phs = I18nOverlay.PlaceholdersInOrder(en);
+            if (phs.Count > 0)
+            {
+                contract["placeholders"] = I18nOverlay.Inventory(phs);
+                rules.Add("placeholders immuables : recopie chaque {n} TEL QUEL, " +
+                          "même compte, même position logique — jamais renuméroté " +
+                          "ni fondu dans la prose");
+            }
+
+            if (en.Contains('\n'))
+            {
+                contract["multiline"] = true;
+                rules.Add("valeur multi-lignes : conserve chaque saut de ligne " +
+                          "(une ligne de la native = un \\n dans la valeur)");
+            }
+
+            if (rules.Count == 0) return null;
+            contract["directive"] = string.Join(" ; ", rules);
+            return contract;
+        }
+
+        /// <summary>Extrait borné d'une valeur pour le journal (100 car.,
+        /// sauts réduits à l'espace — le log reste sur une ligne).</summary>
+        internal static string SnipValue(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            var single = value.Replace("\r", " ").Replace("\n", " ");
+            return single.Length <= 100 ? single : single.Substring(0, 97) + "…";
+        }
     }
 
     /// <summary>
     /// Tool de chat <c>i18n_get</c> (v1.17.0 T1d — atelier de langues) :
     /// lecture COMPLÈTE d'une clé d'interface — natives EN + FR (l'intention
     /// du mainteneur), valeurs d'overlay par langue avec leur verdict
-    /// structurel (le chargeur les servira ou les laissera tomber). C'est
+    /// structurel (le chargeur les servira ou les laissera tomber), et
+    /// depuis v1.17.1.0 un bloc <c>contract</c> quand la native porte des
+    /// éléments immuables (balises HTML, placeholders {n}, sauts de ligne,
+    /// entités ; famille ext = texte brut) : inventaire exact + directive —
+    /// la prévention au dépôt, le refus motivé restant le filet. C'est
     /// l'instrument de revue des langues générées : le LLM voit pourquoi une
     /// valeur est sautée AVANT de proposer une correction.
     /// Lecture pure, sans approbation ni écriture — safe par construction.
@@ -138,11 +283,17 @@ namespace LLM_AI
             "natives EN (source formelle) et FR (intention du mainteneur), puis les valeurs " +
             "d'overlay par langue générée avec leur validité structurelle (placeholders {n}, " +
             "balises — une valeur « vide/placeholders divergents/balises divergentes » est " +
-            "SAUTÉE par le chargeur, la clé sert l'anglais natif). Utilisez-le avant toute " +
-            "correction (read-modify-write) : il montre la valeur actuelle, la famille exacte " +
-            "(web|server|ext) et le verdict de chaque langue. Une clé inconnue renvoie des " +
-            "suggestions proches (les familles : web = libellés des pages, server = messages " +
-            "HTTP/jalons, ext = chat externe).";
+            "SAUTÉE par le chargeur, la clé sert l'anglais natif). Si la native porte des " +
+            "éléments structurels (balises HTML, placeholders {n}, sauts de ligne, entités " +
+            "HTML), la réponse inclut un bloc « contract » : ces éléments sont IMMUABLES — " +
+            "recopiez-les caractère par caractère dans la valeur corrigée (traduisez le " +
+            "TEXTE, jamais les balises ni les {n}) ; un dépôt qui brise le contrat est " +
+            "refusé. Utilisez-le avant toute correction (read-modify-write) : il montre la " +
+            "valeur actuelle, la famille exacte (web|server|ext) et le verdict de chaque " +
+            "langue. Si vous ne connaissez que le TEXTE vu à l'écran (pas la clé), " +
+            "commencez par i18n_search(text). Une clé inconnue renvoie des suggestions " +
+            "proches (les familles : web = libellés des pages, server = messages HTTP/" +
+            "jalons, ext = chat externe).";
 
         public string ArgumentsSchema =>
             "{\"type\":\"object\",\"properties\":{" +
@@ -182,14 +333,24 @@ namespace LLM_AI
                     };
                 }
 
-                return Task.FromResult(I18nChatKeys.Json(new
+                var resp = new Dictionary<string, object>
                 {
-                    status = "ok",
-                    key,
-                    family = sec,
-                    natives = new { en, fr },
-                    overlay
-                }));
+                    ["status"] = "ok",
+                    ["key"] = key,
+                    ["family"] = sec,
+                    ["natives"] = new { en, fr },
+                    ["overlay"] = overlay
+                };
+                // Contrat structurel (v1.17.1.0) : la native porte des
+                // éléments immuables (balises, {n}, sauts de ligne,
+                // entités, ext = brut) — le bloc liste l'inventaire EXACT
+                // que la porte Validate exigera au dépôt + la directive à
+                // suivre. Omis pour une clé sans contrainte : un contrat
+                // partout n'est plus un signal.
+                var contract = I18nChatKeys.ContractFor(sec, en);
+                if (contract != null) resp["contract"] = contract;
+
+                return Task.FromResult(I18nChatKeys.Json(resp));
             }
             catch (OperationCanceledException)
             {
@@ -205,14 +366,21 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Tool de chat <c>i18n_set_key</c> (v1.17.0 T1d) : corrige UNE clé pour
-    /// UNE langue générée — écriture DIRECTE (décision usager 2026-10-03
-    /// « clé unique directe ») après validation structurelle DÉTERMINISTE en
-    /// C# : placeholders {n}/balises identiques à la native EN, texte brut
-    /// strict pour la famille ext, clé réelle, code langue normalisé. Le LLM
-    /// n'a aucun contournement : une valeur fautive est refusée avec la
-    /// raison. Écriture atomique (.bak + re-scan, effectif sans restart) —
-    /// l'identique-EN légitime (marques, icônes) passe avec un avertissement.
+    /// Tool de chat <c>i18n_set_key</c> (v1.17.0 T1d ; DÉPÔT deux phases
+    /// depuis v1.17.0.2) : propose la correction d'UNE clé pour UNE langue
+    /// générée — validation structurelle DÉTERMINISTE en C# (placeholders
+    /// {n}/balises identiques à la native EN, texte brut strict pour la
+    /// famille ext, clé réelle, code langue normalisé), puis sérialisation
+    /// dans <see cref="ChatI18nStore"/> : l'écriture n'a lieu qu'au clic
+    /// « Approuver » de l'admin (endpoint déterministe, gates re-courues,
+    /// .bak + re-scan) — le LLM n'a AUCUN chemin d'écriture direct. Le dépôt
+    /// exige le mode déroulant « Modification texte UI » (décision usager
+    /// 2026-10-04) — hors mode : refus avec la consigne. L'identique-EN
+    /// légitime (marques, icônes) passe avec un avertissement. Depuis
+    /// v1.17.1.0, <see cref="I18nGetTool"/> sert le contrat structurel de
+    /// la clé (bloc « contract » : inventaire exact + directive) : le
+    /// modèle recopie un contrat LISTÉ, il ne « retouche » pas les balises
+    /// de mémoire — la porte, elle, ne change pas.
     /// </summary>
     /// <remarks>
     /// Différent du pattern plugin_prompts (deux phases + carte) : l'atelier
@@ -229,29 +397,42 @@ namespace LLM_AI
         /// les plus longues ≪ ; protège le fichier et l'attention des doses).</summary>
         internal const int MaxValueChars = 2000;
 
+        private readonly string _sessionId, _userId, _contextId;
         private readonly ILogger _logger;
 
-        public I18nSetKeyTool(ILogger logger) { _logger = logger; }
+        /// <summary>Session/usager de liaison du dépôt (anti-détournement :
+        /// l'approbation rejoue la même session) + mode déroulant résolu côté
+        /// service — la validation croisée mode ↔ dépôt (miroir des prompts
+        /// v1.13.9) vit ici.</summary>
+        public I18nSetKeyTool(string sessionId, string userId, string contextId, ILogger logger)
+        {
+            _sessionId = sessionId; _userId = userId;
+            _contextId = contextId; _logger = logger;
+        }
 
         public string Name => "i18n_set_key";
 
         public string Description =>
-            "Corrige UNE clé d'interface pour UNE langue générée (atelier de langues) — " +
-            "écriture directe validée : la valeur doit avoir les MÊMES placeholders {n} et " +
-            "balises que la native EN (famille ext = texte BRUT, jamais de HTML), sinon elle " +
-            "est refusée avec la raison. Procédure : i18n_get(key) D'ABORD (natives + valeur " +
-            "actuelle), puis set_key(key, lang, value) en une VRAIE traduction (registre poli, " +
-            "longueur proche de la native — un bouton reste 2-3 mots). Ne soumettez jamais une " +
-            "copie anglaise d'une chaîne traduisible. Après écriture, la réponse porte ce que " +
-            "le serveur SERVIT réellement (re-scan immédiat) — confirmez à l'admin avec cette " +
-            "valeur.";
+            "Propose la correction d'UNE clé d'interface pour UNE langue générée (atelier de " +
+            "langues) — DÉPÔT en deux phases : la proposition est VALIDÉE (placeholders {n} et " +
+            "balises identiques à la native EN, ext = texte BRUT) puis déposée sur une carte " +
+            "« Approuver / Refuser » ; l'ÉCRITURE n'a lieu qu'au clic « Approuver » de l'admin " +
+            "(code déterministe). N'annoncez JAMAIS une écriture faite : annoncez la proposition " +
+            "(clé, langue, valeur) et attendez le résultat de la carte. Procédure : i18n_get(key) " +
+            "D'ABORD et relevez son bloc « contract » s'il y en a un (balises HTML, placeholders " +
+            "{n}, sauts de ligne, entités) — ces éléments sont IMMUABLES : recopiez-les " +
+            "caractère par caractère, traduisez le texte entre eux. Puis set_key(key, lang, " +
+            "value) avec la valeur COMPLÈTE (registre poli, longueur proche de la native — " +
+            "un bouton reste 2-3 mots), jamais une copie anglaise d'une chaîne traduisible. " +
+            "Le dépôt exige le mode « Modification texte UI » (dropdown de la page).";
 
         public string ArgumentsSchema =>
             "{\"type\":\"object\",\"properties\":{" +
             "\"key\":{\"type\":\"string\",\"description\":\"Clé exacte (ex. act.ok.2)\"}," +
             "\"lang\":{\"type\":\"string\",\"description\":\"Code de langue cible (ex. es)\"}," +
             "\"value\":{\"type\":\"string\",\"description\":\"Valeur corrigée complète (max " +
-            MaxValueChars + " caractères)\"}}," +
+            MaxValueChars + " caractères) — le contract de i18n_get (balises HTML, {n}, " +
+            "sauts de ligne) se recopie EXACTEMENT\"}}," +
             "\"required\":[\"key\",\"lang\",\"value\"]}";
 
         public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
@@ -272,6 +453,22 @@ namespace LLM_AI
                         detail = "value dépasse " + MaxValueChars + " caractères (" + value.Length +
                                  ") — une valeur d'interface ne l'exige jamais." }));
 
+                // MODE EXCLUSIF (décision usager 2026-10-04) : la modification
+                // des chaînes exige la sélection du mode « Modification texte
+                // UI » dans le dropdown de la page chat — miroir de la
+                // validation champ ↔ mode des prompts (v1.13.9). Le refus est
+                // une CONSIGNE : le modèle relit l'invite au tour suivant.
+                var mode = ChatContexts.Find(_contextId);
+                if (mode == null || !string.Equals(mode.Id, ChatContexts.I18nEditModeId,
+                        StringComparison.Ordinal))
+                {
+                    _logger?.Info("[LLM_AI] Chat i18n_set_key : dépôt refusé (mode « Modification texte UI » non sélectionné).");
+                    return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
+                        detail = "la modification des chaînes i18n exige le mode « Modification " +
+                                 "texte UI » — sélectionnez-le dans la liste déroulante de la page " +
+                                 "chat puis réessayez." }));
+                }
+
                 string langKey = I18nOverlay.NormalizeLang(lang, out var normNote);
                 if (langKey == null)
                     return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
@@ -288,14 +485,20 @@ namespace LLM_AI
 
                 // Validation structurelle DÉTERMINISTE (le même mur que le
                 // chargeur et que la campagne de génération — le LLM ne
-                // contourne pas : refus motivé, aucune écriture).
+                // contourne pas : refus motivé, aucune écriture). La raison
+                // est la MÊME que la campagne ET est loggée — terrain
+                // 2026-10-04 : 4 dépôts refusés d'affilée n'ont laissé
+                // AUCUNE trace loggable, le diagnostic ne tenait qu'à la
+                // prose (paraphrase) du modèle.
                 var verdict = I18nDoses.Validate(en, value);
                 if (verdict != I18nDoses.Verdict.Ok)
+                {
+                    string reason = I18nChatKeys.RefusalReason(verdict, en, value);
+                    _logger?.Warn("[LLM_AI] Chat i18n_set_key : dépôt refusé ({0}) — clé={1}, lang={2}, value « {3} ».",
+                        reason, key, lang, I18nChatKeys.SnipValue(value));
                     return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
-                        detail = "valeur refusée par la validation structurelle : " +
-                                 I18nChatKeys.VerdictLabel(verdict) + " (copiez le multiset des " +
-                                 "placeholders {n} et des balises de la native EN exactement — " +
-                                 "native : « " + (en ?? "") + " »)." }));
+                        detail = "valeur refusée par la validation structurelle : " + reason }));
+                }
 
                 var warn = new List<string>();
                 if (string.Equals(value, en, StringComparison.Ordinal)
@@ -311,25 +514,32 @@ namespace LLM_AI
                 else if (normNote != null)
                     warn.Add("langue normalisée : " + normNote);
 
-                I18nGenerator.WriteOverlayKey(langKey, sec, key, value);
-                _logger?.Info("[LLM_AI] Chat i18n : clé {0} corrigée ({1}/{2}, {3} caractères).",
-                    key, langKey, sec, value.Length);
-                SecurityMonitor.Record("I18N_CLE_MODIFIEE",
-                    langKey + "/" + sec + " " + key + " (" + value.Length + " caractères"
-                    + (warn.Count > 0 ? ", " + string.Join(" ; ", warn) : "") + ")");
+                // Valeur d'overlay actuelle (carte Avant/Après ; null =
+                // première écriture pour cette langue — la carte l'affiche).
+                var overlay = I18nChatKeys.OverlayFor(key);
+                string oldValue = overlay.TryGetValue(langKey, out var ov) ? ov.Value : null;
 
-                // Ce que le serveur SERVIT après re-scan : la preuve d'effet
-                // (le LLM la relaie à l'admin tel quel).
-                string served = I18n.S(key, langKey);
+                // DÉPÔT (two phases) : sérialisation côté serveur — l'écriture
+                // n'a lieu qu'à l'approbation (endpoint I18nKey/Approve, code
+                // déterministe). Le LLM n'a aucun chemin d'écriture direct.
+                var pending = ChatI18nStore.Create(_sessionId, _userId, sec, key, langKey,
+                    oldValue, value, warn.Count > 0 ? string.Join(" ; ", warn) : null, _logger);
+                if (pending == null)
+                    return Task.FromResult(I18nChatKeys.Json(new { status = "failed",
+                        detail = "création de l'attente impossible." }));
+
+                _logger?.Info("[LLM_AI] Chat i18n : proposition déposée (action_id={0}, {1}/{2}, {3} caractères).",
+                    pending.ActionId, langKey, key, value.Length);
                 return Task.FromResult(I18nChatKeys.Json(new
                 {
-                    status = "ok",
+                    status = "pending_approval",
+                    action_id = pending.ActionId,
                     key,
                     lang = langKey,
                     family = sec,
-                    written = true,
-                    served = served ?? value,
-                    warning = warn.Count > 0 ? string.Join(" ; ", warn) : null
+                    detail = "Proposition déposée — la carte « Approuver / Refuser » de la page " +
+                             "porte l'écriture. Annoncez la proposition à l'admin (clé, langue, " +
+                             "valeur) et attendez ; ne la renvoyez PAS sans changement."
                 }));
             }
             catch (OperationCanceledException)
@@ -342,6 +552,144 @@ namespace LLM_AI
                 return Task.FromResult(I18nChatKeys.Json(new { status = "failed", detail = ex.Message }));
             }
         }
+
+    }
+
+    /// <summary>
+    /// Tool de chat <c>i18n_search</c> (v1.17.0 — atelier de langues) : l'admin
+    /// voit le TEXTE à l'écran, pas la clé. Recherche par sous-chaîne
+    /// (insensible à la casse) dans les natives EN+FR (web, server, ext) et
+    /// TOUTES les valeurs d'overlay des langues générées — les natives restent
+    /// sondées même avec un filtre de langue, car le texte vu peut être un
+    /// repli natif (clé absente de l'overlay). Texte absent partout : réponse
+    /// explicite « ne vient pas du plugin » (UI Emby core, autre source, texte
+    /// construit en JS). Flux : i18n_search(text) → i18n_get(key) →
+    /// i18n_set_key. Lecture pure — safe par construction.
+    /// </summary>
+    internal sealed class I18nSearchTool : ILlmTool
+    {
+        /// <summary>Cap de résultats (les correspondances au-delà sont
+        /// tronquées — le texte générique s'affine, pas la pagination).</summary>
+        internal const int MaxMatches = 20;
+
+        private readonly ILogger _logger;
+
+        public I18nSearchTool(ILogger logger) { _logger = logger; }
+
+        public string Name => "i18n_search";
+
+        public string Description =>
+            "Recherche PAR TEXTE dans les chaînes du plugin (atelier de langues) : sous-chaîne " +
+            "insensible à la casse cherchée DANS LES VALEURS — natives EN et FR (famille web, " +
+            "server, ext) et valeurs d'overlay de toutes les langues générées. À utiliser quand " +
+            "l'admin voit un texte non conforme à l'écran sans connaître la clé (« trouve la clé " +
+            "contenant… »). Renvoie clé, famille, langue(s) et extrait borné — puis i18n_get(key) " +
+            "pour le contexte complet et i18n_set_key pour corriger. Avec un « lang », le filtre " +
+            "ne porte que sur l'overlay : les natives EN/FR restent toujours sondées (le texte vu " +
+            "peut être un repli natif — alors la langue demandée n'affichera RIEN, seul « en »/« fr » " +
+            "matchera). Texte absent partout → le dit explicitement : le texte ne vient pas du " +
+            "plugin. Cap " + MaxMatches + " résultats : si le texte est trop générique, affinez.";
+
+        public string ArgumentsSchema =>
+            "{\"type\":\"object\",\"properties\":{" +
+            "\"text\":{\"type\":\"string\",\"description\":\"Sous-chaîne du texte VU À L'ÉCRAN (ex. « anterior se mantiene »)\"}," +
+            "\"lang\":{\"type\":\"string\",\"description\":\"Optionnel — filtre une langue générée (ex. es). Par défaut : toutes.\"}}," +
+            "\"required\":[\"text\"]}";
+
+        public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
+        {
+            string text = (I18nChatKeys.ArgString(args, "text") ?? "").Trim();
+            string langF = (I18nChatKeys.ArgString(args, "lang") ?? "").Trim();
+            try
+            {
+                if (text.Length < 2)
+                    return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
+                        detail = "text requise (sous-chaîne du texte VU À L'ÉCRAN, ≥ 2 caractères)." }));
+                string langKey = langF.Length == 0 ? null : I18nOverlay.NormalizeLang(langF, out _);
+                if (langF.Length > 0 && langKey == null)
+                    return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
+                        detail = "lang « " + langF + " » non reconnu — 2-3 lettres (ex. es, de, pt)." }));
+
+                // Une seule passe « valeurs » (natives puis overlay) — chaque
+                // correspondance mémorise lang → extrait, fusion par clé :
+                // une clé qui matche en EN et en es donne UNE ligne à deux
+                // langues, pas deux résultats.
+                var rows = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+                void SnipAdd(string key, string langTag, string val)
+                {
+                    if (string.IsNullOrEmpty(val)) return;
+                    var idx = val.IndexOf(text, StringComparison.OrdinalIgnoreCase);
+                    if (idx < 0) return;
+                    if (!rows.TryGetValue(key, out var r))
+                        rows[key] = r = new Dictionary<string, string>(StringComparer.Ordinal);
+                    if (!r.ContainsKey(langTag)) r[langTag] = Snip(val, idx);
+                }
+                foreach (var kv in Nulless(I18nApiService.WebNativesLang("en", _logger)))
+                    SnipAdd(kv.Key, "en", kv.Value);
+                foreach (var kv in Nulless(I18nApiService.WebNativesLang("fr", _logger)))
+                    SnipAdd(kv.Key, "fr", kv.Value);
+                foreach (var kv in Nulless(I18n.EnServerDict)) SnipAdd(kv.Key, "en", kv.Value);
+                foreach (var kv in Nulless(I18n.ServerDictFor("fr"))) SnipAdd(kv.Key, "fr", kv.Value);
+                foreach (var kv in Nulless(I18n.EnExtDict)) SnipAdd(kv.Key, "en", kv.Value);
+                // Overlay de toutes les langues générées (filtre optionnel).
+                foreach (var langKv in I18nGenerator.ReadOverlayValues())
+                {
+                    if (langKey != null && !string.Equals(langKv.Key, langKey, StringComparison.Ordinal))
+                        continue;
+                    foreach (var famKv in langKv.Value)
+                        foreach (var kk in famKv.Value)
+                            SnipAdd(kk.Key, langKv.Key, kk.Value);
+                }
+
+                var matches = new List<object>();
+                foreach (var k in rows.Keys.OrderBy(k => k, StringComparer.Ordinal))
+                {
+                    var (sec, _, _) = I18nChatKeys.ResolveNative(k, _logger);
+                    matches.Add(new { key = k, fam = sec ?? "(hors natives — inerte)", langs = rows[k] });
+                }
+
+                bool trunc = matches.Count > MaxMatches;
+                return Task.FromResult(I18nChatKeys.Json(new
+                {
+                    status = "ok",
+                    text,
+                    lang = langKey ?? "(toutes)",
+                    count = matches.Count,
+                    matches = matches.Take(MaxMatches).ToArray(),
+                    truncated = trunc,
+                    note = matches.Count == 0
+                        ? "aucune chaîne du plugin (natives EN/FR ni overlay des langues générées) ne " +
+                          "contient ce texte — il ne vient pas du plugin (UI Emby core, autre plugin, " +
+                          "texte construit en JS)"
+                        : null
+                }));
+            }
+            catch (OperationCanceledException)
+            {
+                return Task.FromResult(I18nChatKeys.Json(new { status = "failed", detail = "annulé" }));
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Chat i18n_search : {0}", ex.Message);
+                return Task.FromResult(I18nChatKeys.Json(new { status = "failed", detail = ex.Message }));
+            }
+        }
+
+        /// <summary>Extrait borné autour de la 1re occurrence (≤ 140 car.,
+        /// ellipses) — les lignes de résultat restent lisibles ; la valeur
+        /// COMPLETE s'obtient par i18n_get.</summary>
+        private static string Snip(string v, int idx)
+        {
+            const int Cap = 140, Before = 40;
+            int start = Math.Max(0, idx - Before), end = Math.Min(v.Length, start + Cap);
+            return (start > 0 ? "…" : "") + v.Substring(start, end - start) + (end < v.Length ? "…" : "");
+        }
+
+        /// <summary>Itération tolérante (les natives d'une section peuvent
+        /// ne pas être chargées).</summary>
+        private static IEnumerable<KeyValuePair<string, string>> Nulless(
+            IReadOnlyDictionary<string, string> d)
+            => d ?? (IEnumerable<KeyValuePair<string, string>>)Array.Empty<KeyValuePair<string, string>>();
 
     }
 }

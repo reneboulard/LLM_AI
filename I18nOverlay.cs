@@ -748,6 +748,42 @@ namespace LLM_AI
             => string.Join("|", HtmlTagRx.Matches(s ?? "")
                 .Cast<Match>().Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal));
 
+        /// <summary>Balises HTML d'une chaîne, dans leur ordre
+        /// D'APPARITION (même regex que la porte) — l'inventaire des doses
+        /// « tags » liste à l'identique ce que la validation exigera : une
+        /// seule définition du balisé, zéro désynchronisation critère
+        /// d'extraction ↔ porte de validation.</summary>
+        internal static List<string> HtmlTagsInOrder(string s)
+            => HtmlTagRx.Matches(s ?? "").Cast<Match>().Select(m => m.Value).ToList();
+
+        /// <summary>Placeholders {n} d'une chaîne, dans leur ordre
+        /// D'APPARITION (même regex que la porte <see cref="PlaceholderSig"/>)
+        /// — le contrat de l'atelier de langues liste à l'identique ce que la
+        /// validation exigera au dépôt (miroir de <see cref="HtmlTagsInOrder"/>
+        /// pour la seconde règle du kit).</summary>
+        internal static List<string> PlaceholdersInOrder(string s)
+            => PlaceholderRx.Matches(s ?? "").Cast<Match>().Select(m => m.Value).ToList();
+
+        /// <summary>Inventaire « n×token » d'une liste de tokens (ordre de
+        /// première apparition, comptage EXACT par token, attributs
+        /// compris) — la forme partagée du CONTRAT structurel : la campagne
+        /// de génération (doses « tags », <c>I18nGenerator.DoseUser</c>) et
+        /// l'atelier de langues (bloc « contract » de <c>i18n_get</c>)
+        /// listent à l'identique ce que la porte de validation exigera —
+        /// une seule définition du balisé, zéro désynchronisation
+        /// inventaire ↔ porte.</summary>
+        internal static string Inventory(IEnumerable<string> tokens)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var ordered = new List<string>();
+            foreach (var t in tokens ?? Array.Empty<string>())
+            {
+                if (!counts.TryGetValue(t, out var c)) { counts[t] = 1; ordered.Add(t); }
+                else counts[t] = c + 1;
+            }
+            return string.Join(", ", ordered.Select(t => counts[t] + "×" + t));
+        }
+
         /// <summary>Format de signature pour les logs (multiset vide → « aucune »).</summary>
         private static string SigOrNone(string sig)
             => sig.Length == 0 ? "aucun" : sig;

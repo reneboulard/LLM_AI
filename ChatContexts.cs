@@ -17,6 +17,12 @@ namespace LLM_AI
     /// Les contextes fournis d'origine sont les cinq <b>modes d'édition de
     /// prompt</b> : chacun injecte le texte courant d'un prompt éditable +
     /// son guide d'édition (rôle, invariants, conventions de rédaction).
+    /// v1.17.0.2 ajoute le mode <b>atelier de langues</b> (« Modification
+    /// texte UI ») : sans prompt éditable — son guide seul est injecté
+    /// (<see cref="ChatContextDef.GuideOnly"/>) et la modification des
+    /// chaînes i18n n'y est déposable QUE dans ce mode (validation croisée
+    /// côté <c>i18n_set_key</c>, comme la validation champ ↔ mode des
+    /// prompts).
     /// Ajouter un contexte futur = UNE entrée dans <see cref="ChatContexts.All"/>
     /// — la liste servie à la page et la validation <c>context_id</c> en
     /// dérivent automatiquement (registre unique en code, pas de fichier à
@@ -39,6 +45,9 @@ namespace LLM_AI
         /// croisée champ ↔ mode du <c>set</c> (v1.13.9 — la sauvegarde ne
         /// peut viser que le prompt du mode actif).</summary>
         public string Field { get; }
+        /// <summary>Vrai pour un mode <b>sans prompt éditable</b> : le guide
+        /// seul est injecté (défaut : faux pour les modes de prompt).</summary>
+        public bool GuideOnly { get; private set; }
 
         public ChatContextDef(string id, string label, string guide,
             Func<PluginConfiguration, string> getPrompt, string field)
@@ -48,6 +57,17 @@ namespace LLM_AI
             Guide = guide ?? "";
             GetPrompt = getPrompt ?? (_ => "");
             Field = field ?? "";
+            GuideOnly = false;
+        }
+
+        /// <summary>Constructeur d'un mode SANS prompt éditable (atelier de
+        /// langues) : le guide seul est injecté — ni « TEXTE ACTUEL » ni
+        /// « LANGUE CIBLE » (rien à relire dans la config). Les règles du
+        /// mode vivent dans son guide.</summary>
+        public ChatContextDef(string id, string label, string guide)
+            : this(id, label, guide, _ => null, "")
+        {
+            GuideOnly = true;
         }
     }
 
@@ -172,7 +192,50 @@ namespace LLM_AI
                 "modifier ni croire devoir les dupliquer — ne réécrivez pas l'interdiction de " +
                 "remédiation autonome en prose différente, laissez le code la porter.\n",
                 cfg => cfg.AuditPrompt, "audit_prompt"),
+
+            // Mode ATELIER DE LANGUES (v1.17.0.2, décision usager) : sans
+            // prompt éditable — la modification des chaînes i18n
+            // (i18n_set_key, dépôt deux phases) n'est déposable QUE dans ce
+            // mode. GuideOnly : le guide seul est injecté (les règles du
+            // mode vivent dedans).
+            new ChatContextDef(ChatContexts.I18nEditModeId,
+                "Modification texte UI",
+                "### RÔLE DE CE MODE\n" +
+                "L'atelier de langues : revoir et corriger les chaînes d'interface du plugin pour " +
+                "les langues générées (overlay). Ouvrez toujours par i18n_search (recherche PAR " +
+                "TEXTE — l'admin reproduit le texte vu à l'écran, jamais une clé) ou i18n_get " +
+                "(état complet d'une clé : natives EN+FR, valeurs par langue avec verdict " +
+                "structurel et flag identique-EN).\n" +
+                "### CORRECTION — DÉPÔT, PAS ÉCRITURE\n" +
+                "i18n_set_key(key, lang, value) DÉPOSE la proposition — la valeur COMPLÈTE (jamais " +
+                "un diff), avec EXACTEMENT les placeholders {n} et balises de la native EN (famille " +
+                "ext = texte BRUT), registre poli, longueur proche de la native (un bouton reste " +
+                "2-3 mots), jamais une copie anglaise d'une chaîne traduisible. L'ÉCRITURE n'a lieu " +
+                "qu'au clic « Approuver » de l'admin sur la carte de la page : ne dites JAMAIS " +
+                "qu'une valeur est écrite avant cette approbation — annoncez la proposition (clé, " +
+                "langue, valeur) et attendez le résultat de la carte.\n" +
+                "### RÈGLES DU MODE\n" +
+                "- LANGUES : répondez dans la langue de l'usager ; la valeur corrigée reste dans " +
+                "la langue que l'usager demande (ex. es = espagnol).\n" +
+                "- CONTRAT STRUCTUREL : quand i18n_get renvoie un bloc « contract », la native " +
+                "porte des éléments IMMUABLES (balises HTML, placeholders {n}, sauts de ligne, " +
+                "entités HTML ; famille ext = texte brut) — recopiez-les caractère par " +
+                "caractère dans la valeur corrigée, inventaire exact à l'appui ; traduisez le " +
+                "TEXTE entre eux, jamais les balises ni les {n}. Un dépôt qui brise le contrat " +
+                "est refusé par la validation.\n" +
+                "- UNE CLÉ PAR PROPOSITION : une seule clé par appel i18n_set_key ; pour plusieurs " +
+                "clés, déposez la première et attendez son approbation avant la suivante.\n" +
+                "- PAS DE CONFIRMATION AVANT DÉPÔT : ne demandez JAMAIS « voulez-vous que je prépare " +
+                "la correction ? » — déposez direct, la carte EST la confirmation.\n" +
+                "- MODE EXCLUSIF : ce mode couvre l'atelier de langues — pas les prompts (plugin_prompts : " +
+                "attendez un mode « Éditer — … ») ni les actions Emby ; refusez poliment et invitez " +
+                "à changer de mode dans la liste déroulante.\n"),
         };
+
+        /// <summary>Id du mode atelier de langues (« Modification texte UI »)
+        /// — le seul du registre sans prompt éditable ; la validation croisée
+        /// du dépôt s'appuie dessus.</summary>
+        internal const string I18nEditModeId = "i18n_edit";
 
         /// <summary>Résout un contexte par identifiant (null si inconnu —
         /// la page n'envoie que des ids de la liste servie, mais la requête
@@ -199,8 +262,22 @@ namespace LLM_AI
             IServerApplicationHost host)
         {
             var def = Find(contextId);
-            string current = def == null || cfg == null ? null : def.GetPrompt(cfg);
-            if (def == null || string.IsNullOrWhiteSpace(current)) return "";
+            if (def == null || cfg == null) return "";
+
+            // Mode sans prompt (atelier de langues « Modification texte UI »,
+            // v1.17.0.2) : le guide seul est injecté — ni « LANGUE CIBLE » ni
+            // « TEXTE ACTUEL » (rien à relire dans la config) ; les règles du
+            // mode vivent dans son guide.
+            if (def.GuideOnly)
+            {
+                var sg = new System.Text.StringBuilder();
+                sg.Append("\n\n### MODE ACTIF : ").Append(def.Label).Append("\n");
+                sg.Append(def.Guide);
+                return sg.ToString();
+            }
+
+            string current = def.GetPrompt(cfg);
+            if (string.IsNullOrWhiteSpace(current)) return "";
 
             string lang = I18n.ParseLangName(cfg.ResponseLanguage);
             if (string.IsNullOrEmpty(lang))
