@@ -10,6 +10,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.3] — 2026-10-04
+
+### Fixed (FR)
+- **Natives FR portant de l'anglais corrigées** (audit des paires
+  natives EN↔FR du dictionnaire web `i18n.js` — 426 clés/langue,
+  11 exactement identiques validées une à une) : `cfg.backend.provider.label`
+  « Provider » → « **Fournisseur** » ; `cfg.crosskind.status.suspect`
+  « suspect — not-found DVR » → « **suspect — fiche introuvable, dossier
+  DVR** » (cohérent avec `cfg.crosskind.evidence.base` et la famille
+  francisée : « copie faite — original en place ») ; `cfg.rag.label`
+  « RAG Directives (system prompt) » → « **Directives RAG (prompt
+  système)** » (ordre des mots français, aligné sur `cfg.rag.desc`
+  « Prompt système envoyé au LLM… »). Les paires restantes identiques
+  FR = EN sont légitimes et documentées comme telles : nom du produit
+  (`cfg.title`), mots identiques (`Genres`), marques/anglicismes
+  techniques (`Ollama local/cloud`, `Google Gemini`, `LLM #{0}`) et
+  chaînes à pur placeholder (« ❌ {0} ») ; `cfg.backend.test.ok` n'était
+  d'ailleurs pas une paire identique (guillemets FR « {1} » vs "
+  {1}" EN). La famille `ext.*` (chat externe) reste natives-EN-seules
+  dans `I18n.cs` par conception — le repli FR vit embarqué dans
+  `chat_external.py` ; label « 🔊 Auto » identique légitime ("Auto" =
+  même mot). Aucune clé manquante de part et d'autre. Bump obligatoire :
+  i18n.js est embarqué, le cache-busting suit `<Version>`.
+
+### Fixed (EN)
+- **French natives carrying English corrected** (audit of the EN↔FR
+  native pairs in the `i18n.js` web dictionary — 426 keys/language,
+  11 exactly identical pairs validated one by one):
+  `cfg.backend.provider.label` "Provider" → "**Fournisseur**";
+  `cfg.crosskind.status.suspect` "suspect — not-found DVR" →
+  "**suspect — fiche introuvable, dossier DVR**" (consistent with
+  `cfg.crosskind.evidence.base` and the French-worded status family:
+  "copie faite — original en place"); `cfg.rag.label` "RAG Directives
+  (system prompt)" → "**Directives RAG (prompt système)**" (French word
+  order, aligned with `cfg.rag.desc` "Prompt système envoyé au LLM…").
+  The remaining FR = EN identical pairs are legitimate by design:
+  product name (`cfg.title`), identical words (`Genres`), brands/tech
+  anglicisms (`Ollama local/cloud`, `Google Gemini`, `LLM #{0}`) and
+  pure-placeholder strings ("❌ {0}"); `cfg.backend.test.ok` was not an
+  identical pair anyway (French guillemets « {1} » vs "{1}" EN). The
+  `ext.*` family (external chat) stays EN-natives-only in `I18n.cs` by
+  design — the FR fallback lives embedded in `chat_external.py`; label
+  "🔊 Auto" identical is legitimate ("Auto" = same word). No missing key
+  on either side. Mandatory bump: i18n.js is embedded, browser
+  cache-busting follows `<Version>`.
+
 ## [1.17.1.2] — 2026-10-04
 
 ### Changed (FR)
