@@ -146,8 +146,8 @@ namespace LLM_AI
                         return Task.FromResult(Json(new { status = "refused",
                             detail = "Aucun mode d'édition actif — sélectionnez un mode « Éditer — … » " +
                                      "dans la liste déroulante de la page chat, puis réessayez." }));
-                    // Le mode atelier de langues (« Modification texte UI »,
-                    // v1.17.0.2) ne couvre AUCUN prompt : redirige le LLM vers
+                    // Le mode atelier de langues (« Éditer — Atelier de
+                    // langues », v1.17.0.2) ne couvre AUCUN prompt : redirige le LLM vers
                     // l'outil de l'atelier au lieu du message générique.
                     if (mode.Field.Length == 0)
                         return Task.FromResult(Json(new { status = "refused",

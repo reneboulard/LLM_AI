@@ -330,8 +330,8 @@ namespace LLM_AI
             // (DÉPÔT deux phases : la carte « Approuver / Refuser » porte
             // l'écriture, les endpoints I18nKey exécutent en C# déterministe).
             // Enregistrés quand le protocole tool-calling est déjà actif
-            // (budget/prompts) OU quand le mode « Modification texte UI » est
-            // sélectionné (opt-in explicite du dropdown — protocole initié
+            // (budget/prompts) OU quand le mode « Éditer — Atelier de
+            // langues » est sélectionné (opt-in explicite du dropdown — protocole initié
             // POUR lui). Hors mode, i18n_set_key refuse le dépôt avec la
             // consigne : la modification des chaînes est exclue sans le mode
             // (décision usager 2026-10-04).
@@ -343,7 +343,7 @@ namespace LLM_AI
                 actionTools.Add(new I18nGetTool(Logger));
                 actionTools.Add(new I18nSetKeyTool(sessionId, userId, contextId, Logger));
                 Logger.Info("[LLM_AI] [CHAT] Atelier de langues actif{0} (i18n_search, i18n_get, i18n_set_key — dépôt).",
-                    i18nMode ? " en mode « Modification texte UI »" : "");
+                    i18nMode ? " en mode « Éditer — Atelier de langues »" : "");
             }
 
             string reply;

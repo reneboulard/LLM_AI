@@ -199,7 +199,7 @@ namespace LLM_AI
             // mode. GuideOnly : le guide seul est injecté (les règles du
             // mode vivent dedans).
             new ChatContextDef(ChatContexts.I18nEditModeId,
-                "Modification texte UI",
+                "Éditer — Atelier de langues",
                 "### RÔLE DE CE MODE\n" +
                 "L'atelier de langues : revoir et corriger les chaînes d'interface du plugin pour " +
                 "les langues générées (overlay). Ouvrez toujours par i18n_search (recherche PAR " +
@@ -232,7 +232,8 @@ namespace LLM_AI
                 "à changer de mode dans la liste déroulante.\n"),
         };
 
-        /// <summary>Id du mode atelier de langues (« Modification texte UI »)
+        /// <summary>Id du mode atelier de langues (« Éditer — Atelier de
+        /// langues »)
         /// — le seul du registre sans prompt éditable ; la validation croisée
         /// du dépôt s'appuie dessus.</summary>
         internal const string I18nEditModeId = "i18n_edit";
@@ -264,10 +265,10 @@ namespace LLM_AI
             var def = Find(contextId);
             if (def == null || cfg == null) return "";
 
-            // Mode sans prompt (atelier de langues « Modification texte UI »,
-            // v1.17.0.2) : le guide seul est injecté — ni « LANGUE CIBLE » ni
-            // « TEXTE ACTUEL » (rien à relire dans la config) ; les règles du
-            // mode vivent dans son guide.
+            // Mode sans prompt (atelier de langues « Éditer — Atelier de
+            // langues », v1.17.0.2) : le guide seul est injecté — ni
+            // « LANGUE CIBLE » ni « TEXTE ACTUEL » (rien à relire dans la
+            // config) ; les règles du mode vivent dans son guide.
             if (def.GuideOnly)
             {
                 var sg = new System.Text.StringBuilder();

@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.2] — 2026-10-04
+
+### Changed (FR)
+- **Mode atelier renommé « Éditer — Atelier de langues »** (registre des
+  modes du chat admin, ex « Modification texte UI ») : aligné sur le
+  patron des modes d'édition (« Éditer — <objet> » — l'ancien libellé
+  nommait l'action sans préfixe) et sur le nom de la fonctionnalité porté
+  partout ailleurs (panneau « Langues d'interface », section README,
+  guide du mode lui-même). Le libellé exact est cité par la description
+  et le refus de `i18n_set_key` (consigne au LLM) et par la ligne de log
+  du chat — renommés à l'identique. + **Clé i18n manquante comblée** :
+  `chat.ctx.i18n_edit` n'existait ni en FR ni en EN (les 5 modes
+  « Éditer — … » des prompts étaient traduits) — le mode retombait sur
+  le libellé serveur français dans toute langue d'interface ; ajout
+  FR « Éditer — Atelier de langues » / EN « Edit — Language workshop ».
+  Les messages dynamiques (redirection `plugin_prompts` du mode)
+  suivaient déjà `mode.Label`. Bump obligatoire : i18n.js est embarqué,
+  le cache-busting suit `<Version>`.
+
+### Changed (EN)
+- **Workshop mode renamed "Edit — Language workshop"** (admin chat mode
+  registry, formerly "UI text modification"): aligned with the editing
+  mode pattern ("Edit — <object>" — the old label named the action with
+  no prefix) and with the feature name carried everywhere else
+  ("Interface languages" panel, README section, the mode's own guide).
+  The exact label is quoted by `i18n_set_key`'s description and refusal
+  (the instruction the LLM re-reads) and by the chat log line — renamed
+  identically. + **Missing i18n key filled**: `chat.ctx.i18n_edit`
+  existed neither in FR nor in EN (the five "Edit — …" prompt modes were
+  translated) — the mode fell back to the French server label on any
+  interface language; added FR "Éditer — Atelier de langues" /
+  EN "Edit — Language workshop". The dynamic messages
+  (`plugin_prompts` mode redirect) already followed `mode.Label`.
+  Mandatory bump: i18n.js is embedded, browser cache-busting follows
+  `<Version>`.
+
 ## [1.17.1.1] — 2026-10-04
 
 ### Fixed (FR)

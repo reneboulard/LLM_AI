@@ -374,8 +374,8 @@ namespace LLM_AI
     /// dans <see cref="ChatI18nStore"/> : l'écriture n'a lieu qu'au clic
     /// « Approuver » de l'admin (endpoint déterministe, gates re-courues,
     /// .bak + re-scan) — le LLM n'a AUCUN chemin d'écriture direct. Le dépôt
-    /// exige le mode déroulant « Modification texte UI » (décision usager
-    /// 2026-10-04) — hors mode : refus avec la consigne. L'identique-EN
+    /// exige le mode déroulant « Éditer — Atelier de langues » (décision
+    /// usager 2026-10-04) — hors mode : refus avec la consigne. L'identique-EN
     /// légitime (marques, icônes) passe avec un avertissement. Depuis
     /// v1.17.1.0, <see cref="I18nGetTool"/> sert le contrat structurel de
     /// la clé (bloc « contract » : inventaire exact + directive) : le
@@ -424,7 +424,7 @@ namespace LLM_AI
             "caractère par caractère, traduisez le texte entre eux. Puis set_key(key, lang, " +
             "value) avec la valeur COMPLÈTE (registre poli, longueur proche de la native — " +
             "un bouton reste 2-3 mots), jamais une copie anglaise d'une chaîne traduisible. " +
-            "Le dépôt exige le mode « Modification texte UI » (dropdown de la page).";
+            "Le dépôt exige le mode « Éditer — Atelier de langues » (dropdown de la page).";
 
         public string ArgumentsSchema =>
             "{\"type\":\"object\",\"properties\":{" +
@@ -454,18 +454,18 @@ namespace LLM_AI
                                  ") — une valeur d'interface ne l'exige jamais." }));
 
                 // MODE EXCLUSIF (décision usager 2026-10-04) : la modification
-                // des chaînes exige la sélection du mode « Modification texte
-                // UI » dans le dropdown de la page chat — miroir de la
+                // des chaînes exige la sélection du mode « Éditer — Atelier
+                // de langues » dans le dropdown de la page chat — miroir de la
                 // validation champ ↔ mode des prompts (v1.13.9). Le refus est
                 // une CONSIGNE : le modèle relit l'invite au tour suivant.
                 var mode = ChatContexts.Find(_contextId);
                 if (mode == null || !string.Equals(mode.Id, ChatContexts.I18nEditModeId,
                         StringComparison.Ordinal))
                 {
-                    _logger?.Info("[LLM_AI] Chat i18n_set_key : dépôt refusé (mode « Modification texte UI » non sélectionné).");
+                    _logger?.Info("[LLM_AI] Chat i18n_set_key : dépôt refusé (mode « Éditer — Atelier de langues » non sélectionné).");
                     return Task.FromResult(I18nChatKeys.Json(new { status = "refused",
-                        detail = "la modification des chaînes i18n exige le mode « Modification " +
-                                 "texte UI » — sélectionnez-le dans la liste déroulante de la page " +
+                        detail = "la modification des chaînes i18n exige le mode « Éditer — " +
+                                 "Atelier de langues » — sélectionnez-le dans la liste déroulante de la page " +
                                  "chat puis réessayez." }));
                 }
 

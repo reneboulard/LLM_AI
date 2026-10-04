@@ -357,6 +357,11 @@ define([], function () {
             "chat.ctx.edit_schedule_movies": "Éditer — Tâche films (enregistrements)",
             "chat.ctx.edit_tonight": "Éditer — Run « À regarder ce soir »",
             "chat.ctx.edit_audit": "Éditer — Prompt d'audit santé",
+            // Mode atelier (v1.17.0.2) : le seul mode sans prompt éditable —
+            // absent des débuts, il retombait sur le libellé serveur FR dans
+            // toute interface (corrigé v1.17.1.2, renommé « Éditer — Atelier
+            // de langues »).
+            "chat.ctx.i18n_edit": "Éditer — Atelier de langues",
             // Annonce automatique au changement de mode (tour « Vous » du
             // fil — visible par l'usager ET relue par le LLM) + erreurs
             // d'envoi (timeout / connexion) : suivent la langue de la page.
@@ -810,6 +815,11 @@ define([], function () {
             "chat.ctx.edit_schedule_movies": "Edit — Movies task (recordings)",
             "chat.ctx.edit_tonight": "Edit — \"Watch tonight\" run",
             "chat.ctx.edit_audit": "Edit — Health audit prompt",
+            // Workshop mode (v1.17.0.2): the only mode without an editable
+            // prompt — missing at first, it fell back to the FR server label
+            // on any interface (fixed v1.17.1.2, renamed "Edit — Language
+            // workshop").
+            "chat.ctx.i18n_edit": "Edit — Language workshop",
             // Automatic announcement on mode change (the \"You\" turn of
             // the thread — seen by the user AND re-read by the LLM) +
             // send errors (timeout / connection): follow the page language.
