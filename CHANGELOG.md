@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.5] — 2026-10-04
+
+### Fixed (FR)
+- **`task.llm.name` : native FR traduite** — « LLM AI Task » →
+  « **Tâche LLM AI** » (le nom de la tâche planifiée affiché dans le
+  tableau de bord Emby ; dernier fr==en identique de la famille
+  `task.*`/`nfo.*` côté serveur — repéré au diagnostic de la session
+  overlay du 2026-10-04, où la régénération fr de gemma4 l'affichait
+  mieux que la native). EN inchangée. Les natif-fr des autres tâches
+  étaient déjà traduits (« LLM AI — Nettoyage… », « LLM AI —
+  Identification des enregistrements orphelins »…).
+
+### Fixed (EN)
+- **`task.llm.name`: FR native translated** — "LLM AI Task" →
+  "**Tâche LLM AI**" (the scheduled task display name in the Emby
+  dashboard; the last fr==en identical of the server-side
+  `task.*`/`nfo.*` families — spotted while diagnosing the 2026-10-04
+  overlay session, where gemma4's fr generation displayed it better
+  than the native). EN unchanged. The FR natives of the other tasks
+  were already translated ("LLM AI — Nettoyage…", "LLM AI — Orphan
+  recording identification"…).
+
 ## [1.17.1.4] — 2026-10-04
 
 ### Fixed (FR)

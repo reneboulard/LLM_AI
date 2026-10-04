@@ -471,7 +471,7 @@ namespace LLM_AI
                     ["nfo.epglink"] = "🔗 Fiche EPG : ",
                     ["nfo.seriesSuffix"] = " (série)",
                     // --- Tâches planifiées ---
-                    ["task.llm.name"] = "LLM AI Task",
+                    ["task.llm.name"] = "Tâche LLM AI",
                     ["task.llm.desc"] = "Agent LLM autonome (Ollama) qui interroge la bibliothèque Emby via des outils natifs read-only pour accomplir la tâche configurée.",
                     ["task.cleanup.name"] = "LLM AI — Nettoyage tag « AI Tonight »",
                     ["task.cleanup.desc"] = "Nettoyage nocturne des surfaces natives « À regarder ce soir » : retire le tag « AI Tonight » de tous les items Emby (et, migration v1.13.3, le genre hérité du même nom) ET vide la collection « AI Tonight » de ses membres (la coquille reste, re-remplie au prochain run). Tourne quotidiennement à 3 h ; les runs Tonight suivants reconstruisent les surfaces sur les recos toujours pertinentes. Ne touche pas au genre « AI Suggestion » de la bibliothèque .strm.",
