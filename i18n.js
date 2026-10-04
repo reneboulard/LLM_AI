@@ -17,8 +17,10 @@
 //                     data-i18n-ph / data-i18n-label / data-i18n-title.
 //
 // Overlay communautaire (v1.16.0, plan P3) : init() fait AUSSI un fetch de
-// GET /Plugins/LLMAI/I18n (endpoint du plugin, en parallèle de la détection).
-// Le payload { "<lang>": { "web": {…} } } enrichit STRINGS (patch fr/en,
+// GET /Plugins/LLMAI/I18n (endpoint du plugin, en parallèle de la détection)
+// — via ApiClient.ajax (jeton Emby attaché ; un fetch NU y reçoit 401,
+// constat terrain 2026-10-04, voir fetchOverlayWeb). Le payload
+// { "<lang>": { "web": {…} } } enrichit STRINGS (patch fr/en,
 // ajout de langues comme « es ») AVANT la résolution pickLang, qui est
 // désormais data-driven (itération Object.keys(STRINGS)). La section web
 // n'est PAS validée côté serveur — la référence EN web vit dans CE module,
@@ -27,7 +29,8 @@
 // divergents de l'EN natif → clé sautée + console.warn (miroir exact des
 // règles 4-5 du kit/chargeur). Échec fetch (plugin < v1.16.0 → 404, hôte
 // injoignable, réponse non-JSON) → null silencieux : natif inchangé
-// (fail-open symétrique du chargeur).
+// (fail-open symétrique du chargeur) ; un statut HTTP ≠ 404 est signalé
+// console.warn (la panne 401 initiale était totalement invisible).
 define([], function () {
     "use strict";
 
@@ -967,18 +970,56 @@ define([], function () {
         return out;
     }
 
-    // Fetch de l'overlay — null silencieux sur tout échec (endpoint absent,
-    // plugin < v1.16.0, hôte injoignable, réponse non-JSON, fetch vieux
-    // navigateur) : natif inchangé. no-store : l'overlay est éditable live
-    // et le serveur re-scanne à chaque GET.
+    // Fetch de l'overlay — API emby authentifiée : chemin principal
+    // ApiClient.ajax (global du dashboard ; il attache le jeton X-Emby-Token
+    // via setAuthorizationInfoIntoRequest — constat terrain 2026-10-04 : un
+    // fetch NU de /Plugins/LLMAI/I18n reçoit 401, l'endpoint exigeant le jeton
+    // contrairement aux pages web/ConfigurationPage ; l'overlay ne fusionnait
+    // donc JAMAIS dans le navigateur et une langue générée ne s'affichait
+    // pas — fail-open silencieux = panne invisible, d'où le console.warn de
+    // diagnostic ci-dessous). Sémantiques d'ApiClient (fetchhelper 4.10) :
+    // 2xx → Response BRUTE (r.json() à l'appel, pattern des appels ?base /
+    // ?missing de config.js), ≥ 400 → REJET de la Response (r.status lu au
+    // catch). Cache-buster ?v= par init : la réponse de l'endpoint ne porte
+    // AUCUN en-tête de fraîcheur et l'overlay est éditable live (le serveur
+    // re-scanne à chaque GET — même garantie que l'ancien no-store).
+    // Repli fetch nu si ApiClient est absent (contexte hors dashboard,
+    // harnais) — 404 (plugin < v1.16.0, endpoint absent) et hôte injoignable
+    // restent silencieux : natif inchangé (fail-open symétrique du chargeur).
+    function warnFetch(status) {
+        try { console.warn("[LLM_AI i18n] overlay non chargé — HTTP " + status
+            + " sur GET /Plugins/LLMAI/I18n (jeton absent ?)"); }
+        catch (e) { /* la console ne doit jamais casser l'i18n */ }
+    }
+    function payloadOrNull(payload) {
+        return (payload && typeof payload === "object"
+                && !Array.isArray(payload)) ? payload : null;
+    }
     function fetchOverlayWeb() {
+        try {
+            if (typeof ApiClient !== "undefined" && ApiClient
+                    && typeof ApiClient.ajax === "function"
+                    && typeof ApiClient.getUrl === "function") {
+                return ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/I18n",
+                        { v: String(Date.now()) }),
+                    type: "GET"
+                })
+                    .then(function (r) { return r.json(); })
+                    .then(payloadOrNull)
+                    .catch(function (r) {
+                        if (r && r.status && r.status !== 404) warnFetch(r.status);
+                        return null;
+                    });
+            }
+        } catch (e) { /* repli fetch nu ci-dessous */ }
         try {
             if (typeof fetch !== "function") return Promise.resolve(null);
             return fetch("/Plugins/LLMAI/I18n", { cache: "no-store" })
-                .then(function (r) { return (r && r.ok) ? r.json() : null; })
-                .then(function (payload) {
-                    return (payload && typeof payload === "object"
-                            && !Array.isArray(payload)) ? payload : null;
+                .then(function (r) {
+                    if (r && r.ok) return r.json().then(payloadOrNull);
+                    if (r && r.status && r.status !== 404) warnFetch(r.status);
+                    return null;
                 })
                 .catch(function () { return null; });
         } catch (e) { return Promise.resolve(null); }
