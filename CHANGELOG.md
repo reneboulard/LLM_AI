@@ -10,6 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.4] — 2026-10-04
+
+### Fixed (FR)
+- **Blindage `/I18nExt` : repli natif EN par clé (langues ≠ fr)**. Le chat
+  externe est la seule famille servie **overlay-seul** — sans fichier (ou
+  section absente), `/I18nExt` ne rendait QUE `_lang` et le chat usager
+  retombait sur les littéraux FR embarqués de `chat_external.py`, même sur
+  un serveur à culture d'affichage EN (page déclarant html `lang="en"`
+  avec des textes français — état mixte silencieux). Désormais le pivot
+  natif `I18n.EnExtDict` complète le payload **par clé** pour toute langue
+  ≠ fr : fresh install EN servie EN sans aucun fichier ; une traduction
+  communautaire partielle ne perd que ses trous (miroir de l'étage natif
+  de `I18n.S`) ; la section « en » de l'overlay devient un choix (suivre
+  les versions ou la retirer), plus une condition. **fr inchangé** : son
+  repli reste FR-first (littéraux auteur du .py — décision v1.16.0) ;
+  son cas est exclu du complément natif EN (pas de natif FR dans s_ext).
+  Diagnostic : la ligne de log `GET /I18nExt — langue …, N chaînes servies`
+  compte le payload final — 0 chaîne reste possible UNIQUEMENT fr.
+
+### Fixed (EN)
+- **`/I18nExt` hardening: per-key native EN fallback (languages ≠ fr)**.
+  The external chat is the only family served **overlay-only** — with no
+  file (or missing section), `/I18nExt` returned ONLY `_lang` and the
+  user chat fell back to the embedded FR literals of `chat_external.py`,
+  even on a server with an EN display culture (page declaring html
+  `lang="en"` while rendering French text — silent mixed state). The
+  native pivot `I18n.EnExtDict` now completes the payload **per key** for
+  any language ≠ fr: a fresh install with EN culture is served English
+  with no file; a partial community translation only loses its gaps
+  (mirroring the native stage of `I18n.S`); the overlay's "en" section
+  becomes a choice (follow versions or remove it), no longer a
+  requirement. **fr unchanged**: its fallback stays FR-first (the .py's
+  author literals — v1.16.0 decision); excluded from the native EN
+  completion (s_ext has no FR dict). Diagnostics : the `GET /I18nExt —
+  language …, N strings served` log line counts the final payload — 0
+  strings is now only possible for fr.
+
 ## [1.17.1.3] — 2026-10-04
 
 ### Fixed (FR)

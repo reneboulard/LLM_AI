@@ -142,7 +142,10 @@ namespace LLM_AI
             /// (chrome ext.* + messages Python srv.*) — servies par l'endpoint
             /// /I18nExt à la langue résolue (cascade UICulture). Validée ICI,
             /// règle {n}-seule (famille texte brut : pas de règle balises —
-            /// rendu textContent / str.format).</summary>
+            /// rendu textContent / str.format). v1.17.1.4 : le service est
+            /// overlay-seul — le pivot <see cref="I18n"/>.EnExtDict complète
+            /// par clé pour toute langue ≠ fr (section absente OU clés
+            /// isolées manquantes) ; fr retombe sur les littéraux du .py.</summary>
             internal readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Ext;
 
             /// <summary>Instant du chargement (diagnostic).</summary>

@@ -158,9 +158,13 @@ Emby** (tableau de bord → Préférences → Langue) — résolue **côté plug
 l'app ne décide rien. Au chargement, la page récupère la section « ext » de
 l'overlay communautaire `LLM_AI_i18n.json` via `GET /Plugins/LLMAI/I18nExt`
 (secret partagé, appel loopback — le même que ci-dessus), avec un cache de
-30 s côté app. Voir le README du plugin (section traductions communautaires)
-pour fournir ou compléter une langue ; absent ou injoignable → repli par
-clé sur le français embarqué (l'app reste utilisable sans traduction).
+30 s côté app. Depuis v1.17.1.4 du plugin, la famille est servie
+**overlay-seul + complément natif EN par clé** pour toute langue ≠ fr
+(fresh install EN servie en anglais sans fichier) ; le repli fr reste le
+français embarqué. Voir le README du plugin (section traductions
+communautaires) pour fournir ou compléter une langue ; absent ou
+injoignable → repli par clé sur le français embarqué (l'app reste
+utilisable sans traduction).
 
 ## Conversation par la voix 🎤 🔊
 

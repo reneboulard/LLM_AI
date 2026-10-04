@@ -887,7 +887,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, internal static) | **Language-workshop engine** (v1.17.0): 8 steps — natives + FR context, targets per mode (full/missing/skipped), official Emby glossary, dynamic-count directive, per-dose loop (2-message completion, LLM output under **sentinel tokens** `[NL]`/`[QU]` decoded in C# *after* the parse, per-key validation, targeted repair ≤ 3, **parse-dead escalation** to the following backends), non-destructive merge + atomic write (writes only if ≥ 1 key accepted), persisted report + SecurityMonitor. `BoundedDump` = bounded RAW dump of any dead dose (␊/␍/␉ visible). |
 | `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Admin endpoint **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0): `?Lang&Mode` starts a campaign as a **detached run** (single-flight `I18nGenState`, survives tab close, 25-min CTS), backends resolved by the caller (disposable LlmRunner); `?Status=true` = snapshot + last persisted report (engine-written `i18n_gen_report.json`) in the same response. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | **Admin chat** tools (v1.17.0): `i18n_search` (text search — substring across EN/FR natives and overlays; natives always scanned even with a language filter: the on-screen text may be a native fallback), `i18n_get` (full key read-out: EN+FR natives per family, overlay values per language with structural verdict + identical-EN flag, a **`contract` block** as of v1.17.1.0 when the native carries immutable elements — exact inventory of HTML tags / `{n}` / line breaks + recopy directive for the deposit, omitted for a bare key, unknown key → suggestions) and `i18n_set_key` — **two-phase** since v1.17.0.2 (deposit validated through the structural gates then a Before/After "Approve/Refuse" card, `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` endpoints in deterministic C#; deposits allowed ONLY in the "Edit — Language workshop" dropdown mode — v1.17.0.2, label aligned with the "Edit — …" mode pattern as of v1.17.1.2). Responses are serialized with **relaxed** JSON (v1.17.1.1: literal tags — the default escaping sent `<b>` as `\u003C` and the model never saw a real tag). Registered whenever the tool-calling protocol is already active (action budget, prompts editing) or in i18n mode; with budget and prompts editing both off, the mode IS what starts the protocol (non-thinking-model quirk). |
-| `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side). See [Community interface languages](#community-interface-languages). |
+| `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side); family served overlay-only + per-key native EN completion for a language ≠ fr (v1.17.1.4). See [Community interface languages](#community-interface-languages). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (internal static) | **Security monitor** (detection, v1.14.0.6): in-process counters (web_fetch/web_search calls, blocked SSRF, malformed/unknown tool calls, LLM backend failures, refused chat turns, deposited/approved/refused actions) + bounded security event journal (200 events). Zero configuration, in-memory (reset on restart); every event is durably logged as `LLM_AI[SEC]` in the Emby log. Never throws. |
@@ -2276,11 +2276,17 @@ secrets).
 GET /Plugins/LLMAI/I18nExt?Token=<secret>
 ```
 
-**Companion-app i18n** (v1.16.0): the resolved language's `ext` slice
-plugin-side (`ext.*` page chrome + `srv.*` Python messages) + the `_lang` meta.
-Dedicated gate (loopback without XFF + shared secret, `[Unauthenticated]` — the
-app has no Emby token), `Cache-Control: no-store`. Failure/gate →
-`{ "Error": … }` without `_lang` (the app falls back to French).
+**Companion-app i18n** (v1.16.0; hardened v1.17.1.4): the resolved
+language's `ext` slice plugin-side (`ext.*` page chrome + `srv.*` Python
+messages) + the `_lang` meta. The family is served **overlay-only** (no
+native fallback otherwise): the native EN pivot completes **per key** for
+any language ≠ fr — a fresh install with an EN display culture renders
+its external chat in English with no file, and the file's "en" section
+becomes optional; the fr fallback stays the app's embedded French
+(v1.16.0 decision). Dedicated gate (loopback without XFF + shared secret,
+`[Unauthenticated]` — the app has no Emby token), `Cache-Control:
+no-store`. Failure/gate → `{ "Error": … }` without `_lang` (the app
+falls back to French).
 
 **Response:** `{ "<key>": "<text>", …, "_lang": "es" }`.
 
@@ -2377,7 +2383,8 @@ drives the 🎤 voice).
 - `GET /Plugins/LLMAI/I18n` — the slices actually served (natives + your
   patches);
 - `GET /Plugins/LLMAI/I18nExt?Token=<external chat secret>` — the resolved
-  language's `ext` slice, served to the companion app (loopback gate +
+  language's `ext` slice, served to the companion app (overlay-only + per-key
+  native EN completion for a language ≠ fr — v1.17.1.4; loopback gate +
   shared secret — mostly useful for debugging).
 
 **LLM-assisted translation**: feed the EN base (`?base=1`) to your LLM in

@@ -150,9 +150,13 @@ long, Emby unreachable…) follow the **Emby server's interface language**
 decides nothing. At page load, the app fetches the "ext" section of the
 community overlay `LLM_AI_i18n.json` via `GET /Plugins/LLMAI/I18nExt`
 (shared secret, loopback call — same as above), with a 30 s app-side
-cache. See the plugin README (community translations section) to provide
-or complete a language; missing or unreachable → per-key fallback to the
-embedded French (the app remains usable without any translation).
+cache. As of plugin v1.17.1.4, the family is served **overlay-only +
+per-key native EN completion** for any language ≠ fr (a fresh EN install
+is served English with no file); the fr fallback stays the embedded
+French. See the plugin README (community translations section) to
+provide or complete a language; missing or unreachable → per-key
+fallback to the embedded French (the app remains usable without any
+translation).
 
 ## Voice conversation 🎤 🔊
 

@@ -41,7 +41,10 @@ namespace LLM_AI
     ///   de la section « ext » de l'overlay communautaire pour la langue
     ///   résolue (cascade UICulture) + méta <c>_lang</c> : traduction du
     ///   chrome de la page <c>ext.*</c> et des messages serveur Python
-    ///   <c>srv.*</c>. Même gate (loopback sans XFF + secret) SANS la liste
+    ///   <c>srv.*</c>. Familles servie OVERLAY-SEUL : le pivot natif
+    ///   <see cref="I18n.EnExtDict"/> complète PAR CLÉ pour toute langue
+    ///   ≠ fr (v1.17.1.4 — fresh install EN rendue EN ; repli fr = littéraux
+    ///   du .py). Même gate (loopback sans XFF + secret) SANS la liste
     ///   d'usagers — cf. handler Get(I18nExtRequest).</item>
     /// </list>
     /// Sécurité (design validé 2026-09-13) :
@@ -706,9 +709,18 @@ namespace LLM_AI
         /// SANS la liste d'usagers (aucune donnée usager-spécifique ici).
         /// Le consommateur (<c>chat_external.py</c>) encapsule le JSON dans
         /// <c>window.LLMAI_EXT_I18N = {…}</c> ; la page applique ensuite le
-        /// repli par clé sur ses littéraux FR embarqués (fail-open : seul
-        /// <c>_lang</c> si l'overlay ne porte pas d'ext pour la langue
-        /// résolue — jamais d'échec dur).
+        /// repli par clé sur ses littéraux FR embarqués (fail-open — jamais
+        /// d'échec dur).
+        /// <para><b>Blindage v1.17.1.4</b> : l'overlay est la seule voie de
+        /// service de cette famille (le pivot <see cref="I18n.EnExtDict"/>
+        /// n'est JAMAIS consulté en dessous) — complété par clé avec le
+        /// natif EN pour toute langue ≠ fr : sans lui, une fresh install à
+        /// culture d'affichage EN rendait le chat externe en français
+        /// (littéraux embarqués du .py tout en déclarant `_lang` "en").
+        /// fr reste FR-first : son repli = les littéraux auteur du .py
+        /// (décision v1.16.0 P2b/P3b). Conséquence : la section « en » du
+        /// fichier devient un simple choix (identique au pivot tant qu'elle
+        /// suit les versions ; périmée si oubliée) — plus une condition.</para>
         /// </summary>
         public object Get(I18nExtRequest req)
         {
@@ -728,6 +740,21 @@ namespace LLM_AI
             if (snap?.Ext != null && snap.Ext.TryGetValue(lang, out var dict) && dict != null)
             {
                 foreach (var kv in dict) payload[kv.Key] = kv.Value;
+            }
+            // Blindage v1.17.1.4 : cette famille est SERVIE overlay-seul —
+            // le pivot natif s_ext[en] n'est jamais consulté en dessous ; sans
+            // ce complément, une fresh install sans fichier à culture d'affi-
+            // chage EN (ou toute langue ≠ fr sans section ext) rendait le
+            // chat externe en littéraux FR. Complément PAR CLÉ (une traduction
+            // communautaire partielle ne perd donc que ses trous) — sauf fr :
+            // le repli fr reste le .py FR-first (décision v1.16.0), un pas
+            // vers l'anglais serait une régression pour sa cascade native.
+            if (!string.Equals(lang, I18n.Fr, StringComparison.Ordinal))
+            {
+                var enDict = I18n.EnExtDict;
+                if (enDict != null)
+                    foreach (var kv in enDict)
+                        if (!payload.ContainsKey(kv.Key)) payload[kv.Key] = kv.Value;
             }
             payload["_lang"] = lang;
             Logger.Info("[LLM_AI] [CHAT-EXT] GET /I18nExt — langue « {0} », {1} chaînes ext servies.",
