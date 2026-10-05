@@ -38,7 +38,7 @@ namespace LLM_AI
         /// par ce tool.</summary>
         internal static readonly (string Id, string Label)[] FieldIds =
         {
-            ("rag_directives", "Directives RAG"),
+            ("rag_directives", "Prompt système"),
             ("schedule_task", "Tâche séries"),
             ("schedule_task_movies", "Tâche films"),
             ("tonight_prompt", "Run « ce soir »"),

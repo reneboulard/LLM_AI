@@ -246,7 +246,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Directives RAG : prompt système envoyé au LLM (role: system)
+        /// Prompt système : directives de l'agent envoyées au LLM (role: system)
         /// à chaque appel de la tâche planifiée. Réinitialisable en page de
         /// config vers la version « propre » localisée
         /// (<see cref="DefaultPrompts"/>).
@@ -557,7 +557,7 @@ namespace LLM_AI
         /// retrouve en filtrant sur ce <b>tag</b> dans n'importe quel client
         /// Emby (ex-genre, migré en tag en v1.13.3 : c'est un marqueur d'admin,
         /// pas un genre de contenu).
-        /// <para>Une tâche planifiée (« Nettoyage tag AI Tonight », 3 h du
+        /// <para>Une tâche planifiée (« Nettoyage de l'étiquette AI Tonight », 3 h du
         /// matin) retire le tag de tous les items chaque jour (et migre
         /// l'éventuel genre hérité) ; les runs Tonight suivants le réajoutent
         /// sur les recos toujours pertinentes.
@@ -588,7 +588,7 @@ namespace LLM_AI
         /// agrège des items <i>inter-bibliothèques</i> (enregistrements + films/
         /// séries possédés), ce qu'un filtre de tags ne permet pas aussi
         /// directement.</para>
-        /// <para>Une tâche planifiée (« Nettoyage tag AI Tonight », 3 h du
+        /// <para>Une tâche planifiée (« Nettoyage de l'étiquette AI Tonight », 3 h du
         /// matin) <b>vide</b> aussi la collection chaque jour (retire tous les
         /// membres, la coquille BoxSet reste pour être re-remplie au prochain
         /// run) ; cette tâche tourne <b>même si ce flag est décoché</b> (nettoie

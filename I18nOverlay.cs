@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -750,6 +751,33 @@ namespace LLM_AI
         internal static string HtmlTagSig(string s)
             => string.Join("|", HtmlTagRx.Matches(s ?? "")
                 .Cast<Match>().Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal));
+
+        /// <summary>Multiset des EMOJIS d'une chaîne — même mécanique que
+        /// <see cref="HtmlTagSig"/> (tri ordinal, jointure « | ») sur les
+        /// code points symboliques : plages 1F000-1FAFF, 2600-27BF, 2B00-2BFF,
+        /// 2900-297F (symboles), 2190-21FF (flèches ↻ → ↗), 2300-23FF
+        /// (horloges ⏳ ⏰) ; typographie (— " " … –) et sélecteurs de
+        /// variation exclus — une langue peut légitimement choisir son
+        /// style de guillemets. Audit 2026-10-05 : 642/643 emojis copiés par
+        /// inférence sur les natives, 1 substitué (🤖 → 😄,
+        /// <c>ext.title</c>) — la porte les verrouille ; l'es existant
+        /// copie déjà les symboles élargis à l'identique (0 désaccord
+        /// constaté).</summary>
+        internal static string EmojiSig(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var hits = new List<string>();
+            foreach (var rune in s.EnumerateRunes())
+            {
+                int c = rune.Value;
+                if ((c >= 0x1F000 && c <= 0x1FAFF) || (c >= 0x2600 && c <= 0x27BF)
+                    || (c >= 0x2B00 && c <= 0x2BFF) || (c >= 0x2900 && c <= 0x297F)
+                    || (c >= 0x2190 && c <= 0x21FF) || (c >= 0x2300 && c <= 0x23FF))
+                    hits.Add(rune.ToString());
+            }
+            hits.Sort(StringComparer.Ordinal);
+            return string.Join("|", hits);
+        }
 
         /// <summary>Balises HTML d'une chaîne, dans leur ordre
         /// D'APPARITION (même regex que la porte) — l'inventaire des doses

@@ -148,10 +148,12 @@ define(["loading"], function (loading) {
     // Flags orthogonaux opt-in (par catégorie séries/films) : on AJOUTE ces
     // types à la fiction. Les catégories series/films ne figurent pas ici —
     // elles sont garanties par l'appel outil (epg_series vs epg_movies).
+    // Libellés i18n : résolus dans populateWhitelists (après i18n.init()) ;
+    // seules les values brutes ("kids"/"news"/"sports") sont stockées.
     var FLAG_ITEMS = [
-        { value: "kids",   label: "Kids" },
-        { value: "news",    label: "News" },
-        { value: "sports", label: "Sport" }
+        { value: "kids",   key: "cfg.flag.kids" },
+        { value: "news",    key: "cfg.flag.news" },
+        { value: "sports", key: "cfg.flag.sports" }
     ];
 
     function toSet(arr) {
@@ -167,8 +169,9 @@ define(["loading"], function (loading) {
         var seSet = toSet(parseJsonArray(cfg.SeriesFlags).map(function (v) { return (v || "").toLowerCase(); }));
         var moSet = toSet(parseJsonArray(cfg.MovieFlags).map(function (v) { return (v || "").toLowerCase(); }));
 
-        renderChecklist(view.querySelector("#wlSeriesFlags"), FLAG_ITEMS, seSet);
-        renderChecklist(view.querySelector("#wlMovieFlags"), FLAG_ITEMS, moSet);
+        var flagItems = FLAG_ITEMS.map(function (f) { return { value: f.value, label: i18n.t(f.key) }; });
+        renderChecklist(view.querySelector("#wlSeriesFlags"), flagItems, seSet);
+        renderChecklist(view.querySelector("#wlMovieFlags"), flagItems, moSet);
 
         // Chaines vivantes (LiveTv/Channels).
         // dataType:"json" est OBLIGATOIRE : sans lui, ApiClient.fetch renvoie

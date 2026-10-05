@@ -5,7 +5,7 @@
 </head>
 <body>
     <!--
-        Page de configuration du plugin LLM_AI.
+        Page de configuration de l'extension LLM_AI.
         Pattern dashboard moderne Emby (cf. Emby.ComSkipper) :
         - data-role="page" + class "pluginConfigurationPage" : reconnu comme
           page de config plugin par le viewmanager (querySelector
@@ -225,10 +225,10 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.2em;" data-i18n="cfg.backends.h">Serveurs LLM (repli par priorité)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.backends.desc">
-                            Ajoutez un ou plusieurs serveurs Ollama. Chaque LLM a une <b>priorité</b>
-                            (1 = la plus haute, essayée en premier) et un drapeau <b>activé</b>.
-                            Si un serveur est indisponible, la tâche bascule automatiquement sur le
-                            prochain LLM activé selon la priorité.
+                            Ajoutez un ou plusieurs serveurs LLM — Ollama (local ou cloud) ou Google
+                            Gemini. Chaque LLM a une priorité (1 = essayé en premier) et peut être activé
+                            ou non. Si un serveur ne répond pas, la tâche passe automatiquement au LLM
+                            activé suivant.
                         </div>
 
                         <!-- Conteneur des lignes de backends, rempli dynamiquement par config.js. -->
@@ -246,7 +246,7 @@
                                    label="URL publique Emby"
                                    data-i18n-label="cfg.embyurl.label"
                                    placeholder="http://localhost:8096" />
-                            <div class="fieldDescription" data-i18n-html="cfg.embyurl.desc">URL d'accès Emby (ex. http://localhost:8096) — sert à construire les liens d'images retournés au LLM.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.embyurl.desc">URL d'accès à Emby (ex. http://localhost:8096), utilisée pour construire les liens d'images transmis au LLM.</div>
                         </div>
 
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
@@ -260,36 +260,36 @@
                                 <option value="Português">Português</option>
                             </select>
                             <div class="fieldDescription" data-i18n-html="cfg.relang.desc">
-                                Langue des <b>métadonnées</b> et du texte en prose de l'LLM :
-                                <b>raisons des recommandations</b>, <b>rapport d'audit</b>, scaffolding des
-                                cartes .strm et <b>synopsis TMDB</b> (demandé dans cette langue, repli en-US,
-                                traduction LLM en dernier recours). « Auto » = suit la langue d'affichage
-                                Emby. Les titres de films/séries, noms de chaînes et champs JSON techniques
-                                restent inchangés.
+                                Choisissez la langue pour les recommandations, le rapport d'audit, les
+                                cartes .strm et les synopsis TMDB. L'extension privilégie votre langue de
+                                choix, puis l'anglais, et enfin une traduction par le LLM si nécessaire.
+                                Le réglage « Auto » suit la langue de votre interface Emby. Les titres
+                                de films et de séries, les noms de chaînes et les champs techniques
+                                restent inchangés pour garantir leur exactitude.
                             </div>
                         </div>
 
-                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.filters.h">Filtres de l'analyse EPG (tâche recommandations)</h3>
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.filters.h">Filtres de l'analyse du guide TV (tâche recommandations)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.filters.desc">
-                            Filtres appliqués aux programmes EPG avant envoi au LLM (get_emby_info
-                            epg_series/epg_movies). <b>Chaines</b> et <b>Genres</b> sont partagés par les
-                            deux tâches (séries et films) ; case vide = pas de filtre sur cette dimension.
-                            Les <b>flags Kids/News/Sports</b> sont <i>opt-in</i> par catégorie : vide =
-                            fiction seulement ; cochez un flag pour AJOUTER ces programmes.
-                            Spécifique à la tâche de recommandation.
+                            Ces filtres définissent les programmes du guide TV qui seront analysés pour vos
+                            recommandations. Pour les chaînes et les genres, cochez ceux que vous souhaitez
+                            conserver ; si rien n'est coché, tout est inclus. Concernant les catégories
+                            Enfants, Infos et Sports : si elles sont cochées, ces programmes seront ajoutés
+                            aux films et séries. Si elles restent décochées, seuls ces derniers seront pris
+                            en compte.
                         </div>
 
                         <div class="inputContainer">
-                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.channels.label">Chaines</label>
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.channels.label">Chaînes</label>
                             <input is="emby-input" type="text" id="wlChannelsFilter"
-                                   label="Rechercher une chaine"
+                                   label="Rechercher une chaîne"
                                    data-i18n-label="cfg.channels.search"
                                    data-i18n-ph="cfg.channels.ph"
                                    placeholder="Filtrer la liste…" />
                             <div id="wlChannels" class="wlBox">
-                                <div class="wlEmpty" data-i18n="cfg.channels.loading">Chargement des chaines…</div>
+                                <div class="wlEmpty" data-i18n="cfg.channels.loading">Chargement des chaînes…</div>
                             </div>
-                            <div class="fieldDescription" data-i18n-html="cfg.channels.desc">Chaines à garder. Vide = toutes les chaines.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.channels.desc">Chaînes à garder. Vide = toutes les chaînes.</div>
                         </div>
 
                         <div class="inputContainer">
@@ -297,19 +297,19 @@
                             <div id="wlGenres" class="wlBox">
                                 <div class="wlEmpty" data-i18n="cfg.genres.loading">Chargement des genres…</div>
                             </div>
-                            <div class="fieldDescription" data-i18n-html="cfg.genres.desc">Genres de l'EPG (collectés depuis les programmes à venir) à garder. Vide = tous les genres.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.genres.desc">Genres du guide TV (collectés depuis les programmes à venir) à garder. Vide = tous les genres.</div>
                         </div>
 
                         <div class="inputContainer">
-                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.flags.series">Flags Séries (opt-in)</label>
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.flags.series">Types de programmes à ajouter — Séries</label>
                             <div id="wlSeriesFlags" class="wlBox"></div>
-                            <div class="fieldDescription" data-i18n-html="cfg.flags.series.desc">Flags à AJOUTER aux séries de fiction. Vide = fiction seulement (kids/news/sports exclus). Cochez Kids/News/Sports pour les inclure.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.flags.series.desc">Par défaut, les programmes du guide TV marqués Enfants, Infos ou Sports sont ignorés. Cochez une catégorie pour l'inclure dans l'analyse des séries.</div>
                         </div>
 
                         <div class="inputContainer">
-                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.flags.movies">Flags Films (opt-in)</label>
+                            <label style="display:block;font-weight:600;margin-bottom:0.3em;" data-i18n="cfg.flags.movies">Types de programmes à ajouter — Films</label>
                             <div id="wlMovieFlags" class="wlBox"></div>
-                            <div class="fieldDescription" data-i18n-html="cfg.flags.movies.desc">Flags à AJOUTER aux films de fiction. Vide = fiction seulement. Cochez Kids/News/Sports pour les inclure.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.flags.movies.desc">Par défaut, les programmes du guide TV marqués Enfants, Infos ou Sports sont ignorés. Cochez une catégorie pour l'inclure dans l'analyse des films.</div>
                         </div>
 
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
@@ -318,36 +318,36 @@
                                        label="Plafond séries (par appel)"
                                        data-i18n-label="cfg.maxseries.label"
                                        min="5" max="200" />
-                                <div class="fieldDescription" data-i18n-html="cfg.maxseries.desc">Max de séries soumises au LLM (après pré-tri). Défaut 40.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.maxseries.desc">Nombre maximum de séries soumises au LLM (après pré-tri). Défaut 40.</div>
                             </div>
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numMaxMovieBatch"
                                        label="Plafond films (par appel)"
                                        data-i18n-label="cfg.maxmovies.label"
                                        min="5" max="200" />
-                                <div class="fieldDescription" data-i18n-html="cfg.maxmovies.desc">Max de films soumis au LLM (après pré-tri). Défaut 30.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.maxmovies.desc">Nombre maximum de films soumis au LLM (après pré-tri). Défaut 30.</div>
                             </div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.gtx.h">Traduction des genres (IA)</h3>
-                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.gtx.desc">Détecte les genres de l'EPG non mappés par le plugin <b>GenreCleaner</b> et propose, via le LLM, une traduction vers votre vocabulaire curaté (<b>AllowedGenres</b>). Vous validez chaque proposition avant écriture dans <b>GenreCleaner.xml</b> — les recommandations l'utilisent aussitôt (sans redémarrage) ; un redémarrage du serveur est ensuite requis pour que GenreCleaner lui-même l'adopte (bannière Emby « redémarrage requis »).</div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.gtx.desc">L'extension repère les genres du guide TV qui ne sont pas encore traduits et suggère des équivalents basés sur votre liste de genres. Si un genre est totalement nouveau, le LLM peut vous proposer de le créer et de l'ajouter à votre liste en un clic. Vous gardez le contrôle total en validant chaque proposition. Ces changements sont appliqués immédiatement aux recommandations, mais un redémarrage du serveur est requis pour mettre à jour l'ensemble du système GenreCleaner.</div>
                         <div class="inputContainer">
                             <button is="emby-button" type="button" class="raised block" id="btnGenreAnalyze" data-i18n="cfg.gtx.analyze">
-                                Analyser les genres non mappés
+                                Analyser les genres non traduits
                             </button>
                             <div id="genreProposalsInfo" class="fieldDescription" style="display:none;"></div>
                             <div id="genreProposals" class="wlBox" style="display:none;"></div>
-                            <div id="genreSuggestLabel" class="fieldDescription" style="display:none;margin-top:0.8em;font-weight:600;" data-i18n="cfg.gtx.suggest.h">Genres sans équivalent — nouveaux genres suggérés</div>
+                            <div id="genreSuggestLabel" class="fieldDescription" style="display:none;margin-top:0.8em;font-weight:600;" data-i18n="cfg.gtx.suggest.h">Genres sans équivalent — nouveaux genres suggérés (ajoutés à AllowedGenres à l'application)</div>
                             <div id="genreSuggestions" class="wlBox" style="display:none;"></div>
                             <div id="genreOrphans" class="fieldDescription" style="display:none;"></div>
                             <button is="emby-button" type="button" class="raised button-submit block" id="btnGenreApply" style="display:none;" data-i18n="cfg.gtx.apply">
-                                Appliquer les mappages sélectionnés
+                                Appliquer les traductions sélectionnées
                             </button>
                             <div id="genreApplyResult" class="fieldDescription" style="display:none;"></div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.apikeys.h">Clés API — services externes</h3>
-                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.apikeys.desc">Clés pour les outils d'enrichissement internet. Un champ vide désactive l'outil correspondant (il n'est pas exposé au LLM).</div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.apikeys.desc">Clés des services web auxquels l'extension peut faire appel. Un champ vide désactive le service correspondant : l'LLM ne le voit plus.</div>
 
                         <div class="inputContainer">
                             <input is="emby-input" type="password" id="txtTmdbApiKey"
@@ -355,7 +355,7 @@
                                    data-i18n-label="cfg.tmdb.label"
                                    data-i18n-ph="cfg.tmdb.ph"
                                    placeholder="clé themoviedb.org" />
-                            <div class="fieldDescription" data-i18n-html="cfg.tmdb.desc">Clé API TMDB pour l'outil tmdb_lookup (enrichissement synopsis/statut). Laisser vide pour désactiver l'outil.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.tmdb.desc">Clé de l'API TMDB, utilisée pour enrichir les fiches (synopsis, statut). Laisser vide pour désactiver l'outil.</div>
                         </div>
 
                         <div class="inputContainer">
@@ -363,24 +363,24 @@
                                    label="Langue TMDB"
                                    data-i18n-label="cfg.tmdblang.label"
                                    placeholder="fr-FR" />
-                            <div class="fieldDescription" data-i18n-html="cfg.tmdblang.desc">Repli legacy pour la langue TMDB quand « Langue de réponse du LLM » est sur Auto et que la langue d'affichage Emby est illisible. Quand une langue de réponse est choisie, c'est elle qui pilote TMDB (repli en-US, traduction LLM en dernier recours). Ex. fr-FR, en-US.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.tmdblang.desc">Ne sert que si « Langue de réponse du LLM » est sur Auto : langue utilisée pour interroger TMDB (ex. fr-FR, en-US). Quand une langue de réponse est choisie, c'est elle qui pilote TMDB.</div>
                         </div>
 
                         <div class="inputContainer">
                             <input is="emby-input" type="password" id="txtTvdbApiKey"
-                                   label="Clé API TheTVDB (tvdb_search)"
+                                   label="Clé API TheTVDB"
                                    data-i18n-label="cfg.tvdb.label"
                                    data-i18n-ph="cfg.tvdb.ph"
                                    placeholder="clé api4.thetvdb.com" />
-                            <div class="fieldDescription" data-i18n-html="cfg.tvdb.desc">Clé API TheTVDB.com (v4) pour l'outil tvdb_search (enrichissement séries, synopsis FR en priorité). Repli sur la variable d'environnement TVDB_API_KEY. Vide = désactivé.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.tvdb.desc">Clé de l'API TheTVDB (v4), utilisée pour enrichir les séries (synopsis FR en priorité). À défaut, la variable d'environnement TVDB_API_KEY est utilisée. Vide = outil désactivé.</div>
                         </div>
 
                         <div class="inputContainer">
                             <input is="emby-input" type="password" id="txtOllamaApiKey"
-                                   label="Clé API Ollama (cloud / web_search / web_fetch)"
+                                   label="Clé API Ollama (cloud et recherche web)"
                                    data-i18n-label="cfg.ollama.label"
                                    placeholder="ollama.com API key" />
-                            <div class="fieldDescription" data-i18n-html="cfg.ollama.desc">Clé ollama.com — sert pour le backend <b>Ollama cloud</b> ET les outils web_search/web_fetch. Repli sur la variable d'environnement OLLAMA_API_KEY. Vide = Ollama cloud désactivé.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.ollama.desc">Clé ollama.com, utilisée pour Ollama cloud et la recherche web. À défaut, la variable d'environnement OLLAMA_API_KEY est utilisée. Vide = Ollama cloud désactivé.</div>
                         </div>
 
                         <div class="inputContainer">
@@ -389,28 +389,22 @@
                                    data-i18n-label="cfg.searxng.label"
                                    placeholder="http://localhost:8888" />
                             <div class="fieldDescription" data-i18n-html="cfg.searxng.desc">
-                                Instance SearXNG auto-hébergée (méta-moteur). Si renseigné,
-                                l'outil <b>web_search</b> l'utilise en priorité (gratuit, sans
-                                quota, résultats JSON). L'outil interroge
-                                <c>{url}/search?q=…&amp;format=json</c> — le format JSON doit
-                                être activé dans les réglages SearXNG (<c>search.formats</c>).
-                                Optionnel : un utilisateur de la communauté n'a pas besoin
-                                d'installer SearXNG (repli automatique sur Ollama cloud).
-                                Vide = SearXNG désactivé.
+                                Instance SearXNG auto-hébergée, utilisée en priorité pour la recherche
+                                web — gratuit, sans quota. Le format JSON doit être activé dans ses
+                                réglages (search.formats). Sans SearXNG, la recherche web passe par
+                                Ollama cloud. Vide = désactivé.
                             </div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkWebFetchDirect" />
-                            <span class="checkboxLabel" data-i18n="cfg.webfetch.label">web_fetch direct (auto-hébergé, sans clé)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.webfetch.label">Récupération directe des pages web (sans clé)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.webfetch.desc">
-                            Récupère les pages web directement côté plugin (HttpClient) et extrait
-                            localement le contenu structuré (titre, métadonnées, <b>JSON-LD schema.org</b>,
-                            texte, titres, tableaux) — aucun quota cloud, aucune clé requise. Repli
-                            automatique sur Ollama cloud en cas de blocage anti-bot (si une clé est
-                            renseignée). Décochez pour utiliser uniquement Ollama cloud (clé requise).
-                            Activé par défaut — fonctionne pour tout utilisateur de la communauté.
+                            Récupère les pages web directement depuis le serveur Emby et en extrait
+                            le contenu (titre, texte, tableaux) — sans quota ni clé. En cas de
+                            blocage anti-bot, repli automatique sur Ollama cloud si une clé est
+                            renseignée. Décochez pour tout passer par Ollama cloud. Activé par défaut.
                         </div>
 
                         <div class="inputContainer">
@@ -418,30 +412,28 @@
                                    label="Clé API Google Gemini"
                                    data-i18n-label="cfg.gemini.label"
                                    placeholder="AIza... API key" />
-                            <div class="fieldDescription" data-i18n-html="cfg.gemini.desc">Clé Google AI Studio pour le backend <b>Gemini</b> (generativelanguage.googleapis.com). Repli sur la variable d'environnement GEMINI_API_KEY. Vide = Gemini désactivé.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.gemini.desc">Clé Google AI Studio, utilisée pour le serveur Gemini. À défaut, la variable d'environnement GEMINI_API_KEY est utilisée. Vide = Gemini désactivé.</div>
                         </div>
 
                         <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtNewReleaseSources"
-                                      label="Sources nouveautés web (outil new_releases)"
+                                      label="Sources nouveautés web"
                                       data-i18n-label="cfg.newreleases.label"
                                       rows="4"
                                       data-i18n-ph="cfg.newreleases.ph"
-                                      placeholder="https://exemple.com/flux.rss&#10;https://exemple.com/nouveautes :: &lt;li&gt;&lt;a href=&quot;(?&lt;url&gt;/[^&quot;]+)&quot;[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;"></textarea>
+                                      placeholder="https://exemple.com/flux.rss&#10;https://exemple.com/nouveautes :: @showbizz"></textarea>
                             <div class="fieldDescription" data-i18n-html="cfg.newreleases.desc">
-                                Une source par ligne pour l'outil <b>new_releases</b> (alias de l'ancien
-                                showbizz_new_releases) : <b>URL</b> seule = flux RSS/Atom auto-détecté ;
-                                <b>URL :: @showbizz</b> = extracteur intégré Showbizz.net (blocs
-                                « Saison 1 ») ; <b>URL :: regex .NET</b> = extraction personnalisée
-                                (groupe « title » requis, « url »/« date » optionnels). Exemple :
-                                <code>https://en.wikipedia.org/wiki/Category:2026_Canadian_television_series_debuts :: &lt;li&gt;&lt;a href="(?&lt;url&gt;/wiki/[^:"]+)"[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;</code>.
-                                Vide = outil désactivé. Modifier la liste re-scrappe sans redémarrer
-                                (cache 24h clé sur les sources).
+                                Une source par ligne : URL seule = flux RSS/Atom auto-détecté ;
+                                « URL :: @showbizz » = extracteur intégré Showbizz.net ;
+                                « URL :: regex .NET » = extraction personnalisée (groupe « title »
+                                requis, « url » et « date » optionnels). Vide = outil désactivé.
+                                La liste est relue sans redémarrage (cache 24 h). Le bouton
+                                « Tester les sources » valide chaque ligne sans enregistrer.
                             </div>
                             <button is="emby-button" type="button" class="raised" id="btnTestNewReleases"
                                     data-i18n="cfg.newreleases.test"
                                     data-i18n-title="cfg.newreleases.test.title"
-                                    title="Teste les lignes éditées (sans enregistrer) : mode détecté, décompte par source, aperçu des titres.">
+                                    title="Teste chaque ligne sans enregistrer : mode détecté, nombre d'items trouvés, aperçu des titres — ou l'erreur exacte (HTTP, délai dépassé, regex).">
                                 Tester les sources
                             </button>
                             <div id="newReleaseTestResult" class="fieldDescription backendTestResult"
@@ -450,7 +442,7 @@
 
                         <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtRagDirectives"
-                                      label="RAG Directives (system prompt)"
+                                      label="Prompt système (directives de l'agent)"
                                       data-i18n-label="cfg.rag.label"
                                       rows="4"></textarea>
                             <button is="emby-button" type="button" class="raised btnResetPrompt"
@@ -458,22 +450,22 @@
                                     data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
                                 Réinitialiser
                             </button>
-                            <div class="fieldDescription" data-i18n-html="cfg.rag.desc">Prompt système envoyé au LLM (role: system) à chaque appel.</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.rag.desc">Instructions envoyées au LLM au début de chaque appel.</div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkDebugVerbose" />
-                            <span class="checkboxLabel" data-i18n="cfg.debug.label">Debug verbose (journalisation intégrale de l'agent)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.debug.label">Mode debug (journal complet de l'agent)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.debug.desc">
-                            Quand activé, le journal Emby contient le system prompt complet, le prompt
-                            utilisateur, la réponse complète de chaque itération et chaque résultat d'outil.
-                            À activer ponctuellement pour comprendre ce que voit le LLM (désactivé par défaut).
+                            Écrit dans le journal Emby tout ce que voit l'LLM : prompts complets,
+                            réponses, résultats d'outils. À activer ponctuellement pour comprendre
+                            un comportement. Désactivé par défaut.
                         </div>
 
                         <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtScheduleTask"
-                                      label="Schedule Task (Séries) — planification + prompt"
+                                      label="Tâche planifiée Séries — planification et prompt"
                                       data-i18n-label="cfg.sched.series.label"
                                       rows="3"
                                       data-i18n-ph="cfg.sched.series.ph"
@@ -484,18 +476,17 @@
                                 Réinitialiser
                             </button>
                             <div class="fieldDescription" data-i18n-html="cfg.sched.series.desc">
-                                Format : « &lt;planification&gt; | &lt;prompt de tâche SÉRIES&gt; ».
-                                Planification : Daily HH:MM, Hourly, Weekly &lt;Day&gt; HH:MM, Interval &lt;heures&gt;.
-                                La partie après le « | » est le prompt utilisateur du <b>run SÉRIES</b>
-                                (étapes 1 + 2 : premieres S01E01 + nouvelles saisons). Exécuté comme un
-                                premier run agent indépendant. Déclenchable manuellement dans
-                                « Tâches planifiées ».
+                                Format : « planification | prompt de la tâche ». Planification :
+                                Daily HH:MM, Hourly, Weekly Jour HH:MM ou Interval heures. Le texte
+                                après le « | » est envoyé au LLM pour le run séries (premières
+                                S01E01 et nouvelles saisons). La tâche est aussi déclenchable
+                                manuellement dans « Tâches planifiées ».
                             </div>
                         </div>
 
                         <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtScheduleTaskMovies"
-                                      label="Schedule Task (Films) — prompt du run films"
+                                      label="Tâche planifiée Films — prompt du run films"
                                       data-i18n-label="cfg.sched.movies.label"
                                       rows="3"
                                       data-i18n-ph="cfg.sched.movies.ph"
@@ -506,35 +497,33 @@
                                 Réinitialiser
                             </button>
                             <div class="fieldDescription" data-i18n-html="cfg.sched.movies.desc">
-                                Prompt du <b>run FILMS</b> (étape 3 : films à venir absents de la biblio,
-                                via get_emby_info action=epg_movies). Pas de planification ici — elle vient
-                                du champ ci-dessus. Exécuté comme un second run agent indépendant, puis
-                                fusionné avec les séries (la page Recommandations affiche deux sections).
-                                Vide = pas de run films (séries seulement).
+                                Prompt envoyé au LLM pour le run films (films à venir absents de
+                                la bibliothèque). Pas de planification ici : elle vient du champ
+                                Séries. Le run films est fusionné avec les séries sur la page
+                                Recommandations. Vide = pas de run films (séries seulement).
                             </div>
                         </div>
 
                         <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtDroppedTitles"
-                                      label="Drop list — titres à exclure des recommandations"
+                                      label="Titres à exclure des recommandations"
                                       data-i18n-label="cfg.dropped.label"
                                       rows="5"
                                       data-i18n-ph="cfg.dropped.ph"
                                       placeholder="Star Trek&#10;Castle&#10;Un titre par ligne"></textarea>
                             <div class="fieldDescription" data-i18n-html="cfg.dropped.desc">
-                                Titres exclus des prochaines exécutions : la tâche les retire de la
-                                liste envoyée au LLM (épuration en amont) — ils ne seront plus
-                                recommandés. Un titre par ligne. Alimenté aussi par le bouton
-                                « Oublier » de la page Recommandations.
+                                Titres jamais recommandés : la tâche les retire de la liste envoyée
+                                au LLM. Un titre par ligne. Le bouton « Oublier » de la page
+                                Recommandations y ajoute aussi des titres.
                             </div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.tonight.h">À regarder ce soir (recommandation personnalisée par usager)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.desc">
                             Section « À regarder ce soir » de la page Recommandations : analyse
-                            l'historique de visionnage de l'usager et croise avec l'EPG du soir pour
-                            recommander quoi regarder maintenant. Appel à la demande (endpoint plugin),
-                            cache par usager.
+                            l'historique de visionnage de l'usager et croise avec le guide TV du soir pour
+                            proposer quoi regarder maintenant. Calculée à l'ouverture de la page, avec
+                            un cache par usager.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -544,58 +533,55 @@
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightGenreTagEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.tonight.genretag.flag">Étiqueter les recos « à regarder ce soir » avec le tag « AI Tonight »</span>
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.genretag.flag">Ajouter l'étiquette « AI Tonight » aux recommandations « à regarder ce soir »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.genretag.desc">
-                            Option <b>opt-in</b>. Ajoute le tag <b>AI Tonight</b> aux items Emby recommandés (enregistrements
-                            non visionnés + bibliothèque) pour les retrouver en filtrant sur ce <b>tag</b> (filtre « Tags ») dans n'importe quel
-                            client Emby. Une tâche planifiée (<b>Nettoyage tag AI Tonight</b>, 3 h du matin) retire le tag (et migre l'éventuel genre hérité)
-                            chaque jour ; les runs « ce soir » suivants le réajoutent sur les recos pertinentes. <b>Modifie les
-                            métadonnées réelles</b> des items (tableau Tags) — un refresh peut l'effacer (réajouté au prochain
-                            run). Indépendant de la bibliothèque <c>.strm</c> (genre <c>AI Suggestion</c>, nettoyage séparé).
+                            Ajoute l'étiquette AI Tonight aux items recommandés (enregistrements non
+                            visionnés + bibliothèque) : ils se retrouvent en filtrant sur cette étiquette
+                            dans n'importe quel client Emby (filtre « Étiquettes »). Une tâche planifiée
+                            retire l'étiquette chaque nuit à 3 h ; les exécutions suivantes la
+                            réajoutent. L'étiquette modifie les métadonnées des items — un rafraîchissement
+                            Emby peut l'effacer (elle sera réajoutée).
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightCollectionEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.tonight.collection.flag">Regrouper les recos « à regarder ce soir » dans une collection « AI Tonight »</span>
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.collection.flag">Regrouper les recommandations « à regarder ce soir » dans une collection « AI Tonight »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.collection.desc">
-                            Option <b>opt-in</b>, indépendante du tag ci-dessus (les deux peuvent cohabiter). Maintient une
-                            <b>collection Emby</b> <b>AI Tonight</b> regroupant les items recommandés (enregistrements non
-                            visionnés + bibliothèque) — l'usager la parcourt comme n'importe quelle collection dans n'importe
-                            quel client Emby. <b>Non destructive</b> : les items sont référencés (regroupés), jamais copiés ni
-                            déplacés ; lire un membre joue le vrai item. La collection agrège des items
-                            <i>inter-bibliothèques</i> (enregistrements + films/séries possédés). La tâche planifiée
-                            (<b>Nettoyage tag AI Tonight</b>, 3 h du matin) <b>vide</b> aussi la collection chaque jour
-                            (coquille conservée, re-remplie au prochain run).
+                            Maintient une collection Emby « AI Tonight » regroupant les items recommandés
+                            (enregistrements non visionnés + bibliothèque) — l'usager la parcourt comme
+                            n'importe quelle collection. Non destructive : les items sont référencés,
+                            jamais copiés ni déplacés ; jouer un membre joue le vrai item. Indépendante
+                            de l'étiquette (les deux peuvent cohabiter). La tâche planifiée de 3 h vide
+                            la collection chaque nuit ; elle est re-remplie à l'exécution suivante.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightPlaylistEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.tonight.playlist.flag">Remplir une playlist « AI Tonight » avec les recos « à regarder ce soir »</span>
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.playlist.flag">Remplir une playlist « AI Tonight » avec les recommandations « à regarder ce soir »</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.playlist.desc">
-                            Option <b>opt-in</b>, indépendante du tag et de la collection ci-dessus (les trois peuvent
-                            cohabiter). Maintient une <b>playlist Emby</b> <b>AI Tonight</b> remplie avec les items
-                            recommandés (enregistrements non visionnés + bibliothèque) — lecture enchaînée directement
-                            depuis n'importe quel client Emby. <b>Reset à chaque run</b> : la playlist est vidée puis
-                            remplie avec les recos courantes (elle reflète exactement les recommandations du jour).
-                            Publique (visible par le foyer), liée à l'usager ci-dessous. La tâche planifiée (3 h du
-                            matin) <b>vide</b> aussi la playlist (entrées retirées, coquille conservée).
+                            Maintient une playlist Emby « AI Tonight » remplie avec les items recommandés
+                            (enregistrements non visionnés + bibliothèque) — lecture enchaînée depuis
+                            n'importe quel client Emby. Remise à zéro à chaque exécution : la playlist
+                            est vidée puis remplie avec les recommandations du jour. Publique (visible
+                            par le foyer), liée à l'usager indiqué ci-dessous. Indépendante de l'étiquette
+                            et de la collection (les trois peuvent cohabiter). La tâche planifiée de 3 h
+                            vide aussi la playlist.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightFavoritesEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.tonight.favorites.flag">Mettre les recos « à regarder ce soir » en favori (favoris éphémères)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.tonight.favorites.flag">Mettre les recommandations « à regarder ce soir » en favori (favoris éphémères)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.favorites.desc">
-                            Option <b>opt-in</b>. À chaque run frais, les recos (enregistrements non visionnés +
-                            bibliothèque) sont mises en <b>favori</b> (dans « Ma liste ») pour l'usager ci-dessous —
-                            favoris <b>éphémères</b> : la tâche planifiée (3 h du matin) les retire, en ne touchant
-                            <b>que ceux posés par le plugin</b> (traçés dans un fichier d'état) — jamais les favoris
-                            préexistants de l'usager (un item déjà favori avant le run n'est pas modifié ni suivi).
-                            Limite : si l'usager re-favorise manuellement un item que le plugin avait mis en favori,
-                            le nettoyage le retire quand même (indistinguable d'un nôtre).
+                            À chaque nouvelle exécution, les recommandations sont mises en favori (dans
+                            « Ma liste ») pour l'usager indiqué ci-dessous. Favoris éphémères : la tâche
+                            planifiée de 3 h les retire — uniquement ceux posés par l'extension (traçés
+                            dans un fichier d'état), jamais les favoris préexistants. Limite connue :
+                            un item re-favori manuellement par l'usager est retiré quand même
+                            (indiscernable d'un favori posé par l'extension).
                         </div>
 
                         <div class="inputContainer">
@@ -605,8 +591,8 @@
                                    placeholder="René" />
                             <div class="fieldDescription" data-i18n-html="cfg.tonight.user.desc">
                                 Usager propriétaire des favoris éphémères et de la playlist. Vide = premier
-                                usager admin (sinon premier usager). Doit correspondre au nom exact d'un usager
-                                Emby existant.
+                                usager administrateur (sinon, premier usager). Doit être le nom exact
+                                d'un usager Emby existant.
                             </div>
                         </div>
 
@@ -625,7 +611,7 @@
                             </div>
                         </div>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.window.desc">
-                            Fenêtre temporelle de l'EPG interrogée (ex. 18:00 → 23:59).
+                            Fenêtre du guide TV interrogée (ex. 18:00 → 23:59).
                             Début vide = maintenant ; fin vide = 23:59.
                         </div>
 
@@ -640,25 +626,25 @@
                                 Réinitialiser
                             </button>
                             <div class="fieldDescription" data-i18n-html="cfg.tonight.prompt.desc">
-                                Template du prompt envoyé au LLM. Le profil de goût (historique récent
-                                de l'usager) y est injecté à l'exécution.
+                                Gabarit du prompt envoyé au LLM. Le profil de goût de l'usager (historique
+                                récent) y est injecté à l'exécution.
                             </div>
                         </div>
 
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numTonightBatch"
-                                       label="Plafond programmes (par appel)"
+                                       label="Plafond de programmes (par appel)"
                                        data-i18n-label="cfg.tonight.batch"
                                        min="1" max="50" />
-                                <div class="fieldDescription" data-i18n-html="cfg.tonight.batch.desc">Max de programmes de la soirée soumis au LLM (après pré-tri par pertinence). Défaut 10.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.tonight.batch.desc">Nombre maximal de programmes de la soirée soumis au LLM (après pré-tri par pertinence). Défaut 10.</div>
                             </div>
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numTonightCache"
                                        label="Cache (heures)"
                                        data-i18n-label="cfg.tonight.cache"
                                        min="0" max="168" />
-                                <div class="fieldDescription" data-i18n-html="cfg.tonight.cache.desc">Durée de validité du cache par usager. 0 = pas de cache (run à chaque ouverture). Défaut 4.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.tonight.cache.desc">Durée de validité du cache par usager. 0 = pas de cache (recalcul à chaque ouverture). Défaut 4.</div>
                             </div>
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numTonightRecDays"
@@ -672,7 +658,7 @@
                                        label="Min recommandations"
                                        data-i18n-label="cfg.tonight.minRec"
                                        min="0" max="20" />
-                                <div class="fieldDescription" data-i18n-html="cfg.tonight.minRec.desc">Si l'EPG + les enregistrements donnent moins de recommandations, complète avec des titres non visionnés de la bibliothèque. Défaut 3.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.tonight.minRec.desc">Si le guide TV et les enregistrements donnent moins de recommandations, complète avec des titres non visionnés de la bibliothèque. Défaut 3.</div>
                             </div>
                         </div>
 
@@ -681,15 +667,13 @@
                             <span class="checkboxLabel" data-i18n="cfg.tonight.binge.flag">Signaler les séries « prêtes à dévorer » (stock d'épisodes enregistrés non visionnés)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.tonight.binge.desc">
-                            Option <b>opt-in</b>. Détecte les séries que l'usager est en train d'enregistrer et dont il
-                            accumule volontairement les épisodes non visionnés (il attend d'en avoir plusieurs avant de
-                            commencer) : quand le stock atteint le seuil, le run « ce soir » propose de commencer
-                            (« il est temps de regarder X, N épisodes en attente »). <b>Anti-spam</b> : chaque série
-                            n'est signalée qu'<b>une seule fois</b> ; la suggestion ne se ré-arme qu'après que le
-                            compte non visionné repasse sous le seuil (l'usager a commencé à regarder). Une série
-                            dormante (jamais commencée, conservée « pour un jour de pluie ») ne déclenche
-                            <b>jamais</b> la suggestion : seules les séries encore actives — au moins un épisode
-                            arrivé récemment — sont signalées.
+                            Détecte les séries en cours d'enregistrement dont l'usager accumule les
+                            épisodes non visionnés : quand le stock atteint le seuil, la recommandation
+                            propose de commencer (« il est temps de regarder X, N épisodes en attente »).
+                            Anti-spam : chaque série n'est signalée qu'une seule fois ; la suggestion ne
+                            revient qu'après que le compte non visionné repasse sous le seuil. Une série
+                            dormante (jamais commencée, gardée « pour un jour de pluie ») n'est jamais
+                            signalée : seules les séries encore actives le sont.
                         </div>
 
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
@@ -711,18 +695,18 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.feedback.h">Boucle de rétroaction des recommandations</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.feedback.desc">
-                            <b>Opt-in</b>. Chaque recommandation (« À regarder ce soir », tâche planifiée
-                            d'enregistrement) et chaque rejet (« Oublier ») est journalisé. Une fois par
-                            semaine (dimanche 4 h), une tâche d'analyse rapproche ce journal de ce que
-                            l'usager a <b>réellement regardé</b> et fait produire au LLM une directive
-                            concise (ce qui a plu / ignoré / manqué) réinjectée dans les prompts des runs
-                            suivants — les recommandations s'améliorent d'elles-mêmes au fil des semaines.
-                            Fail-open : sans directive, les prompts sont inchangés.
+                            Chaque recommandation (« À regarder ce soir », tâche d'enregistrement) et chaque
+                            rejet (« Oublier ») est journalisé. Une fois par semaine (dimanche 4 h), une
+                            tâche d'analyse rapproche ce journal de ce que l'usager a réellement regardé
+                            et fait produire au LLM une directive concise (ce qui a plu, ce qui a été
+                            ignoré, ce qui a manqué), réinjectée dans les prompts des exécutions suivantes
+                            — les recommandations s'améliorent d'elles-mêmes au fil des semaines.
+                            Sans directive, les prompts sont inchangés.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkRecoFeedbackEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.feedback.flag">Activer la boucle de rétroaction (analyse hebdo + directives de recommandation)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.feedback.flag">Activer la boucle de rétroaction (analyse hebdomadaire)</span>
                         </label>
 
                         <div class="inputContainer">
@@ -731,9 +715,9 @@
                                       data-i18n-label="cfg.feedback.directive"
                                       rows="4"></textarea>
                             <div class="fieldDescription" data-i18n-html="cfg.feedback.directive.desc">
-                                Directives produites par la dernière analyse (une par usager). <b>Éditable</b> :
+                                Directives produites par la dernière analyse (une par usager). Éditable :
                                 l'admin peut corriger ou vider ce JSON
-                                <code>[{"u":"userId","n":"nom","d":"date","text":"…"}]</code> —
+                                « [{"u":"userId","n":"nom","d":"date","text":"…"}] » —
                                 vider le champ (ou un « text ») retire la directive des prompts jusqu'à la
                                 prochaine analyse.
                             </div>
@@ -741,25 +725,23 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.memory.h">Mémoire réflexive (expérimental)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.desc">
-                            Les <b>données</b> qui alimenteront la réflexion du LLM sur lui-même
-                            (Phase 1 — la fiche mémoire rédigée par le LLM arrive dans une version
-                            ultérieure) : chaque reco émise avec sa <b>raison</b>, le <b>menu</b> de
-                            candidats soumis à chaque run, et chaque <b>lecture</b> terminée avec le
-                            pourcentage visionné. Trois fichiers JSON locaux (rétention 30 jours,
-                            plafonnés), aucune donnée sortante.
+                            Les données qui alimentent la réflexion du LLM sur lui-même : chaque
+                            recommandation émise avec sa raison, la liste des candidats soumis à
+                            chaque exécution, et chaque lecture terminée avec le pourcentage
+                            visionné. Trois fichiers JSON locaux (rétention 30 jours, volume
+                            plafonné), aucune donnée sortante.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkDecisionLogEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.memory.decisions.flag">Journaliser les décisions du LLM (reco + raison + menu de candidats)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.memory.decisions.flag">Journaliser les décisions du LLM (recommandation, raison, candidats)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.decisions.desc">
-                            Opt-in. À chaque reco (« À regarder ce soir », enregistrements) et chaque
-                            rejet « Oublier », écrit <code>decisions.json</code> (raison + priorité +
-                            version de fiche) et <code>run_pool.json</code> (les candidats écartés aussi)
-                            — permet de réviser une croyance, pas un titre, et de distinguer une mauvaise
-                            reco d'une erreur de classement. Double écriture du journal RecoLog (requis
-                            par l'analyse hebdo actuelle).
+                            À chaque recommandation (« À regarder ce soir », enregistrements) et chaque
+                            rejet « Oublier », écrit « decisions.json » (raison, priorité,
+                            version de fiche) et « run_pool.json » (candidats écartés).
+                            Double aussi l'écriture dans le journal des recommandations, requis
+                            par l'analyse hebdomadaire.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -767,32 +749,33 @@
                             <span class="checkboxLabel" data-i18n="cfg.memory.playback.flag">Télémétrie de lecture (% visionné de chaque lecture)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.playback.desc">
-                            Opt-in. À chaque fin de lecture, écrit <code>playback.json</code> (item,
-                            usager, durée réelle, fraction lue, source bibliothèque/.strm/direct,
-                            chaîne, client, appareil). Signal central de la réflexion : rejet immédiat
-                            (&lt; 5 %), abandon (5–50 %), contenu validé (&gt; 80 %). Aucun effet sur la
-                            lecture elle-même.
+                            À chaque fin de lecture, écrit « playback.json » (item,
+                            usager, durée réelle, fraction lue, source, chaîne, client, appareil).
+                            Signal central de la réflexion : rejet immédiat
+                            (moins de 5 %), abandon (5 à 50 %), contenu validé (plus de 80 %). Aucun
+                            effet sur la lecture elle-même.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkMemoryCardEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.memory.card.flag">Activer la fiche mémoire du LLM (révision hebdomadaire + injection)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.memory.card.flag">Activer la fiche mémoire du LLM (révision hebdomadaire)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.card.desc">
-                            Opt-in. Tâche hebdomadaire (dimanche 4 h 30) : le LLM réécrit lui-même sa
-                            <b>fiche mémoire</b> (~250 mots) à partir des événements bruts de la semaine
-                            (décisions × télémétrie × candidats écartés × snapshot EPG). La fiche est
-                            versionnée (4 versions conservées), réinjectée dans les prompts (recommandations,
-                            enregistrement, chat) où elle <b>remplace</b> la directive de la boucle de
-                            rétroaction classique. Un échec LLM conserve la fiche précédente.
+                            Tâche hebdomadaire (dimanche 4 h 30) : le LLM réécrit lui-même sa fiche
+                            mémoire (~250 mots) à partir des événements de la semaine — ce qu'il sait
+                            de l'usager, ses réussites, ses échecs et ses stratégies. Quatre versions
+                            sont conservées. La fiche est réinjectée dans les prompts (recommandations,
+                            enregistrement, chat) et remplace la directive de la boucle de
+                            rétroaction. En cas d'échec, la fiche précédente est conservée.
                         </div>
 
                         <div style="margin:0.8em 0 1.2em;">
                             <h3 class="sectionTitle" style="margin-top:0.4em;margin-bottom:0.5em;" data-i18n="cfg.memory.cardview.h">Fiche mémoire actuelle</h3>
                             <div class="fieldDescription" style="margin-bottom:0.6em;" data-i18n-html="cfg.memory.cardview.desc">
-                                Lecture/édition admin — correctif manuel possible (le LLM la réécrira
-                                la semaine suivante à partir de votre version). Version 0 = pas encore
-                                rédigée (la première révision a besoin d'une semaine de données).
+                                Lecture et édition admin : vous pouvez corriger la fiche à la main
+                                (le LLM la réécrira la semaine suivante à partir de votre version).
+                                Version 0 = pas encore rédigée (la première révision a besoin
+                                d'une semaine de données).
                             </div>
                             <div id="lblMemoryCardMeta" class="fieldDescription" style="margin-bottom:0.4em;"></div>
                             <textarea id="txtMemoryCard" is="emby-textarea" class="txtMemoryCard" rows="10"
@@ -806,11 +789,12 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.autoprog.h">Auto-programmation &amp; popup au login</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.desc">
-                            Les clients natifs Android / Android TV ne rendent pas les pages plugin HTML :
-                            les recommandations ne sont visibles que sur la page web. L'<b>auto-programmation</b>
-                            crée les timers Emby des recos à enregistrer → elles ressortent dans le guide EPG
-                            natif (badge d'enregistrement) sur tous les clients. Le <b>popup au login</b>
-                            signale ce soir ce que l'usager peut regarder (bibliothèque / enregistrements).
+                            Les clients natifs Android / Android TV n'affichent pas les pages HTML
+                            de l'extension : les recommandations n'y sont donc pas visibles.
+                            L'auto-programmation crée les timers d'enregistrement Emby des
+                            recommandations — elles ressortent dans le guide natif (badge
+                            d'enregistrement) sur tous les clients. Le popup au login signale
+                            ce soir ce que l'usager peut regarder (bibliothèque, enregistrements).
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -818,11 +802,12 @@
                             <span class="checkboxLabel" data-i18n="cfg.autoprog.flag">Auto-programmer les recommandations (créer les timers d'enregistrement)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.autoprog.flag.desc">
-                            Option <b>opt-in</b> (décochée par défaut). Si cochée, après chaque run (tâche planifiée
-                            ET login), les recommandations à enregistrer (programmes EPG à venir, non déjà
-                            possédées, non déjà programmées, hors drop list) sont programmées en enregistrement
-                            (SeriesTimer pour une série, Timer unique pour un film). Aucune programmation tant
-                            que décochée. L'utilisateur peut annuler un timer indésirable dans Emby.
+                            Si cochée, après chaque exécution (tâche planifiée et login), les
+                            recommandations à enregistrer sont programmées : programmes à venir
+                            du guide TV, non déjà possédés, non déjà programmés, hors titres à
+                            exclure — SeriesTimer pour une série, timer unique pour un film.
+                            Aucune programmation tant que la case est décochée. L'usager peut
+                            annuler un timer indésirable directement dans Emby.
                         </div>
 
                         <div style="display:flex;gap:1.2em;flex-wrap:wrap;align-items:flex-start;margin:0.6em 0;">
@@ -831,49 +816,52 @@
                                        label="Seuil disque enregistrements (Go)"
                                        data-i18n-label="cfg.diskgate.threshold"
                                        min="0" max="2000" />
-                                <div class="fieldDescription" data-i18n-html="cfg.diskgate.threshold.desc">Espace libre minimum sur le disque des enregistrements. En dessous, aucun NOUVEAU timer n'est créé (les timers existants continuent). 0 = désactivé. Défaut 25.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.diskgate.threshold.desc">Espace libre minimum sur le disque des enregistrements. En dessous, aucun nouveau timer n'est créé (les timers existants continuent). 0 = désactivé. Défaut 25.</div>
                             </div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkRecordingTaggingEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.diskgate.tag.flag">Suggérer à supprimer les enregistrements visionnés quand le seuil disque est franchi (tag « AI Delete »)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.diskgate.tag.flag">Suggérer à supprimer les enregistrements visionnés quand le seuil disque est franchi (étiquette « AI Delete »)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.diskgate.tag.desc">
-                            Option <b>opt-in</b> (décochée par défaut). Quand l'espace libre passe sous le seuil,
-                            les enregistrements <b>déjà visionnés</b> sont tagués « AI Delete », du plus
-                            ancien au plus récent, jusqu'à ce que leur suppression ramène le disque au-dessus du
-                            seuil (avec marge). <b>Pure suggestion — le plugin ne supprime jamais rien</b> :
-                            filtrez la bibliothèque des enregistrements par le tag « AI Delete » (filtre « Tags »), multi-sélectionnez
-                            puis supprimez. Chaque passe retire d'abord les tags précédents (les tags reflètent
-                            toujours la dernière évaluation ; si vous avez libéré de l'espace, tout disparaît).
-                            Les enregistrements non visionnés ne sont jamais tagués.
+                            Quand l'espace libre passe sous le seuil, les enregistrements déjà
+                            visionnés reçoivent l'étiquette « AI Delete », du plus ancien au plus
+                            récent, jusqu'à ce que leur suppression ramène le disque au-dessus du
+                            seuil (avec marge). Pure suggestion — l'extension ne supprime jamais
+                            rien : filtrez la bibliothèque des enregistrements par cette étiquette
+                            (filtre « Étiquettes »), sélectionnez puis supprimez. Chaque passe
+                            retire d'abord les étiquettes précédentes (si vous avez libéré de
+                            l'espace, tout disparaît). Les enregistrements non visionnés ne sont
+                            jamais étiquetés.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkAiBadgeEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.aibadge.flag">Badge « AI » sur les images EPG des suggestions à enregistrer</span>
+                            <span class="checkboxLabel" data-i18n="cfg.aibadge.flag">Badge « AI » sur l'image des suggestions à enregistrer (guide natif)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.aibadge.desc">
-                            Pastille verte + icône étincelle (sans texte, multilingue) en haut à droite de l'image des
-                            programmes suggérés par la tâche planifiée — visible dans le guide EPG natif, sur tous
-                            les clients. <b>Non destructif</b> : overlay au moment du service, l'artwork stocké
-                            n'est jamais modifié (l'enregistrement importé garde l'image d'origine — le badge
-                            disparaît une fois l'émission enregistrée) et un refresh EPG est sans effet. Chaque run
-                            remplace la sélection badgée ; les diffusions passées s'auto-expirent.
+                            Pastille verte avec icône étincelle (sans texte, multilingue) en haut
+                            à droite de l'image des programmes suggérés — visible dans le guide
+                            natif, sur tous les clients. Non destructif : le badge est ajouté
+                            quand l'image est servie, l'image stockée n'est jamais modifiée
+                            (l'enregistrement importé garde son image d'origine et le badge
+                            disparaît une fois l'émission enregistrée). Chaque exécution remplace
+                            la sélection badgée ; les diffusions passées s'auto-expirent.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkAiOwnedBadgeEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.ownedbadge.flag">Badge jaune « déjà possédé » sur les images EPG des émissions de la bibliothèque</span>
+                            <span class="checkboxLabel" data-i18n="cfg.ownedbadge.flag">Badge jaune « déjà possédé » sur l'image des émissions de la bibliothèque (guide natif)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.ownedbadge.desc">
-                            Pastille jaune (sans icône) sur l'image des programmes EPG dont la série ou le film figure
-                            déjà dans la bibliothèque — même rapprochement par nom que l'exclusion biblio des outils
-                            EPG (Articles FR/EN retirés, casse ignorée). L'usager sait dans le guide qu'il n'a pas
-                            intérêt à enregistrer. Même mécanisme non destructif que le badge « AI » (overlay au
-                            service, artwork jamais modifié) ; clé de cache distincte. NB : une nouvelle saison d'une
-                            série possédée porte aussi le jaune (c'est le même nom de série).
+                            Pastille jaune (sans icône) sur l'image des programmes du guide dont
+                            la série ou le film figure déjà dans la bibliothèque — le
+                            rapprochement se fait par nom (articles FR/EN et casse ignorés).
+                            L'usager sait ainsi qu'il n'a pas intérêt à enregistrer. Même mécanisme
+                            non destructif que le badge « AI » : l'image stockée n'est jamais
+                            modifiée. NB : une nouvelle saison d'une série possédée porte aussi
+                            la pastille jaune (même nom de série).
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -882,25 +870,26 @@
                         </label>
                         <div class="inputContainer" style="max-width:200px;margin-top:0.4em;">
                             <input is="emby-input" type="number" id="numLoginPopupSeconds"
-                                   label="Durée du toast (secondes)"
+                                   label="Durée d'affichage du popup (secondes)"
                                    data-i18n-label="cfg.loginpopup.seconds"
                                    min="2" max="60" />
                             <div class="fieldDescription" data-i18n-html="cfg.loginpopup.desc">
                                 Indépendant de l'auto-programmation : le popup liste ce soir ce que l'usager peut
-                                regarder (enregistrements non visionnés, bibliothèque). Toast sur le client qui
-                                se connecte (si <c>DisplayMessage</c> supporté) + notification cloche persistante
-                                (deep-link) en repli. La cloche reste même si la session ferme avant la fin du run
-                                LLM (~30–60 s) ou si le client ne supporte pas le toast.
+                                regarder (enregistrements non visionnés, bibliothèque). Le message s'affiche
+                                sur le client qui se connecte ; si le client ne le supporte pas, une notification
+                                persistante (cloche) prend le relais. La cloche reste même si la session ferme
+                                avant la fin du calcul (~30 à 60 s).
                             </div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.strmlib.h">Bibliothèque .strm des recommandations</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.strmlib.desc">
-                            Alternative <b>manuelle</b> à l'auto-programmation : après chaque run, le plugin écrit une
-                            carte <b>.strm</b>+<b>.nfo</b>+poster par recommandation à enregistrer (programmes EPG à
-                            venir, non possédés) dans une bibliothèque Emby dédiée. L'usager parcourt la bibliothèque ;
-                            <b>lire une carte crée l'enregistrement</b> puis affiche un clip de confirmation. Créez
-                            d'abord dans Emby une bibliothèque de type <b>Films</b> (ou Contenu mixte) pointant vers
+                            Alternative manuelle à l'auto-programmation : après chaque exécution, l'extension
+                            écrit une carte (.strm, .nfo, affiche) par recommandation à enregistrer —
+                            programmes à venir du guide TV, non possédés — dans une bibliothèque Emby
+                            dédiée. L'usager parcourt la bibliothèque ; lire une carte crée
+                            l'enregistrement puis affiche un clip de confirmation. Créez d'abord
+                            dans Emby une bibliothèque de type Films (ou Contenu mixte) pointant vers
                             un dossier vide, puis renseignez son nom exact ici.
                         </div>
 
@@ -914,29 +903,30 @@
                                    data-i18n-label="cfg.strmlib.name"
                                    placeholder="AI Suggestions" />
                             <div class="fieldDescription" data-i18n-html="cfg.strmlib.name.desc">
-                                Nom exact (sensible à la casse ignorée) de la bibliothèque Emby où écrire les cartes.
-                                Indépendant de l'auto-programmation (les deux peuvent cohabiter : le dedup évite les
-                                timers en double). Un jeton de sécurité est auto-généré au premier run pour protéger
-                                l'endpoint d'activation.
+                                Nom exact de la bibliothèque Emby où écrire les cartes (casse ignorée).
+                                Indépendant de l'auto-programmation : les deux peuvent cohabiter, les doublons
+                                de timers sont évités. Un jeton de sécurité est généré automatiquement au
+                                premier passage pour protéger l'activation.
                             </div>
                             <div class="fieldDescription" style="margin-top:0.6em;" data-i18n-html="cfg.strmlib.perm">
-                                <b>Droits d'accès</b> : lire une carte programme un enregistrement — réservez donc la
+                                Droits d'accès : lire une carte programme un enregistrement — réservez donc la
                                 bibliothèque, dans le tableau de bord Emby (Utilisateurs → autoriser un accès par
-                                dossier), aux comptes disposant du droit <b>EnableLiveTvManagement</b> (Enregistrer).
-                                Le plugin refuse par ailleurs l'activation déclenchée par un compte sans ce droit
-                                (toast dédié, aucun timer créé), et la page Recommandations masque ses sections
+                                dossier), aux comptes disposant du droit Enregistrer (EnableLiveTvManagement).
+                                L'extension refuse l'activation déclenchée par un compte sans ce droit
+                                (message dédié, aucun timer créé), et la page Recommandations masque ses sections
                                 d'enregistrement pour ces comptes.
                             </div>
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.orphan.h">Identification des enregistrements orphelins</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.desc">
-                            Passe quotidienne (04 h) qui repère les enregistrements DVR <b>non identifiés</b>
-                            (sans id IMDb/TMDB — souvent des titres québécois absents du catalogue TMDB/TVDB),
-                            tente de les résoudre par <b>nettoyage du titre + recherche multilingue</b> (S1),
-                            puis par <b>proposition LLM d'un id IMDb validé via TMDB /find</b> (S2), et écrit
-                            l'id + métadonnées + affiche en <b>verrouillant le titre EPG</b> (jamais écrasé).
-                            Les irrésolus sont marqués pour revue. <b>Opt-in</b> : modifie des enregistrements.
+                            Passe quotidienne (4 h) qui repère les enregistrements non identifiés
+                            (sans id IMDb/TMDB — souvent des titres québécois absents de TMDB/TVDB)
+                            et tente de les résoudre en trois étapes : nettoyage du titre et recherche
+                            multilingue (S1), id IMDb proposé par le LLM puis validé via TMDB (S2),
+                            recherche web SearXNG (S3). L'id, les métadonnées et l'affiche sont
+                            écrits en verrouillant le titre du guide (jamais écrasé). Les irrésolus
+                            sont marqués pour revue. Modifie des enregistrements.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -946,12 +936,13 @@
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkOrphanIdentifyDryRun" />
-                            <span class="checkboxLabel" data-i18n="cfg.orphan.dryrun">Mode simulation (dry-run — aucune écriture)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.dryrun">Mode simulation (aucune écriture)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.dryrun.desc">
-                            Si cochée, la tâche <b>n'écrit rien</b> : elle logue seulement les orphelins trouvés
-                            et la résolution proposée (S1/S2/S3) + un bilan. Sert à valider la qualité des résolutions
-                            avant de basculer en application automatique. À garder cochée pour les premiers runs.
+                            Si cochée, la tâche n'écrit rien : elle consigne dans le journal les
+                            orphelins trouvés, la résolution proposée et un bilan. Sert à valider
+                            la qualité des résolutions avant d'activer l'application automatique.
+                            À garder cochée pour les premiers passages.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -959,20 +950,23 @@
                             <span class="checkboxLabel" data-i18n="cfg.orphan.searxng">Étape S3 : recherche web (SearXNG) pour les titres introuvables</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.searxng.desc">
-                            Si cochée, après S1/S2 la tâche interroge <b>SearXNG</b> (cf. URL ci-dessus), extrait
-                            les ids <b>IMDb</b> des résultats, valide via TMDB + juge de synopsis. Résout les titres
-                            québécois paraphrasés qu'aucun catalogue ne connaît (ex. « L'histoire de Jean Seberg »
-                            → film « Seberg » 2019). Inopérant si ni SearXNG ni clé Ollama ne sont configurés.
+                            Si cochée, après S1 et S2 la tâche interroge SearXNG (URL configurée
+                            plus haut), extrait les ids IMDb des résultats et les valide via
+                            TMDB et le juge de synopsis. Résout les titres paraphrasés qu'aucun
+                            catalogue ne connaît (ex. « L'histoire de Jean Seberg » → le film
+                            « Seberg », 2019). Sans effet si ni SearXNG ni la clé Ollama ne sont
+                            configurés.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkOrphanRetryNeedsReview" />
-                            <span class="checkboxLabel" data-i18n="cfg.orphan.retry">Retraiter les besoins-revues (retry)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.retry">Retraiter les items marqués pour revue</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.retry.desc">
-                            Si cochée, les orphelins marqués <b>needs-review</b> sont retraités (au lieu d'être
-                            sautés) — pour y repasser S3 une fois SearXNG configuré. En cas de résolution, le tag
-                            devient <b>identified</b>. Les déjà-identifiés restent sautés.
+                            Si cochée, les orphelins marqués « needs-review » sont retraités au
+                            lieu d'être sautés — l'étape S3 peut ainsi être repassée une fois
+                            SearXNG configuré. En cas de résolution, l'étiquette devient
+                            « identified ». Les déjà-identifiés restent sautés.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -980,11 +974,12 @@
                             <span class="checkboxLabel" data-i18n="cfg.orphan.firstpass">Étape S0 : premier tri natif Emby (moteur « Identifier »)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.firstpass.desc">
-                            Si cochée, les orphelins passent d'abord par la <b>recherche native Emby</b>
-                            (le même moteur que le dialogue « Identifier » : TMDB/TVDB configurés côté serveur,
-                            clés du serveur) avant la recherche TMDB multilingue S1. Chaque candidat passe la
-                            porte de conformité : titre + année + juge de synopsis — un mauvais match natif est
-                            rejeté et la chaîne S1→S2→S3 se poursuit. Désactivée si la clé TMDB est absente.
+                            Si cochée, les orphelins passent d'abord par la recherche native
+                            d'Emby (le même moteur que le dialogue « Identifier », avec les clés
+                            configurées côté serveur) avant l'étape S1. Chaque candidat est
+                            vérifié sur le titre, l'année et le synopsis — un mauvais match est
+                            rejeté et la chaîne S1→S2→S3 se poursuit. Sans effet si la clé
+                            TMDB est absente.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -992,41 +987,45 @@
                             <span class="checkboxLabel" data-i18n="cfg.orphan.validate">Valider les métadonnées à la fin de chaque enregistrement</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.validate.desc">
-                            Si cochée, à la fin de chaque enregistrement DVR le plugin <b>fige la vérité EPG</b>
-                            (titre/synopsis/année du programme du guide) puis audite l'identification posée par
-                            les providers automatiques d'Emby : <b>juge de synopsis</b> — match → verrous + tag
-                            identifié ; <b>mismatch</b> → ids retirés, retour à l'état EPG et reprise immédiate
-                            du pipeline S1→S2→S3. Les enregistrements non identifiés passent immédiatement.
-                            Sinon, la passe nocturne 04 h reste le seul filet. <b>Opt-in</b> : activeable sans
-                            redémarrage ; respecte le dry-run ci-dessus.
+                            Si cochée, à la fin de chaque enregistrement l'extension fige les données
+                            du guide (titre, synopsis, année) puis audite l'identification posée
+                            par les fournisseurs automatiques d'Emby. Si le synopsis concorde :
+                            champs verrouillés et étiquette « identified ». Sinon : ids retirés,
+                            retour aux données du guide et reprise immédiate de la chaîne
+                            S1→S2→S3. Les enregistrements non identifiés passent immédiatement
+                            au traitement. Sans cette case, la passe de 4 h reste le seul filet.
+                            Activeable sans redémarrage ; respecte le mode simulation.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkOrphanAuditTaggedIds" />
-                            <span class="checkboxLabel" data-i18n="cfg.orphan.audit">Auditer les taggés qui ont reçu un id entre-temps</span>
+                            <span class="checkboxLabel" data-i18n="cfg.orphan.audit">Auditer les items étiquetés qui ont reçu un id entre-temps</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.orphan.audit.desc">
-                            Si cochée, les items marqués <b>introuvables/besoins-revue</b> qui ont reçu un id
-                            Emby <b>après</b> le tag sont ré-audités : la fiche TMDB de l'id posé est confrontée
-                            au titre de l'item — <b>match</b> → verrous + tag identifié ; <b>mismatch</b>
-                            (identification Emby fausse, ex. un homonyme) → ids retirés et reprise immédiate
-                            du pipeline S1→S2→S3. Respecte le dry-run. <b>Opt-in</b> : modifie des métadonnées.
+                            Si cochée, les items marqués « introuvable » ou « à revoir » qui ont
+                            reçu un id Emby après coup sont ré-audités : la fiche TMDB de l'id
+                            posé est confrontée au titre de l'item. Si tout concorde : champs
+                            verrouillés et étiquette « identified ». Sinon (identification Emby
+                            fausse, ex. un homonyme) : ids retirés et reprise immédiate de la
+                            chaîne S1→S2→S3. Respecte le mode simulation. Modifie des métadonnées.
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.crosskind.h">File de régularisation « cross-kind »</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.crosskind.desc">
-                            Œuvres enregistrées par Emby sous le mauvais type. Deux sources dans la file : les
-                            items taggés <b>llmai-cross-kind</b> (fiche film sur un item série, ou l'inverse) et
-                            les <b>suspects</b> — items taggés <b>llmai-not-found</b> dont le dossier vit dans le
-                            répertoire des enregistrements DVR (œuvre absente de TMDB : documentaire importé en
-                            série). Pour chacune : <b>copier</b> le fichier vidéo vers la bibliothèque de son
-                            type avec un nommage « Titre (Année).ts » (copie vérifiée, jamais destructive —
-                            l'original reste en place, supprimez-le ensuite pour qu'Emby retire l'ancien item),
-                            ou <b>convertir sur place</b> le dossier DVR : renommage du dossier, de la vidéo, du
-                            .nfo et du poster « Titre (Année) », réécriture du .nfo en racine &lt;movie&gt;,
-                            retrait de tvshow.nfo — Emby ré-importe alors l'œuvre sous le bon type (rollback
-                            complet en cas d'échec). « Ignorer » retire une entrée de la file (tag
-                            <b>llmai-cross-kind-ignored</b>), réaffichable à la demande.
+                            Œuvres enregistrées par Emby sous le mauvais type. Deux sources alimentent la
+                            file : les items étiquetés llmai-cross-kind (fiche film sur un item série, ou
+                            l'inverse) et les suspects — items étiquetés llmai-not-found dont le dossier
+                            vit dans le répertoire des enregistrements (œuvre absente de TMDB : un
+                            documentaire importé en série, par exemple). Pour chacune, deux traitements :
+                            copier le fichier vidéo vers la bibliothèque de son type, sous le nom
+                            « Titre (Année).ts » (copie vérifiée, jamais destructive — l'original reste
+                            en place ; supprimez-le ensuite pour qu'Emby retire l'ancien item) ; ou
+                            convertir sur place le dossier d'enregistrement : renommage du dossier, de
+                            la vidéo, du .nfo et de l'affiche en « Titre (Année) », réécriture du .nfo
+                            en racine &lt;movie&gt;, retrait de tvshow.nfo — Emby ré-importe alors
+                            l'œuvre sous le bon type, et tout échec restaure l'état initial.
+                            « Ignorer » retire une entrée de la file (étiquette llmai-cross-kind-ignored),
+                            réaffichable à la demande.
                         </div>
                         <div style="max-width:420px;margin:0.4em 0;">
                             <button is="emby-button" type="button" class="raised block" id="btnCrossKindRefresh"
@@ -1097,40 +1096,41 @@
                                         data-i18n-label="cfg.crosskind.dialog.lib"></select>
                                 <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.lib.desc">
                                     Bibliothèques de films/séries ou à contenu mixte, filtrées selon le type
-                                    visé par l'entrée — la bibliothèque de cartes .strm n'est jamais proposée ;
-                                    celle qui contient les enregistrements DVR l'est si elle supporte le type
-                                    visé (rétention DVR à considérer). Choisir une bibliothèque préremplit le
-                                    dossier de destination avec la cible suggérée « Titre (Année) ».
+                                    visé par l'entrée (la bibliothèque de cartes .strm de l'extension n'est jamais
+                                    proposée ; celle qui contient les enregistrements l'est si elle supporte
+                                    le type visé — elle reste soumise à la rétention des enregistrements).
+                                    Choisir une bibliothèque préremplit le dossier de destination avec la
+                                    cible suggérée « Titre (Année) ».
                                 </div>
                             </div>
                             <div class="inputContainer" style="margin:0.4em 0;">
                                 <input is="emby-input" type="text" id="ckDlgFolder"
                                        label="Dossier de destination" data-i18n-label="cfg.crosskind.dialog.folder" />
                                 <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.folder.desc">
-                                    Dossier cible complet ; le fichier y est copié sous le nom ci-dessous.
-                                    Modifiable : vous pouvez pointer directement un dossier « Season 01 » pour
-                                    le cas fiche-série.
+                                    Dossier cible complet ; le fichier y est copié sous le nom indiqué
+                                    ci-dessous. Modifiable : vous pouvez pointer directement un dossier
+                                    « Season 01 » dans le cas d'une fiche série.
                                 </div>
                             </div>
                             <div class="inputContainer" style="margin:0.4em 0;">
                                 <input is="emby-input" type="text" id="ckDlgFile"
                                        label="Nom du fichier copié" data-i18n-label="cfg.crosskind.dialog.file" />
                                 <div class="fieldDescription" data-i18n-html="cfg.crosskind.dialog.file.desc">
-                                    Suggestion « Titre (Année).ext » dérivée de la fiche. Pour le cas fiche-série
-                                    (un épisode d'une série), écrivez le nommage complet, ex.
+                                    Suggestion « Titre (Année).ext » dérivée de la fiche. Pour une fiche
+                                    série (un épisode d'une série), écrivez le nom complet, ex.
                                     « Série (2019) - S01E05.ts ».
                                 </div>
                             </div>
                             <div id="ckConvertBox" style="display:none;margin-top:1em;padding-top:0.8em;border-top:1px solid #3a3a3a;">
-                                <b data-i18n="cfg.crosskind.convert.title">Convertir sur place (dossier DVR)</b>
+                                <b data-i18n="cfg.crosskind.convert.title">Convertir sur place (dossier d'enregistrement)</b>
                                 <div class="fieldDescription" data-i18n-html="cfg.crosskind.convert.hint">
-                                    Renomme le dossier en « Titre (Année) », la vidéo et le .nfo à l'identique,
-                                    poster.jpg en « Titre (Année)-poster.jpg », réécrit le .nfo en racine
-                                    &lt;movie&gt; (sinon l'œuvre serait relue comme Épisode) puis Emby ré-importe
-                                    l'œuvre sous le bon type au scan suivant. L'image EPG de l'œuvre est en outre
-                                    écrite en poster.jpg canonique dans le dossier converti — l'affiche est
-                                    conservée au ré-import. La vidéo n'est jamais supprimée ; tout échec
-                                    restaure l'état initial (rollback).
+                                    Renomme le dossier en « Titre (Année) », la vidéo et le .nfo à
+                                    l'identique, poster.jpg en « Titre (Année)-poster.jpg », réécrit
+                                    le .nfo en racine &lt;movie&gt; (sinon l'œuvre serait relue comme
+                                    un épisode), puis Emby ré-importe l'œuvre sous le bon type au
+                                    scan suivant. L'image du guide est aussi écrite en poster.jpg
+                                    dans le dossier converti — l'affiche survit au ré-import. La
+                                    vidéo n'est jamais supprimée ; tout échec restaure l'état initial.
                                 </div>
                                 <div class="inputContainer" style="margin:0.4em 0;">
                                     <input is="emby-input" type="text" id="ckDlgName"
@@ -1160,28 +1160,25 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.audit.h">Audit santé du serveur</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.desc">
-                            Lance un agent LLM qui interroge l'outil <b>system_audit</b> (sessions, tâches
-                            planifiées, transcodage, disques, journaux, métriques hôte) et produit un
-                            <b>rapport Markdown</b> de santé : constats tagués par gravité + actions
-                            recommandées. Réservé aux administrateurs. La <b>remédiation</b> (arrêter une
-                            session, déclencher une tâche, notifier un usager) est désactivée par défaut.
+                            Un agent LLM inspecte le serveur (sessions, tâches planifiées, transcodage,
+                            disques, journaux) et rédige un rapport de santé : constats classés par gravité,
+                            actions recommandées. Le dernier rapport est sauvegardé et réaffiché à
+                            l'ouverture de la page. Réservé aux administrateurs.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkAuditEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.audit.enabled">Activer l'endpoint d'audit (/Plugins/LLMAI/Audit)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.audit.enabled">Activer l'audit (/Plugins/LLMAI/Audit)</span>
                         </label>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkAuditRemediationEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.audit.remediation">Autoriser la remédiation (stop_session, trigger_task, send_message)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.audit.remediation">Autoriser l'agent à agir (arrêter une lecture, déclencher une tâche, envoyer un message)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.audit.remediation.desc">
-                            Option <b>opt-in</b> (décochée par défaut). Si cochée, le LLM peut <b>exécuter</b>
-                            des actions de remédiation pendant l'audit (arrêter une lecture, déclencher une
-                            tâche, envoyer un message). Tant que décochée, ces actions renvoient une erreur
-                            et le LLM se contente de les <b>recommander</b> dans le rapport. Le prompt d'audit
-                            demande de toute façon au LLM de ne jamais agir sans demande explicite.
+                            Décochée par défaut : l'agent ne peut que recommander des actions dans son
+                            rapport. Cochée, il peut les exécuter pendant l'audit. Dans tous les cas, il
+                            n'agit jamais sans demande explicite.
                         </div>
 
                         <div class="inputContainer">
@@ -1195,32 +1192,23 @@
                                 Réinitialiser
                             </button>
                             <div class="fieldDescription" data-i18n-html="cfg.audit.prompt.desc">
-                                Template du prompt envoyé au LLM (message user). Le workflow d'audit
-                                (quelles actions appeler, règle d'or de remédiation) est injecté par le
-                                plugin indépendamment de ce texte — le modifier n'affaiblit donc pas les
-                                garde-fous. Conservez néanmoins la phrase d'interdiction d'exécution des
-                                actions de remédiation.
+                                Instructions envoyées au modèle pour l'audit. Vous pouvez les adapter
+                                librement — le déroulement et les garde-fous sont injectés par l'extension —
+                                mais conservez la phrase qui interdit les actions de remédiation.
                             </div>
                         </div>
 
                         <div class="selectContainer" style="max-width:420px;margin-top:0.4em;">
                             <select is="emby-select" id="selAuditMode" label="Mode d'exécution de l'audit" data-i18n-label="cfg.audit.mode">
-                                <option value="single" data-i18n="cfg.audit.mode.single">Boucle agent (adaptatif — modèle costaud / cloud)</option>
-                                <option value="deterministic" data-i18n="cfg.audit.mode.deterministic">Déterministe + synthèse dosée (modèle local / gemma4)</option>
+                                <option value="single" data-i18n="cfg.audit.mode.single">Agent adaptatif (modèle puissant / cloud)</option>
+                                <option value="deterministic" data-i18n="cfg.audit.mode.deterministic">Déterministe, guidé par l'extension (modèle local)</option>
                             </select>
                             <div class="fieldDescription" data-i18n-html="cfg.audit.mode.desc">
-                                <b>single</b> : l'LLM appelle lui-même l'outil system_audit de façon adaptative (peut
-                                creuser un journal suite à un constat). Convient à un modèle puissant (cloud).
-                                <b>deterministic</b> : le plugin rassemble lui-même toutes les sondes (zéro LLM), puis
-                                synthétise en <b>passes dosées sans outils</b> — une dose bornée par groupe de
-                                sections, croisements sonde↔journal pré-calculés en C# (« FAITS ÉTABLIS »), puis un
-                                assemblage final qui reprend les blocs rédigés. Conçu pour un modèle
-                                local/modeste (ex. gemma4) : orchestration retirée (son point faible — terrain :
-                                un batch d'actions en tableau expirait la boucle), fidélité des constats tenue par
-                                doses courtes. Une dose dont la synthèse échoue est repliée en bloc mécanique :
-                                le rapport sort toujours. Note : la <b>remédiation exécutable</b> n'est possible
-                                qu'en mode <b>single</b> (avec le flag de remédiation activé) ; en mode déterministe
-                                elle reste rapport-only.
+                                Agent adaptatif : l'agent décide lui-même ce qu'il inspecte et peut creuser un
+                                constat. À réserver à un modèle puissant (cloud). Déterministe : l'extension
+                                collecte toutes les données, puis le modèle rédige le rapport en courtes
+                                étapes — adapté à un modèle local ou modeste. Seul le mode adaptatif permet
+                                d'exécuter les actions de remédiation.
                             </div>
                         </div>
 
@@ -1228,10 +1216,11 @@
                             <input is="emby-input" type="text" id="txtAuditFocus"
                                    label="Focus optionnel de l'audit"
                                    data-i18n-label="cfg.audit.focus"
+                                   data-i18n-ph="cfg.audit.focus.ph"
                                    placeholder="ex. transcoding, disk, ou « arrête la session XYZ »" />
                             <div class="fieldDescription" data-i18n-html="cfg.audit.focus.desc">
-                                Orientation libre de l'audit (ex. un domaine à inspecter, ou une demande
-                                explicite de remédiation). Laisser vide pour un audit complet.
+                                Restreint l'audit à un domaine ou à une demande précise. Laisser vide pour
+                                un audit complet.
                             </div>
                         </div>
 
@@ -1265,24 +1254,25 @@
                         </style>
                         <div style="margin:0.8em 0;">
                             <button is="emby-button" type="button" class="raised block" id="btnRunAudit" data-i18n="cfg.audit.run">
-                                Lancer l'audit santé
+                                Lancer l'audit
                             </button>
                             <div class="fieldDescription" style="margin-top:0.5em;" data-i18n-html="cfg.audit.running.desc">
-                                L'audit s'exécute en <b>tâche de fond détachée</b> : vous pouvez quitter ou recharger la
-                                page, le run continue et le rapport est persisté à la fin. Les clics supplémentaires
-                                sont absorbés : ils ne relancent pas de nouveau run, ils reprennent la progression.
+                                L'audit démarre en arrière-plan. Vous pouvez quitter cette page ; le rapport
+                                sera sauvegardé automatiquement à la fin, quoi qu'il arrive. Cliquer à
+                                nouveau pendant un audit ne le relance pas : cela permet simplement de
+                                suivre son avancement.
                             </div>
                         </div>
                         <div id="auditReport" class="auditReport" style="display:none;"></div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.i18n.h">Langues d'interface</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.i18n.desc">
-                            Ajoute/entretient une langue d'interface du plugin (pages de configuration, messages
-                            serveur, app compagnon) avec le LLM configuré ici. La génération passe par des
-                            <b>doses</b> validées (placeholders {n} et balises préservés, valeurs identiques à
-                            l'anglais rejetées) puis écrit le fichier <b>LLM_AI_i18n.json</b> dans le dossier de
-                            configuration du plugin — l'atelier manuel décrit dans le README reste possible, et le
-                            fichier peut toujours être retouché à la main. Réservé aux administrateurs.
+                            Ajoute ou entretient une langue d'interface de l'extension (pages de configuration,
+                            messages serveur, app compagnon) avec le LLM configuré ici. La génération passe
+                            par des lots validés (placeholders {n} et balises HTML préservés, valeurs
+                            identiques à l'anglais rejetées), puis écrit le fichier LLM_AI_i18n.json dans
+                            le dossier de configuration de l'extension. L'atelier manuel décrit dans le README
+                            reste possible, et le fichier peut toujours être retouché à la main.
                         </div>
 
                         <div class="inputContainer" style="max-width:320px;">
@@ -1291,9 +1281,10 @@
                                    data-i18n-label="cfg.i18n.lang"
                                    placeholder="ex. es" />
                             <div class="fieldDescription" data-i18n-html="cfg.i18n.lang.desc">
-                                2-3 lettres minuscules (ex. <b>es</b>, de, it, pt). La terminologie officielle Emby
-                                de cette langue (chaînes du serveur) sert de glossaire d'ancrage à chaque dose ; sans
-                                fichier local, le glossaire est vide (avertissement au rapport).
+                                2 ou 3 lettres minuscules (ex. es, de, it, pt). La terminologie officielle
+                                Emby de cette langue (les chaînes du serveur) sert de glossaire d'ancrage
+                                à chaque lot ; sans fichier local, le glossaire est vide (avertissement
+                                au rapport).
                             </div>
                         </div>
                         <div id="divI18nCoverage" style="display:none;margin:0.4em 0;font-size:13px;"></div>
@@ -1306,10 +1297,11 @@
                                 <option value="skipped" data-i18n="cfg.i18n.mode.skipped">Re-traduire les clés sautées seulement</option>
                             </select>
                             <div class="fieldDescription" data-i18n-html="cfg.i18n.mode.desc">
-                                <b>Générer</b> : toutes les clés, repart de zéro (l'existant est écrasé, un fichier
-                                .bak est conservé). <b>Compléter</b> : seulement les clés absentes ; vos retouches
-                                manuelles restent intouchables. <b>Re-traduire sautées</b> : seulement les clés
-                                refusées par la validation (repli natif en attendant).
+                                « Générer » refait toutes les clés de zéro (l'existant est écrasé, une
+                                sauvegarde .bak est conservée). « Compléter » traite seulement les clés
+                                absentes ; vos retouches manuelles restent intouchables.
+                                « Re-traduire les sautées » reprend seulement les clés refusées par la
+                                validation (repli natif en attendant).
                             </div>
                         </div>
 
@@ -1318,10 +1310,9 @@
                                 Lancer la génération
                             </button>
                             <div class="fieldDescription" style="margin-top:0.5em;" data-i18n-html="cfg.i18n.running.desc">
-                                La génération s'exécute en <b>tâche de fond détachée</b> : vous pouvez quitter ou
-                                recharger la page, le run continue et le rapport est écrit à la fin. Les clics
-                                supplémentaires sont absorbés : ils ne relancent pas de run, ils reprennent la
-                                progression.
+                                La génération s'exécute en tâche de fond : vous pouvez quitter ou
+                                recharger la page, elle continue et le rapport est écrit à la fin.
+                                Un clic supplémentaire ne relance rien, il reprend la progression.
                             </div>
                         </div>
                         <div id="divI18nRun" class="auditReport" style="display:none;"></div>
@@ -1329,17 +1320,17 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.chat.h">Chat avec l'assistant IA</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.desc">
-                            Conversation interactive multi-tours avec l'agent LLM, sur sa propre page
-                            (menu <b>Serveur</b> → <b>Chat LLM AI</b>). Celui-ci dispose de
-                            <b>tous les outils déjà disponibles</b> (guide TV, bibliothèque, TMDB/TVDB, recherche web,
-                            Showbizz, audit système) et utilise les <b>priorités de backends LLM configurées</b> ci-dessus.
-                            L'historique est maintenu par la page ; la directive et la documentation des outils sont
-                            envoyées au LLM une seule fois, au début de la conversation. Réservé aux administrateurs.
+                            Conversation multi-tours avec l'agent LLM, sur sa propre page
+                            (menu Serveur → Chat LLM AI). Il dispose de tous les outils de l'extension (guide TV, bibliothèque, TMDB/TVDB, recherche web, nouveautés
+                            web, audit système) et suit les priorités de serveurs LLM configurées
+                            ci-dessus. L'historique est maintenu par la page ; la directive et la
+                            documentation des outils sont envoyées au LLM une seule fois, au début
+                            de la conversation. Réservé aux administrateurs.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkChatEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.chat.enabled">Activer le chat interactif (/Plugins/LLMAI/Chat)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.chat.enabled">Activer le chat interactif</span>
                         </label>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -1347,72 +1338,72 @@
                             <span class="checkboxLabel" data-i18n="cfg.chat.memory.flag">Mémoire de conversation (reprendre le dernier chat)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.memory.desc">
-                            Opt-in. Chaque conversation est persistée (<code>chat_memory.json</code>) ;
-                            au retour de l'usager, un appel LLM condense la session précédente en
-                            <b>note de continuité</b> (goûts exprimés, faits, fil ouvert) et les
-                            <b>signaux de goût</b> partent dans <code>decisions.json</code> (kind="chat")
-                            — la fiche mémoire hebdo les intègre. La page chat affiche un bouton
-                            « Reprendre » ; le résumé + les derniers échanges sont injectés dans le
-                            prompt. Un échec LLM = conversation suivante sans mémoire (fail-open).
+                            Chaque conversation est conservée (« chat_memory.json »).
+                            Au retour de l'usager, un appel LLM condense la session précédente
+                            en note de continuité (goûts exprimés, faits, fil ouvert) ; les
+                            signaux de goût partent dans « decisions.json » et la fiche
+                            mémoire hebdomadaire les intègre. La page chat affiche un bouton
+                            « Reprendre » ; le résumé et les derniers échanges sont injectés dans
+                            le prompt. En cas d'échec LLM, la conversation suivante continue
+                            sans mémoire.
                         </div>
 
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.actions.desc">
-                            Couche d'action (v1.13) : le chat peut agir sur les <b>mêmes surfaces que le
-                            plugin</b> — cartes .strm « AI Suggestions », timers d'enregistrement, tag
-                            « AI Tonight », collection, playlist — en réutilisant les primitives existantes
-                            (garde-fous owned/watched/drop list/dedup inclus). Le budget plafonne les
-                            actions réussies : <b>par tour</b> (toutes surfaces confondues) et
-                            <b>par conversation</b> ; <code>0</code> = chat en lecture seule. L'agent doit
-                            <b>proposer puis attendre votre confirmation</b> avant d'exécuter ; une action
-                            refusée par un garde-fou ne consomme pas le budget.
+                            Le chat peut agir sur les mêmes surfaces que l'extension — cartes .strm
+                            « AI Suggestions », timers d'enregistrement, étiquette
+                            « AI Tonight », collection, playlist — avec les mêmes garde-fous
+                            (déjà possédé, déjà visionné, titres à exclure, doublons évités).
+                            Le budget plafonne les actions réussies, par question et par
+                            conversation ; 0 = chat en lecture seule. L'agent propose puis
+                            attend votre confirmation avant d'exécuter ; une action refusée
+                            par un garde-fou ne consomme pas le budget.
                         </div>
                         <div style="display:flex;gap:1em;flex-wrap:wrap;">
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numChatActionBudget"
-                                       label="Budget actions / tour"
+                                       label="Budget d'actions (par question)"
                                        data-i18n-label="cfg.chat.actions.budget"
                                        min="0" max="100" />
-                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.budget.desc">Actions réussies max par question (toutes surfaces confondues). 0 = lecture seule. Défaut 10.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.budget.desc">Nombre maximal d'actions réussies par question (toutes surfaces confondues : cartes, timers, étiquettes, collection, playlist, lancement de l'analyse « ce soir »). 0 = lecture seule. Défaut 10.</div>
                             </div>
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numChatActionCap"
-                                       label="Plafond actions / conversation"
+                                       label="Plafond d'actions (par conversation)"
                                        data-i18n-label="cfg.chat.actions.cap"
                                        min="0" max="1000" />
-                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.cap.desc">Borne cumulative par conversation (compteur en mémoire serveur, remis au redémarrage). Défaut 30.</div>
+                                <div class="fieldDescription" data-i18n-html="cfg.chat.actions.cap.desc">Plafond cumulé par conversation (compteur en mémoire serveur, remis au redémarrage). Défaut 30.</div>
                             </div>
                         </div>
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkChatPrompts" />
-                            <span class="checkboxLabel" data-i18n="cfg.chat.prompts">Autoriser le chat à proposer des modifications des prompts (plugin_prompts)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.chat.prompts">Autoriser le chat à proposer des modifications des prompts</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.prompts.desc">
-                            Opt-in. Le chat peut lire les cinq prompts de la configuration et
-                            <b>proposer</b> leur réécriture. L'écriture est <b>deux phases</b> : la
-                            proposition attend le clic « Approuver » de l'admin sur la carte de diff
-                            de la page chat (expiration 10 min, une par conversation) — le LLM n'a
-                            aucun chemin d'écriture direct. Les modes d'édition du menu déroulant
-                            de la page chat (lecture du prompt courant + guide) restent disponibles
-                            sans ce flag.
+                            Le chat peut lire les cinq prompts de la configuration et proposer
+                            leur réécriture. L'écriture se fait en deux temps : la proposition
+                            attend le clic « Approuver » de l'admin sur la page chat
+                            (expiration 10 min, une par conversation) — le LLM n'a aucun
+                            chemin d'écriture direct. Les modes d'édition du menu déroulant
+                            de la page chat restent disponibles sans cette case.
                         </div>
 
                         <div class="sectionTitleTextButton" style="margin-top:1.4em;">Chat externe — app compagnon</div>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.extchat.desc">
-                            Pour une <b>app compagnon</b> (script Python autonome fourni, sur le
-                            même serveur, derrière son
-                            propre login) : <code>POST /Plugins/LLMAI/ChatExternal</code> discute avec
-                            l'agent pour un usager Emby résolu, <code>POST /Plugins/LLMAI/Show</code>
+                            Pour une app compagnon (script Python autonome fourni avec l'extension,
+                            dossier chat-external — aucun serveur web à installer) :
+                            « POST /Plugins/LLMAI/ChatExternal » discute avec l'agent
+                            au nom d'un usager Emby, « POST /Plugins/LLMAI/Show »
                             projette la fiche d'un item sur le client Emby actif de cet usager.
-                            Lecture seule (aucun tool d'action, aucun audit) ; <b>tout contenu est
-                            filtré par la policy parentale de l'usager</b> et la navigation ne cible
-                            que SA session. Gates : requête <b>loopback uniquement, sans
-                            X-Forwarded-For</b> (l'app appelle Emby directement), secret dédié
-                            (comparaison à temps constant), liste d'usagers — les administrateurs
-                            sont toujours refusés sur ce chemin.
+                            Lecture seule : aucun outil d'action, aucun audit ; tout contenu est
+                            filtré par le contrôle parental de l'usager et la navigation ne
+                            cible que sa session. Côté sécurité : appels uniquement depuis le
+                            serveur lui-même (l'app appelle Emby directement, sans
+                            X-Forwarded-For), secret dédié, liste d'usagers — les
+                            administrateurs sont toujours refusés sur ce chemin.
                         </div>
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkExternalChatEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.extchat.enabled">Activer le chat externe (app compagnon, loopback + secret)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.extchat.enabled">Activer le chat externe (app compagnon)</span>
                         </label>
                         <div style="display:flex;gap:1em;flex-wrap:wrap;align-items:flex-start;">
                             <div style="flex:1 1 260px;">
@@ -1421,8 +1412,9 @@
                                        data-i18n-label="cfg.extchat.secret"
                                        autocomplete="off" spellcheck="false" />
                                 <div class="fieldDescription" data-i18n-html="cfg.extchat.secret.desc">
-                                    Secret DÉDIÉ (distinct du secret .strm). Génère-le ici puis copie-le
-                                    dans la config de l'app compagnon ; changer les deux côtés pour révoquer.
+                                    Secret dédié (distinct du secret .strm). Générez-le ici puis
+                                    copiez-le dans la config de l'app compagnon ; changez-le des
+                                    deux côtés pour révoquer l'accès.
                                 </div>
                                 <button is="emby-button" type="button" class="raised button-cancel" id="btnExternalChatSecretGen" style="margin-top:0.4em;">Générer</button>
                             </div>
@@ -1433,7 +1425,8 @@
                                           data-i18n-label="cfg.extchat.users"></textarea>
                                 <div class="fieldDescription" data-i18n-html="cfg.extchat.users.desc">
                                     Mêmes noms que dans l'app compagnon. Un usager non listé est rejeté ;
-                                    un administrateur est TOUJOURS rejeté (chat admin = /Plugins/LLMAI/Chat).
+                                    un administrateur est toujours rejeté (le chat admin reste sur
+                                    /Plugins/LLMAI/Chat).
                                 </div>
                                 </div>
                             </div>
@@ -1442,47 +1435,46 @@
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numExternalChatPerMinute"
-                                       label="Anti-spam (tours/minute)"
+                                       label="Anti-spam (messages/minute)"
                                        data-i18n-label="cfg.extchat.perMinute"
                                        min="0" max="60" />
                                 <div class="fieldDescription" data-i18n-html="cfg.extchat.perMinute.desc">
-                                    Max de tours de chat par usager et par minute (fenêtre glissante) — chaque tour déclenche un appel LLM. 0 = illimité. Défaut 5.
+                                    Nombre maximal de messages par usager et par minute (fenêtre glissante) — chaque message déclenche un appel LLM. 0 = illimité. Défaut 5.
                                 </div>
                             </div>
                             <div style="flex:0 0 auto;">
                                 <input is="emby-input" type="number" id="numExternalChatPerDay"
-                                       label="Quota (tours/24 h)"
+                                       label="Quota (messages/24 h)"
                                        data-i18n-label="cfg.extchat.perDay"
                                        min="0" max="2000" />
                                 <div class="fieldDescription" data-i18n-html="cfg.extchat.perDay.desc">
-                                    Max de tours de chat par usager sur 24 h (fenêtre glissante). 0 = illimité. Défaut 150 (compteur en mémoire : un redémarrage d'Emby le remet à zéro).
+                                    Nombre maximal de messages par usager sur 24 h (fenêtre glissante). 0 = illimité. Défaut 150 (compteur en mémoire : un redémarrage d'Emby le remet à zéro).
                                 </div>
                             </div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkExternalChatRecordings" />
-                            <span class="checkboxLabel" data-i18n="cfg.extchat.rec.enabled">Enregistrements à la voix (human-in-the-loop à code, opt-in)</span>
+                            <span class="checkboxLabel" data-i18n="cfg.extchat.rec.enabled">Enregistrements à la voix (confirmation par code)</span>
                         </label>
                         <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.desc">
-                            Le tool <b>record_program</b> n'enregistre JAMAIS du premier coup :
-                            il dépose une réservation dans un bucket serveur et un code à 4
-                            chiffres généré côté serveur s'affiche à l'écran de l'app
-                            (le LLM ne le voit jamais) ; l'usager fournit ensuite ce code dans
-                            son message, et <b>seul le code exact</b> crée le timer. 3 codes
-                            erronés = outil verrouillé 15 min pour l'usager (réservation ET
-                            confirmation) ; quota de créations/jour compté à l'effet seulement ;
-                            porte parentale EPG fail-closed. Exige cumulativement : opt-in ici,
-                            usager listé ci-dessous ET droit natif Emby d'enregistrer la TV
-                            en direct. Les administrateurs restent sur le chemin chat admin.
+                            Une demande d'enregistrement ne s'exécute jamais du premier coup :
+                            elle est mise en réserve et un code à 4 chiffres s'affiche à
+                            l'écran de l'app (le LLM ne le voit jamais) ; l'usager donne
+                            ensuite ce code dans son message, et seul le code exact crée le
+                            timer. 3 codes erronés = outil verrouillé 15 min pour l'usager ;
+                            le quota journalier ne compte que les enregistrements réellement
+                            créés ; le contrôle parental s'applique toujours. Exige à la fois :
+                            la case cochée ici, l'usager listé ci-dessous et le droit Emby
+                            d'enregistrer la TV en direct.
                         </div>
                         <div class="inputContainer">
                         <textarea is="emby-textarea" id="txtExternalChatRecordingUsers" rows="3"
                                   label="Usagers autorisés à enregistrer (un nom d'usager Emby par ligne)"
                                   data-i18n-label="cfg.extchat.rec.users"></textarea>
                         <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.users.desc">
-                            Vide = personne (fail-closed). En plus du droit natif Emby
-                            (Gérer l'enregistrement TV) et de l'opt-in ci-dessus.
+                            Vide = personne autorisée. En plus du droit Emby
+                            (Gérer l'enregistrement TV) et de la case cochée ci-dessus.
                         </div>
                         </div>
                         <div class="inputContainer" style="display:flex;gap:1.5em;flex-wrap:wrap;">
@@ -1492,9 +1484,10 @@
                                        data-i18n-label="cfg.extchat.rec.perDay"
                                        min="0" max="100" />
                                 <div class="fieldDescription" data-i18n-html="cfg.extchat.rec.perDay.desc">
-                                    Max de timers CRÉÉS par usager sur 24 h (fenêtre glissante) —
-                                    comptés seulement quand le code est confirmé, jamais sur une
-                                    réservation expirée ou refusée. 0 = illimité. Défaut 3.
+                                    Nombre maximal d'enregistrements créés par usager sur 24 h
+                                    (fenêtre glissante) — comptés seulement quand le code est
+                                    confirmé, jamais sur une réservation expirée ou refusée.
+                                    0 = illimité. Défaut 3.
                                 </div>
                             </div>
                         </div>

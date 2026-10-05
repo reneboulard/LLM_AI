@@ -682,11 +682,40 @@ namespace LLM_AI
                             : "balises HTML divergentes (attendu « " + BoundedSig(sigEn)
                                 + " » ; reçu « " + BoundedSig(sigV) + " »)";
                     }
+                    else if (verdict == I18nDoses.Verdict.EmojiMismatch)
+                    {
+                        // Audit 2026-10-05 (es, ext.title) : le modèle
+                        // substitue un emoji (🤖 → 😄) — nommer le symbole
+                        // attendu rend la réparation immédiate.
+                        reason = "emojis modifiés (recopie chaque emoji TEL QUEL — attendu « "
+                            + BoundedSig(I18nOverlay.EmojiSig(enNative))
+                            + " », reçu « " + BoundedSig(I18nOverlay.EmojiSig(val)) + " »)";
+                    }
+                    else if (verdict == I18nDoses.Verdict.EdgeMismatch)
+                    {
+                        // Bords : préfixes/suffixes assemblés en runtime —
+                        // l'espace initial/final est structurel (audit es,
+                        // rec.tonight.why : espace final perdu).
+                        reason = "espaces de bord divergents (la valeur est assemblée en runtime — recopie l'espace initial/final de la native : un bord perdu colle le texte suivant, un bord ajouté double l'espace)";
+                    }
                     else
                         reason = verdict == I18nDoses.Verdict.PlaceholderMismatch ? "placeholders {n} divergents"
                             : verdict == I18nDoses.Verdict.Empty ? "valeur vide"
                             : "clé inconnue";
                     refused.Add((e.Sec, e.Key, reason));
+                    continue;
+                }
+                // Étiquettes de données : toute étiquette présente dans la
+                // native EN doit se retrouver à l'identique dans la valeur
+                // (fail-closed ; terrain 2026-10-05 : « AI Tonight » devenu
+                // « Esta noite IA » côté es). La raison voyage en réparation.
+                var tagMisses = I18nDirective.PluginTagValues(enNative, null)
+                    .Where(t => !val.Contains(t, StringComparison.Ordinal)).ToList();
+                if (tagMisses.Count > 0)
+                {
+                    refused.Add((e.Sec, e.Key, "étiquette de données « "
+                        + tagMisses[0]
+                        + " » absente — recopie EXACTE de l'étiquette (valeur écrite dans Emby, jamais traduite)"));
                     continue;
                 }
                 if (string.Equals(val, enNative, StringComparison.Ordinal)
@@ -1230,7 +1259,7 @@ namespace LLM_AI
                 ["nfo"] = "fragments assemblés en UNE phrase du fichier .nfo (la chaîne nfo.airs.*) : chaque fragment est un morceau de la même phrase, placeholders identiques",
                 ["task"] = "noms et descriptions des tâches planifiées (affichés dans Tâches planifiées du serveur Emby)",
                 ["extchat"] = "la configuration du chat externe (panneau serveur)",
-                ["ext"] = "l'app compagnon de chat externe (page Python autonome) : chrome de l'app + messages srv.* — la famille ext est TEXTE BRUT, jamais de HTML",
+                ["ext"] = "l'app compagnon de chat externe (page Python autonome) : chrome de l'app + messages srv.* — la famille ext est TEXTE BRUT, jamais de HTML ; registre USTED aussi vers l'usager (pas de tutoiement)",
                 ["chatext"] = "messages du chat externe côté serveur",
                 ["disktag"] = "tags de disques d'enregistrements",
                 ["activate"] = "l'endpoint d'activation/feedback (messages courts)",
@@ -1267,7 +1296,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
 4. Entités HTML (&lt;movie&gt;) : elles RESTENT des entités — ne les dés-échappe JAMAIS : une entité devenue balise vraie est REFUSÉE par la validation (écrire « <movie> » au lieu de « &lt;movie&gt; » est un refus garanti). Et symétriquement : n'ajoute JAMAIS une balise à une valeur EN qui n'en porte aucune.
 5. Symboles à COPIER TELS QUELS dans les valeurs : [NL] = un saut de ligne, [QU] = un guillemet double. Le plugin les fournit à la place des caractères à échapper en JSON et les décode après validation — ne les traduis jamais, ne les remplace jamais, ne les supprime pas, ne les déplace pas (un [NL] en début de valeur reste au début). N'émets AUCUN échappement à leur place (pas de \n littéral, pas de quote échappée) : ton JSON doit rester propre sans eux.
 6. La chaîne nfo.airs.* s'assemble en UNE phrase du fichier .nfo : chaque fragment est un morceau de la même phrase.
-7. NE TRADUIS PAS les marques : AI Tonight, AI Suggestions, LLM_AI, Emby, TMDB, TVDB, Ollama, Gemini, SearXNG, nfo, .strm, plugin, backend — recopie exacte.
+7. NE TRADUIS PAS les marques : AI Tonight, AI Suggestions, LLM_AI, Emby, TMDB, TVDB, Ollama, Gemini, SearXNG, nfo, .strm, backend — recopie exacte. « Plugin » n'est PAS une marque : chaque langue suit son terme officiel Emby via le glossaire (p.ex. es « complemento », fr « extension »), faute d'entrée officielle la traduction naturelle. Les EMOJIS aussi se recopient TELS QUELS : même symbole, même nombre (🤖 ne devient jamais 😀 ou 😄).
 8. Registre POLI et cohérent sur toute la langue (le FR source vouvoie — suis la même distance : usted en espagnol, etc.).
 9. Longueur proche de la native (boutons = 2 à 3 mots) — l'UI Emby est dense.
 10. Cohérence terminologique entre doses : même terme = même mot, sur toutes les doses.
@@ -1324,6 +1353,16 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
                         .Append(TagInventory(nats[e.Sec].TryGetValue(e.Key, out var v) ? v : null)).Append('\n');
             }
 
+            // Étiquettes de données vues dans la dose — inventaire explicite
+            // (pattern des doses « tags ») : la règle 7 globale a pu passer
+            // inaperçue dans une phrase fluide (terrain 2026-10-05 : « AI
+            // Tonight » traduit « Esta noite IA » en es, 1 clé sur 19) ;
+            // la validation refuse mécaniquement une étiquette perdue.
+            var verbatim = VerbatimHits(dose, nats, frs);
+            if (verbatim.Count > 0)
+                sb.Append("\nÉTIQUETTES DE DONNÉES — valeurs écrites dans Emby puis relues par égalité exacte ; recopie EXACTE, identique à la source, JAMAIS traduites ni reformulées : ")
+                  .Append(string.Join(", ", verbatim)).Append('\n');
+
             // Paires EN+FR : intention mainteneur (contexte, pas cible formelle).
             var frLines = new List<string>();
             foreach (var e in dose.Entries)
@@ -1342,6 +1381,28 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             {
                 sb.Append("\nCONTEXTE FR (rédaction auteur — sémantique de référence) :\n");
                 foreach (var l in frLines) sb.Append(l).Append('\n');
+            }
+
+            // Entités HTML : inventaire littéral par clé porteuse. La règle 4
+            // (SystemPrompt) dit l'interdit, mais la raison de réparation
+            // seule n'a pas fait converger gemma4:latest (terrain 2026-10-05 :
+            // 4 refus sur les 2 clés crosskind puis repli natif). L'annotation
+            // voyage avec le CONTEXTE dans TOUTES les passes qui portent la
+            // clé (première passe ET singletons de réparation) — contrat
+            // nominal, même mécanique que l'inventaire des balises des doses
+            // « tags » (I18nOverlay.Inventory).
+            var entLines = new List<string>();
+            foreach (var e in dose.Entries)
+            {
+                if (!nats.TryGetValue(e.Sec, out var enDict) || enDict == null) continue;
+                if (!enDict.TryGetValue(e.Key, out var enVal) || string.IsNullOrEmpty(enVal)) continue;
+                var inv = EntityInventory(enVal);
+                if (inv.Length > 0) entLines.Add("· " + e.Key + " : " + inv);
+            }
+            if (entLines.Count > 0)
+            {
+                sb.Append("\nENTITÉS HTML LITTÉRALES — recopie ci-dessous à l'identique (esperluette + lettres + point-virgule ; « < » nu est REFUSÉ) :\n");
+                foreach (var l in entLines) sb.Append(l).Append('\n');
             }
 
             if (repairReasons == null)
@@ -1373,6 +1434,129 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             return tags.Count == 0
                 ? "(aucune balise — texte brut)"
                 : I18nOverlay.Inventory(tags);
+        }
+
+        /// <summary>Inventaire des ENTITÉS HTML d'une native (&lt;movie&gt;…) —
+        /// miroir du <see cref="TagInventory"/> pour la classe de piège
+        /// symétrique : le modèle dés-échappe l'entité en balise vraie, un
+        /// refus garanti par la porte balises (HtmlTagSig). Ordre de première
+        /// apparition, comptage exact — même style que
+        /// <see cref="I18nOverlay.Inventory"/> (p.ex. « 1×&lt;movie&gt; »).
+        /// Alimente l'annotation préventive des doses (bloc « ENTITÉS HTML
+        /// LITTÉRALES »).</summary>
+        private static string EntityInventory(string en)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var ordered = new List<string>();
+            foreach (Match m in Regex.Matches(en, "&lt;/?[A-Za-z0-9]+&gt;"))
+            {
+                string t = m.Value;
+                if (counts.TryGetValue(t, out var n)) counts[t] = n + 1;
+                else { counts[t] = 1; ordered.Add(t); }
+            }
+            return ordered.Count == 0 ? "" : string.Join(", ", ordered.Select(t => counts[t] + "×" + t));
+        }
+
+        /// <summary>Étiquettes de données posées par le plugin, à recopier
+        /// exactement dans toute langue générée. « AI Tonight »/« AI Delete »
+        /// viennent des constantes métier (<see cref="AiTagger"/>) ;
+        /// « AI Suggestions » est le nom de bibliothèque par défaut des
+        /// cartes .strm (défaut de configuration). Le préfixe
+        /// <c>llmai-</c> (marqueurs d'orphelins/cross-kind) est scanné
+        /// génériquement. Terrain 2026-10-05 : la règle 7 globale seule a
+        /// laissé traduire « AI Tonight » (1 clé es sur 19 porteuses) —
+        /// d'où l'inventaire dosé et le refus mécanique.</summary>
+        private static readonly string[] TagsPlain =
+        {
+            AiTagger.TonightTag, AiTagger.DeleteTag, "AI Suggestions",
+        };
+
+        /// <summary>Étiquettes courtes ambiguës avec la prose (« identified »
+        /// existe comme mot ordinaire en anglais) : considérées étiquette
+        /// uniquement entre guillemets — « x », « x » (espaces), "x", “x”,
+        /// 'x'.</summary>
+        private static readonly string[] TagsQuoted = { "identified", "needs-review" };
+
+        /// <summary>Valeurs techniques de données — noms de fichiers journaux,
+        /// endpoints du chat externe, exemple d'enregistrement JSON (les
+        /// natives portent « … »/“ … ” depuis l'élimination du
+        /// <c>&lt;code&gt;</c> natif, 2026-10-05 ; la valeur EN entière est
+        /// verrouillée, le <c>"name"</c> interne du JSON compris ; la native
+        /// FR de l'exemple porte « nom » — seule la forme EN est exigée en
+        /// validation, elle est l'ancre).</summary>
+        private static readonly string[] DataTokens =
+        {
+            "chat_memory.json", "decisions.json", "run_pool.json",
+            "playback.json",
+            "POST /Plugins/LLMAI/ChatExternal", "POST /Plugins/LLMAI/Show",
+            "[{\"u\":\"userId\",\"n\":\"name\",\"d\":\"date\",\"text\":\"…\"}]",
+        };
+
+        /// <summary>Étiquettes de données présentes dans une valeur source
+        /// (EN native ou contexte FR) — détection par sous-chaîne sur ce que
+        /// le modèle reçoit réellement : l'inventaire dosé cite exactement
+        /// ce que la validation exigera (miroir du contrat des doses
+        /// « tags »).</summary>
+        internal static List<string> PluginTagValues(string en, string fr)
+        {
+            var hits = new List<string>();
+            void Scan(string s)
+            {
+                if (string.IsNullOrEmpty(s)) return;
+                foreach (var t in TagsPlain)
+                    if (s.Contains(t, StringComparison.Ordinal) && !hits.Contains(t))
+                        hits.Add(t);
+                foreach (var t in DataTokens)
+                    if (s.Contains(t, StringComparison.Ordinal) && !hits.Contains(t))
+                        hits.Add(t);
+                foreach (var t in TagsQuoted)
+                    if ((s.Contains("«" + t + "»") || s.Contains("« " + t + " »")
+                        || s.Contains("\"" + t + "\"") || s.Contains("\u201c" + t + "\u201d")
+                        || s.Contains("'" + t + "'")) && !hits.Contains(t))
+                        hits.Add(t);
+                foreach (var t in LlmaiHits(s))
+                    if (!hits.Contains(t)) hits.Add(t);
+            }
+            Scan(en);
+            Scan(fr);
+            return hits;
+        }
+
+        /// <summary>Marqueurs <c>llmai-…</c> d'une valeur (mots en-minuscules
+        /// et tirets) — lecture générique pour couvrir les marqueurs futurs
+        /// sans retouche du prompt.</summary>
+        private static List<string> LlmaiHits(string s)
+        {
+            var hits = new List<string>();
+            int i = s.IndexOf("llmai-", StringComparison.Ordinal);
+            while (i >= 0)
+            {
+                int j = i + 6;
+                while (j < s.Length && (char.IsAsciiLetterLower(s[j]) || s[j] == '-')) j++;
+                if (j - i > 6) hits.Add(s.Substring(i, j - i).TrimEnd('-'));
+                i = s.IndexOf("llmai-", i + 1, StringComparison.Ordinal);
+            }
+            return hits;
+        }
+
+        /// <summary>Inventaire dosé des valeurs à recopier exactement :
+        /// union des étiquettes de données vues dans les natives EN et les
+        /// contextes FR de la dose — le modèle ne voit l'inventaire que si
+        /// la dose en porte (aucun bruit sur les autres doses).</summary>
+        internal static List<string> VerbatimHits(
+            I18nDoses.Dose dose,
+            Dictionary<string, IReadOnlyDictionary<string, string>> nats,
+            Dictionary<string, IReadOnlyDictionary<string, string>> frs)
+        {
+            var hits = new List<string>();
+            foreach (var e in dose.Entries)
+            {
+                var en = nats.TryGetValue(e.Sec, out var nd) && nd.TryGetValue(e.Key, out var v) ? v : null;
+                var fr = frs.TryGetValue(e.Sec, out var fd) && fd != null && fd.TryGetValue(e.Key, out var fv) ? fv : null;
+                foreach (var t in PluginTagValues(en, fr))
+                    if (!hits.Contains(t)) hits.Add(t);
+            }
+            return hits;
         }
 
         /// <summary>Note de domaine (les doses « chat_p2 » résolvent leur base

@@ -245,7 +245,9 @@ namespace LLM_AI
             Unknown,                // pas une clé native EN (hallucinée / glissement)
             Empty,                  // blanc
             PlaceholderMismatch,    // multiset {n} divergent
-            TagMismatch             // multiset balises divergent (incl. HTML dans ext)
+            TagMismatch,            // multiset balises divergentes (incl. HTML dans ext)
+            EmojiMismatch,          // multiset emojis divergent (recopie tel quel)
+            EdgeMismatch            // espace initial/final divergent (valeur assemblée en runtime)
         }
 
         /// <summary>Valide <paramref name="value"/> contre la native EN
@@ -259,6 +261,22 @@ namespace LLM_AI
                 return Verdict.PlaceholderMismatch;
             if (I18nOverlay.HtmlTagSig(enNative) != I18nOverlay.HtmlTagSig(value))
                 return Verdict.TagMismatch;
+            if (I18nOverlay.EmojiSig(enNative) != I18nOverlay.EmojiSig(value))
+                return Verdict.EmojiMismatch;
+            // Bords : l'espace initial/final se recopie — les valeurs
+            // préfixes (« 🤖 Why tonight: », suffixes « (série) ») sont
+            // assemblées en runtime : un bord perdu colle le texte suivant,
+            // un bord ajouté double l'espace à l'affichage. Terrain
+            // 2026-10-05 (es, rec.tonight.why) : l'espace final perdu par la
+            // traduction — attrapé par l'audit, invisible des autres portes.
+            bool enLead = enNative.Length > 0 && (enNative[0] == ' ' || enNative[0] == '\t');
+            bool enTrail = enNative.Length > 0
+                && (enNative[enNative.Length - 1] == ' ' || enNative[enNative.Length - 1] == '\t');
+            bool vLead = value.Length > 0 && (value[0] == ' ' || value[0] == '\t');
+            bool vTrail = value.Length > 0
+                && (value[value.Length - 1] == ' ' || value[value.Length - 1] == '\t');
+            if (enLead != vLead || enTrail != vTrail)
+                return Verdict.EdgeMismatch;
             return Verdict.Ok;
         }
 

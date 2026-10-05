@@ -126,17 +126,17 @@ namespace LLM_AI
             "refusez : rappelez le mode actif et invitez-le à changer de mode dans la liste " +
             "déroulante de la page chat. Ne proposez JAMAIS un set d'un autre champ — le " +
             "serveur le refuserait de toute façon (vécu 2026-09-09 : une règle demandée pour " +
-            "les Directives RAG a été écrite dans la tâche séries sans que rien ne le signale).";
+            "le Prompt système a été écrite dans la tâche séries sans que rien ne le signale).";
 
         /// <summary>Les cinq modes d'édition (un par prompt éditable de la
         /// page de configuration).</summary>
         internal static readonly ChatContextDef[] All =
         {
             new ChatContextDef("edit_rag",
-                "Éditer — Directives RAG",
+                "Éditer — Prompt système",
                 "### RÔLE DE CE PROMPT\n" +
-                "Les « Directives RAG » sont injectées dans le system prompt de TOUTES les tâches " +
-                "LLM du plugin (tâche quotidienne de séries, tâche films, run « ce soir »). Elles " +
+                "Le « Prompt système » est injecté au début de TOUTES les tâches " +
+                "LLM du plugin (tâche quotidienne de séries, tâche films, exécution « ce soir »). Il " +
                 "portent les invariants transverses : ne jamais recommander un titre déjà possédé " +
                 "ou déjà programmé, ne jamais deviner une donnée absente (synopsis, année, id), " +
                 "préférence légère aux productions récentes SANS pénaliser une année inconnue, " +

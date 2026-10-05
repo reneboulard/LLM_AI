@@ -10,6 +10,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.17.1.8] — 2026-10-05
+
+### Changed (FR)
+- **Protection des étiquettes de données dans les langues générées** — les
+  valeurs écrites par le plugin dans Emby (« AI Tonight », « AI Delete »,
+  « AI Suggestions », marqueurs `llmai-*`) doivent être recopiées exactement
+  : chaque dose de traduction qui en porte reçoit un inventaire explicite
+  (présent seulement si la dose en contient), et une porte mécanique refuse
+  une valeur générée qui perd une étiquette (la clé part en réparation).
+  Motivé par un cas réel : une traduction espagnole avait rendu
+  « AI Tonight » en « Esta noite IA » (1 clé sur 19).
+- **Natives sans HTML** — les 5 clés natives qui enveloppaient des valeurs
+  techniques dans `<code>` (noms de fichiers journaux, endpoints du chat
+  externe, exemple JSON) portent maintenant des guillemets (« … » /
+  “ … ”) ; les valeurs techniques sont armées par les mêmes portes de
+  validation. Plus aucune dose « balise » sur les natives. Les entités
+  `&lt;movie&gt;` (racines .nfo) restent volontairement.
+- **À faire après mise à jour** : régénérer les langues générées (mode
+  refonte complète) pour qu'elles suivent les natives sans HTML.
+
+### Changed (EN)
+- **Protection of plugin data tag values in generated languages** — values
+  written by the plugin into Emby ("AI Tonight", "AI Delete", "AI
+  Suggestions", `llmai-*` markers) must be copied verbatim: any translation
+  dose carrying them gets an explicit inventory (only when present), and a
+  mechanical gate rejects a generated value that lost a tag (key goes to
+  repair). Field witness: a Spanish translation turned "AI Tonight" into
+  "Esta noite IA" (1 key in 19).
+- **HTML-free natives** — the 5 native keys that wrapped technical values
+  in `<code>` (journal file names, external-chat endpoints, JSON example)
+  now use quotes (“ … ”); technical values are armed by the same
+  validation gates. No "tag" doses remain on the natives. The
+  `&lt;movie&gt;` entities (.nfo roots) stay on purpose.
+- **After upgrading**: regenerate generated languages (full redo) so they
+  follow the HTML-free natives.
+
+## [1.17.1.7] — 2026-10-05
+
+### Changed (FR)
+- **Langue de réponse du LLM (description)** — reformulation plaine :
+  « Choisissez la langue pour les recommandations, le rapport d'audit,
+  les cartes .strm et les synopsis TMDB. Le plugin privilégie votre
+  langue de choix, puis l'anglais, et enfin une traduction par le LLM
+  si nécessaire. (…) Les titres de films et de séries, les noms de
+  chaînes et les champs techniques restent inchangés pour garantir
+  leur exactitude. »
+- **Chaînes serveur alignées sur le vocabulaire de la page de
+  configuration** — « étiquette » (tag/tagué), « guide » (EPG, hors
+  « snapshot EPG »), « enregistrements » (DVR), « exécution/analyse »
+  (run), « simulation » (dry-run), « serveurs LLM » (backends),
+  « lots » (doses), « affiche » (poster) : descriptions des tâches
+  planifiées, notifications, confirmations d'actions du chat, erreurs,
+  audit, rapport de génération. Les emphases destinées au LLM (⚠️,
+  AUCUN, PAS) et les valeurs réelles (AI Tonight, llmai-*) restent
+  inchangées.
+
+### Changed (EN)
+- **LLM response language (description)** — plain rewording: "Choose
+  the language for recommendations, the audit report, .strm cards and
+  TMDB synopsis…"
+- **Server strings aligned with the configuration page vocabulary** —
+  "TV guide" (EPG, except the technical "EPG snapshot"), "recordings"
+  (DVR), "LLM servers" (backends), "batches" (doses), "analysis"
+  wording: scheduled-task descriptions, notifications, chat action
+  confirmations, errors, audit, generation report. English keeps its
+  natural terms (tag, run, timeout).
+
+## [1.17.1.6] — 2026-10-05
+
+### Changed (FR)
+- **Révision complète des textes de la page de configuration** — style
+  épuré : phrases simples, jargon interne retiré (les détails vivent
+  dans le README). Vocabulaire unifié : « guide TV » (au lieu d'EPG),
+  « étiquette » (au lieu de tag, traduction française d'Emby),
+  « exécution » (au lieu de run), « mode simulation » (au lieu de
+  dry-run), « hors titres à exclure » (au lieu de drop list),
+  « affiche » (au lieu de poster), « recommandations » (au lieu de
+  recos). Les valeurs d'étiquettes réelles (AI Tonight, AI Delete,
+  needs-review, identified, llmai-*) restent inchangées. Repli HTML de
+  la page synchronisé sur les valeurs i18n (plusieurs dérives corrigées
+  au passage).
+- **Page Chat et serveur alignés** — « Directives RAG » devient
+  « Prompt système » (menu d'édition, registre serveur, outil LLM) ;
+  l'astuce de la page cite le guide TV ; la tâche planifiée devient
+  « LLM AI — Nettoyage de l'étiquette « AI Tonight » » et sa
+  description suit la même révision.
+
+### Changed (EN)
+- **Full revision of the configuration page texts** — plain style:
+  simple sentences, internal jargon removed (details live in the
+  README); unified vocabulary ("TV guide" instead of EPG, "simulation
+  mode", "excluded titles", "recommendations"). Real tag values
+  unchanged. The page's HTML fallback resynced to the i18n values
+  (several drifts fixed along the way).
+- **Chat page and server aligned** — "RAG directives" becomes "System
+  prompt" (edit menu, server registry, LLM tool); the page hint now
+  cites the TV guide; the cleanup task description follows the same
+  revision (EN task name unchanged).
+
 ## [1.17.1.5] — 2026-10-04
 
 ### Fixed (FR)
