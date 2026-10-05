@@ -127,18 +127,26 @@
             }
             .LLMAIConfigPage .wlBox .wlItem {
                 /* emby-checkbox-label vaut width:100% → remplit la cellule
-                   de la grille (alignement colonnes). */
+                   de la grille (alignement colonnes). AUCUN overflow ici :
+                   le dessin de la case (::before) dépasse volontairement
+                   au-dessus de son label (margin-top:-.18em, CSS Emby) —
+                   tout clip sur l'item ou le label tranche son bord
+                   supérieur (case « 3 côtés », terrain 2026-10-05). */
                 color: #333;
                 font-size: 0.92em;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
             }
             .LLMAIConfigPage .wlBox .wlItem .checkboxLabel {
-                /* Permet l'ellipsis sur les libellés longs. */
+                /* Se comprime dans la cellule ; JAMAIS de clip ici (le
+                   dessin de la case en dépend). */
+                min-width: 0;
+            }
+            .LLMAIConfigPage .wlBox .wlText {
+                /* L'ellipsis vit ICI (span texte seul) : le clip ne touche
+                   jamais le dessin de la case ni le pseudo-checkmark. */
                 min-width: 0;
                 overflow: hidden;
                 text-overflow: ellipsis;
+                white-space: nowrap;
             }
             .LLMAIConfigPage .wlBox .checkboxLabel::before {
                 /* Bordure de la case bien visible sur fond blanc. */

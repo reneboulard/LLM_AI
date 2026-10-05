@@ -102,11 +102,15 @@ define(["loading"], function (loading) {
 
     // Rend une boîte de cases à cocher. items = [{value,label}].
     // Structure imposée par emby-checkbox : <label><input is="emby-checkbox">
-    // <span class="checkboxLabel">…</span></label>. Le CSS d'emby-checkbox
-    // masque l'<input> natif (z-index -1, transparent) et dessine la case
-    // via .checkboxLabel::before/::after — qui n'existent QUE si le <span>
-    // est le frère direct de l'input. Sans ce <span>, aucune case ne
-    // s'affiche et l'input reste invisible (cf. emby-checkbox.js/css).
+    // <span class="checkboxLabel"><span class="wlText">…</span></span></label>.
+    // Le CSS d'emby-checkbox masque l'<input> natif (z-index -1, transparent)
+    // et dessine la case via .checkboxLabel::before/::after — qui n'existent
+    // QUE si le <span> est le frère direct de l'input. Sans ce <span>, aucune
+    // case ne s'affiche et l'input reste invisible (cf. emby-checkbox.js/css).
+    // Le span texte intérieur (.wlText) porte l'ellipsis : le dessin de la
+    // case (::before) dépasse volontairement AU-DESSUS de son label
+    // (margin-top:-.18em) — un overflow:hidden sur le label ou l'item tranche
+    // son bord supérieur (case « 3 côtés », terrain 2026-10-05).
     function renderChecklist(host, items, selectedSet) {
         if (!host) return;
         if (!items || items.length === 0) {
@@ -120,7 +124,7 @@ define(["loading"], function (loading) {
             return '<label class="emby-checkbox-label wlItem">'
                 + '<input type="checkbox" is="emby-checkbox" '
                 + 'class="wlCheck" data-wl-value="' + v + '" ' + checked + ' />'
-                + '<span class="checkboxLabel">' + l + '</span>'
+                + '<span class="checkboxLabel"><span class="wlText">' + l + '</span></span>'
                 + '</label>';
         }).join("");
         host.innerHTML = html;
@@ -1955,8 +1959,8 @@ define(["loading"], function (loading) {
                                     ' data-new="' + esc(p.New) + '"' +
                                     ' data-inmovies="' + (p.InMovies ? "1" : "") + '"' +
                                     ' data-inseries="' + (p.InSeries ? "1" : "") + '">' +
-                                    '<span class="checkboxLabel">' + esc(p.Genre) + ' → ' + nTargets.join(" · ") +
-                                    ' <em>' + esc(i18n.t("cfg.gtx.newgenre")) + '</em></span></label>';
+                                    '<span class="checkboxLabel"><span class="wlText">' + esc(p.Genre) + ' → ' + nTargets.join(" · ") +
+                                    ' <em>' + esc(i18n.t("cfg.gtx.newgenre")) + '</em></span></span></label>';
                                 return;
                             }
                             var targets = [];
@@ -1968,8 +1972,8 @@ define(["loading"], function (loading) {
                                 ' data-name="' + esc(p.Genre) + '"' +
                                 ' data-movies="' + esc(p.Movies || "") + '"' +
                                 ' data-series="' + esc(p.Series || "") + '">' +
-                                '<span class="checkboxLabel">' + esc(p.Genre) + ' → ' +
-                                targets.join(" · ") + '</span></label>';
+                                '<span class="checkboxLabel"><span class="wlText">' + esc(p.Genre) + ' → ' +
+                                targets.join(" · ") + '</span></span></label>';
                         });
                         if (listEl) {
                             if (html) {
