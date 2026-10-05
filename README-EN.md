@@ -885,7 +885,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | i18n endpoints for translators (v1.16.0): `GET /Plugins/LLMAI/I18n` (overlay slices, fail-open), `?base=1` (hot EN native base — web extracted from the embedded i18n.js without eval, server + ext direct), `?missing=1&lang=xx` (diff of keys still to translate, paste-ready RAW output). |
 | `I18nDoses.cs` | `I18nDoses` / `I18nDoses.Split` / `Validate` (internal static) | Splits targets into **family-atomic doses** ≤ 50 keys (coherence over cap — faithful to the v1.16 dose kit) + loader-mirroring **per-key** validation (placeholder `{n}` multiset, HTML tags, `ext` = strict plain text, empty, unknown key) + dose-majority identical-to-EN guard (`TriviallyIdenticalEn`: icons, short strings, brands). (v1.17.0) |
 | `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, internal static) | **Language-workshop engine** (v1.17.0): 8 steps — natives + FR context, targets per mode (full/missing/skipped), official Emby glossary, dynamic-count directive, per-dose loop (2-message completion, LLM output under **sentinel tokens** `[NL]`/`[QU]` decoded in C# *after* the parse, per-key validation, targeted repair ≤ 3, **parse-dead escalation** to the following backends), non-destructive merge + atomic write (writes only if ≥ 1 key accepted), persisted report + SecurityMonitor. `BoundedDump` = bounded RAW dump of any dead dose (␊/␍/␉ visible). |
-| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Admin endpoint **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0): `?Lang&Mode` starts a campaign as a **detached run** (single-flight `I18nGenState`, survives tab close, 25-min CTS), backends resolved by the caller (disposable LlmRunner); `?Status=true` = snapshot + last persisted report (engine-written `i18n_gen_report.json`) in the same response. |
+| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Admin endpoint **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0): `?Lang&Mode` starts a campaign as a **detached run** (single-flight `I18nGenState`, survives tab close, 25-min CTS), backends resolved by the caller (disposable LlmRunner); `?Status=true` = snapshot + last persisted report (engine-written `i18n_gen_report.json`) in the same response. v2.0.0: doses ship the preventive inventories (data tags, literal HTML entities) and the full validation battery — targeted repair, per-key refusal reason. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | **Admin chat** tools (v1.17.0): `i18n_search` (text search — substring across EN/FR natives and overlays; natives always scanned even with a language filter: the on-screen text may be a native fallback), `i18n_get` (full key read-out: EN+FR natives per family, overlay values per language with structural verdict + identical-EN flag, a **`contract` block** as of v1.17.1.0 when the native carries immutable elements — exact inventory of HTML tags / `{n}` / line breaks + recopy directive for the deposit, omitted for a bare key, unknown key → suggestions) and `i18n_set_key` — **two-phase** since v1.17.0.2 (deposit validated through the structural gates then a Before/After "Approve/Refuse" card, `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` endpoints in deterministic C#; deposits allowed ONLY in the "Edit — Language workshop" dropdown mode — v1.17.0.2, label aligned with the "Edit — …" mode pattern as of v1.17.1.2). Responses are serialized with **relaxed** JSON (v1.17.1.1: literal tags — the default escaping sent `<b>` as `\u003C` and the model never saw a real tag). Registered whenever the tool-calling protocol is already active (action budget, prompts editing) or in i18n mode; with budget and prompts editing both off, the mode IS what starts the protocol (non-thinking-model quirk). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side); family served overlay-only + per-key native EN completion for a language ≠ fr (v1.17.1.4). See [Community interface languages](#community-interface-languages). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
@@ -2404,11 +2404,17 @@ resume the thread and progress by reloading the page), translating
 **family-atomic doses** (≤ 50 keys) served to the LLM with **EN+FR pairs in
 context** and the **official Emby glossary**
 (`dashboard-ui/strings/<lang>.json` on the server when available, else
-resolved by reflection); every key passes a **loader-mirroring validation**
-(`{n}` placeholders + tags, `ext` = plain text, identical-to-EN copy
-detection) and refused keys get a **targeted repair pass**. A dose that a
-backend fails to render parsable is **retried on the following backends**;
-only the number of **actual LLM calls** is displayed. End of campaign:
+resolved by reflection); every key passes a **mechanical validation
+battery** (v2.0.0): `{n}` placeholders, HTML tags (`ext` = plain text),
+**emojis** (same symbol and same count as the native — 🤖 never becomes
+😀), **edges** (leading/trailing space parity with the native), **data
+tags** ("AI Tonight", "AI Delete", "AI Suggestions", `llmai-*` — verbatim
+recopy; the dose ships the inventory when the key carries one), **literal
+HTML entities** (`&lt;movie&gt;` — preventive inventory, never
+de-escaped) and identical-to-EN copy detection; refused keys get a
+**targeted repair pass** (real per-key reason). A dose that a backend
+fails to render parsable is **retried on the following backends**; only
+the number of **actual LLM calls** is displayed. End of campaign:
 **atomic write** tmp+move + `.bak` (writes only if ≥ 1 key was accepted —
 the other languages in the file are preserved) and a **final report**
 (accepted / refused / identical-EN suspects). **Human review** of generated
@@ -2421,6 +2427,12 @@ at approval — and when the key carries structural elements (HTML tags,
 so tags and placeholders survive the translation.
 As always: the workshop only touches the plugin's interface labels — no
 media, no library data is ever modified.
+
+**Official terminology (v2.0.0)**: generated languages follow the official
+term **of their own language** — the Emby UI never says "plugin" (fr
+"extension", es "complemento"…); the verbatim list only excludes real
+brands (`LLM_AI`, Emby, TMDB…) and data (`llmai-*`). The server's official
+glossary anchors them.
 
 **Staleness**: if an EN native text changes in a future plugin version, an
 overridden value whose placeholders no longer match is **skipped** at

@@ -908,7 +908,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | Endpoints i18n pour traducteurs (v1.16.0) : `GET /Plugins/LLMAI/I18n` (slices de l'overlay, fail-open), `?base=1` (base EN native à chaud — web extraite du i18n.js embarqué sans eval, server + ext direct), `?missing=1&lang=xx` (diff des clés restant à traduire, sortie RAW collable). |
 | `I18nDoses.cs` | `I18nDoses` / `I18nDoses.Split` / `Validate` (statique interne) | Découpe des cibles en **doses famille-atomiques** ≤ 50 clés (cohérence > cap — fidèle au kit de doses v1.16) + validation miroir du chargeur **par clé** (placeholders `{n}` multiset, balises HTML, `ext` = texte brut strict, vide, clé inconnue) + garde anti-copie-EN dose-majoritaire (`TriviallyIdenticalEn` : icônes, courts, marques). (v1.17.0) |
 | `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, statiques internes) | **Moteur de l'atelier de langues** (v1.17.0) : 8 étapes — natives+FR contexte, cibles par mode (full/missing/skipped), glossaire officiel Emby, directive à comptes dynamiques, boucle par dose (complétion 2 messages, sorties LLM sous **tokens sentinelle** `[NL]`/`[QU]` décodés C# *après* le parse, validation par clé, réparation ciblée ≤ 3, **escalade parse-dead** vers les backends suivants), fusion non destructive + écriture atomique (n'écrit que si ≥ 1 clé acceptée), rapport persisté + SecurityMonitor. `BoundedDump` = dump RAW borné toute dose morte (␊/␍/␉ visibles). |
-| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), backends résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. |
+| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), backends résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. v2.0.0 : les doses portent les inventaires préventifs (étiquettes de données, entités HTML littérales) et la batterie de validation complète — réparation ciblée, raison du refus par clé. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | Tools du **chat admin** (v1.17.0) : `i18n_search` (recherche PAR TEXTE — sous-chaîne dans les natives EN/FR et les overlays ; natives toujours sondées même avec filtre de langue : le texte vu peut être un repli natif), `i18n_get` (lecture complète d'une clé : natives EN+FR par famille, overlay par langue avec verdict structurel + flag identique-EN, **bloc « contract »** v1.17.1.0 quand la native porte des éléments immuables — inventaire exact des balises HTML / `{n}` / sauts de ligne + directive de recopie pour le dépôt, omis pour une clé nue, inconnue → suggestions) et `i18n_set_key` — **two-phase** depuis v1.17.0.2 (dépôt validé après gates structurelles puis carte Avant/Après « Approuver/Refuser », endpoints `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` en C# déterministe ; dépôt possible SEULEMENT dans le mode déroulant « Éditer — Atelier de langues » — v1.17.0.2, libellé aligné sur le patron des modes « Éditer — … » en v1.17.1.2). Réponses sérialisées en JSON **relaxé** (v1.17.1.1 : balises littérales — l'échappement par défaut faisait partir `<b>` en `\u003C` et le modèle ne voyait jamais une vraie balise). Enregistrés quand le protocole tool-calling est déjà actif (budget d'actions, édition de prompts) ou en mode i18n ; avec budget et prompts désactivés, le mode EST l'initiateur du protocole (quirk des modèles non-thinking). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | Chat **externe** (app compagnon, v1.13.21+) : `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, listes), erreurs localisées par langue (v1.16.0) et `GET /Plugins/LLMAI/I18nExt` — tranche `ext` de la langue résolue servie à l'app (pas de token Emby côté app) ; famille servie overlay-seul + complément natif EN par clé pour une langue ≠ fr (v1.17.1.4). Voir [Langues d'interface communautaires](#langues-dinterface-communautaires). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
@@ -2485,11 +2485,17 @@ au rechargement de la page), traduisant par **doses famille-atomiques**
 (≤ 50 clés) servies au LLM avec les **paires EN+FR en contexte**, le
 **glossaire officiel Emby** (`dashboard-ui/strings/<lang>.json` du serveur
 quand il existe, sinon résolu par réflexion), chaque clé passe une
-**validation miroir du chargeur** (placeholders `{n}` + balises, `ext` =
-texte brut, détection des copies identiques-EN) et les clés refusées
-bénéficient d'une **réparation ciblée**. Une dose rendue imparsable par un
-backend est **re-tentée sur les backends suivants** ; seul le nombre
-d'**appels LLM réels** est affiché. Fin de campagne : **écriture atomique**
+**batterie mécanique de validation** (v2.0.0) : placeholders `{n}`, balises
+HTML (`ext` = texte brut), **emojis** (même symbole et même nombre que la
+native — 🤖 ne devient jamais 😀), **bords** (parité des espaces
+initial/final de la native), **étiquettes de données** (« AI Tonight »,
+« AI Delete », « AI Suggestions », `llmai-*` — recopie exacte ; la dose
+porte l'inventaire quand la clé en porte), **entités HTML littérales**
+(`&lt;movie&gt;` — inventaire préventif, jamais dés-échappées) et
+détection des copies identiques-EN ; les clés refusées bénéficient d'une
+**réparation ciblée** (raison réelle, clé par clé). Une dose rendue
+imparsable par un backend est **re-tentée sur les backends suivants** ;
+seul le nombre d'**appels LLM réels** est affiché. Fin de campagne : **écriture atomique**
 tmp+move + `.bak` (n'écrit que si ≥ 1 clé acceptée — les autres langues du
 fichier sont conservées) et **rapport final** (acceptées / refusées /
 suspects identiques-EN). La **revue humaine** des valeurs générées se fait
@@ -2503,6 +2509,12 @@ de recopie, pour que balises et placeholders survivent à la traduction.
 Comme toujours :
 l'Atelier ne touche qu'aux libellés d'interface du plugin — aucun média,
 aucune donnée de bibliothèque ne sont modifiés.
+
+**Terminologie officielle (v2.0.0)** : les langues générées suivent le
+terme officiel de **leur propre langue** — l'interface Emby ne dit jamais
+« plugin » (fr « extension », es « complemento »…) ; la liste des mots
+recopiés verbatim n'exclut que les vraies marques (`LLM_AI`, Emby, TMDB…)
+et les données (`llmai-*`). Le glossaire officiel du serveur sert d'ancre.
 
 **Péremption** : si le natif EN d'une clé évolue dans une version future,
 une valeur devenue incohérente (placeholders divergents) est sautée à la
