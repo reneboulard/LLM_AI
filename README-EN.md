@@ -874,8 +874,8 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (internal static) | **Chat editing contexts** (v1.13.8, port of the llm_core "contexts" pattern): five dropdown modes (one per editable prompt). `BuildBlock` injects at EVERY turn: the mode's editing guide (prompt role, invariants, drafting conventions), the prompt's CURRENT text re-read from config (read-modify-write source of truth) and the server-resolved target language. Also carries the `CommonRules` (```text delivery channel, read-modify-write, drafting conventions, languages, saving, exclusive mode) appended at the end of the block. The page list and `context_id` validation both derive from the `All` registry (one entry = one mode). See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (internal static) | Pending-modification store (`chat_pending.json`, 10-min expiry, one per conversation, per user). `TakePagePending` (collects the diff card for the turn), `PeekPagePending` (peeks without consuming — nudge net), `Consume` (approval: removes the action if it exists, has not expired, belongs to this user AND session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Chat tool `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`): `list`/`get` (read the five fields) and `set` — **two-phase**: validates (field whitelist, 8000-char cap, non-empty text, field = active mode) then serializes the proposal into `ChatPromptStore`; the write happens only on the "Approve" click (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, deterministic C#) — the LLM has NO direct write path. Divergence warning (lexical overlap < 25 %) carried by the diff card. See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. See [Orphan identification](#orphan-recording-identification). |
-| `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), audit of tagged items that received an id in the meantime (`OrphanAuditTaggedIds` — match → identified tag, mismatch → needs-review flag with **ids kept**, translated titles invisible to the lexical guard), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB, Emby date marker = soft year + year cascade) → S2 (LLM, IMDb/TMDB/series-TVDB ids) → S3 (SearXNG, IMDb and TMDB ids from URLs), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis), non-destructive apply + add-only locks, poster via `SaveImage`. |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), audit of tagged items that received an id in the meantime (`OrphanAuditTaggedIds` — match → identified tag, mismatch → needs-review flag with **ids kept**, translated titles invisible to the lexical guard), **SB** library anchoring (same-named sibling folder ± year carrying a card — candidate #0, the user's curation, dedicated series year rule), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB, Emby date marker = soft year + year cascade) → S2 (LLM, IMDb/TMDB/series-TVDB ids) → S3 (SearXNG, IMDb and TMDB ids from URLs), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis) **followed by the "card already carried" gate** (same-title carrier → pass + duplicate log; divergent title → EPG-vs-carrier judge arbitration, reject out of caution otherwise; already-carried id conflict → reject), non-destructive apply + add-only locks, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation when each DVR recording finishes (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle without restart): freezes the **EPG truth** into `recording_validate.json` (`RecordingValidateStore`, EpgSnapshotStore pattern) **before** Emby's identification can overwrite the synopsis, background loop (~3 min after import) → `OrphanResolver` with the truth; dry-run honored, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default image (embedded resource): `default_poster.jpg` (400×600 portrait) on the `AI Tonight` collection (BoxSet) and on the "AI Tonight" playlists (public + per-user private), `default_library.jpg` (640×360 16:9) on the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
@@ -1513,6 +1513,59 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
    candidate accepted **with no synopsis to compare** is logged "to confirm visually"
    (trust SearXNG ranking, as the user would before validating by hand).
 
+### Library anchoring (SB) and the "card already carried" gate (v2.1)
+
+Emby types DVR imports after the **EPG program title**: every title variant (a
+"(year)" suffix, a translation, a guide renaming) spawns a **new folder** —
+Emby never merges by fiche, its identity is the folder. A recording is
+therefore often the **duplicate of an already-identified work** in the library,
+possibly in another library. Yet the S0→S1→S2→S3 chain re-identifies the work
+**from the catalogs** and can *diverge* from the existing folder's card — two
+folders of the same work end up with two different cards (or worse: a wrong
+card written on one of them). Two mechanisms (v2.1) close this gap **at the
+source**, without scanning the library and without duplicating Emby's native
+"Duplicates" filter:
+
+1. **SB — library anchoring (sibling folder)**: before any external catalog,
+   the user's own library is consulted — a same-named item (± "(year)",
+   parentheses and EPG noise stripped) already carrying a card offers it as
+   **candidate #0 to the common acceptance gate** (title/year/judge). The
+   user's curation outranks the catalogs; when the anchor lands, S0/S1/S2/S3
+   don't even run. Dedicated year rule for series: a recording cannot
+   **precede** its series' first airing (item year ≥ card year − 1 — seasons
+   of a long-running series air years after the first: a 2020 recording can
+   be the series carded 2011), but a same-named sibling folder from
+   **another era** with no synopsis to arbitrate is rejected
+   (reboot/homonym). On rejection the S0→S1→S2→S3 chain runs as usual. A
+   sibling card unreadable under the pass kind (cross-kind card): no
+   anchoring — the kind replay handles it.
+2. **"Card already carried" gate**: at the acceptance gate, for **every
+   candidate from every path** (SB/S0/S1/S2/S3), before writing — who else in
+   the library already carries this tmdb/tvdb/imdb (indexed provider-id
+   query, the plumbing of the recommendations' IMDb fallback)?
+   - **no other carrier** → pass (card new to the library);
+   - **carrier under the same title** (± "(year)") → pass + "same work in two
+     folders" log line — duplicate reporting falls out **for free, in
+     passing**; manual merging stays with the user (the plugin never touches
+     files);
+   - **carrier under a divergent title** → the LLM synopsis judge arbitrates
+     the EPG synopsis against the carrier's overview (fully in-process, zero
+     web calls): a renamed/translated same work → pass; **different works**,
+     judge unavailable or no synopsis to arbitrate → **reject out of
+     caution** (the item ends up `llmai-needs-review` if the whole chain
+     fails — a human decides: folder duplicate, or a wrong card on the
+     carrier?);
+   - preliminary deterministic guard: a candidate **contradicting an id the
+     item already carries** is rejected (defensive — the Emby-audit id
+     removal is best-effort, a failed removal leaves the old card in place
+     during the S1/S2/S3 retry).
+
+**Systemic effect**: cards **converge** — two folders of the same work carry
+the same card, and Emby's native "Duplicates" filter (same TVDB id) becomes
+reliable. The plugin does not duplicate that filter: it feeds it correct
+data, and reports duplicates only in passing, whenever the pipeline meets
+them naturally.
+
 ### Fiche language (v1.15)
 
 The TMDB fiche searched/re-read by S1/S2/S3 follows the **content's** language — same
@@ -1551,7 +1604,7 @@ Pipeline failures are distinguished by their nature (v1.13.20.0):
 
 - **candidates seen but rejected** (a bank lists the title, the gate refuses it) →
   tag **`llmai-needs-review`** (to recheck by hand — a human action remains possible);
-- **no candidate seen in any bank** (S0/S1/S2/S3 with no result at all) → tag
+- **no candidate seen in any bank** (SB/S0/S1/S2/S3 with no result at all) → tag
   **`llmai-not-found`** — **terminal** state: nothing to review, the EPG card is the
   best available metadata. Frozen for the nightly pass (no more calls); re-activable
   by removing the tag (Emby metadata editor) if a bank adds the title later.
@@ -1598,7 +1651,7 @@ IMDb id only looks at `movie_results` (real case, 2026-09-20: "La foudre, un
 `llmai-needs-review` after a resolution attempted only in the series kind).
 
 **Implemented cascade (series→movie kind replay)** — when the item is a series
-and the chain fails in the series kind, the full pipeline (native Emby S0 → S1
+and the chain fails in the series kind, the full pipeline (SB → native Emby S0 → S1
 → S2 → S3) is **replayed in the movie kind** on the same item, with the same
 acceptance gate (year ±1 + lexical guard — contiguous containment **or
 ordered token subsequence**, e.g. "ADN business : la face cachée des tests

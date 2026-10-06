@@ -897,8 +897,8 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (statique interne) | **Contextes d'édition du chat** (v1.13.8, portage du pattern « contextes » de llm_core) : cinq modes déroulants (un par prompt éditable). `BuildBlock` injecte à CHAQUE tour : guide d'édition (rôle, invariants, conventions), TEXTE COURANT du prompt (source de vérité read-modify-write, relu de la config) et langue cible résolue serveur. Porte aussi les `CommonRules` (canal de livraison ```text, read-modify-write, conventions de rédaction, langues, sauvegarde, mode exclusif) appendées en fin de bloc. La liste servie à la page et la validation `context_id` dérivent du registre `All` (une entrée = un mode). Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (statique interne) | Store des propositions de modification en attente (`chat_pending.json`, expiration 10 min, une par conversation, par usager). `TakePagePending` (relève la carte de diff pour le tour), `PeekPagePending` (consulte sans consommer — filet nudge), `Consume` (approbation : retire l'action si elle existe, n'a pas expiré, appartient à cet usager ET à cette session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Tool de chat `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`) : `list`/`get` (lecture des cinq champs) et `set` — **two-phase** : valide (liste blanche, plafond 8000 car., texte non vide, champ = mode actif) puis sérialise la proposition dans `ChatPromptStore` ; l'écriture n'a lieu qu'au clic « Approuver » (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, C# déterministe) — le LLM n'a AUCUN chemin d'écriture direct. Avertissement de divergence (recouvrement lexical < 25 %) porté par la carte de diff. Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series), résolution déléguée à `OrphanResolver` (S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found gelé), dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
-| `OrphanResolver.cs` | `OrphanResolver` (classe interne) | **Résolveur partagé** (tâche 04 h + `RecordingWatcher`) : audit d'un id posé par Emby (juge synopsis — match → verrous+tag, mismatch → retrait des ids + retour à l'état EPG + reprise), audit des taggés ayant reçu un id entre-temps (`OrphanAuditTaggedIds` — match → tag identifié, mismatch → flag needs-review **ids conservés**, titres traduits invisibles à la garde lexicale), **S0** recherche native Emby (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (TMDB multilingue, marqueur de date Emby = année soft + cascade annuelle) → S2 (LLM, ids IMDb/TMDB/TVDB séries) → S3 (SearXNG, ids IMDb et TMDB des URLs), porte d'acceptation commune (année + garde lexicale + juge `JudgeSynopsisMatchAsync`, corroboration obligatoire sur les voies par id sans synopsis comparable), application non destructive + verrous add-only, poster via `SaveImage`. |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series), résolution déléguée à `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found gelé), dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
+| `OrphanResolver.cs` | `OrphanResolver` (classe interne) | **Résolveur partagé** (tâche 04 h + `RecordingWatcher`) : audit d'un id posé par Emby (juge synopsis — match → verrous+tag, mismatch → retrait des ids + retour à l'état EPG + reprise), audit des taggés ayant reçu un id entre-temps (`OrphanAuditTaggedIds` — match → tag identifié, mismatch → flag needs-review **ids conservés**, titres traduits invisibles à la garde lexicale), **SB** ancrage bibliothèque (dossier frère homonyme ± année portant une fiche — candidat n° 0, curation de l'usager, règle d'année séries dédiée), **S0** recherche native Emby (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (TMDB multilingue, marqueur de date Emby = année soft + cascade annuelle) → S2 (LLM, ids IMDb/TMDB/TVDB séries) → S3 (SearXNG, ids IMDb et TMDB des URLs), porte d'acceptation commune (année + garde lexicale + juge `JudgeSynopsisMatchAsync`, corroboration obligatoire sur les voies par id sans synopsis comparable) **suivie de la garde « fiche déjà portée »** (porteur au même titre → passage + log doublon ; titre divergent → arbitrage du juge EPG-vs-porteur, rejet par prudence sinon ; conflit d'id déjà porté → rejet), application non destructive + verrous add-only, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation à la fin de chaque enregistrement DVR (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle sans redémarrage) : fige la **vérité EPG** dans `recording_validate.json` (`RecordingValidateStore`, pattern EpgSnapshotStore) **avant** que l'identification d'Emby n'écrase le synopsis, boucle d'arrière-plan (~3 min après l'import) → `OrphanResolver` avec la vérité ; dry-run respecté, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose une image par défaut standardisée (ressource embedded) : `default_poster.jpg` (400×600 portrait) sur la collection `AI Tonight` (BoxSet) et sur les playlists « AI Tonight » (publique + privées par usager), `default_library.jpg` (640×360 16:9) sur la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette du guide de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
@@ -1552,6 +1552,58 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    comparer** est logué « à confirmer visuellement » (on fait confiance au classement
    SearXNG, comme l'usager le ferait avant de valider à la main).
 
+### Ancrage bibliothèque (SB) et garde « fiche déjà portée » (v2.1)
+
+Emby type l'import DVR d'après le **titre EPG du programme** : chaque variation de
+titre (suffixe « (année) », traduction, renommage du guide) enfante un **nouveau
+dossier** — Emby ne fusionne jamais par fiche, son identité est le dossier. Un
+enregistrement est donc souvent le **double d'une œuvre déjà identifiée** en
+bibliothèque, possiblement dans une autre bibliothèque. Or la chaîne S0→S1→S2→S3
+ré-identifie l'œuvre **depuis les banques** et peut *diverger* de la fiche du
+dossier existant — deux dossiers d'une même œuvre finissent avec deux fiches
+différentes (ou pire : une fiche erronée écrite sur l'un d'eux). Deux mécanismes
+(v2.1) ferment cette faille, **à la source**, sans scanner la bibliothèque ni
+dupliquer le filtre natif « Doublons » d'Emby :
+
+1. **SB — ancrage bibliothèque (dossier frère)** : avant toute banque externe,
+   la bibliothèque de l'usager est interrogée — un item homonyme (± « (année) »,
+   parenthèses et bruit EPG retirés) portant déjà une fiche la propose comme
+   **candidat n° 0 à la porte d'acceptation commune** (titre/année/juge). La
+   curation de l'usager prime sur les catalogues ; quand l'ancrage réussit,
+   S0/S1/S2/S3 ne courent pas. Règle d'année dédiée aux séries : un
+   enregistrement ne peut pas **précéder** la première diffusion de sa série
+   (année item ≥ année fiche − 1 — les saisons d'une série longue se diffusent
+   des années après la première : un enregistrement 2020 peut être la série
+   fichée 2011), mais un dossier frère homonyme d'une **autre époque** sans
+   synopsis à arbitrer est rejeté (reboot/homonyme). Rejet → la chaîne S0→S1→S2→S3
+   suit son cours. Fiche du frère illisible dans le type de la passe (fiche
+   croisée) : pas d'ancrage — le repli de type s'en charge.
+2. **Garde « fiche déjà portée »** : à la porte d'acceptation, pour **tout
+   candidat de toute voie** (SB/S0/S1/S2/S3), avant d'écrire — qui d'autre dans
+   la bibliothèque porte déjà ce tmdb/tvdb/imdb (requête indexée par id
+   provider, la plomberie du repli IMDb des recommandations) ?
+   - **aucun autre porteur** → passage (fiche neuve pour la bibliothèque) ;
+   - **porteur au même titre** (± « (année) ») → passage + ligne de log
+     « même œuvre en deux dossiers » — le signalement de doublons tombe
+     **gratuitement, en passant** ; la fusion manuelle reste à l'usager (le
+     plugin ne touche jamais les fichiers) ;
+   - **porteur au titre divergent** → le juge LLM de synopsis arbitre le
+     synopsis EPG contre l'overview du porteur (tout en processus, zéro appel
+     web) : même œuvre renommée/traduite → passage ; **œuvres différentes**,
+     juge indisponible ou aucun synopsis à arbitrer → **rejet par prudence**
+     (l'item finit `llmai-needs-review` si la chaîne échoue — l'humain tranche :
+     doublon de dossiers ou fiche erronée sur le porteur ?) ;
+   - garde déterministe préalable : un candidat qui **contredit un id déjà
+     porté par l'item** est rejeté (défensif — le retrait d'ids de l'audit
+     Emby est best-effort, un échec y laisse l'ancienne fiche en place pendant
+     la reprise S1/S2/S3).
+
+**Effet systémique** : les fiches **convergent** — deux dossiers d'une même
+œuvre portent la même fiche, et le filtre natif « Doublons » d'Emby (même id
+TVDB) devient fiable. Le plugin ne duplique pas ce filtre : il l'alimente en
+données correctes, et ne signale les doublons qu'en passant, au moment où le
+pipeline les rencontre naturellement.
+
 ### Langue des fiches (v1.15)
 
 La fiche TMDB recherchée/relue par S1/S2/S3 suit la langue du **contenu** — même règle
@@ -1594,7 +1646,7 @@ Les échecs du pipeline sont distingués selon la nature de l'échec (v1.13.20.0
 - **candidats vus mais rejetés** (une banque liste le titre, la porte le refuse) →
   tag **`llmai-needs-review`** (à revérifier à la main — une action humaine reste
   possible) ;
-- **aucun candidat vu dans aucune banque** (S0/S1/S2/S3 sans aucun résultat) → tag
+- **aucun candidat vu dans aucune banque** (SB/S0/S1/S2/S3 sans aucun résultat) → tag
   **`llmai-not-found`** — état **terminal** : rien à réviser, la fiche EPG est la
   meilleure métadonnée disponible. Gelé pour la passe nocturne (plus aucun appel) ;
   réactivable en retirant le tag (éditeur de métadonnées Emby) si une banque ajoute
@@ -1646,7 +1698,7 @@ une résolution tentée uniquement en kind series).
 
 **Cascade implémentée (repli de type series→movie)** — quand l'item est une
 série et que la chaîne échoue en kind series, le pipeline complet
-(S0 natif Emby → S1 → S2 → S3) est **rejoué en kind movie** sur le même item,
+(SB → S0 natif Emby → S1 → S2 → S3) est **rejoué en kind movie** sur le même item,
 avec la même porte d'acceptation (année ±1 + garde lexicale — inclusion
 contiguë **ou sous-séquence ordonnée de tokens**, p. ex. « ADN business :
 la face cachée des tests grand public » vs « ADN, la face cachée des tests

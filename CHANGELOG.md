@@ -10,6 +10,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.1.0] — 2026-10-06
+
+### Added (FR)
+- **SB — ancrage bibliothèque (dossier frère)** dans l'identification des
+  orphelins : avant toute banque externe, la bibliothèque de l'usager est
+  consultée — un item homonyme (± « (année) », parenthèses et bruit EPG
+  retirés) portant déjà une fiche la propose comme candidat n° 0 à la porte
+  d'acceptation commune. Motif : Emby type l'import DVR d'après le titre EPG
+  — chaque variation de titre enfante un nouveau dossier, souvent le double
+  d'une œuvre déjà identifiée — et une chaîne qui ré-identifie depuis les
+  banques peut DIVERGER de la fiche du dossier existant (cas réels : une
+  saison récente fichée sous une série homonyme étrangère, un spin-off
+  fiché sous la série-mère). Règle d'année dédiée aux séries : un
+  enregistrement ne peut pas précéder la première diffusion (année item ≥
+  année fiche − 1 — les saisons d'une série longue se diffusent des années
+  après), et un dossier frère homonyme d'une AUTRE époque sans synopsis à
+  arbitrer est rejeté (reboot/homonyme). Bénéfice systémique : les fiches
+  CONVERGENT entre dossiers d'une même œuvre — le filtre natif « Doublons »
+  d'Emby (même id TVDB) devient fiable ; le plugin ne duplique pas ce
+  filtre, il le nourrit de données correctes.
+- **Garde « fiche déjà portée »** à la porte d'acceptation, pour tout
+  candidat de toute voie (SB/S0/S1/S2/S3) : avant d'écrire, qui d'autre dans
+  la bibliothèque porte déjà ce tmdb/tvdb/imdb (requête indexée par id
+  provider) ? Aucun autre porteur → passage ; porteur au même titre (±
+  année) → passage + log « même œuvre en deux dossiers » (le signalement de
+  doublons tombe gratuitement, en passant — la fusion manuelle reste à
+  l'usager, le plugin ne touche jamais les fichiers) ; porteur au titre
+  divergent → le juge LLM de synopsis arbitre le synopsis EPG contre
+  l'overview du porteur (tout en processus, zéro appel web) : renommage ou
+  traduction (ex. un dossier « Retour à … » vs « Bienvenue à … » pour la
+  même œuvre) → passage ; œuvres différentes, juge indisponible ou aucun
+  synopsis à arbitrer → rejet par prudence (needs-review — l'humain
+  tranche). Garde déterministe préalable : un candidat qui contredit un id
+  déjà porté par l'item est rejeté (défensif : le retrait d'ids de l'audit
+  Emby est best-effort, un échec y laisse l'ancienne fiche en place pendant
+  la reprise).
+- Docs FR/EN : section orphelins (SB + garde), tables des composants,
+  description de la tâche planifiée.
+
+### Added (EN)
+- **SB — library anchoring (sibling folder)** in orphan identification:
+  before any external catalog, the user's own library is consulted — a
+  same-named item (± "(year)", parentheses and EPG noise stripped) already
+  carrying a card offers it as candidate #0 to the common acceptance gate.
+  Motive: Emby types DVR imports after the EPG title — every title variant
+  spawns a new folder, often a duplicate of an already-identified work — and
+  a chain that re-identifies from the catalogs can DIVERGE from the existing
+  folder's card (real cases: a recent season fiched under a foreign
+  same-named series, a spin-off fiched under its parent show). Dedicated
+  year rule for series: a recording cannot precede the series' first airing
+  (item year ≥ card year − 1 — seasons of a long-running series air years
+  after the first), and a same-named sibling folder from ANOTHER era without
+  a synopsis to arbitrate is rejected (reboot/homonym). Systemic benefit:
+  cards CONVERGE across folders of the same work — Emby's native
+  "Duplicates" filter (same TVDB id) becomes reliable; the plugin does not
+  duplicate that filter, it feeds it correct data.
+- **"Card already carried" gate** at the acceptance door, for every
+  candidate from every path (SB/S0/S1/S2/S3): before writing, who else in
+  the library already carries this tmdb/tvdb/imdb (indexed provider-id
+  query)? No other carrier → pass; carrier under the same title (± year) →
+  pass + "same work in two folders" log line (duplicate reporting falls out
+  for free, in passing — manual merging stays with the user, the plugin
+  never touches files); carrier under a divergent title → the LLM synopsis
+  judge arbitrates the EPG synopsis against the carrier's overview (fully
+  in-process, zero web calls): renaming or translation (e.g. a "Return
+  to …" folder vs a "Welcome to …" folder for the same work) → pass;
+  different works, judge unavailable or no synopsis to arbitrate → reject
+  out of caution (needs-review — a human decides). Preliminary
+  deterministic guard: a candidate contradicting an id the item already
+  carries is rejected (defensive: the Emby-audit id removal is best-effort,
+  a failed removal leaves the old card in place during the retry).
+- FR/EN docs: orphan section (SB + gate), component tables, scheduled task
+  description.
+
 ## [2.0.0] — 2026-10-05
 
 > **Saut de majeur** : armement complet des langues générées (inventaires

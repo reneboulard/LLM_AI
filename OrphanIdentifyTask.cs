@@ -28,12 +28,18 @@ namespace LLM_AI
     /// <para>La logique de résolution par item vit dans
     /// <see cref="OrphanResolver"/> (partagée avec le
     /// <see cref="RecordingWatcher"/>, qui l'appelle à la fin de chaque
-    /// enregistrement avec la vérité EPG figée) : S0 recherche native Emby
+    /// enregistrement avec la vérité EPG figée) : SB ancrage bibliothèque
+    /// (dossier frère homonyme portant déjà une fiche — la curation de
+    /// l'usager prime sur les banques et empêche la divergence des fiches
+    /// entre dossiers d'une même œuvre), S0 recherche native Emby
     /// (option <c>OrphanEmbyFirstPass</c>), S1 nettoyage + recherche TMDB
     /// multilingue, S2 proposition LLM validée par TMDB, S3 recherche web
     /// SearXNG → id IMDb. Porte d'acceptation commune : année compatible +
     /// (garde lexicale sur les voies par titre) + juge sémantique LLM dès que
-    /// les deux synopsis existent. Repli de type : une série dont la chaîne
+    /// les deux synopsis existent, puis garde « fiche déjà portée » (un
+    /// autre item porte-t-il déjà ce tmdb/tvdb/imdb ? même titre ± année →
+    /// passage + log « même œuvre en deux dossiers » ; titre divergent →
+    /// arbitrage du juge, rejet par prudence sinon). Repli de type : une série dont la chaîne
     /// échoue est rejouée en kind movie (film importé comme série par
     /// Emby — la fiche est alors appliquée à l'item, dont le type est
     /// conservé).</para>

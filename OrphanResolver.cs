@@ -46,6 +46,22 @@ namespace LLM_AI
     /// identifié). Mismatch → retrait des ids écrits par Emby, retour à l'état
     /// EPG, puis S1/S2/S3 immédiat. Sans synopsis à comparer ou juge
     /// indisponible → on ne touche pas (prudence).</para></item>
+    /// <item><b>SB — ancrage bibliothèque</b> (dossier frère) : avant toute
+    /// banque externe, la bibliothèque de l'usager est interrogée — un item
+    /// homonyme (± « (année) », parenthèses et bruit EPG retirés) portant
+    /// déjà une fiche la propose comme candidat n° 0 à la porte commune.
+    /// Emby type l'import DVR d'après le titre EPG : chaque variation de
+    /// titre enfante un NOUVEAU dossier, souvent le double d'une œuvre déjà
+    /// identifiée (« Le monde de Gabrielle Roy » vs « … (2021) ») — sans
+    /// ancrage, la chaîne ré-identifie depuis les banques et peut DIVERGER
+    /// de la fiche du dossier existant (cas réels : « Les enquêtes de Vera
+    /// (2020) » fiché Sommerdahl ; « La recrue FBI » fiché The Rookie).
+    /// Règle d'année dédiée (séries) : un enregistrement ne peut pas
+    /// précéder la série — année item ≥ année fiche − 1 (les saisons d'une
+    /// série longue se diffusent des années après la première) ; un frère
+    /// homonyme d'une AUTRE époque sans synopsis à arbitrer est rejeté
+    /// (reboot/homonyme). Bénéfice systémique : les fiches convergent, le
+    /// filtre natif « Doublons » d'Emby (même id TVDB) devient fiable.</item>
     /// <item><b>S0 — recherche native Emby</b> (option
     /// <c>OrphanEmbyFirstPass</c>) : <c>IProviderManager.GetRemoteSearchResults</c>
     /// (le moteur du dialogue « Identifier ») sur le titre EPG nettoyé.
@@ -67,7 +83,15 @@ namespace LLM_AI
     /// <para><b>Porte d'acceptation</b> commune : année compatible (±1 an) +
     /// (garde lexicale sur les voies par titre) + juge LLM dès que les deux
     /// synopsis existent (sinon acceptation sur année+titre, comme la pratique
-    /// EPG sans synopsis). Rejet = « on continue de chercher ».</para>
+    /// EPG sans synopsis). Rejet = « on continue de chercher ». Toute
+    /// acceptation passe ensuite la <b>garde « fiche déjà portée »</b>
+    /// (<see cref="FicheConflictGateAsync"/>) : un autre item de bibliothèque
+    /// portant déjà ce tmdb/tvdb/imdb au MÊME titre (± « (année) ») = même
+    /// œuvre en deux dossiers (passage + log — la fusion manuelle reste à
+    /// l'usager, le plugin ne touche jamais les fichiers) ; au titre
+    /// divergent, le juge LLM arbitre (renommage/traduction → passage ;
+    /// œuvres différentes, juge indisponible ou aucun synopsis → rejet par
+    /// prudence).</para>
     /// <para><b>Vérité EPG</b> : une <see cref="EpgTruth"/> fournie prime sur
     /// les champs de l'item (que l'identification — parfois fausse — de Emby
     /// peut avoir écrasés). Sans truth, comportement historique : champs de
@@ -379,13 +403,24 @@ namespace LLM_AI
             TmdbMeta meta = null;
             string stage = null;
 
+            // SB : ancrage bibliothèque (dossier frère) — AVANT toute banque
+            // externe : la curation de l'usager prime sur les catalogues.
+            try
+            {
+                meta = await ResolveViaSiblingAsync(item, cfg, kind, epgTitle, cleanTitle,
+                    overview, gateYear, userTmdb, trace, ct).ConfigureAwait(false);
+                if (meta != null) stage = "SB";
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : SB « {0} » échoué ({1}).", epgTitle, ex.Message); }
+
             // S0 : recherche native Emby (moteur du dialogue « Identifier »).
             if (allowS0 && (searchYear.HasValue || yearSoft))
             {
                 try
                 {
                     meta = await ResolveViaEmbyAsync(cleanTitle, kind, isSeries, searchYear,
-                        epgTitle, overview, userTmdb, gateYear, trace, ct).ConfigureAwait(false);
+                        epgTitle, overview, userTmdb, gateYear, item, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S0";
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -424,8 +459,18 @@ namespace LLM_AI
                         : TitleMatches(cleanTitle, s1?.Title, gateYear, s1?.Year);
                     if (s1Ok)
                     {
-                        meta = s1;
-                        stage = "S1";
+                        // Garde « fiche déjà portée » : S1 n'appelle pas la
+                        // porte commune (acceptation lexicale historique) —
+                        // la garde y est appliquée directement. Un candidat
+                        // dont la fiche est déjà portée par une œuvre au
+                        // titre divergent est rejeté ici (arbitrage juge /
+                        // prudence), comme sur les autres voies.
+                        if (await FicheConflictGateAsync(cfg, s1, item, epgTitle, gateYear,
+                                overview, false, ct).ConfigureAwait(false))
+                        {
+                            meta = s1;
+                            stage = "S1";
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -440,7 +485,7 @@ namespace LLM_AI
                 try
                 {
                     meta = await ResolveViaLlmAsync(cfg, epgTitle, cleanTitle, kind, year, gateYear,
-                        overview, truth?.Channel, langs, userTmdb, trace, ct).ConfigureAwait(false);
+                        overview, truth?.Channel, langs, userTmdb, item, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S2";
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -453,7 +498,7 @@ namespace LLM_AI
                 try
                 {
                     meta = await ResolveViaSearXngAsync(cfg, epgTitle, cleanTitle, kind, gateYear,
-                        yearSoft, overview, userTmdb, trace, ct).ConfigureAwait(false);
+                        yearSoft, overview, userTmdb, item, trace, ct).ConfigureAwait(false);
                     if (meta != null) stage = "S3";
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -744,6 +789,103 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  SB — ancrage bibliothèque (dossier frère). Emby type l'import DVR
+        //  d'après le titre EPG du programme : chaque variation de titre
+        //  (suffixe « (année) », traduction, renommage du guide) enfante un
+        //  NOUVEAU dossier — Emby ne fusionne jamais par fiche, l'identité
+        //  est le dossier. Un enregistrement est donc souvent le double
+        //  d'une œuvre déjà identifiée en bibliothèque, possiblement dans
+        //  une autre bibliothèque. Sans ancrage, S1/S2/S3 ré-identifient
+        //  l'œuvre DEPUIS LES BANQUES et peuvent diverger de la fiche du
+        //  dossier existant (cas réels 2026-10-06 : « Les enquêtes de Vera
+        //  (2020) » porte la fiche entière de « Les enquêtes de Dan
+        //  Sommerdahl » ; « La recrue FBI » porte la fiche de « The
+        //  Rookie » ; « Élémentaire » 2022 porte le TMDB d'Elementary). La
+        //  source la plus fiable est la bibliothèque elle-même : la
+        //  curation de l'usager. Un dossier frère homonyme (± « (année) »,
+        //  parenthèses et bruit EPG retirés) portant une fiche la propose
+        //  comme candidat n° 0 — la porte commune décide (titre/année/
+        //  juge). Rejet → la chaîne S0→S1→S2→S3 suit son cours (reboot
+        //  homonyme, traduction du titre…). Fiche du frère illisible dans
+        //  le kind de la passe (fiche croisée) : pas d'ancrage — le repli
+        //  de type s'en charge, doctrine inchangée. Effet systémique :
+        //  les fiches CONVERGENT — deux dossiers d'une même œuvre portent
+        //  la même fiche, le filtre natif « Doublons » d'Emby (même id
+        //  TVDB) devient fiable ; le signalement « même œuvre en deux
+        //  dossiers » tombe gratuitement au log via la garde « fiche déjà
+        //  portée » (FicheConflictGateAsync).
+        // ------------------------------------------------------------------
+
+        private async Task<TmdbMeta> ResolveViaSiblingAsync(BaseItem item, PluginConfiguration cfg,
+            string kind, string epgTitle, string cleanTitle, string overview, int? gateYear,
+            string userTmdb, PipelineTrace trace, CancellationToken ct)
+        {
+            string key = SameTitleKey(cleanTitle);
+            if (key.Length == 0 || _library == null || string.IsNullOrWhiteSpace(cleanTitle)) return null;
+
+            // Frères candidats : même nom (au sens Emby : le nom de l'item
+            // CONTIENT le titre nettoyé — le suffixe « (année) » du frère ne
+            // doit pas le cacher à la requête), confirmation mémoire par la
+            // clé stricte (égalité exacte après nettoyage/normalisation).
+            BaseItem[] siblings;
+            try
+            {
+                siblings = _library.GetItemList(new InternalItemsQuery
+                {
+                    NameContains = cleanTitle,
+                    IncludeItemTypes = new[]
+                        { string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase) ? "Series" : "Movie" },
+                    Recursive = true,
+                    Limit = 25,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : SB « {0} » — requête bibliothèque échouée ({1}) — poursuite S0/S1.",
+                    epgTitle, ex.Message);
+                return null;
+            }
+
+            foreach (var sib in siblings)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (sib == null || item == null || sib.InternalId == item.InternalId) continue;
+                if (IsStrmCard(sib)) continue; // cartes .strm : hors périmètre
+                if (SameTitleKey(sib.Name) != key) continue; // confirmation stricte en mémoire
+                // Sans fiche à offrir (ids provider), le frère ne dit rien.
+                if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
+                    && !HasItemProviderId(sib, "tvdb")) continue;
+
+                // Relire la fiche du frère (cascade tmdb → imdb → tvdb,
+                // miroir de S0). Illisible dans le kind de la passe → frère
+                // suivant (pas d'ancrage croisé, voir bandeau).
+                TmdbMeta meta = null;
+                int.TryParse(sib.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sibTmdb);
+                if (sibTmdb > 0)
+                    meta = await _tmdb.LookupMetaByIdAsync(sibTmdb, kind, userTmdb, ct).ConfigureAwait(false);
+                if (meta == null && HasItemProviderId(sib, "imdb"))
+                    meta = await _tmdb.FindByExternalIdAsync(sib.GetProviderId("imdb").Trim(), "imdb_id",
+                        kind, userTmdb, ct).ConfigureAwait(false);
+                if (meta == null && string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
+                    && HasItemProviderId(sib, "tvdb"))
+                    meta = await _tmdb.FindByExternalIdAsync(sib.GetProviderId("tvdb").Trim(), "tvdb_id",
+                        kind, userTmdb, ct).ConfigureAwait(false);
+                if (meta == null) continue;
+
+                trace.SawCandidates = true; // une fiche réelle surfacée (depuis la bibliothèque)
+                _logger?.Info("[LLM_AI] OrphanIdentify : SB « {0} » — dossier frère « {1} » ({2}) porte tmdb={3} ; fiche proposée à la porte.",
+                    epgTitle, sib.Name, sib.Path, meta.TmdbId);
+
+                if (await AcceptCandidateAsync(cfg, meta, epgTitle, gateYear, overview, true, cleanTitle, ct,
+                        item, corroborateNoSynopsis: false, gateYear: gateYear, siblingAnchor: true).ConfigureAwait(false))
+                    return meta;
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------
         //  S0 : recherche native Emby (IProviderManager.GetRemoteSearchResults)
         //  — le moteur du dialogue « Identifier ». Candidats dans l'ordre
         //  d'Emby, porte renforcée (titre + année + juge quand les deux
@@ -755,7 +897,7 @@ namespace LLM_AI
 
         private async Task<TmdbMeta> ResolveViaEmbyAsync(string cleanTitle, string kind, bool isSeries,
             int? searchYear, string epgTitle, string epgOverview, string userTmdb, int? gateYear,
-            PipelineTrace trace, CancellationToken ct)
+            BaseItem item, PipelineTrace trace, CancellationToken ct)
         {
             // La recherche native suit la langue configurée du serveur ; la
             // cascade multilingue de S1 reste le repli. searchYear null
@@ -767,7 +909,7 @@ namespace LLM_AI
                     SearchInfo = new SeriesInfo { Name = cleanTitle, Year = searchYear }
                 };
                 var results = await _providers.GetRemoteSearchResults<Series, SeriesInfo>(query, ct).ConfigureAwait(false);
-                return await PickEmbyCandidateAsync(results, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
+                return await PickEmbyCandidateAsync(results, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, item, trace, ct).ConfigureAwait(false);
             }
 
             var mq = new RemoteSearchQuery<MovieInfo>
@@ -775,13 +917,13 @@ namespace LLM_AI
                 SearchInfo = new MovieInfo { Name = cleanTitle, Year = searchYear }
             };
             var mresults = await _providers.GetRemoteSearchResults<Movie, MovieInfo>(mq, ct).ConfigureAwait(false);
-            return await PickEmbyCandidateAsync(mresults, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, trace, ct).ConfigureAwait(false);
+            return await PickEmbyCandidateAsync(mresults, kind, gateYear, epgTitle, epgOverview, userTmdb, cleanTitle, item, trace, ct).ConfigureAwait(false);
         }
 
         private async Task<TmdbMeta> PickEmbyCandidateAsync(
             IEnumerable<MediaBrowser.Model.Providers.RemoteSearchResult> results,
             string kind, int? gateYear, string epgTitle, string epgOverview,
-            string userTmdb, string cleanTitle, PipelineTrace trace, CancellationToken ct)
+            string userTmdb, string cleanTitle, BaseItem item, PipelineTrace trace, CancellationToken ct)
         {
             if (results == null) return null;
             int taken = 0;
@@ -807,7 +949,7 @@ namespace LLM_AI
 
                 // Porte renforcée : titre lexicale + année + juge synopsis.
                 if (!await AcceptCandidateAsync(Plugin.Instance?.Configuration, meta, epgTitle,
-                        gateYear, epgOverview, true, cleanTitle, ct).ConfigureAwait(false))
+                        gateYear, epgOverview, true, cleanTitle, ct, item).ConfigureAwait(false))
                     continue;
 
                 // Converti en fiche TMDB détaillée (genres, poster, statut) ;
@@ -853,7 +995,7 @@ namespace LLM_AI
         private async Task<TmdbMeta> ResolveViaLlmAsync(PluginConfiguration cfg,
             string epgTitle, string cleanTitle, string kind, int? year, int? gateYear,
             string overview, string channel, string[] langs, string userTmdb,
-            PipelineTrace trace, CancellationToken ct)
+            BaseItem item, PipelineTrace trace, CancellationToken ct)
         {
             var guess = await _runner.ResolveIdsAsync(cfg, epgTitle, kind, year, overview, channel, ct).ConfigureAwait(false);
             if (guess.IsEmpty) return null;
@@ -867,7 +1009,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true; // fiche réelle reléguée, même rejetée
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -878,7 +1020,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.TvdbId.Trim(), "tvdb_id", kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true;
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -887,7 +1029,7 @@ namespace LLM_AI
             {
                 var m = await _tmdb.LookupMetaByIdAsync(guess.TmdbId, kind, userTmdb, ct).ConfigureAwait(false);
                 if (m != null) trace.SawCandidates = true;
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item, corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                     return m;
             }
 
@@ -952,7 +1094,7 @@ namespace LLM_AI
                             m = null;
                         }
                     }
-                    if (await AcceptCandidateAsync(cfg, m, epgTitle, gateForCandidate, overview, true, ot, ct,
+                    if (await AcceptCandidateAsync(cfg, m, epgTitle, gateForCandidate, overview, true, ot, ct, item,
                             corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                         return m;
                 }
@@ -977,7 +1119,7 @@ namespace LLM_AI
 
         private async Task<TmdbMeta> ResolveViaSearXngAsync(PluginConfiguration cfg,
             string epgTitle, string cleanTitle, string kind, int? gateYear, bool yearSoft,
-            string overview, string userTmdb, PipelineTrace trace, CancellationToken ct)
+            string overview, string userTmdb, BaseItem item, PipelineTrace trace, CancellationToken ct)
         {
             // Requête : titre NETTOYÉ (la date-marqueur Emby empoisonne la
             // recherche) + année fiable si connue (aide à lever l'ambiguïté ;
@@ -1050,7 +1192,7 @@ namespace LLM_AI
             foreach (string imdbId in imdbIds)
             {
                 var m = await _tmdb.FindByExternalIdAsync(imdbId, "imdb_id", kind, userTmdb, ct).ConfigureAwait(false);
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct,
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item,
                         corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                 {
                     if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
@@ -1065,7 +1207,7 @@ namespace LLM_AI
                 if (!int.TryParse(tmdbIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var tmdbId) || tmdbId <= 0)
                     continue;
                 var m = await _tmdb.LookupMetaByIdAsync(tmdbId, kind, userTmdb, ct).ConfigureAwait(false);
-                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct,
+                if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item,
                         corroborateNoSynopsis: true, gateYear: gateYear).ConfigureAwait(false))
                 {
                     if (string.IsNullOrWhiteSpace(overview) || string.IsNullOrWhiteSpace(m.Overview))
@@ -1134,19 +1276,37 @@ namespace LLM_AI
         //  seule l'ÉGALITÉ EXACTE du titre du guide est une preuve.
         //  gateYear = année fiable de l'item (null si soft/absente) — sert à
         //  distinguer « année corroborante » de « année devinée (circulaire) ».
+        //  siblingAnchor = candidat du dossier frère (SB) : règle d'année
+        //  dédiée séries (un enregistrement ne peut pas précéder la série :
+        //  année item ≥ année fiche − 1 — les saisons d'une série longue se
+        //  diffusent des années après la première, « Les enquêtes de Vera
+        //  (2020) » = la série fichée 2011), garde lexicale pure (l'année est
+        //  arbitrée à part) et rejet des frères homonymes d'une AUTRE époque
+        //  sans synopsis à arbitrer (reboot/homonyme — « Les Schtroumpfs »
+        //  1976 vs 2021). Toute acceptation passe ensuite la garde « fiche
+        //  déjà portée » (FicheConflictGateAsync) — voir sa documentation.
         // ------------------------------------------------------------------
 
         private async Task<bool> AcceptCandidateAsync(PluginConfiguration cfg, TmdbMeta m,
             string epgTitle, int? epgYear, string epgSynopsis,
             bool requireTitleMatch, string matchTitle, CancellationToken ct,
-            bool corroborateNoSynopsis = false, int? gateYear = null)
+            BaseItem item,
+            bool corroborateNoSynopsis = false, int? gateYear = null, bool siblingAnchor = false)
         {
             if (m == null || m.TmdbId <= 0) return false;
+
+            bool seriesKind = string.Equals(m.Kind, "series", StringComparison.OrdinalIgnoreCase);
 
             // Garde-fou année (deux œuvres d'époques différentes). Rejet
             // logué : ce garde est silencieux sinon, et un « 0 si inconnu »
             // du LLM y a déjà caché une fiche correcte (cas 2026-09-20).
-            if (!YearCompatible(epgYear, m.Year))
+            // Ancrage frère (séries) : règle dédiée — un enregistrement ne
+            // peut pas PRÉCÉDER la première diffusion de sa série, mais il
+            // peut la suivre de longtemps (saisons d'une série longue).
+            bool yearOk = siblingAnchor && seriesKind
+                ? AnchorSeriesYearCompatible(epgYear, m.Year)
+                : YearCompatible(epgYear, m.Year);
+            if (!yearOk)
             {
                 _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — année incompatible (attendue {2}, fiche {3}).",
                     m.Title, m.TmdbId,
@@ -1155,8 +1315,12 @@ namespace LLM_AI
                 return false;
             }
 
-            // Garde de titre lexicale (voies par titre uniquement).
-            if (requireTitleMatch && !TitleMatches(matchTitle, m.Title, epgYear, m.Year))
+            // Garde de titre lexicale (voies par titre uniquement). Ancrage :
+            // lexicale PURE (années null) — l'année vient d'être arbitrée par
+            // la règle dédiée ci-dessus, la revérifier ici rejetterait les
+            // séries longues (enregistrement 2020, fiche 2011).
+            if (requireTitleMatch && !TitleMatches(matchTitle, m.Title,
+                    siblingAnchor ? null : epgYear, siblingAnchor ? null : m.Year))
             {
                 _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — garde de titre (proposé « {2} »).",
                     m.Title, m.TmdbId, matchTitle ?? "—");
@@ -1173,13 +1337,31 @@ namespace LLM_AI
             // garde lexicale (titre du guide) ou l'année corroborante suffit.
             if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(m.Overview))
             {
-                if (!corroborateNoSynopsis) return true;
+                // Ancrage frère (séries) sans synopsis : un écart d'époque
+                // (> 1 an) est alors inarbitrable — reboot ou homonyme ? On
+                // n'écrit rien (needs-review en fin de chaîne), la chaîne
+                // continue de chercher.
+                if (siblingAnchor && seriesKind
+                    && epgYear.HasValue && m.Year.HasValue
+                    && Math.Abs(epgYear.Value - m.Year.Value) > 1)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — dossier frère homonyme d'une autre époque (item {2}, fiche {3}), aucun synopsis pour arbitrer (reboot/homonyme ?).",
+                        m.Title, m.TmdbId,
+                        epgYear.Value.ToString(CultureInfo.InvariantCulture),
+                        m.Year.Value.ToString(CultureInfo.InvariantCulture));
+                    return false;
+                }
+                if (!corroborateNoSynopsis)
+                    return await FicheConflictGateAsync(cfg, m, item, epgTitle, epgYear, epgSynopsis,
+                        false, ct).ConfigureAwait(false);
                 string epgClean = TmdbLookupTool.CleanEpgTitle(epgTitle);
                 string a = NormalizeTitle(epgClean);
                 bool exactGuide = a.Length > 0 && a == NormalizeTitle(m.Title);
                 bool titleOk = TitleMatches(epgClean, m.Title, epgYear, m.Year);
                 bool yearsOk = gateYear.HasValue && m.Year.HasValue; // année FIABLE — YearCompatible déjà passé plus haut
-                if (gateYear.HasValue ? (titleOk || yearsOk) : exactGuide) return true;
+                if (gateYear.HasValue ? (titleOk || yearsOk) : exactGuide)
+                    return await FicheConflictGateAsync(cfg, m, item, epgTitle, epgYear, epgSynopsis,
+                        false, ct).ConfigureAwait(false);
                 _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — voie LLM sans synopsis comparable : {2} (titre guide « {3} », fiche « {4} »).",
                     m.Title, m.TmdbId,
                     gateYear.HasValue
@@ -1206,7 +1388,196 @@ namespace LLM_AI
             }
             _logger?.Info("[LLM_AI] OrphanIdentify : juge synopsis : « {0} » = candidat « {1} » ({2}) — accepté.",
                 epgTitle, m.Title, v.Reason);
+            // Juge confirmé : la fiche décrit cet item — la garde « fiche déjà
+            // portée » reste appliquée (signalement du porteur divergent) mais
+            // ne rejette plus (l'écriture est sémantiquement fondée).
+            return await FicheConflictGateAsync(cfg, m, item, epgTitle, epgYear, epgSynopsis,
+                true, ct).ConfigureAwait(false);
+        }
+
+        // ------------------------------------------------------------------
+        //  Garde « fiche déjà portée » (fiche-conflict). Contrepartie ACTIVE
+        //  du filtre natif « Doublons » d'Emby (passif, aveugle aux langues
+        //  et aux fiches TVDB divergentes, un seul item marqué par groupe) :
+        //  AVANT d'écrire un candidat, qui d'autre dans la bibliothèque
+        //  porte DÉJÀ cette fiche (tmdb/tvdb/imdb, requête indexée
+        //  AnyProviderIdEquals — plomberie du repli IMDb d'EnrichWithLibrary) ?
+        //  <list type="bullet">
+        //  <item>aucun autre porteur → passage (fiche neuve pour la
+        //  bibliothèque) ;</item>
+        //  <item>porteur au MÊME titre (± « (année) », bruit EPG retiré —
+        //  SameTitleKey) → passage + log « même œuvre en deux dossiers » —
+        //  le signalement de doublons tombe gratuitement, en passant ; la
+        //  fusion manuelle reste à l'usager (le plugin ne touche jamais les
+        //  fichiers) ;</item>
+        //  <item>porteur au titre DIVERGENT → le juge LLM arbitre le synopsis
+        //  EPG contre l'overview du porteur (tout en processus, zéro web) :
+        //  même œuvre (renommage/traduction — « Retour à Sanditon » vs
+        //  « Bienvenue à Sanditon ») → passage ; œuvres différentes (« La
+        //  recrue FBI » vs « The Rookie ») ou juge indisponible/sans synopsis
+        //  à arbitrer → REJET par prudence (needs-review en fin de chaîne,
+        //  doctrine de la porte).</item>
+        //  </list>
+        //  judgeConfirmed=true (le juge de la porte vient de confirmer le
+        //  synopsis EPG contre la fiche) : la fiche décrit notre item — le
+        //  porteur divergent est probablement un renommage (ou une fiche
+        //  erronée SUR le porteur, problème préexistant) → passage + log.
+        //  Garde déterministe préalable : la fiche contredit un id déjà
+        //  porté par l'item → rejet (défensif : l'item est orphelin en
+        //  principe, mais la reversion d'audit RevertToEpgAsync est
+        //  best-effort — un retrait d'id échoué y laisse le pipeline tourner
+        //  sur un item qui porte encore l'ancienne fiche rejetée).
+        // ------------------------------------------------------------------
+
+        private async Task<bool> FicheConflictGateAsync(PluginConfiguration cfg, TmdbMeta m,
+            BaseItem item, string epgTitle, int? epgYear, string epgSynopsis,
+            bool judgeConfirmed, CancellationToken ct)
+        {
+            if (m == null || m.TmdbId <= 0) return true;
+
+            // Garde déterministe : conflit id déjà porté par l'item.
+            string idConflict = FindItemIdConflict(item, m);
+            if (idConflict != null)
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — contredit un id déjà porté par l'item ({2}).",
+                    m.Title, m.TmdbId, idConflict);
+                return false;
+            }
+
+            if (_library == null) return true; // pas de garde possible — comportement historique
+            var carriers = FindFicheCarriers(m, item);
+            if (carriers.Count == 0) return true;
+
+            foreach (var x in carriers)
+            {
+                if (x == null) continue;
+
+                // Même titre (± année/bruit) : même œuvre en deux dossiers.
+                if (SameTitleKey(epgTitle).Length > 0 && SameTitleKey(epgTitle) == SameTitleKey(x.Name))
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) — même œuvre en deux dossiers (fusion manuelle : décision de l'usager, jamais du plugin).",
+                        m.TmdbId, x.Name, x.Path);
+                    continue;
+                }
+
+                // Titre divergent : arbitrage.
+                if (judgeConfirmed)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) au titre différent — juge a confirmé la fiche pour cet item : renommage/traduction probable (ou fiche du porteur à vérifier).",
+                        m.TmdbId, x.Name, x.Path);
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(x.Overview))
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — fiche déjà portée par « {2} » ({3}) au titre sans rapport, aucun synopsis pour arbitrer (à vérifier : doublon de dossiers ou fiche erronée sur le porteur).",
+                        m.Title, m.TmdbId, x.Name, x.Path);
+                    return false;
+                }
+                var v = await _runner.JudgeSynopsisMatchAsync(cfg, epgTitle, epgYear, epgSynopsis,
+                    x.Name, x.ProductionYear > 1900 ? (int?)x.ProductionYear : null, x.Overview,
+                    ct).ConfigureAwait(false);
+                if (!v.IsValid)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — fiche déjà portée par « {2} » au titre divergent et juge indisponible (prudence).",
+                        m.Title, m.TmdbId, x.Name);
+                    return false;
+                }
+                if (!v.Match)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — fiche déjà portée par « {2} » ({3}) : œuvres différentes ({4}).",
+                        m.Title, m.TmdbId, x.Name, x.Path, v.Reason);
+                    return false;
+                }
+                _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) — le juge confirme la même œuvre (renommage/traduction).",
+                    m.TmdbId, x.Name, x.Path);
+            }
             return true;
+        }
+
+        /// <summary>Items de bibliothèque (Movie/Series, cartes .strm exclues,
+        /// item lui-même exclu) portant déjà un des ids provider du candidat
+        /// (tmdb/tvdb/imdb — requête indexée par id, miroir du repli IMDb
+        /// d'<c>EnrichWithLibrary</c>). Dédupliqués par id interne. Le type
+        /// d'item n'est PAS filtré par le kind du candidat : une fiche croisée
+        /// (film sur un item série, posée par le repli de type) est un
+        /// porteur légitime.</summary>
+        private List<BaseItem> FindFicheCarriers(TmdbMeta m, BaseItem self)
+        {
+            var result = new List<BaseItem>();
+            if (m == null || _library == null) return result;
+
+            var keys = new List<KeyValuePair<string, string>>();
+            if (m.TmdbId > 0)
+                keys.Add(new KeyValuePair<string, string>("Tmdb",
+                    m.TmdbId.ToString(CultureInfo.InvariantCulture)));
+            if (!string.IsNullOrWhiteSpace(m.TvdbId))
+                keys.Add(new KeyValuePair<string, string>("Tvdb", m.TvdbId.Trim()));
+            if (!string.IsNullOrWhiteSpace(m.ImdbId))
+                keys.Add(new KeyValuePair<string, string>("Imdb", m.ImdbId.Trim()));
+
+            foreach (var kv in keys)
+            {
+                try
+                {
+                    var q = new InternalItemsQuery
+                    {
+                        AnyProviderIdEquals = new Dictionary<string, string> { { kv.Key, kv.Value } },
+                        IncludeItemTypes = new[] { "Movie", "Series" },
+                        Recursive = true,
+                        Limit = 12,
+                        EnableTotalRecordCount = false
+                    };
+                    foreach (var x in _library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                    {
+                        if (x == null || self != null && x.InternalId == self.InternalId) continue;
+                        if (IsStrmCard(x)) continue;
+                        bool known = false;
+                        foreach (var r in result)
+                            if (r.InternalId == x.InternalId) { known = true; break; }
+                        if (!known) result.Add(x);
+                    }
+                }
+                catch { /* best-effort : une clé illisible ne bloque pas la garde */ }
+            }
+            return result;
+        }
+
+        /// <summary>Conflit déterministe : le candidat porte un id provider
+        /// DIFFÉRENT de celui que l'item porte déjà (tmdb/imdb/tvdb présents
+        /// des deux côtés, valeurs différentes). Retourne la description du
+        /// conflit, null si aucun. Défensif : le pipeline ne traite en
+        /// principe que des orphelins (aucun id), mais la reversion d'audit
+        /// (<c>RevertToEpgAsync</c>) est best-effort — un retrait d'id échoué
+        /// y laisse l'ancienne fiche rejetée sur l'item pendant la reprise
+        /// S1/S2/S3, et écrire un candidat contradictoire dessus serait une
+        /// fiche de plus à réparer.</summary>
+        private static string FindItemIdConflict(BaseItem item, TmdbMeta m)
+        {
+            if (item == null || m == null) return null;
+
+            string itemTmdb = SafeProviderId(item, "tmdb");
+            string candTmdb = m.TmdbId > 0 ? m.TmdbId.ToString(CultureInfo.InvariantCulture) : null;
+            if (!string.IsNullOrWhiteSpace(itemTmdb) && !string.IsNullOrWhiteSpace(candTmdb)
+                && !string.Equals(itemTmdb.Trim(), candTmdb.Trim(), StringComparison.OrdinalIgnoreCase))
+                return "tmdb " + itemTmdb + " ≠ " + candTmdb;
+
+            string itemImdb = SafeProviderId(item, "imdb");
+            if (!string.IsNullOrWhiteSpace(itemImdb) && !string.IsNullOrWhiteSpace(m.ImdbId)
+                && !string.Equals(itemImdb.Trim(), m.ImdbId.Trim(), StringComparison.OrdinalIgnoreCase))
+                return "imdb " + itemImdb + " ≠ " + m.ImdbId;
+
+            string itemTvdb = SafeProviderId(item, "tvdb");
+            if (!string.IsNullOrWhiteSpace(itemTvdb) && !string.IsNullOrWhiteSpace(m.TvdbId)
+                && !string.Equals(itemTvdb.Trim(), m.TvdbId.Trim(), StringComparison.OrdinalIgnoreCase))
+                return "tvdb " + itemTvdb + " ≠ " + m.TvdbId;
+
+            return null;
+        }
+
+        private static string SafeProviderId(BaseItem item, string key)
+        {
+            if (item == null) return null;
+            try { return item.GetProviderId(key); } catch { return null; }
         }
 
         // ------------------------------------------------------------------
@@ -1417,6 +1788,38 @@ namespace LLM_AI
             foreach (var c in t)
                 if (char.IsLetterOrDigit(c)) sb.Append(c);
             return sb.ToString();
+        }
+
+        /// <summary>Clé de rapprochement « même œuvre, deux dossiers » :
+        /// nettoyage EPG du titre (bruit, parenthèses — donc les suffixes
+        /// « (année) » — et dates-marqueurs d'Emby supprimés) puis
+        /// normalisation (casse/accents/ponctuation). « Le monde de
+        /// Gabrielle Roy (2021) » ≡ « Le monde de Gabrielle Roy » ;
+        /// « Les enquêtes de Vera (2011) » ≡ « Les enquêtes de Vera
+        /// (2020) ». Sert à l'ancrage frère (SB) et à la garde « fiche
+        /// déjà portée » (FicheConflictGateAsync).</summary>
+        internal static string SameTitleKey(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return string.Empty;
+            string cleaned = TmdbLookupTool.CleanEpgTitle(s);
+            return NormalizeTitle(string.IsNullOrWhiteSpace(cleaned) ? s : cleaned);
+        }
+
+        /// <summary>Garde d'année de l'ancrage frère (séries) : un
+        /// enregistrement ne peut pas PRÉCÉDER la première diffusion de sa
+        /// série — les saisons se diffusent des années après (« Les enquêtes
+        /// de Vera (2020) » = la série fichée 2011, « Sissi (2022) » = la
+        /// série fichée 2021) — mais une année ANTÉRIEURE à la fiche désigne
+        /// une autre œuvre (un enregistrement 1976 ne peut pas être la
+        /// fiche 2021). Inconnue/aberrante (&lt; 1900) : pas de garde
+        /// (doctrine commune). L'écart d'époque POSTÉRIEUR sans synopsis à
+        /// arbitrer (reboot/homonyme) est rejeté séparément dans la porte
+        /// d'acceptation.</summary>
+        internal static bool AnchorSeriesYearCompatible(int? expected, int? actual)
+        {
+            if (!expected.HasValue || expected.Value < 1900) return true;
+            if (!actual.HasValue || actual.Value < 1900) return true;
+            return expected.Value >= actual.Value - 1;
         }
 
         private static string MimeFromUrl(string url) =>
