@@ -902,7 +902,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ClassificationMap.cs` | `ClassificationMap` (internal static) | **Classification Mapper bridge** (read-only): lazy reader of `classification_mapper_config.json` (the **server's** configuration directory, not the plugins' — mtime re-stat throttled at 30 s, so mappings edited in the Classification Mapper UI are followed without a restart); normalizes heterogeneous official ratings ("PG-13", "TV-14", "13+"…) to the canonical values maintained in its UI ("CA-G", "CA-14A"…). Neutral when the plugin is absent (case-normalized passthrough). Used by the `find` action of `get_emby_info`. See [Official ratings](#official-ratings-classification-mapper). |
 | `RecosApiService.cs` | `RecosApiService : BaseApiService` | **User** endpoints for the Recommendations page: `GET /Plugins/LLMAI/Recos` (latest scheduled-task recommendations + date, any authenticated user — the page no longer reads plugin config through the admin-only host endpoint `/Configuration`, which returned 403 for non-admins) and `POST /Plugins/LLMAI/Forget {Title}` (**Forget** button: adds to `DroppedTitles` server-side via `SaveConfiguration`). Also answers `CanRecord`/`CanLiveTv` (v1.13.12.0: caller's permissions, policy read live). Serves **only** those fields — never the full config (API keys, prompts). |
 | `UpdateApiService.cs` | `UpdateApiService : BaseApiService` | `GET /Plugins/LLMAI/Update` endpoint: compares the latest GitHub release tag (`releases/latest`, `release.yml` workflow) with the installed assembly version → update banner on the config page. Read-only (no download), 1 h lock-guarded cache (GitHub API limit), `Force=1` bypass, never throws (`Error` → no banner). |
-| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 18 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene, plugin security monitoring) + 3 remediation actions gated by `AuditRemediationEnabled` — primitives shared with the chat action tools via `ServerRemediation` (v1.13.30). Log FS confinement (name-only + extension whitelist + canonical containment). |
+| `SystemAuditTool.cs` | `SystemAuditTool : ILlmTool` | The `system_audit` tool (see [LLM tools](#llm-tools)) — 20 inspection actions (telemetry, config, sessions, tasks, logs, transcoding, host/OS, disks, library, security, rating and tag hygiene, Emby native duplicates, plugin security monitoring) + 3 remediation actions gated by `AuditRemediationEnabled` — primitives shared with the chat action tools via `ServerRemediation` (v1.13.30). Log FS confinement (name-only + extension whitelist + canonical containment). |
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). |
@@ -945,7 +945,7 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
 | `web_fetch` | Fetch/read a web page (public http(s) URL ≤ 2048 characters): **self-hosted local** structured extraction (`WebFetchDirect`, no key — title, og:/twitter + canonical metadata, schema.org JSON-LD, Readability-lite main content with boilerplate stripped, h1–h6 headings and tables as markdown, final URL after redirects) with Ollama Cloud fallback for anti-bot pages. |
 | `new_releases` | TV new releases from the `NewReleaseSources` web sources (one per line): bare URL = auto-detected RSS/Atom feed; `URL :: @showbizz` = built-in Showbizz.net extractor ("Saison 1" blocks); `URL :: .NET regex` = custom extraction (required `title` group, optional `url`/`date`). Alias `showbizz_new_releases` (existing prompts). 24h cache invalidated by any source change (no restart). The configuration page sports a **"Test sources"** button (scrapes the edited lines without saving: detected mode, per-source count and title samples, HTTP/timeout/regex errors); every run logs the per-source count (`[LLM_AI] new_releases source … -> N item(s)`) and raises an explicit Warn on a line extracting 0 items. |
-| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 21 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `ratings_check` (rating hygiene), `security_metrics` (plugin activity counters + security events — detection); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 22 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `duplicates_check` (Emby's native « Duplicates » finding — same-`PresentationUniqueKey` groups, manual management), `ratings_check` (rating hygiene), `security_metrics` (plugin activity counters + security events — detection); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
 
 ---
 
@@ -1324,7 +1324,7 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 | Telemetry & config | `server_info` (version, ports, paths, pending restart, update, maintenance), `system_config` (full server configuration via `IServerConfigurationManager.Configuration`), `active_sessions`, `scheduled_tasks` |
 | Logs & streams | `list_logs` (`LogPath` folder, `*.txt`), `inspect_log` (tail or **grep + context**, confined to the log folder), `log_scan` (v1.15 — anomaly pattern scan: exceptions grouped by class, ingress/egress HTTP 4xx/5xx, ffmpeg failures, metadata-provider failures + "Too Many Requests", Live TV/DVR, library scans, `[LLM_AI]` signal grouped by signature, authentication denials + lockouts — `{error, fatal, warn}` profile **with raw witness lines**), `transcode`, `gpu_transcode` |
 | Hardware & OS | `host_metrics` (BCL: process, GC, runtime, uptime, scan running, aggregate transcode CPU — GPU only per transcode), `disk_storage` (`DriveInfo` + Emby path mapping), `processes` (ffmpeg-**orphan** detection by correlation + top RAM/CPU + Emby counters) |
-| Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres) |
+| Library | `library_stats` (per-type counts + configured libraries + scan state, via `ILibraryManager` — DB layer, no raw FS), `missing_metadata` (sampling of items missing overview/image/genres), `duplicates_check` (**native** « Duplicates » finding: groups of movies/series sharing the same `PresentationUniqueKey` — the same work filed under several folders; `.strm` cards and episodes excluded) |
 | Security & hygiene | `security_check` (missing passwords — **probe suspended near Emby's lockout threshold** and never counted in its failures, multiple administrator accounts, Emby API keys with age/last use, HTTPS, external access, public IPs — security section below), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags: counts per tag, DVR coverage), `ratings_check` (rating hygiene, see below), `security_metrics` (plugin activity counters + window of the plugin's **security events**: blocked SSRF, malformed/unknown tool calls, backend failures, refused chat turns, deposited/approved/refused actions — detection, see below) |
 
 | Family | **Remediation** actions (gate `AuditRemediationEnabled`) |
@@ -1333,6 +1333,23 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 
 When `AuditRemediationEnabled` is off, remediation actions return a JSON error — the LLM
 must then **recommend** the action in its report instead of executing it.
+
+**Library duplicates (`duplicates_check`, v2.1)**: the finding relays the **exact**
+criterion of Emby's native « Duplicates » dashboard filter — two items share the
+same `PresentationUniqueKey` (TVDB id + metadata language + library; verified
+item-for-item against `IsDuplicate=true`). The plugin detects **nothing** by
+itself: it groups what Emby already sees and reports the groups with their
+folders (detail capped at 25 groups), documenting the inherited blind spots (the
+same id carried in two libraries or under two languages does not show up — the
+native filter has the same). This is the *report* counterpart of the
+[source-side prevention](#library-anchoring-sb-and-the-card-already-carried-gate-v21):
+prevention blocks future cases at write time, the finding warns the user that
+**manual management** is required on the duplicates already present (merge or
+delete the redundant folder via the metadata editor) — the plugin never merges
+or deletes. `.strm` cards and episodes are excluded (cards deliberately share
+their source's card; episodes derive from their series). The `deterministic`
+mode includes it in the « Library and metadata » dose, the `single` mode calls
+it through the default audit prompt.
 
 ### Security
 
@@ -1563,8 +1580,10 @@ source**, without scanning the library and without duplicating Emby's native
 **Systemic effect**: cards **converge** — two folders of the same work carry
 the same card, and Emby's native "Duplicates" filter (same TVDB id) becomes
 reliable. The plugin does not duplicate that filter: it feeds it correct
-data, and reports duplicates only in passing, whenever the pipeline meets
-them naturally.
+data, reports duplicates in passing whenever the pipeline meets them
+naturally, and the [health audit](#server-health-audit) relays its complete
+finding (`duplicates_check` action) to warn the user that manual management
+is still required on the already-doubled folders.
 
 ### Fiche language (v1.15)
 

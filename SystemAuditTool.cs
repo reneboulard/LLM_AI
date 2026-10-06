@@ -22,6 +22,7 @@ using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Session;
@@ -42,7 +43,7 @@ namespace LLM_AI
     /// serveur Emby. Contrairement à <see cref="GetEmbyInfoTool"/> (bibliothèque
     /// / EPG, lecture seule), cet outil interroge les services SystÈME d'Emby
     /// (sessions, tâches planifiées, transcodage, infos serveur) et le système
-    /// hôte (process, disques) via la BCL. Douze actions dispatchées sur
+    /// hôte (process, disques) via la BCL. Vingt-trois actions dispatchées sur
     /// <c>action</c> :
     /// <list type="bullet">
     /// <item><b>Inspection (lecture seule, toujours disponibles)</b> :
@@ -52,8 +53,10 @@ namespace LLM_AI
     ///   <c>transcode</c>, <c>host_metrics</c>, <c>gpu_transcode</c>,
     ///   <c>disk_storage</c>,
     ///   <c>processes</c> (orphelins ffmpeg + top processus RAM/CPU),
-    ///   <c>library_stats</c>, <c>missing_metadata</c> (bibliothèque, via
-    ///   <see cref="ILibraryManager"/> — couche DB, pas FS brut),
+    ///   <c>library_stats</c>, <c>missing_metadata</c>, <c>metadata_health</c>,
+    ///   <c>duplicates_check</c> (constat « Doublons » natif — relaye le
+    ///   filtre du dashboard, gestion manuelle de l'usager ; bibliothèque,
+    ///   via <see cref="ILibraryManager"/> — couche DB, pas FS brut),
     ///   <c>security_metrics</c> (compteurs + événements de sécurité du
     ///   plugin, <see cref="SecurityMonitor"/>).</item>
     /// <item><b>Remédiation (écriture, GATE par config
@@ -117,6 +120,13 @@ namespace LLM_AI
                     "llmai-needs-review du plugin — items validés vs non trouvés avec exemples —, des items " +
                     "identifiés par Emby mais JAMAIS audités par le plugin, et des orphelins sans id ni tag ; " +
                     "décomposition Movie/Series, épisodes exclus — leurs métadonnées dérivent de la série), " +
+                    "duplicates_check (constat « Doublons » NATIF d'Emby : groupes de films/séries partageant " +
+                    "la même PresentationUniqueKey — même œuvre fichée en plusieurs dossiers, typiquement " +
+                    "un dossier d'enregistrement « Titre (année) » doublant un dossier identifié ; cartes .strm " +
+                    "et épisodes exclus ; UNE GESTION MANUELLE de l'usager est requise (fusionner ou supprimer " +
+                    "le dossier redondant) ; le plugin ne fusionne ni ne supprime JAMAIS et ne détecte RIEN " +
+                    "par lui-même — il relaye l'information d'Emby, le critère EXACT du filtre « Doublons » " +
+                    "du dashboard), " +
                     "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
                     "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
                     "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
@@ -145,7 +155,7 @@ namespace LLM_AI
             string actions =
                 "server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | " +
                 "list_logs | inspect_log | log_scan | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
-                "library_stats | missing_metadata | metadata_health | ratings_check | security_metrics";
+                "library_stats | missing_metadata | metadata_health | duplicates_check | ratings_check | security_metrics";
             string remediationParams = "";
             if (remediation)
             {
@@ -242,6 +252,7 @@ namespace LLM_AI
                     case "library_stats":    result = LibraryStats(); break;
                     case "missing_metadata": result = MissingMetadata(args); break;
                     case "metadata_health":  result = MetadataHealth(); break;
+                    case "duplicates_check": result = DuplicatesCheck(); break;
                     case "ratings_check":    result = RatingsCheck(); break;
                     case "security_metrics": result = SecurityMonitor.SnapshotJson(); break;
                     case "stop_session":      result = await StopSessionAsync(args, ct).ConfigureAwait(false); break;
@@ -2089,6 +2100,169 @@ namespace LLM_AI
             }, s_json);
         }
 
+        /// <summary>
+        /// Constat « Doublons » natif (action <c>duplicates_check</c>, lecture
+        /// seule) : regroupe les films/séries par
+        /// <see cref="BaseItem.PresentationUniqueKey"/> — LA clé d'identité
+        /// d'Emby (id TVDB + langue de métadonnées + bibliothèque), le
+        /// critère EXACT du filtre « Doublons » du dashboard (vérifié terrain
+        /// 2026-10-06 : les groupes à PUK complète reproduisent au item près
+        /// les flaggés <c>IsDuplicate=true</c> ; la clé est bien bornée par
+        /// bibliothèque — un même id TVDB porté dans deux bibliothèques a deux
+        /// PUK différentes et n'apparaît pas). Motif : une même œuvre fichée
+        /// en plusieurs dossiers — Emby type l'import DVR d'après le titre
+        /// EPG, chaque variation de titre enfante un NOUVEAU dossier (ex.
+        /// « Le monde de Gabrielle Roy » vs « … (2021) ») — et Emby marque le
+        /// doublon sans JAMAIS fusionner : son identité est le dossier. Le
+        /// constat prévient l'usager qu'une GESTION MANUELLE est requise
+        /// (fusionner ou supprimer le dossier redondant) — invariant de
+        /// design : le plugin ne fusionne ni ne supprime jamais.
+        /// <para>Cartes .strm exclues (<see cref="OrphanResolver.IsStrmCard"/>) :
+        /// les suggestions du plugin partagent VOLONTAIREMENT la fiche de
+        /// leur source. Épisodes exclus : leurs métadonnées dérivent de la
+        /// série (le doublon de dossiers se voit et se gère au niveau
+        /// série).</para>
+        /// <para>Angles morts HÉRITÉS du critère natif (documentés dans la
+        /// sortie) : la clé est bornée à la bibliothèque ET à la langue. Le
+        /// plugin ne détecte RIEN par lui-même ici : il relaye l'information
+        /// d'Emby ; la prévention à la source (SB ancrage frère + garde
+        /// « fiche déjà portée », <see cref="OrphanResolver"/>) empêche les
+        /// futurs cas à l'écriture, le présent constat liste les doublons
+        /// DÉJÀ présents.</para>
+        /// <para>Fail-open : bibliothèque illisible → JSON d'erreur, jamais
+        /// une exception.</para>
+        /// </summary>
+        private string DuplicatesCheck()
+        {
+            // Bornes : échantillon identique à MetadataHealth ; 25 groupes
+            // détaillés (membres complets) suffisent au rapport — au-delà, le
+            // compte global porte l'information.
+            const int sampleLimit = 5000;
+            const int maxDetailedGroups = 25;
+            const int maxMembersPerGroup = 6;
+
+            BaseItem[] items;
+            int total = 0;
+            bool capped = false;
+            try
+            {
+                var res = _library.GetItemsResult(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    Limit = sampleLimit,
+                    EnableTotalRecordCount = true
+                });
+                items = res?.Items ?? Array.Empty<BaseItem>();
+                total = res?.TotalRecordCount ?? items.Length;
+                capped = items.Length >= sampleLimit && (res?.TotalRecordCount ?? 0) > items.Length;
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] duplicates_check : lecture bibliothèque impossible : {0}", ex.Message);
+                return Err("duplicates_check : lecture bibliothèque impossible : " + ex.Message);
+            }
+
+            // Groupement par la clé native d'Emby. Sans clé → invisible au
+            // filtre natif aussi : exclu (fidélité au constat d'Emby, pas de
+            // détection maison).
+            var groups = new Dictionary<string, List<BaseItem>>(StringComparer.OrdinalIgnoreCase);
+            int strmExcluded = 0;
+            foreach (var i in items)
+            {
+                if (i == null) continue;
+                string puk;
+                try { puk = i.PresentationUniqueKey; }
+                catch { puk = null; }
+                if (string.IsNullOrWhiteSpace(puk)) continue;
+                if (OrphanResolver.IsStrmCard(i)) { strmExcluded++; continue; }
+                if (!groups.TryGetValue(puk, out var list))
+                { list = new List<BaseItem>(); groups[puk] = list; }
+                list.Add(i);
+            }
+
+            // Groupes à >1 membre = doublons ; ordre déterministe (plus gros
+            // groupe d'abord, puis par nom) pour un rapport stable.
+            var dup = groups
+                .Where(kv => kv.Value.Count > 1)
+                .Select(kv => new
+                {
+                    key = kv.Key,
+                    members = kv.Value.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase).ToList()
+                })
+                .OrderByDescending(g => g.members.Count)
+                .ThenBy(g => g.members[0]?.Name ?? "", StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            int memberCount = dup.Sum(g => g.members.Count);
+            int movies = 0, seriesCount = 0;
+            foreach (var g in dup)
+                foreach (var m in g.members)
+                {
+                    if (m is MediaBrowser.Controller.Entities.TV.Series) seriesCount++;
+                    else movies++;
+                }
+
+            var detailed = new List<object>();
+            foreach (var g in dup.Take(maxDetailedGroups))
+            {
+                // Ids du groupe : pris du premier membre qui les porte (même
+                // fiche par construction — PUK dérivée de ces ids).
+                string tvdb = null, tmdb = null;
+                foreach (var m in g.members)
+                {
+                    if (tvdb == null && OrphanResolver.HasItemProviderId(m, "tvdb"))
+                        tvdb = m.GetProviderId("tvdb");
+                    if (tmdb == null && OrphanResolver.HasItemProviderId(m, "tmdb"))
+                        tmdb = m.GetProviderId("tmdb");
+                    if (tvdb != null && tmdb != null) break;
+                }
+                detailed.Add(new
+                {
+                    key = g.key,
+                    tvdb,
+                    tmdb,
+                    member_count = g.members.Count,
+                    members = g.members.Take(maxMembersPerGroup).Select(m => new
+                    {
+                        name = m.Name,
+                        year = m.ProductionYear > 1900 ? (int?)m.ProductionYear : null,
+                        path = m.Path
+                    }).ToList()
+                });
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                criterion = "PresentationUniqueKey partagée (id TVDB + langue de métadonnées + bibliothèque) — le critère EXACT du filtre « Doublons » du dashboard Emby",
+                scanned_movie_series = total,
+                sample_cap_reached = capped,
+                strm_cards_excluded = strmExcluded,
+                duplicate_groups = dup.Count,
+                duplicate_items = memberCount,
+                by_type = new { movie = movies, series = seriesCount },
+                groups = detailed,
+                truncated_groups = dup.Count > maxDetailedGroups ? dup.Count - maxDetailedGroups : 0,
+                blind_spots = "critère natif borné à la bibliothèque ET à la langue de métadonnées : un même id porté dans deux bibliothèques différentes ou sous deux langues n'apparaît PAS (mêmes angles morts que le filtre du dashboard)",
+                severity = dup.Count == 0 ? "ok" : "avertissement",
+                findings = dup.Count == 0
+                    ? new object[]
+                    {
+                        new { severity = "ok", title = "Aucun doublon natif", detail = "", fix = "" }
+                    }
+                    : new object[]
+                    {
+                        new
+                        {
+                            severity = "avertissement",
+                            title = dup.Count + " groupe(s) de doublons (" + memberCount + " items) — gestion manuelle requise",
+                            detail = "Même œuvre fichée en plusieurs dossiers (même PresentationUniqueKey — Emby marque ces items « Doublons » mais ne fusionne JAMAIS : son identité est le dossier). Typiquement un dossier d'enregistrement doublant un dossier déjà identifié. Reprends les groupes et leurs chemins ci-dessus tels quels.",
+                            fix = "Gestion MANUELLE de l'usager : fusionner (identifier au même id via l'éditeur de métadonnées Emby) ou supprimer le dossier redondant, puis relancer un scan. Le plugin ne fusionne ni ne supprime JAMAIS — ce constat relaye l'information d'Emby, il ne détecte rien par lui-même."
+                        }
+                    }
+            }, s_json);
+        }
+
         /// <summary>Compte les items d'un type via TotalRecordCount (fetch 1).</summary>
         private int CountByType(string embyType)
         {
@@ -3814,6 +3988,7 @@ namespace LLM_AI
             SectionSync("library_stats", () => LibraryStats());
             SectionSync("missing_metadata", () => MissingMetadata(s_emptyArgs));
             SectionSync("metadata_health", () => MetadataHealth());
+            SectionSync("duplicates_check", () => DuplicatesCheck());
             SectionSync("ratings_check", () => RatingsCheck());
             // security_check est async depuis la sonde de mots de passe
             // triviaux (AuthenticateUser in-process est asynchrone).

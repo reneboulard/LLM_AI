@@ -1000,7 +1000,7 @@ namespace LLM_AI
                 ("Système et performance", "System and performance", new[] { "server_info", "system_config", "host_metrics" }),
                 ("Processus et stockage", "Processes and storage", new[] { "processes", "disk_storage" }),
                 ("Activité et tâches planifiées", "Activity and scheduled tasks", new[] { "active_sessions", "scheduled_tasks", "transcode", "gpu_transcode" }),
-                ("Bibliothèque et métadonnées", "Library and metadata", new[] { "library_stats", "missing_metadata", "metadata_health" }),
+                ("Bibliothèque et métadonnées", "Library and metadata", new[] { "library_stats", "missing_metadata", "metadata_health", "duplicates_check" }),
                 ("Hygiène des cotes", "Ratings hygiene", new[] { "ratings_check" }),
                 ("Sécurité", "Security", new[] { "security_check", "security_metrics" }),
                 ("Réseau et journaux", "Network and logs", new[] { "upnp_check", "log_scan", "list_logs", "inspect_log" }),

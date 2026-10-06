@@ -46,8 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   déjà porté par l'item est rejeté (défensif : le retrait d'ids de l'audit
   Emby est best-effort, un échec y laisse l'ancienne fiche en place pendant
   la reprise).
-- Docs FR/EN : section orphelins (SB + garde), tables des composants,
-  description de la tâche planifiée.
+- **Constat « Doublons » dans l'audit santé** (action `duplicates_check` de
+  `system_audit`) : l'audit relaie le critère EXACT du filtre natif « Doublons »
+  d'Emby (même `PresentationUniqueKey` — id TVDB + langue de métadonnées +
+  bibliothèque, vérifié au item près contre `IsDuplicate=true`) : groupes de
+  films/séries en doublon avec leurs dossiers, cartes `.strm` et épisodes
+  exclus, angles morts natifs documentés dans la sortie. Le plugin ne détecte
+  rien lui-même — il regroupe l'information d'Emby pour prévenir l'usager
+  qu'une GESTION MANUELLE est requise sur les dossiers déjà doublés
+  (fusionner ou supprimer le dossier redondant ; le plugin ne fusionne ni ne
+  supprime jamais). Intégré aux deux modes d'audit (dose « Bibliothèque et
+  métadonnées » du mode déterministe, prompt d'audit par défaut du mode
+  agent). Complément *rapport* de la prévention à la source SB/garde :
+  celle-ci empêche les futurs cas à l'écriture, le constat liste les
+  existants.
+- Docs FR/EN : section orphelins (SB + garde), section audit santé (constat
+  « Doublons »), tables des composants, description de la tâche planifiée.
 
 ### Added (EN)
 - **SB — library anchoring (sibling folder)** in orphan identification:
@@ -81,8 +95,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deterministic guard: a candidate contradicting an id the item already
   carries is rejected (defensive: the Emby-audit id removal is best-effort,
   a failed removal leaves the old card in place during the retry).
-- FR/EN docs: orphan section (SB + gate), component tables, scheduled task
-  description.
+- **"Duplicates" finding in the health audit** (`duplicates_check` action of
+  `system_audit`): the audit relays the EXACT criterion of Emby's native
+  "Duplicates" filter (same `PresentationUniqueKey` — TVDB id + metadata
+  language + library, verified item-for-item against `IsDuplicate=true`):
+  duplicate movie/series groups with their folders, `.strm` cards and
+  episodes excluded, native blind spots documented in the output. The plugin
+  detects nothing itself — it groups Emby's own information to warn the user
+  that MANUAL management is required on the already-doubled folders (merge or
+  delete the redundant folder; the plugin never merges or deletes).
+  Integrated into both audit modes ("Library and metadata" dose of
+  deterministic mode, default audit prompt of agent mode). The *report*
+  counterpart of the SB/gate source-side prevention: prevention blocks
+  future cases at write time, the finding lists the existing ones.
+- FR/EN docs: orphan section (SB + gate), health-audit section ("Duplicates"
+  finding), component tables, scheduled task description.
 
 ## [2.0.0] — 2026-10-05
 

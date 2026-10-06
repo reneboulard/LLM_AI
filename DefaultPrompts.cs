@@ -100,7 +100,15 @@ namespace LLM_AI
                 "thermomètre actionnable est dvr_scope, ne génère JAMAIS d'avertissement sur la " +
                 "couverture globale ni sur les items non audités de la bibliothèque régulière ; " +
                 "les needs-review hors DVR sont des résidus attendus de la passe orphelins, pas " +
-                "des urgences), security_check (validation de sécurité : mots de passe " +
+                "des urgences), duplicates_check (constat « Doublons » natif d'Emby : groupes " +
+                "d'items partageant la même PresentationUniqueKey — même œuvre fichée en " +
+                "plusieurs dossiers, typiquement un dossier d'enregistrement doublant un " +
+                "dossier identifié ; rapporte les groupes et leurs chemins tels quels en " +
+                "⚠️ attention : une GESTION MANUELLE de l'usager est requise — fusionner ou " +
+                "supprimer le dossier redondant via l'éditeur de métadonnées Emby ; le plugin " +
+                "ne fusionne ni ne supprime JAMAIS : ce constat relaye l'information " +
+                "d'Emby, pas critique et pas une alerte de sécurité), security_check " +
+                "(validation de sécurité : mots de passe " +
                 "des comptes — admins surtout —, accès distant/HTTPS, UPnP, en-têtes proxy ; " +
                 "reprends ses constats gravés et leurs correctifs tels quels), list_logs (et " +
                 "inspect_log si un journal semble pertinent). Croise les constats : redémarrage en " +
@@ -112,6 +120,10 @@ namespace LLM_AI
                 "orphan_queue, items à réviser — cite seulement les exemples DVR — ; les " +
                 "introuvables sont INFORMATIFS : état terminal, aucune action recommandée) ; " +
                 "plugin_out_of_scope est du CONTEXTE (bibliothèque régulière, aucune alerte). " +
+                "Les doublons de bibliothèque (duplicates_check) sont des constats ⚠️ à part " +
+                "— hygiène de la bibliothèque, pas la couverture d'identification ci-dessus : " +
+                "liste les groupes et leurs chemins, et place la fusion/suppression MANUELLE " +
+                "des dossiers redondants dans « Actions recommandées ». " +
                 "Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
                 "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions recommandées ». " +
                 "La sonde UPnP (action upnp_check) figure TOUJOURS dans les constats : aucun mapping " +
@@ -176,6 +188,13 @@ namespace LLM_AI
                 "plugin's scope — the actionable thermometer is dvr_scope, NEVER raise warnings " +
                 "about global coverage or unaudited regular-library items; regular-library " +
                 "needs-review items are expected residuals of the orphan pass, not urgent), " +
+                "duplicates_check (Emby's NATIVE « Duplicates » finding: groups of items " +
+                "sharing the same PresentationUniqueKey — the same work filed under several " +
+                "folders, typically a recording folder duplicating an identified folder; " +
+                "copy the groups and their paths verbatim as ⚠️ warnings: MANUAL management " +
+                "by the user is required — merge or delete the redundant folder via " +
+                "Emby's metadata editor; the plugin NEVER merges or deletes: this finding " +
+                "relays Emby's own information, not critical and not a security alert), " +
                 "security_check (security validation: account passwords " +
                 "— admins above all —, remote access/HTTPS, UPnP, proxy headers; copy its graded " +
                 "findings and fixes verbatim), list_logs (and inspect_log if a log looks relevant). " +
@@ -186,7 +205,10 @@ namespace LLM_AI
                 "plugin_has_acted (DVR coverage, orphan_queue, items to review — cite only the DVR " +
                 "examples —; not-found items are INFORMATIONAL: terminal state, no recommended " +
                 "action); plugin_out_of_scope is CONTEXT (regular library, no warnings). " +
-                "Produce a concise " +
+                "Library duplicates (duplicates_check) are separate ⚠️ findings — library " +
+                "hygiene, not the identification coverage above: list the groups and their " +
+                "paths, and place the MANUAL merge/deletion of the redundant folders in " +
+                "« Recommended actions ». Produce a concise " +
                 "Markdown REPORT: a list of findings tagged by severity (🔴 critical / ⚠️ warning / " +
                 "✅ ok) + a « Recommended actions » section. The UPnP probe (upnp_check action) " +
                 "ALWAYS appears in the findings: no mapping found = explicit ✅ finding (\"UPnP " +
