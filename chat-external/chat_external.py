@@ -536,6 +536,9 @@ PAGE_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>🤖 Chat Emby</title>
+<!-- Favicon : emoji en SVG data-URI — zéro ressource externe, zéro route
+     (les vieux Safari < 15 l'ignorent : icône générique, pas d'erreur). -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🤖%3C/text%3E%3C/svg%3E">
 <script src="/api/i18n.js"></script>
 <style>
   :root {
