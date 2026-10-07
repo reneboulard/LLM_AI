@@ -535,7 +535,7 @@ PAGE_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>🤖 Chat Emby</title>
+<title>Chat Emby</title>
 <!-- Favicon : emoji en SVG data-URI — zéro ressource externe, zéro route
      (les vieux Safari < 15 l'ignorent : icône générique, pas d'erreur). -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🤖%3C/text%3E%3C/svg%3E">
@@ -693,7 +693,10 @@ function fmt(s) {
 }
 function translateChrome() {
   var title = L("ext.title", "🤖 Chat Emby");
-  document.title = title;
+  // Onglet : le favicon (SVG data-URI) porte déjà le 🤖 — on retire
+  // l'emoji du titre localisé pour éviter le doublon dans l'onglet.
+  // Les en-têtes de page (ltitle/utitle) gardent leur 🤖.
+  document.title = title.replace("🤖", "").trim();
   $("ltitle").textContent = title;
   $("utitle").textContent = title;
   $("u").placeholder = L("ext.login.user.ph", "Nom d'usager Emby");
