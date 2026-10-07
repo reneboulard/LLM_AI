@@ -111,89 +111,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - FR/EN docs: orphan section (SB + gate), health-audit section ("Duplicates"
   finding), component tables, scheduled task description.
 
-## [2.0.0] — 2026-10-05
-
-> **Saut de majeur** : armement complet des langues générées (inventaires
-> préventifs + batterie mécanique de validation) et adoption de la
-> terminologie officielle Emby (« extension » / « complemento »).
-> Première publication depuis v1.16.0.0 — les versions 1.17.0.1 → 1.17.1.8
-> détaillées ci-dessous n'ont jamais été publiées ; le contenu de la
-> 1.17.1.9 (jamais étiquetée) est intégré dans la présente entrée.
-
-### Changed (FR)
-- **Portes mécaniques supplémentaires dans les langues générées** — deux
-  nouvelles validations dans chaque dose : les **emojis** (même symbole et
-  même nombre que la native, raison-consigne dédiée — 🤖 ne devient jamais
-  😀) et les **bords** (parité des espaces initial/final avec la native —
-  les valeurs assemblées en runtime en dépendent). Note de registre
-  « usted » ajoutée pour la famille ext (règle 8). Ces portes s'appliquent
-  aussi au dépôt par l'atelier de langues.
-- **Terminologie officielle Emby** — règle 7 libérée : « plugin » n'est pas
-  une marque verrouillée ; chaque langue générée suit le terme officiel de
-  son dashboard via le glossaire (es « complemento », fr « extension » —
-  l'interface Emby ne dit jamais « plugin »). Natives FR révisées :
-  27 occurrences « plugin » → « extension » (URLs `/Plugins/…` et nom du
-  produit intacts ; les natives EN restent « plugin », correct en anglais).
-- **Annotation préventive « entités HTML littérales »** — toute dose portant
-  une clé à entités (`&lt;movie&gt;`) reçoit l'inventaire littéral du
-  caractère à recopier (miroir de l'inventaire des balises). Motif de
-  terrain : 4 refus puis repli natif sur les clés cross-kind — la raison de
-  réparation seule ne faisait pas converger le modèle.
-- **Interface : cases « 3 côtés » corrigées** — dans les boîtes de sélection
-  (chaînes, genres, types de programmes, propositions de genres), le border
-  supérieur des cases était tranché : Emby dessine la case avec un débord
-  haut voulu (`margin-top:-.18em`) que nos clips d'ellipsis coupaient.
-  L'ellipsis vit maintenant dans un span interne (`.wlText`) ; le
-  comportement (une case par item, libellés tronqués par ellipsis) est
-  inchangé.
-- **Interface : les largeurs ne se lient plus** — dans les groupes flex de
-  la configuration, la description sous chaque champ prenait la largeur de
-  sa ligne (et tirait l'input à elle, ou l'inverse pour une description
-  courte) : les wrappers sont bornés à 420 px (16 occurrences — plafonds
-  séries/films, tonight, chat externe), la description passe à la ligne et
-  l'input suit au plus 420 px, le patron déjà en usage sur la page.
-- **Interface : les bornes ciblent l'input** — la borne de la durée du
-  pop-up (`max-width:200px`) comprimait sa description en une colonne
-  étroite ; la borne vit désormais sur l'`input` lui-même, la description
-  respire en pleine largeur. Même traitement pour `strmlib` (nom + droits),
-  `audit.focus` et `i18n.lang`.
-
-### Changed (EN)
-- **Two more mechanical gates in generated languages** — each dose now also
-  validates **emojis** (same symbol, same count as the native, dedicated
-  reason — 🤖 never becomes 😀) and **edges** (leading/trailing space parity
-  with the native — runtime-assembled values depend on it). A registry note
-  (you-forms) was added for the ext family (rule 8). These gates also apply
-  to deposits made from the language workshop.
-- **Official Emby terminology** — rule 7 freed: "plugin" is not a locked
-  brand; every generated language follows its dashboard's official term via
-  the glossary (es "complemento", fr "extension" — the Emby UI never says
-  "plugin"). FR natives revised: 27 occurrences "plugin" → "extension"
-  (`/Plugins/…` URLs and the product name untouched; EN natives keep
-  "plugin", correct in English).
-- **Preventive "literal HTML entities" annotation** — any dose carrying a
-  key with entities (`&lt;movie&gt;`) gets the literal inventory of the
-  characters to copy verbatim (mirror of the tag inventory). Field motive:
-  4 rejections then a native fallback on the cross-kind keys — the repair
-  reason alone did not converge.
-- **UI: "3-side" checkboxes fixed** — in the selection boxes (channels,
-  genres, program kinds, genre proposals), checkbox top borders were cut:
-  Emby draws the box with an intended top overflow (`margin-top:-.18em`)
-  that our ellipsis clips sawed off. The ellipsis now lives in an inner
-  span (`.wlText`); behavior (one box per item, long labels ellipsed) is
-  unchanged.
-- **UI: widths no longer chain** — in the config page's flex groups, the
-  description under each field took its row's width (dragging the input
-  along, or the reverse for a short description): wrappers are now capped
-  at 420 px (16 occurrences — series/movie caps, tonight, external chat),
-  the description wraps and the input follows at most 420 px, the page's
-  existing pattern.
-- **UI: width caps target the input** — the pop-up duration cap
-  (`max-width:200px`) squeezed its 356-character description into a narrow
-  column; the cap now lives on the `input` itself and the description
-  breathes full width. Same treatment for `strmlib` (name + permissions),
-  `audit.focus` and `i18n.lang`.
-
 ### Fixed (FR)
 - **Nettoyage nocturne « AI Tonight » : l'étiquette ne partait jamais (62
   items cumulés)** — la requête de retrait assignait explicitement `null`
@@ -277,6 +194,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   not traceable through the state file — if your "My List" is polluted
   with old recommendations, remove them manually (the plugin's
   `decisions.json` history helps identify the items it recommended).
+
+## [2.0.0] — 2026-10-05
+
+> **Saut de majeur** : armement complet des langues générées (inventaires
+> préventifs + batterie mécanique de validation) et adoption de la
+> terminologie officielle Emby (« extension » / « complemento »).
+> Première publication depuis v1.16.0.0 — les versions 1.17.0.1 → 1.17.1.8
+> détaillées ci-dessous n'ont jamais été publiées ; le contenu de la
+> 1.17.1.9 (jamais étiquetée) est intégré dans la présente entrée.
+
+### Changed (FR)
+- **Portes mécaniques supplémentaires dans les langues générées** — deux
+  nouvelles validations dans chaque dose : les **emojis** (même symbole et
+  même nombre que la native, raison-consigne dédiée — 🤖 ne devient jamais
+  😀) et les **bords** (parité des espaces initial/final avec la native —
+  les valeurs assemblées en runtime en dépendent). Note de registre
+  « usted » ajoutée pour la famille ext (règle 8). Ces portes s'appliquent
+  aussi au dépôt par l'atelier de langues.
+- **Terminologie officielle Emby** — règle 7 libérée : « plugin » n'est pas
+  une marque verrouillée ; chaque langue générée suit le terme officiel de
+  son dashboard via le glossaire (es « complemento », fr « extension » —
+  l'interface Emby ne dit jamais « plugin »). Natives FR révisées :
+  27 occurrences « plugin » → « extension » (URLs `/Plugins/…` et nom du
+  produit intacts ; les natives EN restent « plugin », correct en anglais).
+- **Annotation préventive « entités HTML littérales »** — toute dose portant
+  une clé à entités (`&lt;movie&gt;`) reçoit l'inventaire littéral du
+  caractère à recopier (miroir de l'inventaire des balises). Motif de
+  terrain : 4 refus puis repli natif sur les clés cross-kind — la raison de
+  réparation seule ne faisait pas converger le modèle.
+- **Interface : cases « 3 côtés » corrigées** — dans les boîtes de sélection
+  (chaînes, genres, types de programmes, propositions de genres), le border
+  supérieur des cases était tranché : Emby dessine la case avec un débord
+  haut voulu (`margin-top:-.18em`) que nos clips d'ellipsis coupaient.
+  L'ellipsis vit maintenant dans un span interne (`.wlText`) ; le
+  comportement (une case par item, libellés tronqués par ellipsis) est
+  inchangé.
+- **Interface : les largeurs ne se lient plus** — dans les groupes flex de
+  la configuration, la description sous chaque champ prenait la largeur de
+  sa ligne (et tirait l'input à elle, ou l'inverse pour une description
+  courte) : les wrappers sont bornés à 420 px (16 occurrences — plafonds
+  séries/films, tonight, chat externe), la description passe à la ligne et
+  l'input suit au plus 420 px, le patron déjà en usage sur la page.
+- **Interface : les bornes ciblent l'input** — la borne de la durée du
+  pop-up (`max-width:200px`) comprimait sa description en une colonne
+  étroite ; la borne vit désormais sur l'`input` lui-même, la description
+  respire en pleine largeur. Même traitement pour `strmlib` (nom + droits),
+  `audit.focus` et `i18n.lang`.
+
+### Changed (EN)
+- **Two more mechanical gates in generated languages** — each dose now also
+  validates **emojis** (same symbol, same count as the native, dedicated
+  reason — 🤖 never becomes 😀) and **edges** (leading/trailing space parity
+  with the native — runtime-assembled values depend on it). A registry note
+  (you-forms) was added for the ext family (rule 8). These gates also apply
+  to deposits made from the language workshop.
+- **Official Emby terminology** — rule 7 freed: "plugin" is not a locked
+  brand; every generated language follows its dashboard's official term via
+  the glossary (es "complemento", fr "extension" — the Emby UI never says
+  "plugin"). FR natives revised: 27 occurrences "plugin" → "extension"
+  (`/Plugins/…` URLs and the product name untouched; EN natives keep
+  "plugin", correct in English).
+- **Preventive "literal HTML entities" annotation** — any dose carrying a
+  key with entities (`&lt;movie&gt;`) gets the literal inventory of the
+  characters to copy verbatim (mirror of the tag inventory). Field motive:
+  4 rejections then a native fallback on the cross-kind keys — the repair
+  reason alone did not converge.
+- **UI: "3-side" checkboxes fixed** — in the selection boxes (channels,
+  genres, program kinds, genre proposals), checkbox top borders were cut:
+  Emby draws the box with an intended top overflow (`margin-top:-.18em`)
+  that our ellipsis clips sawed off. The ellipsis now lives in an inner
+  span (`.wlText`); behavior (one box per item, long labels ellipsed) is
+  unchanged.
+- **UI: widths no longer chain** — in the config page's flex groups, the
+  description under each field took its row's width (dragging the input
+  along, or the reverse for a short description): wrappers are now capped
+  at 420 px (16 occurrences — series/movie caps, tonight, external chat),
+  the description wraps and the input follows at most 420 px, the page's
+  existing pattern.
+- **UI: width caps target the input** — the pop-up duration cap
+  (`max-width:200px`) squeezed its 356-character description into a narrow
+  column; the cap now lives on the `input` itself and the description
+  breathes full width. Same treatment for `strmlib` (name + permissions),
+  `audit.focus` and `i18n.lang`.
 
 ## [1.17.1.8] — 2026-10-05
 
