@@ -126,61 +126,34 @@ namespace LLM_AI
 
         /// <summary>
         /// Items portant <paramref name="tag"/> (filtre <c>Tags</c> ou, pour
-        /// la migration v1.13.3, <c>Genres</c> du même nom). Réplique la
-        /// recette de l'API REST <c>/Items?Tags=…&amp;Recursive=true</c> :
-        /// racine agrégée + <c>Folder.GetItems</c> avec
-        /// <c>EnableTotalRecordCount=true</c>. <b>Pourquoi</b> : sur Emby
-        /// 4.10 (vérifié 2026-10-07 sur 4.10.1.0), le chemin direct
-        /// <c>LibraryManager.GetItemList</c> lève sur un filtre
-        /// <c>Tags</c>/<c>Genres</c> sans contexte usager (NRE / ArgumentNullException
-        /// « source ») — le nettoyage nocturne ne trouvait donc jamais rien
-        /// et les tags s'accumulaient (62 items « AI Tonight » constatés) ;
-        /// le chemin REST, lui, retourne bien les items tagués (prouvé en
-        /// direct sur le même serveur, même filtre). Repli best-effort sur
-        /// <c>GetItemList</c> pour les builds antérieurs (4.9) — la pile
-        /// complète du double échec est loguée (vérifié : c'est elle qui
-        /// aurait évité l'archéologie).
+        /// la migration v1.13.3, <c>Genres</c> du même nom).
+        /// <b>LE BUG HISTORIQUE (prouvé par pile complète 2026-10-07)</b> :
+        /// l'ancien code assignait explicitement <c>null</c> au filtre
+        /// inutilisé (<c>Tags = … : null</c>) — écrasant le défaut
+        /// <c>Array.Empty</c> de la propriété. Le moteur déréférence les
+        /// DEUX tableaux sur toute requête Tags/Genres :
+        /// <c>GetWhereClauses</c> lit <c>query.Genres.Length</c> (NRE) et
+        /// <c>CacheIdsFromTextParams</c> fait <c>query.Tags.ToList()</c>
+        /// (ArgumentNullException « source »). Le nettoyage échouait donc
+        /// depuis le PREMIER JOUR, sur tout build — indépendant d'Emby
+        /// 4.10, de <c>Recursive</c> et du pipeline GetItems/GetItemList.
+        /// Règle : n'assigner QUE le filtre utilisé, jamais null aux
+        /// autres (cf. AGENTS.md).
         /// </summary>
         internal static BaseItem[] FindByTagOrGenre(
-            ILibraryManager library, ILogger logger, string tag, bool byTags, int? limit)
+            ILibraryManager library, string tag, bool byTags, int? limit)
         {
             var q = new InternalItemsQuery
             {
-                Tags = byTags ? new[] { tag } : null,
-                Genres = byTags ? null : new[] { tag },
                 Recursive = true,
-                EnableTotalRecordCount = true,
+                EnableTotalRecordCount = false,
                 Limit = limit
             };
-            try
-            {
-                return library.RootFolder?.GetItems(q)?.Items ?? Array.Empty<BaseItem>();
-            }
-            catch (Exception ex)
-            {
-                // Repli builds antérieurs (4.9) : forme GetItemList d'origine
-                // (Recursive conservé — couverture racine complète).
-                var fallback = new InternalItemsQuery
-                {
-                    Tags = byTags ? new[] { tag } : null,
-                    Genres = byTags ? null : new[] { tag },
-                    Recursive = true,
-                    EnableTotalRecordCount = false,
-                    Limit = limit
-                };
-                try
-                {
-                    var items = library.GetItemList(fallback) ?? Array.Empty<BaseItem>();
-                    logger?.Info("[LLM_AI] Tag query : repli GetItemList utilisé (recette REST a échoué : {0}).", ex.Message);
-                    return items;
-                }
-                catch (Exception ex2)
-                {
-                    logger?.Warn("[LLM_AI] Tag query : les DEUX chemins ont échoué — racine+GetItems : {0} ; GetItemList : {1}\n{2}",
-                        ex.Message, ex2.Message, ex);
-                    throw;
-                }
-            }
+            // Seul le filtre utilisé est assigné — l'autre garde son défaut
+            // Array.Empty (un null explicite crashe le moteur).
+            if (byTags) q.Tags = new[] { tag };
+            else q.Genres = new[] { tag };
+            return library.GetItemList(q) ?? Array.Empty<BaseItem>();
         }
 
         /// <summary>
@@ -203,7 +176,7 @@ namespace LLM_AI
                 BaseItem[] found;
                 try
                 {
-                    found = FindByTagOrGenre(library, logger, tag, filter == "Tags", null);
+                    found = FindByTagOrGenre(library, tag, filter == "Tags", null);
                 }
                 catch (Exception ex)
                 {

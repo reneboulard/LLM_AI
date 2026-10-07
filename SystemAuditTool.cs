@@ -4434,10 +4434,10 @@ namespace LLM_AI
         /// Un tag de règle parentale (BlockedTags / IncludeTags) matche-t-il au
         /// moins un item de la bibliothèque ? Requête <c>Limit=1</c> avec le
         /// même filtre que AiTagger (<see cref="AiTagger.FindByTagOrGenre"/> —
-        /// recette de l'API REST, cf. son commentaire : le chemin direct
-        /// GetItemList lève sur Emby 4.10) — une coquille de frappe (accent,
-        /// casse gérée par Emby, mais pas les accents) rend la règle AVEUGLE :
-        /// aucun constat de règle noire inopérante ne doit passer inaperçu.
+        /// n'assigne jamais null au filtre inutilisé, cf. son commentaire) —
+        /// une coquille de frappe (accent, casse gérée par Emby, mais pas les
+        /// accents) rend la règle AVEUGLE : aucun constat de règle noire
+        /// inopérante ne doit passer inaperçu.
         /// Fail-open : erreur de requête = on assume que le tag matche (pas
         /// de fausse alerte).
         /// </summary>
@@ -4445,7 +4445,7 @@ namespace LLM_AI
         {
             try
             {
-                return AiTagger.FindByTagOrGenre(_library, _logger, tag, byTags: true, limit: 1).Length > 0;
+                return AiTagger.FindByTagOrGenre(_library, tag, byTags: true, limit: 1).Length > 0;
             }
             catch (Exception ex)
             {
