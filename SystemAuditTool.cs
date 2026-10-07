@@ -4433,27 +4433,19 @@ namespace LLM_AI
         /// <summary>
         /// Un tag de règle parentale (BlockedTags / IncludeTags) matche-t-il au
         /// moins un item de la bibliothèque ? Requête <c>Limit=1</c> avec le
-        /// même filtre que AiTagger (<see cref="InternalItemsQuery.Tags"/>) —
-        /// une coquille de frappe (accent, casse gérée par Emby, mais pas les
-        /// accents) rend la règle AVEUGLE : aucun constat de règle noire
-        /// inopérante ne doit passer inaperçu. Fail-open : erreur de requête =
-        /// on assume que le tag matche (pas de fausse alerte).
+        /// même filtre que AiTagger (<see cref="AiTagger.FindByTagOrGenre"/> —
+        /// recette de l'API REST, cf. son commentaire : le chemin direct
+        /// GetItemList lève sur Emby 4.10) — une coquille de frappe (accent,
+        /// casse gérée par Emby, mais pas les accents) rend la règle AVEUGLE :
+        /// aucun constat de règle noire inopérante ne doit passer inaperçu.
+        /// Fail-open : erreur de requête = on assume que le tag matche (pas
+        /// de fausse alerte).
         /// </summary>
         private bool TagMatchesAnyItem(string tag)
         {
             try
             {
-                return _library.GetItemList(new InternalItemsQuery
-                {
-                    Tags = new[] { tag },
-                    // Recursive=true OBLIGATOIRE sur Emby 4.10 (cf. AiTagger.RemoveAllAsync,
-                    // vérifié 2026-10-07) : sans lui la requête lève et le catch
-                    // fail-open rapportait « règle matchée » — masquant à la
-                    // fois la panne et les règles réellement aveugles.
-                    Recursive = true,
-                    Limit = 1,
-                    EnableTotalRecordCount = false
-                })?.Length > 0;
+                return AiTagger.FindByTagOrGenre(_library, _logger, tag, byTags: true, limit: 1).Length > 0;
             }
             catch (Exception ex)
             {

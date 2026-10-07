@@ -196,21 +196,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed (FR)
 - **Nettoyage nocturne « AI Tonight » : l'étiquette ne partait jamais (62
-  items cumulés)** — la requête de retrait de tag
-  (`AiTagger.RemoveAllAsync`) ne posait pas `Recursive=true` : sur Emby
-  4.10, `GetItemList` avec un filtre `Tags`/`Genres` lève alors une
-  exception (référence nulle / « Value cannot be null (source) ») — le
-  nettoyage de 3 h échouait chaque nuit sans jamais rien trouver, et les
-  étiquettes s'accumulaient indéfiniment (constaté 2026-10-07 : 62 items
-  tagués « AI Tonight » cumulés depuis le 2026-09-07, chaque run en
-  rajoutant). Le correctif pose `Recursive=true`, comme toutes les
-  requêtes Tags/Genres in-process du plugin qui tournaient déjà — la
-  première exécution remet la surface à zéro et le cycle quotidien
-  (étiquetage au run, retrait à 3 h) devient réel. Même omission réparée
-  dans la sonde parentale de l'audit (`TagMatchesAnyItem`) : son exception
-  avalée faisait rapporter « règle matchée » et masquait les règles de
-  tags réellement aveugles. Le clear-first « AI Delete » (passe disque),
-  qui réutilise le même code, est réparé par contrecoup.
+  items cumulés)** — sur Emby 4.10, le chemin direct
+  `LibraryManager.GetItemList` **lève** sur un filtre
+  `Tags`/`Genres` sans contexte usager (référence nulle / « Value cannot be
+  null (source) ») : le nettoyage de 3 h échouait chaque nuit sans jamais
+  rien trouver, et les étiquettes s'accumulaient indéfiniment (constaté
+  2026-10-07 : 62 items tagués « AI Tonight » cumulés depuis le 2026-09-07,
+  chaque run en rajoutant). Le correctif réplique la recette de l'API REST
+  `/Items?Tags=…&Recursive=true` — racine agrégée
+  (`LibraryManager.RootFolder`) + `Folder.GetItems` avec
+  `EnableTotalRecordCount=true`, le chemin qui retourne les items tagués
+  (prouvé en direct sur le même serveur) — via un helper unique
+  réutilisable (`AiTagger.FindByTagOrGenre`), avec repli sur
+  `GetItemList` pour les builds antérieurs (4.9) et, si les deux chemins
+  échouent, log de la pile complète. La première exécution remet la
+  surface à zéro et le cycle quotidien (étiquetage au run, retrait à 3 h)
+  devient réel. Même panne réparée dans la sonde parentale de l'audit
+  (`TagMatchesAnyItem`, qui réutilise le helper) : son exception avalée
+  faisait rapporter « règle matchée » et masquait les règles de tags
+  réellement aveugles. Le clear-first « AI Delete » (passe disque), qui
+  réutilise le même code, est réparé par contrecoup.
 - **Favoris éphémères : le revert ne trouvait jamais les entrées (63
   favoris cumulés)** — le fichier d'état des favoris était sérialisé avec
   les noms par défaut de System.Text.Json (« ItemId »/« UserId ») alors
@@ -236,20 +241,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed (EN)
 - **Nightly "AI Tonight" cleanup: the tag was never removed (62 items
-  accumulated)** — the tag-removal query (`AiTagger.RemoveAllAsync`) did
-  not set `Recursive=true`: on Emby 4.10, `GetItemList` with a
-  `Tags`/`Genres` filter then throws (null reference / "Value cannot be
-  null (source)") — the 3 AM cleanup failed every single night without
-  ever finding anything, and tags piled up indefinitely (witnessed
-  2026-10-07: 62 items tagged "AI Tonight" accumulated since 2026-09-07,
-  each run adding more). The fix sets `Recursive=true`, like every other
-  in-process Tags/Genres query of the plugin that already worked — the
-  first execution resets the surface to zero and the daily cycle (tagged on
-  the run, removed at 3 AM) becomes real. Same omission fixed in the audit
-  parental probe (`TagMatchesAnyItem`): its swallowed exception made it
-  report "rule matched", hiding tag rules that were actually blind. The
-  "AI Delete" clear-first (disk pass), which reuses the same code, is
-  repaired by the same token.
+  accumulated)** — on Emby 4.10, the direct
+  `LibraryManager.GetItemList` path **throws** on a `Tags`/`Genres`
+  filter with no user context (null reference / "Value cannot be null
+  (source)"): the 3 AM cleanup failed every single night without ever
+  finding anything, and tags piled up indefinitely (witnessed 2026-10-07:
+  62 items tagged "AI Tonight" accumulated since 2026-09-07, each run
+  adding more). The fix replicates the REST API recipe
+  `/Items?Tags=…&Recursive=true` — aggregate root
+  (`LibraryManager.RootFolder`) + `Folder.GetItems` with
+  `EnableTotalRecordCount=true`, the path that actually returns tagged
+  items (proven live on the same server) — through a single reusable
+  helper (`AiTagger.FindByTagOrGenre`), with a `GetItemList` fallback for
+  older builds (4.9) and a full stack log when both paths fail. The first
+  execution resets the surface to zero and the daily cycle (tagged on the
+  run, removed at 3 AM) becomes real. Same failure fixed in the audit
+  parental probe (`TagMatchesAnyItem`, now using the helper): its
+  swallowed exception made it report "rule matched", hiding tag rules
+  that were actually blind. The "AI Delete" clear-first (disk pass), which
+  reuses the same code, is repaired by the same token.
 - **Ephemeral favorites: the revert never found any entry (63 favorites
   accumulated)** — the favorites state file was serialized with
   System.Text.Json's default property names ("ItemId"/"UserId") while the

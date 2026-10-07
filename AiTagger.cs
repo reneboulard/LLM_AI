@@ -125,6 +125,65 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
+        /// Items portant <paramref name="tag"/> (filtre <c>Tags</c> ou, pour
+        /// la migration v1.13.3, <c>Genres</c> du même nom). Réplique la
+        /// recette de l'API REST <c>/Items?Tags=…&amp;Recursive=true</c> :
+        /// racine agrégée + <c>Folder.GetItems</c> avec
+        /// <c>EnableTotalRecordCount=true</c>. <b>Pourquoi</b> : sur Emby
+        /// 4.10 (vérifié 2026-10-07 sur 4.10.1.0), le chemin direct
+        /// <c>LibraryManager.GetItemList</c> lève sur un filtre
+        /// <c>Tags</c>/<c>Genres</c> sans contexte usager (NRE / ArgumentNullException
+        /// « source ») — le nettoyage nocturne ne trouvait donc jamais rien
+        /// et les tags s'accumulaient (62 items « AI Tonight » constatés) ;
+        /// le chemin REST, lui, retourne bien les items tagués (prouvé en
+        /// direct sur le même serveur, même filtre). Repli best-effort sur
+        /// <c>GetItemList</c> pour les builds antérieurs (4.9) — la pile
+        /// complète du double échec est loguée (vérifié : c'est elle qui
+        /// aurait évité l'archéologie).
+        /// </summary>
+        internal static BaseItem[] FindByTagOrGenre(
+            ILibraryManager library, ILogger logger, string tag, bool byTags, int? limit)
+        {
+            var q = new InternalItemsQuery
+            {
+                Tags = byTags ? new[] { tag } : null,
+                Genres = byTags ? null : new[] { tag },
+                Recursive = true,
+                EnableTotalRecordCount = true,
+                Limit = limit
+            };
+            try
+            {
+                return library.RootFolder?.GetItems(q)?.Items ?? Array.Empty<BaseItem>();
+            }
+            catch (Exception ex)
+            {
+                // Repli builds antérieurs (4.9) : forme GetItemList d'origine
+                // (Recursive conservé — couverture racine complète).
+                var fallback = new InternalItemsQuery
+                {
+                    Tags = byTags ? new[] { tag } : null,
+                    Genres = byTags ? null : new[] { tag },
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    Limit = limit
+                };
+                try
+                {
+                    var items = library.GetItemList(fallback) ?? Array.Empty<BaseItem>();
+                    logger?.Info("[LLM_AI] Tag query : repli GetItemList utilisé (recette REST a échoué : {0}).", ex.Message);
+                    return items;
+                }
+                catch (Exception ex2)
+                {
+                    logger?.Warn("[LLM_AI] Tag query : les DEUX chemins ont échoué — racine+GetItems : {0} ; GetItemList : {1}\n{2}",
+                        ex.Message, ex2.Message, ex);
+                    throw;
+                }
+            }
+        }
+
+        /// <summary>
         /// Retire <paramref name="tag"/> de tous les items Emby qui le portent
         /// (requêtes par filtre — <see cref="InternalItemsQuery.Tags"/> et,
         /// pour la migration v1.13.3, <see cref="InternalItemsQuery.Genres"/>
@@ -144,28 +203,11 @@ namespace LLM_AI
                 BaseItem[] found;
                 try
                 {
-                    var q = new InternalItemsQuery
-                    {
-                        Tags = filter == "Tags" ? new[] { tag } : null,
-                        Genres = filter == "Genres" ? new[] { tag } : null,
-                        // Recursive=true OBLIGATOIRE sur Emby 4.10 (vérifié
-                        // 2026-10-07 sur 4.10.1.0) : sans lui, GetItemList
-                        // lève — NRE pour le filtre Tags, ArgumentNullException
-                        // « source » pour Genres — et le nettoyage ne trouve
-                        // JAMAIS rien (les tags « AI Tonight » se sont
-                        // accumulés sur 62 items pendant des semaines avant
-                        // d'être repérés). Toutes les requêtes Tags/Genres
-                        // in-process qui tournent (find, CountByTag) le
-                        // posent ; le filtre REST /Items?Tags= ne retourne
-                        // aussi que la descendance récursive.
-                        Recursive = true,
-                        EnableTotalRecordCount = false
-                    };
-                    found = library.GetItemList(q) ?? Array.Empty<BaseItem>();
+                    found = FindByTagOrGenre(library, logger, tag, filter == "Tags", null);
                 }
                 catch (Exception ex)
                 {
-                    logger?.Warn("[LLM_AI] Tag cleanup : GetItemList ({0}) échoué : {1}", filter, ex.Message);
+                    logger?.Warn("[LLM_AI] Tag cleanup : requête ({0}) échouée : {1}", filter, ex.Message);
                     continue;
                 }
                 foreach (var it in found)
