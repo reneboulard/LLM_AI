@@ -4446,6 +4446,11 @@ namespace LLM_AI
                 return _library.GetItemList(new InternalItemsQuery
                 {
                     Tags = new[] { tag },
+                    // Recursive=true OBLIGATOIRE sur Emby 4.10 (cf. AiTagger.RemoveAllAsync,
+                    // vérifié 2026-10-07) : sans lui la requête lève et le catch
+                    // fail-open rapportait « règle matchée » — masquant à la
+                    // fois la panne et les règles réellement aveugles.
+                    Recursive = true,
                     Limit = 1,
                     EnableTotalRecordCount = false
                 })?.Length > 0;

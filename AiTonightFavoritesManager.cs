@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
@@ -24,14 +25,20 @@ namespace LLM_AI
     /// <para><b>Propriété des favoris</b> : le set exact des items mis en
     /// favori par le plugin est tracé dans un fichier d'état
     /// (<see cref="StateFileName"/>, dossier de configuration du plugin) —
-    /// réécrit intégralement à chaque run (set = recos courantes), lu par le
+    /// <b>fusionné</b> à chaque run (les entrées des runs précédents pas
+    /// encore nettoyées survivent, dédupliquées), lu puis supprimé par le
     /// nettoyage. Règles :
     /// <list type="bullet">
     /// <item>un item DÉJÀ favori avant le run est <b>ignoré</b> (pas dans le
     /// set → jamais retiré par le nettoyage, qu'il vienne de l'usager ou
     /// d'un run antérieur) ;</item>
     /// <item>le nettoyage ne retire que les entrées du fichier d'état, et
-    /// seulement si l'item est encore favori ;</item>
+    /// seulement si l'item est encore favori ; le fichier n'est supprimé
+    /// qu'en cas de nettoyage complet (échecs de persistance → retry au
+    /// prochain passage) ;</item>
+    /// <item>la fusion rend le cycle robuste aux nettoyages manqués
+    /// (serveur arrêté à 3 h) et aux runs multiples d'une même journée —
+    /// le prochain nettoyage réussi remet tout à zéro ;</item>
     /// <item>limite : si l'usager re-favorise manuellement un item que nous
     /// avions mis en favori, le nettoyage le retire quand même —
     /// indistinguable d'un nôtre ; documenté.</item>
@@ -64,9 +71,13 @@ namespace LLM_AI
         /// Met en favori <paramref name="user"/> chaque item Emby dont l'id
         /// (chaîne, cf. <see cref="ItemIdResolver"/>) figure dans
         /// <paramref name="itemGuidIds"/> — SAUF les items déjà favoris
-        /// (préexistants : jamais touchés). Réécrit le fichier d'état avec le
-        /// set exact de ce run (favoris du run précédent remplacés : le
-        /// nettoyage nocturne ne revert que ce set frais).
+        /// (préexistants : jamais touchés). <b>Fusionne</b> le set de ce run
+        /// dans le fichier d'état (dédup par item+usager) : les entrées des
+        /// runs précédents NON ENCORE nettoyées sont conservées — un
+        /// nettoyage manqué (serveur arrêté à 3 h) ou plusieurs runs le
+        /// même jour ne fuient plus : la prochaine exécution du nettoyage
+        /// reverte tout le cumul, puis supprime le fichier (retour à zéro
+        /// après chaque nettoyage réussi).
         /// </summary>
         internal static void Apply(
             IUserDataManager userData, ILibraryManager library, ILogger logger,
@@ -112,7 +123,7 @@ namespace LLM_AI
                 }
             }
 
-            WriteState(added);
+            WriteState(logger, MergeState(added));
             logger?.Info("[LLM_AI] Favoris : {0} mis en favori pour « {1} » ({2} déjà favori(s) ignoré(s), {3} non résolu(s)).",
                 added.Count, user.Name, skippedFavorite, skippedResolve);
         }
@@ -122,13 +133,16 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Retire les favoris <b>que nous avons posés</b> au dernier run
-        /// (fichier d'état) — et seulement eux : un item est re-favorisé
-        /// (retour à non-favori) SI il est encore en favori. L'usager de
-        /// chaque entrée est re-résolu par l'id stocké dans le fichier d'état
-        /// (<paramref name="users"/>) ; une entrée sans usager résolvable
-        /// est ignorée. Le fichier d'état est supprimé ensuite ;
-        /// absent/corrompu → no-op (ne lève jamais).
+        /// Retire les favoris <b>que nous avons posés</b> (fichier d'état —
+        /// cumul des runs depuis le dernier nettoyage réussi) — et seulement
+        /// eux : un item est re-favorisé (retour à non-favori) SI il est
+        /// encore en favori. L'usager de chaque entrée est re-résolu par l'id
+        /// stocké dans le fichier d'état (<paramref name="users"/>) ; une
+        /// entrée sans usager résolvable est ignorée. Le fichier d'état est
+        /// supprimé ensuite SEULEMENT si aucun échec n'a eu lieu — des
+        /// échecs de persistance gardent leurs entrées pour retry au
+        /// prochain nettoyage (sinon elles fuieraient en favoris
+        /// permanents) ; absent/corrompu → no-op (ne lève jamais).
         /// </summary>
         internal static void Revert(
             IUserDataManager userData, IUserManager users, ILibraryManager library,
@@ -195,7 +209,19 @@ namespace LLM_AI
                 }
             }
 
-            try { File.Delete(StatePath); } catch (Exception ex) { logger?.Warn("[LLM_AI] Favoris : suppression fichier d'état échouée : {0}", ex.Message); }
+            // Suppression du fichier d'état SEULEMENT en cas de succès complet :
+            // un échec de persistance (failed > 0) garde les entrées pour
+            // retry au prochain nettoyage — supprimer les entrées non
+            // rétablies les transformerait en favoris permanents.
+            if (failed == 0)
+            {
+                try { File.Delete(StatePath); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Favoris : suppression fichier d'état échouée : {0}", ex.Message); }
+            }
+            else
+            {
+                logger?.Warn("[LLM_AI] Favoris : {0} échec(s) de revert — fichier d'état conservé pour retry au prochain nettoyage.", failed);
+            }
             logger?.Info("[LLM_AI] Favoris : {0} rétabli(s), {1} déjà absent(s)/item supprimé(s), {2} échec(s).",
                 reverted, alreadyGone, failed);
         }
@@ -206,7 +232,18 @@ namespace LLM_AI
 
         private sealed class StateEntry
         {
+            // Contrat du fichier d'état : camelCase (« itemId »/« userId »).
+            // HISTORIQUE : la sérialisation par défaut de System.Text.Json
+            // (PascalCase « ItemId »/« UserId ») ne correspondait PAS au parse
+            // camelCase — le revert ne trouvait donc JAMAIS les entrées et
+            // les favoris s'accumulaient indéfiniment (constaté 2026-10-07 :
+            // 63 favoris orphelins sur le serveur de test). Noms épinglés
+            // explicitement + parse tolérant aux deux casses (fichiers
+            // écrits par l'ancienne version).
+            [JsonPropertyName("itemId")]
             public string ItemId { get; set; }
+
+            [JsonPropertyName("userId")]
             public string UserId { get; set; }
         }
 
@@ -224,8 +261,39 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>Réécrit intégralement le fichier d'état (best-effort : un échec est logué, non bloquant).</summary>
-        private static void WriteState(List<StateEntry> entries)
+        /// <summary>
+        /// Fusionne les entrées fraîches du run avec le fichier d'état
+        /// existant (dédup par ItemId+UserId, insensible à la casse) : les
+        /// entrées des runs précédents pas encore nettoyées survivent —
+        /// c'est ce qui empêche une fuite quand le nettoyage nocturne est
+        /// manqué ou que plusieurs runs tombent le même jour.
+        /// </summary>
+        private static List<StateEntry> MergeState(List<StateEntry> fresh)
+        {
+            var merged = new List<StateEntry>(fresh);
+            try
+            {
+                string json = File.Exists(StatePath) ? File.ReadAllText(StatePath) : null;
+                var existing = ParseState(json) ?? new List<StateEntry>();
+                var seen = new HashSet<string>(
+                    merged.ConvertAll(e => (e.ItemId ?? "") + "|" + (e.UserId ?? "")),
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var e in existing)
+                {
+                    var key = (e.ItemId ?? "") + "|" + (e.UserId ?? "");
+                    if (string.IsNullOrWhiteSpace(e.ItemId) || seen.Contains(key)) continue;
+                    seen.Add(key);
+                    merged.Add(e);
+                }
+            }
+            catch { /* best-effort : en cas d'échec de lecture, run frais seul */ }
+            return merged;
+        }
+
+        /// <summary>Écrit le fichier d'état fusionné (best-effort — mais un
+        /// échec est LOGUÉ : ce fichier est la source de vérité du
+        /// nettoyage, sans lui les favoris posés fuient en permanence).</summary>
+        private static void WriteState(ILogger logger, List<StateEntry> entries)
         {
             try
             {
@@ -238,10 +306,16 @@ namespace LLM_AI
                 };
                 File.WriteAllText(path, JsonSerializer.Serialize(payload));
             }
-            catch (Exception) { /* l'état est un confort : ne jamais lever */ }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Favoris : écriture du fichier d'état échouée — les favoris de ce run ne pourront PAS être retirés par le nettoyage : {0}", ex.Message);
+            }
         }
 
-        /// <summary>Parse le fichier d'état ; null/JSON invalide → set vide.</summary>
+        /// <summary>Parse le fichier d'état ; null/JSON invalide → set vide.
+        /// Tolérant aux deux casses de propriétés (« itemId » du contrat
+        /// courant, « ItemId » des fichiers écrits avant le correctif
+        /// 2026-10-07 — leur contenu redevient ainsi nettoyable).</summary>
         private static List<StateEntry> ParseState(string json)
         {
             if (string.IsNullOrWhiteSpace(json)) return new List<StateEntry>();
@@ -257,10 +331,8 @@ namespace LLM_AI
                         {
                             if (el.ValueKind != JsonValueKind.Object) continue;
                             var entry = new StateEntry();
-                            if (el.TryGetProperty("itemId", out var iid) && iid.ValueKind == JsonValueKind.String)
-                                entry.ItemId = iid.GetString();
-                            if (el.TryGetProperty("userId", out var uid) && uid.ValueKind == JsonValueKind.String)
-                                entry.UserId = uid.GetString();
+                            entry.ItemId = GetStringAnyCase(el, "itemId");
+                            entry.UserId = GetStringAnyCase(el, "userId");
                             result.Add(entry);
                         }
                     }
@@ -268,6 +340,22 @@ namespace LLM_AI
                 }
             }
             catch { return new List<StateEntry>(); }
+        }
+
+        /// <summary>Propriété de nom <paramref name="name"/> en casse
+        /// quelconque (camelCase ou PascalCase), null si absente/non-chaîne.</summary>
+        private static string GetStringAnyCase(JsonElement obj, string name)
+        {
+            if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(name, out var prop))
+            {
+                // TryGetProperty est sensible à la casse — retour sur la
+                // casse inverse du contrat (anciens fichiers PascalCase).
+                var alt = char.IsLower(name[0])
+                    ? char.ToUpperInvariant(name[0]) + name.Substring(1)
+                    : char.ToLowerInvariant(name[0]) + name.Substring(1);
+                if (!obj.TryGetProperty(alt, out prop)) return null;
+            }
+            return prop.ValueKind == JsonValueKind.String ? prop.GetString() : null;
         }
 
         /// <summary>

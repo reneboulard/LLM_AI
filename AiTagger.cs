@@ -148,6 +148,17 @@ namespace LLM_AI
                     {
                         Tags = filter == "Tags" ? new[] { tag } : null,
                         Genres = filter == "Genres" ? new[] { tag } : null,
+                        // Recursive=true OBLIGATOIRE sur Emby 4.10 (vérifié
+                        // 2026-10-07 sur 4.10.1.0) : sans lui, GetItemList
+                        // lève — NRE pour le filtre Tags, ArgumentNullException
+                        // « source » pour Genres — et le nettoyage ne trouve
+                        // JAMAIS rien (les tags « AI Tonight » se sont
+                        // accumulés sur 62 items pendant des semaines avant
+                        // d'être repérés). Toutes les requêtes Tags/Genres
+                        // in-process qui tournent (find, CountByTag) le
+                        // posent ; le filtre REST /Items?Tags= ne retourne
+                        // aussi que la descendance récursive.
+                        Recursive = true,
                         EnableTotalRecordCount = false
                     };
                     found = library.GetItemList(q) ?? Array.Empty<BaseItem>();

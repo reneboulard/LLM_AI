@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [2.1.0] — 2026-10-06
+## [2.1.0] — 2026-10-07
 
 ### Added (FR)
 - **SB — ancrage bibliothèque (dossier frère)** dans l'identification des
@@ -193,6 +193,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   column; the cap now lives on the `input` itself and the description
   breathes full width. Same treatment for `strmlib` (name + permissions),
   `audit.focus` and `i18n.lang`.
+
+### Fixed (FR)
+- **Nettoyage nocturne « AI Tonight » : l'étiquette ne partait jamais (62
+  items cumulés)** — la requête de retrait de tag
+  (`AiTagger.RemoveAllAsync`) ne posait pas `Recursive=true` : sur Emby
+  4.10, `GetItemList` avec un filtre `Tags`/`Genres` lève alors une
+  exception (référence nulle / « Value cannot be null (source) ») — le
+  nettoyage de 3 h échouait chaque nuit sans jamais rien trouver, et les
+  étiquettes s'accumulaient indéfiniment (constaté 2026-10-07 : 62 items
+  tagués « AI Tonight » cumulés depuis le 2026-09-07, chaque run en
+  rajoutant). Le correctif pose `Recursive=true`, comme toutes les
+  requêtes Tags/Genres in-process du plugin qui tournaient déjà — la
+  première exécution remet la surface à zéro et le cycle quotidien
+  (étiquetage au run, retrait à 3 h) devient réel. Même omission réparée
+  dans la sonde parentale de l'audit (`TagMatchesAnyItem`) : son exception
+  avalée faisait rapporter « règle matchée » et masquait les règles de
+  tags réellement aveugles. Le clear-first « AI Delete » (passe disque),
+  qui réutilise le même code, est réparé par contrecoup.
+- **Favoris éphémères : le revert ne trouvait jamais les entrées (63
+  favoris cumulés)** — le fichier d'état des favoris était sérialisé avec
+  les noms par défaut de System.Text.Json (« ItemId »/« UserId ») alors
+  que le retrait lisait « itemId »/« userId » : le nettoyage de 3 h ne
+  revertait AUCUN favori posé par le plugin et les recos s'accumulaient
+  dans « Ma liste » (63 favoris constatés, 42 identifiés dans
+  decisions.json comme émis par le plugin). Le contrat du fichier est
+  désormais épinglé explicitement (`[JsonPropertyName]`), le parse tolère
+  les deux casses (les fichiers écrits par l'ancienne version redeviennent
+  nettoyables), et l'état est **fusionné** d'un run à l'autre au lieu
+  d'être remplacé : un nettoyage manqué (serveur arrêté à 3 h) ou des runs
+  multiples dans la même journée ne fuient plus — le prochain nettoyage
+  réussi remet tout à zéro. En cas d'échec de persistance, le fichier
+  d'état est conservé (retry au passage suivant) au lieu d'être détruit,
+  et une écriture impossible est désormais loguée (l'état est la source de
+  vérité du nettoyage, pas un simple confort).
+- **À faire après mise à jour** : le premier nettoyage retire toutes les
+  étiquettes « AI Tonight » accumulées (aucune action). Les favoris posés
+  AVANT ce correctif ne sont pas traçables par le fichier d'état — si
+  votre « Ma liste » est polluée par d'anciennes recos, retirez-les
+  manuellement (l'historique `decisions.json` du plugin permet d'identifier
+  les items qu'il a recommandés).
+
+### Fixed (EN)
+- **Nightly "AI Tonight" cleanup: the tag was never removed (62 items
+  accumulated)** — the tag-removal query (`AiTagger.RemoveAllAsync`) did
+  not set `Recursive=true`: on Emby 4.10, `GetItemList` with a
+  `Tags`/`Genres` filter then throws (null reference / "Value cannot be
+  null (source)") — the 3 AM cleanup failed every single night without
+  ever finding anything, and tags piled up indefinitely (witnessed
+  2026-10-07: 62 items tagged "AI Tonight" accumulated since 2026-09-07,
+  each run adding more). The fix sets `Recursive=true`, like every other
+  in-process Tags/Genres query of the plugin that already worked — the
+  first execution resets the surface to zero and the daily cycle (tagged on
+  the run, removed at 3 AM) becomes real. Same omission fixed in the audit
+  parental probe (`TagMatchesAnyItem`): its swallowed exception made it
+  report "rule matched", hiding tag rules that were actually blind. The
+  "AI Delete" clear-first (disk pass), which reuses the same code, is
+  repaired by the same token.
+- **Ephemeral favorites: the revert never found any entry (63 favorites
+  accumulated)** — the favorites state file was serialized with
+  System.Text.Json's default property names ("ItemId"/"UserId") while the
+  removal read "itemId"/"userId": the 3 AM cleanup reverted NONE of the
+  plugin-placed favorites and recos piled up in "My List" (63 witnessed,
+  42 identified in decisions.json as plugin-emitted). The file contract is
+  now pinned explicitly (`[JsonPropertyName]`), parsing tolerates both
+  casings (files written by the old version become cleanable again), and
+  the state is **merged** across runs instead of replaced: a missed
+  cleanup (server down at 3 AM) or several runs within the same day no
+  longer leak — the next successful cleanup resets everything. On
+  persistence failure the state file is kept (retried on the next pass)
+  instead of being destroyed, and a failed write is now logged (the state
+  is the cleanup's source of truth, not a mere convenience).
+- **After upgrading**: the first cleanup removes every accumulated "AI
+  Tonight" tag (no action needed). Favorites placed BEFORE this fix are
+  not traceable through the state file — if your "My List" is polluted
+  with old recommendations, remove them manually (the plugin's
+  `decisions.json` history helps identify the items it recommended).
 
 ## [1.17.1.8] — 2026-10-05
 
