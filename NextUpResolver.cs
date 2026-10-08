@@ -261,6 +261,54 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Résumé du <b>stock disponible</b> d'une série pour un usager :
+        /// le premier épisode <b>non visionné</b> du dossier (l'entrée de
+        /// lecture réelle — pour une série jamais commencée dont seuls des
+        /// épisodes récents ont été enregistrés, c'est le plus ancien
+        /// <b>enregistré</b>, pas S01E01) et le nombre d'épisodes non
+        /// visionnés. Sert à annoter le menu « enregistrements non
+        /// visionnés » du run Tonight (v2.2.2) : sans ces faits, le LLM
+        /// recommandait « le dernier épisode » d'une série que l'usager
+        /// n'avait jamais commencée (vécu 2026-10-08, prod : « Indomptables »
+        /// — un seul épisode en dossier, S01E18, les épisodes 1-17 n'ont
+        /// jamais été enregistrés ; le repli next up ne pouvait rien
+        /// retomber que lui). Best-effort : dossier illisible ou userData
+        /// indisponible → (null, 0) ; ne lève jamais.
+        /// </summary>
+        internal static (BaseItem EarliestUnwatched, int UnwatchedCount) SummarizeSeriesStock(
+            IUserDataManager userData, User user, BaseItem seriesItem)
+        {
+            if (userData == null || user == null || seriesItem == null) return (null, 0);
+            try
+            {
+                var items = (seriesItem as Folder)?.GetItemList(new InternalItemsQuery
+                {
+                    Recursive = true,
+                    IncludeItemTypes = new[] { "Episode" },
+                    EnableTotalRecordCount = false
+                });
+                if (items == null) return (null, 0);
+                BaseItem best = null;
+                int bestSeason = int.MaxValue, bestNumber = int.MaxValue, unwatched = 0;
+                foreach (var it in items)
+                {
+                    if (it == null) continue;
+                    if (IsPlayedForUser(userData, user, it)) continue;
+                    unwatched++;
+                    int season = it.ParentIndexNumber ?? int.MaxValue;
+                    int number = it.IndexNumber ?? int.MaxValue;
+                    if (best == null || season < bestSeason
+                        || (season == bestSeason && number < bestNumber))
+                    {
+                        best = it; bestSeason = season; bestNumber = number;
+                    }
+                }
+                return (best, unwatched);
+            }
+            catch { return (null, 0); }
+        }
+
+        /// <summary>
         /// « Épisode suivant » explicite (tool <c>client_command play_next</c>) :
         /// premier épisode NON VU de la série STRICTEMENT APRÈS
         /// <paramref name="currentEpisode"/>, en ordre saison/épisode.

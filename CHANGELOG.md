@@ -10,6 +10,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.2.2] — 2026-10-08
+
+### Fixed (FR)
+- **« À regarder ce soir » : position réelle de l'usager dans les séries —
+  fini « le dernier épisode » d'une série jamais commencée** (vécu en prod
+  2026-10-08 : « AI Tonight » suggérait « Indomptables » **S01E18** —
+  l'épisode le plus récent — alors que l'usager n'avait jamais regardé la
+  série ; « Antigang » **S02E19** : même piège). Cause : la DVR n'enregistre
+  souvent que les épisodes **courants** d'une série (les épisodes 1-17 n'ont
+  jamais été enregistrés — le dossier bibliothèque ne contient qu'un
+  épisode), et le menu des enregistrements non visionnés soumis au LLM ne
+  portait NI la position de l'épisode, NI l'état « série jamais commencée ».
+  Le LLM recommandait la série (note, genres) et le repli « premier épisode
+  non vu » de la playlist ne pouvait retomber que sur le seul épisode
+  disponible : le plus récent. Correctif : les lignes kind=series du menu
+  portent désormais **start=SxxEyy** (premier épisode non visionné du
+  dossier — l'entrée de lecture réelle), **unwatched=N** (stock non
+  visionné disponible) et **user_started=no|yes** (l'usager a-t-il déjà
+  visionné cette série — index du watched-guard), accompagnés d'une règle
+  explicite : une série jamais commencée dont le stock démarre au milieu
+  n'est recommandée QUE si ses épisodes se suffisent à eux-mêmes (magazine,
+  documentaire, divertissement) — pas de filtre dur, qui exclurait à tort
+  « Découverte » ou « La semaine verte » ; sinon le LLM préfère un autre
+  titre ou dit dans la raison que la série n'est pas commencée. Même
+  vocabulaire pour le bloc « séries prêtes à dévorer » (`user_started=`,
+  mention des stocks partiels) et pour la **réserve bibliothèque**, dont le
+  représentant d'une série devient l'épisode non visionné le plus ANCIEN du
+  pool (et non le plus récemment ajouté) — même classe de défaut. La
+  résolution de la playlist, elle, était correcte : elle ne peut désigner
+  qu'un épisode qui existe réellement. Best-effort partout : un échec
+  d'annotation laisse la ligne telle quelle (le run continue). Journal
+  greppable : « Tonight enregistrements : position annotée — … » (une
+  entrée par série : start, stock, jamais commencée).
+
+### Fixed (EN)
+- **"Watch tonight": the user's real position in series — no more
+  "the latest episode" of a never-started series** (lived in production
+  2026-10-08: "AI Tonight" suggested *Indomptables* **S01E18** — the most
+  recent episode — although the user had never watched the series;
+  *Antigang* **S02E19**: same trap). Root cause: the DVR often records only
+  a series' **current** episodes (episodes 1-17 were never recorded — the
+  library folder holds a single episode), and the unwatched-recordings menu
+  submitted to the LLM carried NEITHER the episode's position NOR the
+  "series never started" state. The LLM recommended the series (rating,
+  genres) and the playlist's "first unwatched episode" fallback could only
+  land on the only episode available: the latest one. Fix: the menu's
+  kind=series lines now carry **start=SxxEyy** (the folder's first unwatched
+  episode — the real entry point), **unwatched=N** (available unwatched
+  stock) and **user_started=no|yes** (has the user watched this series —
+  watched-guard index), with an explicit rule: a never-started series whose
+  stockpile begins mid-series is only recommended when its episodes stand
+  alone (talk show, documentary, entertainment) — no hard filter, which
+  would wrongly exclude *Découverte* or *La semaine verte*; otherwise the
+  LLM prefers another title or states in the reason that the series was
+  never started. Same vocabulary for the binge-ready block (`user_started=`,
+  partial-stockpile mention) and for the **library reserve**, whose series
+  representative becomes the OLDEST unwatched episode in the pool (instead
+  of the most recently added) — the same class of flaw. The playlist
+  resolution itself was correct: it can only point at an episode that
+  actually exists. Best-effort throughout: an annotation failure leaves the
+  line as-is (the run continues). Greppable log line: "Tonight
+  enregistrements : position annotée — …" (one entry per series: start,
+  stock, never started).
+
+---
+
 ## [2.2.1] — 2026-10-08
 
 ### Added (FR)

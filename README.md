@@ -1005,12 +1005,23 @@ l'endpoint `TonightApiService`. Le LLM reçoit **trois sources** :
 3. **Enregistrements récents non visionnés** — `BuildUnwatchedRecordings` : items
    enregistrés dans les `TonightRecordingsDays` derniers jours mais non lus
    (`IsPlayed=false`). Permet la règle : *si l'usager regarde la série X et qu'un nouvel
-   enregistrement de X est disponible non visionné → le recommander.*
+   enregistrement de X est disponible non visionné → le recommander.* Les lignes
+   `kind=series` portent la **position réelle de l'usager** (v2.2.2) :
+   `start=SxxEyy` (premier épisode non visionné du dossier — l'entrée de lecture
+   réelle), `unwatched=N` (stock non visionné disponible) et
+   `user_started=no|yes` (série déjà regardée ou non) : une série **jamais
+   commencée** dont le stock démarre au milieu (les épisodes précédents n'ont
+   jamais été enregistrés — la DVR n'enregistre souvent que les épisodes
+   courants) n'est recommandée que si ses épisodes se suffisent à eux-mêmes
+   (magazine, documentaire, divertissement). Sans ces faits, le LLM recommandait
+   « le dernier épisode » d'une série jamais commencée (vécu 2026-10-08 en prod).
 
 **Réserve bibliothèque (fallback)** — `BuildLibraryFallbackPool` : items non visionnés
 pré-fetchés, injectés comme **réserve**, à utiliser **seulement si** le LLM produit
 **moins de `TonightMinRecommendations`** recommandations. Garantit au moins N recos même
-si l'EPG est vide.
+si l'EPG est vide. Depuis la v2.2.2, une série y est représentée par son épisode non
+visionné le **plus ancien** du pool (ordre saison/épisode), pas par le plus récemment
+ajouté — même classe de défaut que le menu des enregistrements.
 
 **Séries « prêtes à dévorer » (opt-in)** — `TonightBingeEnabled` : l'usager qui enregistre
 une série et attend d'avoir plusieurs épisodes avant de commencer reçoit un signal
@@ -1023,7 +1034,10 @@ série conservée « pour un jour de pluie » n'est **jamais** signalée). La s�
 le seuil est injectée dans le prompt (AU PLUS UNE recommandation par run,
 `source="recording"` si elle figure aussi dans les enregistrements non visionnés, sinon
 `source="library"` ; id du **premier épisode à regarder**, ordre saison/épisode) avec
-mention du nombre d'épisodes en attente dans la raison.
+mention du nombre d'épisodes en attente dans la raison. Chaque ligne porte aussi
+`user_started=no|yes` (v2.2.2, même vocabulaire que le menu des enregistrements) :
+un stock qui démarre au milieu de la série (`start=` ≠ début — les premiers
+épisodes n'ont jamais été enregistrés) est signalé comme tel dans la raison.
 
 > 📌 **Anti-spam** : le gate persistant `BingeNotified` (par usager et par série) ne
 > signale chaque série qu'**une seule fois par cycle d'accumulation**. La suggestion se

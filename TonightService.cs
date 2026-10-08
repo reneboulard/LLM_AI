@@ -284,32 +284,42 @@ namespace LLM_AI
             // 1) Profil de goût : historique de visionnage récent de l'usager.
             string profile = BuildTasteProfile(user, compact, excludedStrmRoot);
 
-            // 2) Enregistrements récents non visionnés (candidats « à regarder
-            //    ce soir » — déjà enregistrés, prêts à lire). Injectés comme le
-            //    profil : l'usager est résolu ici (le tool get_emby_info, lui,
-            //    est global/sans usager).
-            string recs = BuildUnwatchedRecordings(user, cfg, ct, compact);
+            // 2) Watched-guard : index per-usager du contenu DÉJÀ VISIONNÉ
+            //    (épisodes joués par série + films joués). Construit AVANT
+            //    les menus ci-dessous (v2.2.2) : au-delà de son rôle de
+            //    validation des recos live (marquer les rediffusions déjà
+            //    visionnées — l'UI affiche la carte avec badge « Déjà
+            //    visionné » et masque les actions, l'auto-programmation ne
+            //    crée pas de timer, les popups la sautent), il ANNOTE la
+            //    position de l'usager dans les séries du menu des
+            //    enregistrements (« user_started= ») et du bloc « prêtes à
+            //    dévorer ». Null si indisponible (fail-open : recos non
+            //    marquées, lignes sans annotation, jamais droppées pour
+            //    autant).
+            WatchedIndex watchedIdx = BuildWatchedIndex(user, excludedStrmRoot);
 
-            // 2b) Réserve bibliothèque (items non visionnés) : utilisée par le
+            // 2b) Enregistrements récents non visionnés (candidats « à regarder
+            //     ce soir » — déjà enregistrés, prêts à lire). Injectés comme le
+            //     profil : l'usager est résolu ici (le tool get_emby_info, lui,
+            //     est global/sans usager). Les lignes kind=series portent la
+            //     position RÉELLE de l'usager (start=/unwatched=/user_started=,
+            //     v2.2.2) : sans elles, le LLM recommandait « le dernier
+            //     épisode » d'une série jamais commencée (vécu 2026-10-08, prod).
+            string recs = BuildUnwatchedRecordings(user, cfg, ct, compact, watchedIdx);
+
+            // 2c) Réserve bibliothèque (items non visionnés) : utilisée par le
             //    LLM uniquement si EPG + enregistrements < TonightMinRecommendations.
             string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot);
 
-            // 2c) Séries « prêtes à dévorer » (opt-in, gate anti-spam persistant) :
+            // 2d) Séries « prêtes à dévorer » (opt-in, gate anti-spam persistant) :
             //    séries dont l'enregistrement est actif et dont le stock d'épisodes
             //    non visionnés vient de franchir le seuil — signalées UNE fois par
             //    cycle d'accumulation (re-armées quand l'usager commence à regarder).
+            //    Lignes annotées « user_started= » (v2.2.2, même vocabulaire que
+            //    le menu des enregistrements).
             string binge = cfg.TonightBingeEnabled
-                ? BuildBingeReadySeries(user, cfg, compact, excludedStrmRoot)
+                ? BuildBingeReadySeries(user, cfg, compact, excludedStrmRoot, watchedIdx)
                 : string.Empty;
-
-            // 2d) Watched-guard : index per-usager du contenu DÉJÀ VISIONNÉ
-            //     (épisodes joués par série + films joués). Sert à MARQUER les
-            //     recos live « déjà visionnées » (rediffusion EPG) pendant la
-            //     validation — l'UI affiche la carte avec badge « Déjà visionné »
-            //     et masque les actions, l'auto-programmation ne crée pas de
-            //     timer, les popups la sautent. Null si indisponible (fail-open :
-            //     recos non marquées, jamais droppées pour autant).
-            WatchedIndex watchedIdx = BuildWatchedIndex(user, excludedStrmRoot);
 
             // 2e) Injection mémoire : la fiche mémoire réflexive (opt-in,
             //     Phase C) a priorité — quand elle existe, elle REMPLACE la
@@ -1497,10 +1507,28 @@ namespace LLM_AI
         /// Chaque entrée porte l'id Emby de l'enregistrement (Guid) pour que le
         /// LLM puisse le référencer (<c>source="recording"</c>, <c>id=…</c>) et
         /// que l'UI propose « Regarder ».
+        /// <para><b>Position dans la série (v2.2.2)</b> : les lignes
+        /// <c>kind=series</c> sont annotées <c>start=SxxEyy</c> (premier épisode
+        /// non visionné du dossier — l'entrée de lecture réelle),
+        /// <c>unwatched=N</c> (stock non visionné disponible) et
+        /// <c>user_started=no|yes</c> (l'usager a-t-il déjà visionné cette
+        /// série — <paramref name="watchedIdx"/>). Motif (vécu 2026-10-08,
+        /// prod) : la DVR n'enregistre souvent que les épisodes COURANTS d'une
+        /// série (« Indomptables » : un seul épisode en dossier, S01E18 — les
+        /// épisodes 1-17 n'ont jamais été enregistrés) ; sans la position, le
+        /// LLM recommandait la série et le repli next up ne pouvait retomber
+        /// que sur « le dernier épisode » d'une série jamais commencée. Avec
+        /// les faits + la règle du pied de bloc, le LLM évite de proposer
+        /// d'entrer dans une série au milieu — sauf épisodes
+        /// auto-suffisants (magazine, documentaire) qu'un filtre dur aurait
+        /// à tort exclus. Best-effort : échec de résolution/résumé → ligne
+        /// sans annotation ; <paramref name="watchedIdx"/> null → pas de
+        /// <c>user_started=</c> (fail-open).</para>
         /// <para>Résolu ici (et pas via un tool <c>get_emby_info</c>) car
         /// <c>IsPlayed</c> est par usager : le tool est global/sans usager.</para>
         /// </summary>
-        private string BuildUnwatchedRecordings(User user, PluginConfiguration cfg, CancellationToken ct, bool compact)
+        private string BuildUnwatchedRecordings(User user, PluginConfiguration cfg, CancellationToken ct,
+            bool compact, WatchedIndex watchedIdx)
         {
             var sb = new StringBuilder();
             try
@@ -1520,6 +1548,13 @@ namespace LLM_AI
                 var recs = (_liveTv.GetRecordings(q, ct)?.Items) ?? Array.Empty<BaseItemDto>();
 
                 var lines = new List<string>();
+
+                // Caches de position par série (v2.2.2) : un même dossier n'est
+                // résumé qu'une fois par run, quel que soit le nombre de lignes
+                // qui le référencent (une série multi-épisodes enregistrée).
+                var stockBySeries = new Dictionary<long, (string Start, int Unwatched)>();
+                var positionLog = new List<string>();
+
                 foreach (var r in recs)
                 {
                     if (r == null) continue;
@@ -1541,6 +1576,8 @@ namespace LLM_AI
                     if (genres.Length > 0) line.Append($" | genres=[{string.Join(", ", genres)}]");
                     if (isSeries && !string.IsNullOrEmpty(r.EpisodeTitle) && r.EpisodeTitle != title)
                         line.Append($" | episode={r.EpisodeTitle}");
+                    if (isSeries)
+                        AppendSeriesPosition(line, r, user, title, watchedIdx, stockBySeries, positionLog);
                     lines.Add(line.ToString());
 
                     // Mémoire réflexive : les enregistrements listés font
@@ -1560,6 +1597,21 @@ namespace LLM_AI
                     sb.AppendLine("Ces éléments sont DÉJÀ enregistrés (ne PAS re-programmer). Pour un de " +
                                   "ces titres qui correspond aux goûts de l'usager, recommande-le avec " +
                                   "source=\"recording\" et reprends son id tel quel (l'UI proposera « Regarder »).");
+                    if (positionLog.Count > 0)
+                    {
+                        sb.AppendLine("Lignes kind=series : « start=SxxEyy » est l'épisode où la lecture " +
+                                      "démarrera réellement (premier non visionné disponible), " +
+                                      "« unwatched=N » le nombre d'épisodes disponibles non visionnés, et " +
+                                      "« user_started=no » que l'usager n'a JAMAIS regardé cette série. " +
+                                      "Si user_started=no et que start n'est pas le début de la série " +
+                                      "(ex. S01E18 : les épisodes précédents n'ont jamais été enregistrés), " +
+                                      "ne recommande cette série QUE si ses épisodes se suffisent à eux-mêmes " +
+                                      "(magazine, documentaire, divertissement) ; sinon préfère un autre " +
+                                      "titre, ou précise dans la raison que la série n'est pas commencée " +
+                                      "et que seuls ces épisodes sont disponibles.");
+                        _logger?.Info("[LLM_AI] Tonight enregistrements : position annotée — {0}.",
+                            string.Join(" ; ", positionLog));
+                    }
                 }
                 else
                 {
@@ -1572,6 +1624,72 @@ namespace LLM_AI
                 sb.AppendLine("(Enregistrements récents indisponibles — base-toi sur l'EPG du soir et le profil.)");
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Annote une ligne d'enregistrement <c>kind=series</c> (v2.2.2) avec
+        /// la position RÉELLE de l'usager dans la série : résout l'id de
+        /// l'enregistrement (le DTO in-process est au niveau <b>série</b> sur
+        /// ce build — vérifié 4.10.1.0 en prod : la ligne porte l'id du dossier
+        /// « Indomptables » — mais peut être <b>épisode</b> sur d'autres :
+        /// les deux formes sont gérées), résume le stock du dossier via
+        /// <see cref="NextUpResolver.SummarizeSeriesStock"/> (cache
+        /// <paramref name="stockBySeries"/> : un dossier = un résumé par
+        /// run) puis append <c>start=SxxEyy</c>, <c>unwatched=N</c> et
+        /// <c>user_started=no|yes</c> (index <paramref name="watchedIdx"/>
+        /// par titre normalisé — approximation documentée : les 300 épisodes
+        /// joués les plus récents). Best-effort : échec de résolution ou
+        /// stock vide → ligne sans annotation (le run continue) ;
+        /// <paramref name="watchedIdx"/> null → pas de « user_started= ».
+        /// Ne lève jamais ; alimente <paramref name="positionLog"/> pour la
+        /// ligne de journal du bloc (greppable au banc).
+        /// </summary>
+        private void AppendSeriesPosition(StringBuilder line, BaseItemDto r, User user, string title,
+            WatchedIndex watchedIdx, Dictionary<long, (string Start, int Unwatched)> stockBySeries,
+            List<string> positionLog)
+        {
+            try
+            {
+                // Résolution de l'id : série (ce build) / saison / épisode
+                // (autres builds) → toujours retomber sur le dossier série.
+                var item = ItemIdResolver.Resolve(_library, r?.Id?.ToString());
+                var series = item as MediaBrowser.Controller.Entities.TV.Series;
+                if (series == null && item is MediaBrowser.Controller.Entities.TV.Season season)
+                    series = season.Series;
+                if (series == null && item is MediaBrowser.Controller.Entities.TV.Episode episode)
+                    series = episode.Series;
+                if (series == null) return; // forme inconnue : ligne sans annotation
+
+                if (!stockBySeries.TryGetValue(series.InternalId, out var stock))
+                {
+                    var (earliest, unwatched) = NextUpResolver.SummarizeSeriesStock(_userData, user, series);
+                    if (earliest == null) return; // tout vu / dossier illisible
+                    stock = ("S" + (earliest.ParentIndexNumber ?? 0).ToString("00", CultureInfo.InvariantCulture)
+                           + "E" + (earliest.IndexNumber ?? 0).ToString("00", CultureInfo.InvariantCulture),
+                             unwatched);
+                    stockBySeries[series.InternalId] = stock;
+                }
+
+                line.Append(" | start=" + stock.Start + " | unwatched=" + stock.Unwatched);
+
+                // Position de l'usager : a-t-il déjà visionné AU MOINS un
+                // épisode de cette série (toutes bibliothèques) ?
+                string key = LlmRunner.NormTitle(title);
+                if (watchedIdx != null && !string.IsNullOrEmpty(key))
+                {
+                    bool started = watchedIdx.SeriesEpisodes.ContainsKey(key)
+                        || watchedIdx.SeriesEpisodeTitles.ContainsKey(key);
+                    line.Append(" | user_started=" + (started ? "yes" : "no"));
+                    positionLog.Add("« " + title + " » start=" + stock.Start
+                        + " non-vus=" + stock.Unwatched + (started ? " (commencée)" : " (jamais commencée)"));
+                }
+                else
+                {
+                    positionLog.Add("« " + title + " » start=" + stock.Start
+                        + " non-vus=" + stock.Unwatched);
+                }
+            }
+            catch { /* annotation best-effort : ligne sans position */ }
         }
 
         // ------------------------------------------------------------------
@@ -1588,6 +1706,12 @@ namespace LLM_AI
         /// forme comprise par la couche REST/UI — voir
         /// <see cref="ItemIdResolver"/>) pour <c>source="library"</c> + bouton
         /// « Regarder » (lecture bibliothèque).
+        /// <para><b>Représentant par série (v2.2.2)</b> : une série y est
+        /// représentée par son épisode non visionné le PLUS ANCIEN du pool
+        /// (ordre saison/épisode), pas par le plus récemment ajouté — même
+        /// défaut de classe que le menu des enregistrements (vécu
+        /// 2026-10-08, prod : pointer « le dernier épisode » d'une série
+        /// jamais commencée).</para>
         /// </summary>
         private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot)
         {
@@ -1619,8 +1743,51 @@ namespace LLM_AI
                 var parentallyOk = PermissionGate.FilterParental(user, items, _logger);
                 items = parentallyOk.ToArray();
 
-                var seen = new HashSet<string>(StringComparer.Ordinal);
+                // Représentant par série = l'épisode non visionné le PLUS
+                // ANCIEN rencontré dans le pool (ordre saison/épisode), pas
+                // le plus récemment ajouté (v2.2.2) : la réserve ne doit pas
+                // pointer « le dernier épisode » d'une série jamais commencée
+                // — même défaut de classe que le menu des enregistrements
+                // (vécu 2026-10-08, prod : « Indomptables » S01E18 seul en
+                // dossier). Best-effort : le pool est borné (15/30 items
+                // DateCreated décroissant), le représentant est donc le plus
+                // ancien DISPONIBLE DANS LE POOL, pas forcément le premier
+                // épisode de la série. Ordre de sortie STRICTEMENT inchangé
+                // (ordre de rencontre) : chaque série réserve sa place dès sa
+                // première rencontre (placeholder), rempli après la boucle
+                // par son représentant final.
+                int cap = compact ? 8 : 20;
+                int emitted = 0;
                 var lines = new List<string>();
+                var bestByKey = new Dictionary<string, BaseItem>(StringComparer.Ordinal);
+                var bestPosByKey = new Dictionary<string, (int Season, int Number)>();
+                var lineIndexByKey = new Dictionary<string, int>(StringComparer.Ordinal);
+
+                static string LineFor(BaseItem it)
+                {
+                    var episode = it as MediaBrowser.Controller.Entities.TV.Episode;
+                    bool isEpisode = episode != null;
+                    string title = isEpisode ? episode.SeriesName : it.Name;
+                    string kind = isEpisode ? "series" : "movie";
+                    double? rating = it.CommunityRating;
+                    int? year = it.ProductionYear;
+                    var genres = it.Genres ?? Array.Empty<string>();
+
+                    var line = new StringBuilder($"- id={it.InternalId} | title={title} | kind={kind}");
+                    if (year.HasValue) line.Append($" | year={year.Value}");
+                    if (rating.HasValue) line.Append($" | rating={rating.Value:0.0}");
+                    if (genres.Length > 0) line.Append($" | genres=[{string.Join(", ", genres)}]");
+                    if (isEpisode && !string.IsNullOrEmpty(it.Name) && it.Name != title)
+                        line.Append($" | episode={it.Name}");
+
+                    // Mémoire réflexive : la réserve fait partie du menu soumis
+                    // au LLM — capturée comme le reste du pool. No-op hors run.
+                    if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
+                        DecisionStore.CaptureCandidate("library", it.InternalId.ToString(), title,
+                            null, null, genres);
+                    return line.ToString();
+                }
+
                 foreach (var it in items)
                 {
                     if (it == null) continue;
@@ -1634,29 +1801,44 @@ namespace LLM_AI
                     string title = isEpisode ? episode.SeriesName : it.Name;
                     if (string.IsNullOrWhiteSpace(title)) continue;
                     string key = LlmRunner.NormTitle(title);
-                    if (string.IsNullOrEmpty(key) || !seen.Add(key)) continue;
+                    if (string.IsNullOrEmpty(key)) continue;
 
-                    string kind = isEpisode ? "series" : "movie";
-                    double? rating = it.CommunityRating;
-                    int? year = it.ProductionYear;
-                    var genres = it.Genres ?? Array.Empty<string>();
+                    if (isEpisode)
+                    {
+                        if (lineIndexByKey.TryGetValue(key, out _))
+                        {
+                            // Série déjà représentée : ne garde que l'épisode
+                            // le plus ancien (ordre saison/épisode).
+                            int season = it.ParentIndexNumber ?? int.MaxValue;
+                            int number = it.IndexNumber ?? int.MaxValue;
+                            var curPos = bestPosByKey[key];
+                            if (season < curPos.Season
+                                || (season == curPos.Season && number < curPos.Number))
+                            {
+                                bestByKey[key] = it;
+                                bestPosByKey[key] = (season, number);
+                            }
+                            continue;
+                        }
+                        bestByKey[key] = it;
+                        bestPosByKey[key] =
+                            (it.ParentIndexNumber ?? int.MaxValue, it.IndexNumber ?? int.MaxValue);
+                        lineIndexByKey[key] = lines.Count;
+                        lines.Add(null); // placeholder — rempli après la boucle
+                    }
+                    else
+                    {
+                        lines.Add(LineFor(it));
+                    }
 
-                    var line = new StringBuilder($"- id={it.InternalId} | title={title} | kind={kind}");
-                    if (year.HasValue) line.Append($" | year={year.Value}");
-                    if (rating.HasValue) line.Append($" | rating={rating.Value:0.0}");
-                    if (genres.Length > 0) line.Append($" | genres=[{string.Join(", ", genres)}]");
-                    if (isEpisode && !string.IsNullOrEmpty(it.Name) && it.Name != title)
-                        line.Append($" | episode={it.Name}");
-                    lines.Add(line.ToString());
-
-                    // Mémoire réflexive : la réserve fait partie du menu soumis
-                    // au LLM — capturée comme le reste du pool. No-op hors run.
-                    if (!string.IsNullOrEmpty(DecisionStore.ActiveRunId))
-                        DecisionStore.CaptureCandidate("library", it.InternalId.ToString(), title,
-                            null, null, genres);
-
-                    if (lines.Count >= (compact ? 8 : 20)) break;
+                    emitted++;
+                    if (emitted >= cap) break;
                 }
+
+                // Remplit chaque place réservée par le représentant le plus
+                // ancien non visionné de sa série (ordre inchangé).
+                foreach (var kv in lineIndexByKey)
+                    lines[kv.Value] = LineFor(bestByKey[kv.Key]);
 
                 sb.AppendLine("### RÉSERVE BIBLIOTHÈQUE (items NON visionnés — à utiliser SEULEMENT si < minimum)");
                 if (lines.Count > 0)
@@ -1714,8 +1896,16 @@ namespace LLM_AI
         /// <para>Fail-open : toute erreur renvoie une chaîne vide (le run
         /// Tonight continue sans le bloc). Retourne aussi une chaîne vide quand
         /// il n'y a rien à signaler (pas de section vide dans le prompt).</para>
+        /// <para><b>Annotation de position (v2.2.2)</b> : chaque ligne porte
+        /// <c>user_started=no|yes</c> (<paramref name="watchedIdx"/>) — même
+        /// vocabulaire que le menu des enregistrements ; le pied de bloc
+        /// demande de signaler un stock qui démarre au milieu de la série
+        /// (start ≠ début : les premiers épisodes n'ont jamais été
+        /// enregistrés), miroir de la règle du menu (vécu 2026-10-08, prod :
+        /// « le dernier épisode » d'une série jamais commencée).</para>
         /// </summary>
-        private string BuildBingeReadySeries(User user, PluginConfiguration cfg, bool compact, string excludedRoot)
+        private string BuildBingeReadySeries(User user, PluginConfiguration cfg, bool compact,
+            string excludedRoot, WatchedIndex watchedIdx)
         {
             if (cfg == null || user == null) return string.Empty;
             int threshold = Math.Max(1, cfg.TonightBingeThreshold);
@@ -1845,6 +2035,15 @@ namespace LLM_AI
                     if (s.FirstSeason != int.MaxValue || s.FirstEpisode != int.MaxValue)
                         line.Append(" | start=S" + (s.FirstSeason == int.MaxValue ? 0 : s.FirstSeason).ToString("00", CultureInfo.InvariantCulture)
                                   + "E" + (s.FirstEpisode == int.MaxValue ? 0 : s.FirstEpisode).ToString("00", CultureInfo.InvariantCulture));
+                    // Position de l'usager (v2.2.2) : l'usager a-t-il déjà
+                    // visionné cette série ? Même vocabulaire que le menu des
+                    // enregistrements (user_started=no|yes) — la ligne « prête à
+                    // dévorer » d'une série jamais commencée dont le stock
+                    // démarre au milieu doit être signalée comme telle.
+                    if (watchedIdx != null)
+                        line.Append(" | user_started=" +
+                            ((watchedIdx.SeriesEpisodes.ContainsKey(s.Key) ||
+                              watchedIdx.SeriesEpisodeTitles.ContainsKey(s.Key)) ? "yes" : "no"));
                     if (!string.IsNullOrEmpty(s.First?.Name))
                         line.Append(" « " + s.First.Name + " »");
                     sb.AppendLine(line.ToString());
@@ -1857,7 +2056,10 @@ namespace LLM_AI
                               "source=\"recording\" si la série figure aussi dans les ENREGISTREMENTS NON VISIONNÉS " +
                               "ci-dessus (reprends alors l'id de cette liste), sinon source=\"library\" en reprenant " +
                               "l'id ci-dessus tel quel (l'UI proposera « Regarder »). Mentionne le nombre " +
-                              "d'épisodes en attente dans la raison.");
+                              "d'épisodes en attente dans la raison ; « user_started=no » signifie que l'usager " +
+                              "n'a JAMAIS regardé cette série — si start= n'est pas le début de la série " +
+                              "(ex. S01E18 : les épisodes précédents n'ont jamais été enregistrés), précise-le " +
+                              "explicitement dans la raison.");
 
                 _logger?.Info("[LLM_AI] Tonight binge : {0} série(s) signalée(s) ({1} candidate(s), seuil {2}, fenêtre active {3} j, pool {4} épisode(s)).",
                     surfaced.Count, candidates.Count, threshold, activeDays, items.Length);

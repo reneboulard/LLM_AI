@@ -981,12 +981,21 @@ endpoint. The LLM receives **three sources**:
 3. **Recent unwatched recordings** — `BuildUnwatchedRecordings`: items recorded within the
    last `TonightRecordingsDays` days but not watched (`IsPlayed=false`). Enables the rule:
    *if the user watches series X and a new unwatched recording of X is available →
-   recommend it.*
+   recommend it.* The `kind=series` lines carry the **user's real position** (v2.2.2):
+   `start=SxxEyy` (the folder's first unwatched episode — the actual entry point),
+   `unwatched=N` (available unwatched stock) and `user_started=no|yes` (series already
+   watched or not): a **never-started** series whose stockpile begins mid-series (the
+   earlier episodes were never recorded — the DVR often records only the current
+   episodes) is only recommended when its episodes stand alone (talk show,
+   documentary, entertainment). Without these facts, the LLM recommended "the latest
+   episode" of a never-started series (lived 2026-10-08 in production).
 
 **Library reserve (fallback)** — `BuildLibraryFallbackPool`: pre-fetched unwatched items,
 injected as a **reserve**, used **only if** the LLM produces **fewer than
 `TonightMinRecommendations`** recommendations. Guarantees at least N recos even when the
-EPG is empty.
+EPG is empty. Since v2.2.2, a series is represented there by its **oldest** unwatched
+episode in the pool (season/episode order), not the most recently added — the same
+class of flaw as the recordings menu.
 
 **Binge-ready series (opt-in)** — `TonightBingeEnabled`: the user who records a series and
 waits for several episodes before starting gets an opportunistic nudge once the stockpile
@@ -998,7 +1007,10 @@ tells an ongoing stockpile from a **dormant**, never-started series (a series ke
 rainy day" is **never** surfaced). A series crossing the threshold is injected into the
 prompt (AT MOST ONE recommendation per run, `source="recording"` if it also appears in the
 unwatched recordings, else `source="library"`; id of the **first episode to watch**,
-season/episode order) with the waiting-episode count mentioned in the reason.
+season/episode order) with the waiting-episode count mentioned in the reason. Each line
+also carries `user_started=no|yes` (v2.2.2, same vocabulary as the recordings menu): a
+stockpile beginning mid-series (`start=` ≠ the series' beginning — the earlier episodes
+were never recorded) is flagged as such in the reason.
 
 > 📌 **Anti-spam**: the persistent `BingeNotified` gate (per user and per series) surfaces
 > each series **only once per accumulation cycle**. The suggestion re-arms when the

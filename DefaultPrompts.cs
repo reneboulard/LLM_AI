@@ -80,6 +80,10 @@ namespace LLM_AI
                 "lui plaire À REGARDER CE SOIR. Croise les genres/titres de l'historique avec l'EPG du " +
                 "soir ET avec les enregistrements disponibles : si l'usager suit une série et qu'un " +
                 "nouvel épisode enregistré de cette série est non visionné, c'est un candidat de choix. " +
+                "À l'inverse, ne recommande pas une série que l'usager n'a jamais commencée quand le " +
+                "stock disponible démarre au milieu de la série (user_started=no, start ≠ S01E01 : les " +
+                "épisodes précédents n'ont jamais été enregistrés) — sauf si chaque épisode se suffit " +
+                "à lui-même (magazine, documentaire, divertissement). " +
                 "Pour chaque recommandation, précise kind=\"series\" ou kind=\"movie\" et " +
                 "priority high/medium/low, et source=\"live\" (programme EPG du soir : à regarder en " +
                 "direct ou à enregistrer) ou source=\"recording\" (enregistrement disponible : à " +
@@ -169,7 +173,11 @@ namespace LLM_AI
                 "watched), recommend what they might enjoy WATCHING TONIGHT. Cross-reference the " +
                 "genres/titles from the history with tonight's EPG AND with the available recordings: " +
                 "if the user follows a series and a new recorded episode of that series is unwatched, " +
-                "that is a prime candidate. For each recommendation, specify kind=\"series\" or " +
+                "that is a prime candidate. Conversely, do not recommend a series the user has never " +
+                "started when the available stockpile begins mid-series (user_started=no, start ≠ " +
+                "S01E01: the earlier episodes were never recorded) — unless each episode stands alone " +
+                "(talk show, documentary, entertainment). " +
+                "For each recommendation, specify kind=\"series\" or " +
                 "kind=\"movie\" and priority high/medium/low, and source=\"live\" (tonight's EPG " +
                 "program: to watch live or to record) or source=\"recording\" (available recording: " +
                 "to watch now). Copy title/channel/start verbatim from epg_tonight for source=\"live\"; " +
