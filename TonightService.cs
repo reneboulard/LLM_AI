@@ -489,7 +489,7 @@ namespace LLM_AI
             User tonightUser = null;
             if (cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
             {
-                tonightUser = ResolveTonightUser(_users, cfg);
+                tonightUser = ResolveTonightUser(_users, cfg, _logger);
                 if (tonightUser == null)
                     _logger?.Warn("[LLM_AI] Tonight surfaces : aucun usager « Tonight » résolu (TonightUserName={0}) — playlist publique et favoris ignorées.",
                         cfg.TonightUserName);
@@ -517,12 +517,20 @@ namespace LLM_AI
                 //    2026-09-12 — un item de playlist visible est LISIBLE),
                 //    l'intersection est ce qui empêche la surface foyer
                 //    d'exposer du contenu interdit à un compte restreint.
+                //    Résolution série→épisode FOYER (v2.2.0) : le « plus
+                //    avancé » des comptes actifs — le porteur seul (souvent
+                //    un compte technique sans historique) pointait
+                //    l'épisode 1 de chaque série (vécu 2026-10-08, prod).
+                //    Ensemble foyer = porteur + actifs, MOINS les comptes
+                //    ignorés (liste « comptes ignorés », v2.2.0 — la liste
+                //    n'entre JAMAIS dans l'intersection parentale).
                 if (tonightUser != null && user.Id == tonightUser.Id)
                 {
                     try
                     {
                         await AiTonightPlaylistManager.EnsurePublicAsync(_playlists, _library, _logger,
-                                watchBucketIds, tonightUser, GetActiveRestrictedUsers(_users), _host, ct)
+                                watchBucketIds, tonightUser, BuildHouseholdUsers(tonightUser, cfg),
+                                GetActiveRestrictedUsers(_users), _host, ct)
                             .ConfigureAwait(false);
                     }
                     catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight playlist publique : {0}", ex.Message); }
@@ -1013,8 +1021,18 @@ namespace LLM_AI
         /// casse (pattern <c>GetEmbyInfoTool.ResolveUser</c>) ; nom vide →
         /// premier usager admin, sinon premier usager. Best-effort : null si
         /// aucun usager résoluble.
+        /// <para><b>Repli et comptes ignorés (v2.2.0)</b> : quand le champ
+        /// est vide, le repli « premier admin » <b>saute les comptes
+        /// ignorés</b> (<see cref="IgnoredUserKeys"/> — il ne peut plus
+        /// retomber sur un compte technique sans historique, vécu
+        /// 2026-10-08 en prod), puis le repli utilisateur fait de même ;
+        /// un foyer entièrement ignoré → <c>null</c> (pas de porteur :
+        /// pas de playlist publique ni de favoris pour ce run). Le nom
+        /// <b>explicite</b> n'est jamais filtré : une config qui désigne
+        /// un compte l'a choisi délibérément.</para>
         /// </summary>
-        internal static User ResolveTonightUser(IUserManager users, PluginConfiguration cfg)
+        internal static User ResolveTonightUser(IUserManager users, PluginConfiguration cfg,
+            ILogger logger = null)
         {
             try
             {
@@ -1032,10 +1050,38 @@ namespace LLM_AI
                     if (ci != null) return ci;
                 }
 
-                return all.FirstOrDefault(u => u.Policy?.IsAdministrator ?? false)
-                    ?? all.FirstOrDefault();
+                // Repli (champ vide) : saute les comptes ignorés — le « premier
+                // admin » ne doit plus tomber sur un compte technique (v2.2.0).
+                var ignored = IgnoredUserKeys(users, cfg, logger);
+                bool IsNotIgnored(User u) => !ignored.Contains(NormUserName(u.Name));
+                return all.FirstOrDefault(u => (u.Policy?.IsAdministrator ?? false) && IsNotIgnored(u))
+                    ?? all.FirstOrDefault(IsNotIgnored);
             }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// Usagers ACTIFS du foyer (non désactivés) — l'ensemble de
+        /// résolution <b>foyer</b> « next-up le plus avancé » de la
+        /// playlist publique (v2.2.0) : le porteur Tonight (passé à part
+        /// par le manager) y est complété par tous les comptes actifs. Un
+        /// compte sans historique y est <b>neutre</b> : son repli
+        /// « premier épisode non vu » (S1E1) ne gagne le max que si
+        /// personne n'a entamé la série — le bon résultat (« nouvelle
+        /// série pour le foyer »). Best-effort : échec de listing =
+        /// liste vide (la résolution foyer retombe sur le seul porteur).
+        /// </summary>
+        internal static List<User> GetActiveUsers(IUserManager users)
+        {
+            var list = new List<User>();
+            try
+            {
+                foreach (var u in users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                    if (u != null && u.Policy?.IsDisabled != true)
+                        list.Add(u);
+            }
+            catch { /* liste vide : résolution foyer = porteur seul */ }
+            return list;
         }
 
         /// <summary>
@@ -1057,6 +1103,102 @@ namespace LLM_AI
                         list.Add(u);
             }
             catch { /* liste vide : intersection sans filtre */ }
+            return list;
+        }
+
+        /// <summary>
+        /// Clé de comparaison tolérante d'un nom d'usager (liste « comptes
+        /// ignorés », v2.2.0) : trim + décomposition NFKD + retrait des
+        /// diacritiques (accents) + minuscules invariantes — « René »,
+        /// « rene » et « RENÉ » produisent la même clé.
+        /// </summary>
+        internal static string NormUserName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+            try
+            {
+                var norm = name.Trim().Normalize(System.Text.NormalizationForm.FormKD);
+                var sb = new StringBuilder(norm.Length);
+                foreach (var ch in norm)
+                {
+                    var cat = CharUnicodeInfo.GetUnicodeCategory(ch);
+                    if (cat == UnicodeCategory.NonSpacingMark
+                        || cat == UnicodeCategory.SpacingCombiningMark) continue;
+                    sb.Append(ch);
+                }
+                return sb.ToString().ToLowerInvariant();
+            }
+            catch { return name.Trim().ToLowerInvariant(); }
+        }
+
+        /// <summary>
+        /// Clés normalisées (<see cref="NormUserName"/>) de la liste
+        /// <see cref="PluginConfiguration.TonightIgnoredUsers"/> — un nom
+        /// par ligne. Journalise (warn) les noms ne correspondant à
+        /// <b>aucun</b> compte existant (faute de frappe visible au
+        /// diagnostic) sans jamais les rejeter : un compte créé plus tard
+        /// sous ce nom sera ignoré à son tour. Best-effort : liste vide en
+        /// cas d'échec du listing (comportement sans filtre).
+        /// </summary>
+        internal static HashSet<string> IgnoredUserKeys(
+            IUserManager users, PluginConfiguration cfg, ILogger logger)
+        {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            var raw = cfg?.TonightIgnoredUsers;
+            if (string.IsNullOrWhiteSpace(raw)) return keys;
+
+            HashSet<string> existing = null;
+            foreach (var line in raw.Split('\n'))
+            {
+                var name = line?.Trim();
+                if (string.IsNullOrEmpty(name)) continue;
+                keys.Add(NormUserName(name));
+
+                // Résolution (pour le diagnostic uniquement) : liste les noms
+                // ne matchant aucun compte. Tolérante comme le match réel.
+                existing ??= new HashSet<string>(
+                    (users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                        .Where(u => u?.Name != null)
+                        .Select(u => NormUserName(u.Name)),
+                    StringComparer.Ordinal);
+                if (!existing.Contains(NormUserName(name)))
+                    logger?.Warn("[LLM_AI] Comptes ignorés : « {0} » ne correspond à aucun usager existant — entrée conservée quand même.", name);
+            }
+            return keys;
+        }
+
+        /// <summary>
+        /// Ensemble de résolution <b>foyer</b> (playlist publique, v2.2.0) :
+        /// le porteur + les comptes actifs (<see cref="GetActiveUsers"/>),
+        /// <b>MOINS les comptes ignorés</b>
+        /// (<see cref="IgnoredUserKeys"/> de la liste « comptes ignorés ») —
+        /// leur position ne compte pas dans le « next-up le plus avancé »,
+        /// porteur compris s'il y figure lui-même. Journalise une ligne des
+        /// exclusions effectives. Best-effort : échec de listing = retour
+        /// au comportement sans filtre ; liste <b>vide</b> si le foyer
+        /// entier est ignoré (les séries sont alors sautées — le foyer a
+        /// dit qu'aucun compte ne le représente).
+        /// </summary>
+        private List<User> BuildHouseholdUsers(User owner, PluginConfiguration cfg)
+        {
+            var keys = IgnoredUserKeys(_users, cfg, _logger);
+            var list = new List<User>();
+            var excluded = new List<string>();
+            if (owner != null)
+            {
+                if (keys.Contains(NormUserName(owner.Name))) excluded.Add(owner.Name);
+                else list.Add(owner);
+            }
+            foreach (var u in GetActiveUsers(_users))
+            {
+                if (owner != null && u.Id == owner.Id) continue; // déjà traité
+                if (list.Any(x => x.Id == u.Id)) continue;
+                if (keys.Contains(NormUserName(u.Name))) { excluded.Add(u.Name); continue; }
+                list.Add(u);
+            }
+            if (excluded.Count > 0)
+                _logger?.Info("[LLM_AI] Résolution foyer : {0} compte(s) ignoré(s) : {1}.",
+                    excluded.Count, string.Join(", ", excluded));
             return list;
         }
 

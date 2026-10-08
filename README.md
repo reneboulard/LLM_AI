@@ -911,7 +911,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), backends résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. v2.0.0 : les doses portent les inventaires préventifs (étiquettes de données, entités HTML littérales) et la batterie de validation complète — réparation ciblée, raison du refus par clé. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | Tools du **chat admin** (v1.17.0) : `i18n_search` (recherche PAR TEXTE — sous-chaîne dans les natives EN/FR et les overlays ; natives toujours sondées même avec filtre de langue : le texte vu peut être un repli natif), `i18n_get` (lecture complète d'une clé : natives EN+FR par famille, overlay par langue avec verdict structurel + flag identique-EN, **bloc « contract »** v1.17.1.0 quand la native porte des éléments immuables — inventaire exact des balises HTML / `{n}` / sauts de ligne + directive de recopie pour le dépôt, omis pour une clé nue, inconnue → suggestions) et `i18n_set_key` — **two-phase** depuis v1.17.0.2 (dépôt validé après gates structurelles puis carte Avant/Après « Approuver/Refuser », endpoints `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` en C# déterministe ; dépôt possible SEULEMENT dans le mode déroulant « Éditer — Atelier de langues » — v1.17.0.2, libellé aligné sur le patron des modes « Éditer — … » en v1.17.1.2). Réponses sérialisées en JSON **relaxé** (v1.17.1.1 : balises littérales — l'échappement par défaut faisait partir `<b>` en `\u003C` et le modèle ne voyait jamais une vraie balise). Enregistrés quand le protocole tool-calling est déjà actif (budget d'actions, édition de prompts) ou en mode i18n ; avec budget et prompts désactivés, le mode EST l'initiateur du protocole (quirk des modèles non-thinking). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | Chat **externe** (app compagnon, v1.13.21+) : `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, listes), erreurs localisées par langue (v1.16.0) et `GET /Plugins/LLMAI/I18nExt` — tranche `ext` de la langue résolue servie à l'app (pas de token Emby côté app) ; famille servie overlay-seul + complément natif EN par clé pour une langue ≠ fr (v1.17.1.4). Voir [Langues d'interface communautaires](#langues-dinterface-communautaires). |
-| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
+| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware ; **comptes ignorés** filtrés, v2.2.0), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs backend LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
 | `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | Endpoint HTTP **admin** `GET /Plugins/LLMAI/SecurityMetrics` : relevé des compteurs + fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`). Lecture seule, zéro LLM. |
@@ -1044,6 +1044,26 @@ contexte complet.
 **Cache par usager** — `Dictionary<userId, CacheEntry>` + verrou, TTL
 `TonightCacheHours`. `Refresh=1` force un nouveau run (bouton **Rafraîchir**).
 
+**Comptes ignorés (v2.2.0)** — `TonightIgnoredUsers` (config, un nom d'usager
+Emby par ligne, casse et accents tolérés — « rene » = « René ») exclut des
+comptes des mécanismes **foyer**, à **trois endroits uniquement** :
+
+1. **Résolution foyer** de la playlist publique « AI Tonight » : la position
+   de visionnage d'un compte ignoré ne compte pas dans le « next-up le plus
+   avancé » (le porteur lui-même peut y figurer) ;
+2. **Repli du porteur** (champ usager vide) : le « premier admin » saute les
+   comptes ignorés — il ne peut plus retomber sur un compte technique sans
+   historique ;
+3. **Déclencheur login** : le login d'un compte ignoré ne lance plus de run
+   « À regarder ce soir » (fin des runs au profil vide et des favoris
+   parasites).
+
+**Jamais appliquée** à l'intersection parentale de la playlist publique
+(tous les comptes restreints actifs comptent toujours) ni aux surfaces **par
+usager** — un compte ignoré garde ses recos et SA playlist privée en
+rafraîchissement manuel. Noms ne correspondant à aucun compte : journalisés
+(warn) sans bloquer la sauvegarde. Liste vide = aucun changement.
+
 ## Boucle de rétroaction des recommandations
 
 **Opt-in** (`RecoFeedbackEnabled`, défaut off) — le plugin apprend de ses
@@ -1112,6 +1132,10 @@ pattern `Emby.ComSkipper`) branche `SessionManager.SessionStarted` :
 2. **Cache froid** → run `TonightService` (~30–60 s), puis toast + cloche.
 3. Garde-fou **in-flight** : un seul run par usager même sur plusieurs appareils
    connectés à la fois (cache partagé endpoint + login).
+4. **Comptes ignorés** (v2.2.0) : le login d'un compte de la liste
+   « comptes ignorés » ne déclenche **rien** (pas de run, pas de toast) —
+   un login d'un compte technique ne lance plus un run LLM au profil vide
+   avec favoris parasites sur le compte Tonight désigné.
 
 Le **toast** (`SendMessageCommand`, gated `DisplayMessage` dans
 `SupportedCommands`) est une **séquence de popups** — une par suggestion « À
@@ -1275,12 +1299,27 @@ client Emby (miroir de la collection, même nettoyage de 3 h) :
   pas traversé l'intersection du run « Tonight » ; la poser dans la privée
   de l'admin referme ce contournement, la publique reste remplie
   exclusivement par le run « Tonight ».
+- **Résolution foyer « le plus avancé » (v2.2.0)** : dans la **publique**,
+  une reco série/saison devient **l'épisode le plus avancé du foyer** (le
+  max des positions (saison, épisode) résolues pour chaque compte actif
+  non ignoré, porteur Tonight compris — `NextUpResolver.ResolveHouseholdEpisode`)
+  et non plus le seul next up du porteur. Motif (vécu 2026-10-08, prod) : le
+  porteur est souvent un compte technique sans historique (champ usager
+  Tonight vide → premier admin) — sa résolution « premier épisode non vu »
+  valait **l'épisode 1 pour chaque série**, quel que soit l'avancement réel
+  du foyer. Le max rend un compte sans historique **neutre** : son épisode 1
+  ne gagne que si personne n'a entamé la série (« nouvelle série pour le
+  foyer ») ; à position égale, le porteur l'emporte (déterminisme). Tout vu
+  pour tous = série sautée. La liste « **comptes ignorés** » (v2.2.0) retire
+  des comptes de cet ensemble — leur position ne compte pas, porteur
+  compris. Les **privées** restent résolues par usager.
 
 - **Une feuille jouable par reco** : une reco **série ou saison** n'est jamais
   ajoutée telle quelle (Emby développe une série ajoutée à une playlist en
   TOUS ses épisodes — vérifié : un id série → 52 entrées) mais résolue en **un
-  épisode « next up » non vu** pour l'usager du run ; les films/épisodes
-  passent tels quels.
+  épisode « next up » non vu** — pour l'usager du run (playlists privées,
+  `playlist_add` du chat) ou pour le foyer « le plus avancé » (publique,
+  v2.2.0) ; les films/épisodes passent tels quels.
 - **Repli next up (v1.13.10.1)** : sur ce build Emby, `GetNextUp` retourne
   **vide pour une série jamais commencée** — le repli prend le **premier
   épisode non vu** en ordre saison/épisode (donc S1E1 pour une série neuve),

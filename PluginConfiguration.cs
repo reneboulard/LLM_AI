@@ -636,6 +636,35 @@ namespace LLM_AI
         /// </summary>
         public string TonightUserName { get; set; } = string.Empty;
 
+        /// <summary>
+        /// <b>Comptes ignorés des mécanismes foyer</b> (v2.2.0) : liste libre,
+        /// <b>un nom d'usager Emby par ligne</b> — résolution tolérante
+        /// (casse et accents : « rene » = « René »). Trois usages
+        /// <b>exclusivement</b> :
+        /// <para>1) <b>Résolution foyer</b> de la playlist publique « AI
+        /// Tonight » : la position de visionnage d'un compte ignoré ne
+        /// compte pas dans le « next-up le plus avancé » (le porteur
+        /// lui-même peut y figurer) ;</para>
+        /// <para>2) <b>Repli du porteur</b> (champ <see cref="TonightUserName"/>
+        /// vide) : le repli « premier admin » <b>saute les comptes ignorés</b>
+        /// — il ne peut plus retomber sur un compte technique sans
+        /// historique (vécu 2026-10-08, prod) ;</para>
+        /// <para>3) <b>Déclencheur login</b> (<c>TonightLoginService</c>) : le
+        /// login d'un compte ignoré ne déclenche <b>plus</b> de run « À
+        /// regarder ce soir » (fin des runs LLM au profil vide et des
+        /// favoris parasites — un login admin en générait, découvert
+        /// 2026-10-08).</para>
+        /// <para><b>Jamais appliquée</b> à : l'<b>intersection parentale</b>
+        /// de la playlist publique (tous les comptes restreints actifs
+        /// comptent toujours — un compte ignoré ne doit pas pouvoir rouvrir
+        /// une brèche), ni aux <b>surfaces par usager</b> (recos, playlist
+        /// privée : un compte ignoré garde ses surfaces en rafraîchissement
+        /// manuel). Vide (défaut) : aucun changement de comportement. Les
+        /// noms ne correspondant à aucun compte existant sont journalisés
+        /// (warn) sans bloquer la sauvegarde.</para>
+        /// </summary>
+        public string TonightIgnoredUsers { get; set; } = string.Empty;
+
         // ------------------------------------------------------------------
         //  Mémoire réflexive (Phase A) : les données qui alimenteront la
         //  réflexion du LLM. Trois stores fichiers dans le répertoire de

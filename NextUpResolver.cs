@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
@@ -16,7 +17,9 @@ namespace LLM_AI
     /// next up natif (<see cref="ITVSeriesManager.GetNextUp"/>) avec repli
     /// « premier épisode non visionné ». Logique unique partagée par les
     /// playlists AI Tonight (normalisation du watch bucket en feuilles
-    /// jouables) et le tool <c>client_command play_item</c> du chat externe.
+    /// jouables), le tool <c>client_command play_item</c> du chat externe,
+    /// et — pour la playlist publique foyer — la variante multi-usagers
+    /// « le plus avancé » (<see cref="ResolveHouseholdEpisode"/>, v2.2.0).
     /// </summary>
     /// <remarks>
     /// <para><b>Pourquoi série→épisode</b> : un <c>PlayNow</c> (comme une
@@ -112,6 +115,89 @@ namespace LLM_AI
             if (ep == null)
                 ep = FirstUnwatchedEpisode(library, userData, user, seriesItem, logger, logPrefix);
             return ep;
+        }
+
+        /// <summary>
+        /// Résolution <b>foyer</b> (playlist publique « AI Tonight », v2.2.0) :
+        /// le prochain épisode <b>le plus avancé</b> parmi un ensemble
+        /// d'usagers — <paramref name="householdUsers"/>, constitué par
+        /// l'appelant (<c>TonightService.BuildHouseholdUsers</c> : le
+        /// porteur Tonight + les comptes actifs, <b>moins les comptes
+        /// ignorés</b> de la liste de config). Pour chaque usager, la
+        /// résolution individuelle (<see cref="ResolvePlayingEpisode"/> :
+        /// next up natif + repli premier non visionné) est calculée, puis
+        /// l'épisode de position (saison, épisode) <b>maximale</b> est
+        /// retenu — la playlist foyer ne pointe jamais un épisode que le
+        /// foyer a déjà dépassé.
+        /// <para><b>Pourquoi le max</b> (vécu 2026-10-08, prod) : résolue
+        /// pour le seul porteur, la playlist publique pointait l'épisode 1
+        /// de chaque série recommandée — le porteur est souvent un compte
+        /// technique sans historique (champ usager Tonight vide → premier
+        /// admin), dont le repli « premier non vu » vaut toujours S1E1. Le
+        /// <b>min</b> (premier épisode non vu par TOUS) retomberait sur
+        /// l'épisode 1 dès qu'un seul membre n'a rien vu ; le <b>max</b>
+        /// rend un compte sans historique <b>neutre</b> : son S1E1 ne gagne
+        /// que si personne n'a entamé la série — le bon résultat
+        /// (« nouvelle série pour le foyer »).</para>
+        /// <para><b>Égalités</b> : à position (saison, épisode) égale, le
+        /// premier usager de l'ordre reçu l'emporte (déterminisme).
+        /// Numéros absents = position basse (spéciaux non numérotés ≠
+        /// « plus avancé »). Ensemble vide (foyer entier ignoré) ou tout
+        /// vu pour tous = null (l'appelant saute la série). Chaque
+        /// résolution individuelle est journalisée au nom de l'usager
+        /// (préfixe « {paramref logPrefix} ({usager}) »), et un résumé
+        /// une-ligne donne les positions du foyer et l'élu. Best-effort,
+        /// ne lève jamais.</para>
+        /// </summary>
+        internal static BaseItem ResolveHouseholdEpisode(
+            ILibraryManager library, IServerApplicationHost host,
+            IEnumerable<User> householdUsers,
+            BaseItem seriesOrSeason, ILogger logger, string logPrefix)
+        {
+            if (seriesOrSeason == null) return null;
+
+            // Ensemble reçu DÉJÀ constitué et filtré par l'appelant
+            // (TonightService : porteur + actifs, moins les ignorés) —
+            // dédupliqué par id ici par précaution, ordre reçu conservé
+            // (déterminisme des égalités).
+            var users = new List<User>();
+            foreach (var u in householdUsers ?? Array.Empty<User>())
+                if (u != null && !users.Any(x => x.Id == u.Id))
+                    users.Add(u);
+            if (users.Count == 0) return null;
+
+            BaseItem best = null;
+            string bestUser = null;
+            int bestSeason = int.MinValue, bestNumber = int.MinValue;
+            var positions = new List<string>(users.Count);
+            foreach (var u in users)
+            {
+                // Résolution individuelle (next up natif + repli) —
+                // préfixe au nom de l'usager : chaque ligne de repli est
+                // attribuable, le diagnostic foyer reste lisible.
+                var ep = ResolvePlayingEpisode(library, host, u, seriesOrSeason, logger,
+                    logPrefix + " (" + (u.Name ?? "?") + ") : ");
+                if (ep == null)
+                {
+                    positions.Add((u.Name ?? "?") + "=aucun");
+                    continue;
+                }
+                int season = ep.ParentIndexNumber ?? int.MinValue;
+                int number = ep.IndexNumber ?? int.MinValue;
+                positions.Add((u.Name ?? "?") + "=S" + (ep.ParentIndexNumber?.ToString() ?? "?")
+                    + "E" + (ep.IndexNumber?.ToString() ?? "?"));
+                if (best == null || season > bestSeason
+                    || (season == bestSeason && number > bestNumber))
+                {
+                    best = ep; bestUser = u.Name; bestSeason = season; bestNumber = number;
+                }
+            }
+
+            if (best != null)
+                logger?.Info("[LLM_AI] {0} : « {1} » — {2} usager(s) considéré(s) [{3}] → retenu « {4} » (le plus avancé, usager « {5} »).",
+                    logPrefix, seriesOrSeason.Name, users.Count,
+                    string.Join(", ", positions), best.Name, bestUser ?? "?");
+            return best;
         }
 
         /// <summary>État « vu » de l'item pour CET usager

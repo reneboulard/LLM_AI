@@ -130,6 +130,21 @@ namespace LLM_AI
                 User user = ResolveUser(session);
                 if (user == null) return;
 
+                // Comptes ignorés (v2.2.0) : le login d'un compte ignoré ne
+                // déclenche PLUS de run « À regarder ce soir » — un login
+                // admin (compte technique) générait un run LLM complet au
+                // profil vide + des favoris parasites sur le compte Tonight
+                // désigné (découvert 2026-10-08). Le compte garde ses
+                // surfaces par usager (recos, playlist privée) en
+                // rafraîchissement manuel — il n'est ignoré que par les
+                // mécanismes foyer et les déclencheurs automatiques.
+                var ignoredKeys = TonightService.IgnoredUserKeys(_users, cfg, _logger);
+                if (ignoredKeys.Contains(TonightService.NormUserName(user.Name)))
+                {
+                    _logger?.Info("[LLM_AI] Login « {0} » : compte ignoré (liste des comptes ignorés) → pas de run Tonight.", user.Name);
+                    return;
+                }
+
                 string sid = session.Id;
 
                 // 1) Cache frais → toast immédiat (pas de run LLM, pas

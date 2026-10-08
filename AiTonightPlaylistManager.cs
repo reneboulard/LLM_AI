@@ -19,7 +19,12 @@ namespace LLM_AI
     /// policy parentale) et <b>une publique foyer</b> (<see cref="PlaylistName"/>,
     /// « AI Tonight », remplie par les runs de l'usager « Tonight » avec
     /// l'<b>intersection parentale</b> : seulement ce que tout compte actif
-    /// peut lire). Le contenu vient du <b>watch bucket</b> du run
+    /// peut lire). Depuis la v2.2.0, la résolution série→épisode de la
+    /// publique est <b>foyer</b> (« le plus avancé » des comptes actifs,
+    /// <see cref="NextUpResolver.ResolveHouseholdEpisode"/>) : résolue pour
+    /// le seul porteur — souvent un compte technique sans historique —,
+    /// elle pointait l'épisode 1 de chaque série (vécu 2026-10-08, prod).
+    /// Le contenu vient du <b>watch bucket</b> du run
     /// (enregistrements non visionnés + items possédés). Miroir de
     /// <see cref="AiTonightCollectionManager"/> (même workflow : surface au
     /// run, nettoyage à 3 h par <c>AiTonightCleanupTask</c>), mais sous forme
@@ -168,19 +173,34 @@ namespace LLM_AI
         /// un item visible dans une playlist publique est LISIBLE par un
         /// compte restreint, et la playlist publique est une surface foyer ;
         /// l'intersection la rend incapable d'exposer ce qu'un compte ne
-        /// peut pas déjà voir. Détruite puis recréée à chaque appel (aucun
-        /// membre acceptable = playlist absente, jamais recréée vide).
-        /// Best-effort : un échec d'API est logué sans lever.
+        /// peut pas déjà voir.
+        /// <para><b>Résolution foyer (v2.2.0)</b> : une reco série/saison
+        /// y est résolue en <b>l'épisode le plus avancé du foyer</b>
+        /// (<see cref="NextUpResolver.ResolveHouseholdEpisode"/> sur
+        /// <paramref name="householdUsers"/> — ensemble reçu <b>déjà
+        /// constitué et filtré</b> par l'appelant : porteur + comptes
+        /// actifs, <b>moins les comptes ignorés</b>) et non plus en le
+        /// seul next up du porteur. Motif (vécu 2026-10-08, prod) : le
+        /// porteur est souvent un compte technique sans historique (champ
+        /// usager Tonight vide → premier admin) — sa résolution valait
+        /// l'épisode 1 pour chaque série recommandée, quel que soit
+        /// l'avancement réel du foyer. Le « plus avancé » rend les comptes
+        /// sans historique neutres et garde les playlists PRIVÉES par
+        /// usager (v1.13.16.0) inchangées — chacun garde SON next up.</para>
+        /// <para>Détruite puis recréée à chaque appel (aucun membre
+        /// acceptable = playlist absente, jamais recréée vide). Best-effort :
+        /// un échec d'API est logué sans lever.</para>
         /// </summary>
         internal static async Task EnsurePublicAsync(
             IPlaylistManager playlists, ILibraryManager library, ILogger logger,
-            IEnumerable<string> itemGuidIds, User owner, List<User> restrictedUsers,
-            IServerApplicationHost host, CancellationToken ct)
+            IEnumerable<string> itemGuidIds, User owner, List<User> householdUsers,
+            List<User> restrictedUsers, IServerApplicationHost host, CancellationToken ct)
         {
             if (playlists == null || library == null || itemGuidIds == null || owner == null)
                 return;
 
-            var leaves = ResolveLeafItems(library, host, itemGuidIds, owner, logger, ct);
+            var leaves = ResolveLeafItemsHousehold(
+                library, host, itemGuidIds, householdUsers, logger, ct);
 
             var kept = new List<BaseItem>(leaves.Count);
             int blocked = 0;
@@ -542,10 +562,61 @@ namespace LLM_AI
         /// le filet parental (<see cref="PermissionGate.FilterParental"/>) et
         /// l'intersection parentale de la playlist publique ont besoin des
         /// <see cref="BaseItem"/> pour évaluer la policy. Dédup par InternalId.
+        /// Résolution <b>par usager</b> (le run) : playlist privée + chat.
         /// </summary>
         private static List<BaseItem> ResolveLeafItems(
             ILibraryManager library, IServerApplicationHost host,
             IEnumerable<string> itemIds, User user, ILogger logger, CancellationToken ct)
+        {
+            return ResolveLeavesCore(library, host, itemIds, logger, ct,
+                seriesItem => NextUpResolver.ResolvePlayingEpisode(
+                    library, host, user, seriesItem, logger, "Playlist : "),
+                "Playlist : ");
+        }
+
+        /// <summary>
+        /// Variante <b>foyer</b> de <see cref="ResolveLeafItems"/> (v2.2.0) :
+        /// une reco série/saison est résolue en <b>l'épisode le plus avancé
+        /// du foyer</b> (<see cref="NextUpResolver.ResolveHouseholdEpisode"/>
+        /// sur <paramref name="householdUsers"/>) au lieu du next up du seul
+        /// porteur — les autres items passent tels quels, dédup par
+        /// InternalId. <paramref name="householdUsers"/> est reçu
+        /// <b>déjà constitué et filtré</b> par l'appelant
+        /// (<c>TonightService.BuildHouseholdUsers</c> : porteur + comptes
+        /// actifs, <b>moins les comptes ignorés</b>). Réservée à la playlist
+        /// publique « AI Tonight » (surface foyer partagée) ; les playlists
+        /// privées restent par usager (v1.13.16.0). Logs préfixés
+        /// « Playlist foyer » pour distinguer les deux chemins dans le
+        /// journal.
+        /// </summary>
+        private static List<BaseItem> ResolveLeafItemsHousehold(
+            ILibraryManager library, IServerApplicationHost host,
+            IEnumerable<string> itemIds, List<User> householdUsers,
+            ILogger logger, CancellationToken ct)
+        {
+            return ResolveLeavesCore(library, host, itemIds, logger, ct,
+                seriesItem => NextUpResolver.ResolveHouseholdEpisode(
+                    library, host, householdUsers, seriesItem,
+                    logger, "Playlist foyer"),
+                "Playlist foyer : ");
+        }
+
+        /// <summary>
+        /// Cœur commun de normalisation du watch bucket en <b>feuilles
+        /// jouables</b> : une reco <see cref="MediaBrowser.Controller.Entities.TV.Series"/> /
+        /// <c>Season</c> devient un épisode via
+        /// <paramref name="resolveSeriesEpisode"/> (par usager pour les
+        /// privées, foyer « le plus avancé » pour la publique — v2.2.0), les
+        /// autres items (film, épisode) passent tels quels. Dédup par
+        /// InternalId. <b>Pourquoi</b> : Emby développe une série ou saison
+        /// ajoutée à une playlist en TOUS ses épisodes (vérifié 2026-09-06 :
+        /// un id série → 52 entrées) — sans cette normalisation, chaque run
+        /// gonflait la playlist de ~50 entrées par reco série.
+        /// </summary>
+        private static List<BaseItem> ResolveLeavesCore(
+            ILibraryManager library, IServerApplicationHost host,
+            IEnumerable<string> itemIds, ILogger logger, CancellationToken ct,
+            Func<BaseItem, BaseItem> resolveSeriesEpisode, string logPrefix)
         {
             var leaves = new List<BaseItem>();
             var seen = new HashSet<long>();
@@ -558,25 +629,24 @@ namespace LLM_AI
 
                 BaseItem item;
                 try { item = ItemIdResolver.Resolve(library, raw); }
-                catch (Exception ex) { logger?.Warn("[LLM_AI] Playlist : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] {0}résolution id {1} échouée : {2}", logPrefix, raw, ex.Message); continue; }
                 if (item == null) continue;
 
-                // Série/saison → épisode next up (une feuille par reco) —
-                // résolution partagée : NextUpResolver (next up natif +
-                // repli premier non visionné).
+                // Série/saison → épisode (une feuille par reco) — résolution
+                // fournie par l'appelant : par usager (privées, chat) ou
+                // foyer « le plus avancé » (publique, v2.2.0).
                 if (item is MediaBrowser.Controller.Entities.TV.Series
                     || item is MediaBrowser.Controller.Entities.TV.Season)
                 {
-                    var ep = NextUpResolver.ResolvePlayingEpisode(
-                        library, host, user, item, logger, "Playlist : ");
+                    var ep = resolveSeriesEpisode(item);
                     if (ep == null)
                     {
-                        logger?.Info("[LLM_AI] Playlist : série « {0} » sans épisode non vu (tout vu ?) — sautée.",
-                            item.Name);
+                        logger?.Info("[LLM_AI] {0}série « {1} » sans épisode non vu (tout vu ?) — sautée.",
+                            logPrefix, item.Name);
                         continue;
                     }
-                    logger?.Info("[LLM_AI] Playlist : série « {0} » → épisode « {1} » (id={2}).",
-                        item.Name, ep.Name, ep.InternalId);
+                    logger?.Info("[LLM_AI] {0}série « {1} » → épisode « {2} » (id={3}).",
+                        logPrefix, item.Name, ep.Name, ep.InternalId);
                     if (seen.Add(ep.InternalId)) leaves.Add(ep);
                     continue;
                 }

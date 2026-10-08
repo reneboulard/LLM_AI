@@ -1298,7 +1298,7 @@ namespace LLM_AI
                             _logger?.Info("[LLM_AI] Chat action : directives de session tronquées à 500 caractères.");
                         }
 
-                        User user = TonightService.ResolveTonightUser(_users, _cfg) ?? _adminUser;
+                        User user = TonightService.ResolveTonightUser(_users, _cfg, _logger) ?? _adminUser;
                         if (user == null)
                         {
                             Refund(_sessionId, 1);

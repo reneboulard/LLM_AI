@@ -888,7 +888,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Admin endpoint **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0): `?Lang&Mode` starts a campaign as a **detached run** (single-flight `I18nGenState`, survives tab close, 25-min CTS), backends resolved by the caller (disposable LlmRunner); `?Status=true` = snapshot + last persisted report (engine-written `i18n_gen_report.json`) in the same response. v2.0.0: doses ship the preventive inventories (data tags, literal HTML entities) and the full validation battery — targeted repair, per-key refusal reason. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | **Admin chat** tools (v1.17.0): `i18n_search` (text search — substring across EN/FR natives and overlays; natives always scanned even with a language filter: the on-screen text may be a native fallback), `i18n_get` (full key read-out: EN+FR natives per family, overlay values per language with structural verdict + identical-EN flag, a **`contract` block** as of v1.17.1.0 when the native carries immutable elements — exact inventory of HTML tags / `{n}` / line breaks + recopy directive for the deposit, omitted for a bare key, unknown key → suggestions) and `i18n_set_key` — **two-phase** since v1.17.0.2 (deposit validated through the structural gates then a Before/After "Approve/Refuse" card, `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` endpoints in deterministic C#; deposits allowed ONLY in the "Edit — Language workshop" dropdown mode — v1.17.0.2, label aligned with the "Edit — …" mode pattern as of v1.17.1.2). Responses are serialized with **relaxed** JSON (v1.17.1.1: literal tags — the default escaping sent `<b>` as `\u003C` and the model never saw a real tag). Registered whenever the tool-calling protocol is already active (action budget, prompts editing) or in i18n mode; with budget and prompts editing both off, the mode IS what starts the protocol (non-thinking-model quirk). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | **External** chat (companion app, v1.13.21+): `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, allowlists), per-language localized errors (v1.16.0) and `GET /Plugins/LLMAI/I18nExt` — the resolved language's `ext` slice served to the app (no Emby token on the app side); family served overlay-only + per-key native EN completion for a language ≠ fr (v1.17.1.4). See [Community interface languages](#community-interface-languages). |
-| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
+| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Login trigger: hooks `ISessionManager.SessionStarted`, runs `TonightService` (cache-aware; **ignored accounts** filtered out, v2.2.0), auto-programs (if `AutoProgram`), sends a **toast** (`SendMessageCommand`, gated `DisplayMessage`) + persistent **bell** (deep-link). `Emby.ComSkipper` pattern. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | **On-demand admin** HTTP endpoint `GET /Plugins/LLMAI/Audit`: resolves the calling admin, builds the audit prompt (template `AuditPrompt` + optional `Focus`) then delegates the agent run to `LlmRunner.RunAuditAsync`. Returns the raw Markdown report; persists every successful report (`AuditReportStore`) and serves `?Last=true` (read-only access to the last report, zero LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (internal static) | **Security monitor** (detection, v1.14.0.6): in-process counters (web_fetch/web_search calls, blocked SSRF, malformed/unknown tool calls, LLM backend failures, refused chat turns, deposited/approved/refused actions) + bounded security event journal (200 events). Zero configuration, in-memory (reset on restart); every event is durably logged as `LLM_AI[SEC]` in the Emby log. Never throws. |
 | `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | **Admin** HTTP endpoint `GET /Plugins/LLMAI/SecurityMetrics`: snapshot of the counters + window of the latest plugin security events (`SecurityMonitor`). Read-only, zero LLM. |
@@ -1021,6 +1021,24 @@ limited context). Cloud backends receive the full context.
 (`require(["playbackManager"], pm => pm.play({ids:[id], serverId: ApiClient.serverId()}))`),
 not via `ApiClient.play` (which doesn't exist).
 
+**Ignored accounts (v2.2.0)** — `TonightIgnoredUsers` (config, one Emby user
+name per line, case and accents tolerated — "rene" = "René") excludes
+accounts from the **household** mechanisms, at **exactly three places**:
+
+1. **Household resolution** of the public "AI Tonight" playlist: an ignored
+   account's viewing position doesn't count toward the "most advanced
+   next-up" (the carrier itself can be listed);
+2. **Carrier fallback** (empty user field): the "first admin" skips ignored
+   accounts — it can no longer land on a history-less technical account;
+3. **Login trigger**: an ignored account's login no longer fires an
+   "AI Tonight" run (ends profile-less runs and parasite favorites).
+
+**Never applied** to the public playlist's parental intersection (every
+active restricted account still counts) nor to **per-user** surfaces — an
+ignored account keeps its recos and ITS private playlist on manual refresh.
+Names matching no account: logged (warn) without blocking the save. Empty
+list = no behavior change.
+
 ---
 
 ## Recommendation feedback loop
@@ -1093,6 +1111,10 @@ On user login, `TonightLoginService` (`IServerEntryPoint`,
 2. **Cold cache** → run `TonightService` (~30–60 s), then toast + bell.
 3. **In-flight** guard: a single run per user even across several devices
    logged in at once (shared endpoint + login cache).
+4. **Ignored accounts** (v2.2.0): the login of an account on the
+   "ignored accounts" list triggers **nothing** (no run, no toast) — a
+   technical account's login no longer fires a profile-less LLM run with
+   parasite favorites on the designated Tonight account.
 
 The **toast** (`SendMessageCommand`, gated `DisplayMessage` in
 `SupportedCommands`) is a **popup sequence** — one per "watch tonight"
@@ -1252,11 +1274,28 @@ same 3 a.m. cleanup):
   chat-added item never went through the "Tonight" run's intersection;
   placing it in the admin's private playlist closes that bypass, and the
   public household playlist stays filled exclusively by the "Tonight" run.
+- **Household "most advanced" resolution (v2.2.0)**: in the **public**
+  playlist, a series/season reco becomes **the household's most advanced
+  episode** (the max of the (season, episode) positions resolved for every
+  non-ignored active account, Tonight carrier included —
+  `NextUpResolver.ResolveHouseholdEpisode`) instead of the carrier's next-up
+  alone. Motive (lived 2026-10-08, production): the carrier is often a
+  technical account with no viewing history (empty Tonight user field →
+  first admin) — its "first unwatched episode" resolution meant **episode 1
+  for every series**, whatever the household's real progress. The max makes
+  a history-less account **neutral**: its episode 1 only wins when nobody
+  started the series ("new series for the household"); on equal positions
+  the carrier wins (determinism). Everything watched for everyone = series
+  skipped. The **"ignored accounts" list** (v2.2.0) removes accounts from
+  this set — their position doesn't count, carrier included. The
+  **private** playlists stay resolved per user.
 
 - **One playable leaf per reco**: a **series/season** reco is never added as-is
   (Emby expands it into ALL its episodes — verified: one series id → 52
-  entries); it is resolved to a **single unwatched "next up" episode** for the
-  Tonight user; movies/episodes pass through as-is.
+  entries); it is resolved to a **single unwatched "next up" episode** — for
+  the run's user (private playlists, chat `playlist_add`) or for the
+  household "most advanced" (public, v2.2.0); movies/episodes pass through
+  as-is.
 - **Next-up fallback (v1.13.10.1)**: on this Emby build, `GetNextUp` returns
   EMPTY for a **never-started series** — the fallback picks the **first
   unwatched episode** in season/episode order (so S1E1 for a new series), and

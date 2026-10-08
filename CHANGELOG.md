@@ -10,6 +10,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.2.0] — 2026-10-08
+
+### Added (FR)
+- **Playlist publique « AI Tonight » : résolution foyer « le plus avancé »** —
+  une reco série/saison y est désormais résolue en **l'épisode le plus avancé
+  parmi les comptes actifs du foyer** (porteur Tonight compris), et non plus en
+  le seul next up du porteur. Motif (vérifié en prod 2026-10-08) : le porteur
+  est souvent un compte technique sans historique de visionnage (champ
+  « Usager des favoris et de la playlist » vide → repli sur le premier compte
+  admin) — sa résolution « premier épisode non vu » vaut alors **l'épisode 1
+  pour chaque série recommandée**, quel que soit l'avancement réel du foyer
+  (cas réel : « Élémentaire » suggérée à l'épisode 1 alors que l'usager
+  quotidien en est à la saison 4 ; le run du même compte résolvait pourtant
+  correctement sa propre playlist privée). Le « plus avancé » rend les
+  comptes sans historique **neutres** — leur épisode 1 ne gagne que si
+  personne n'a entamé la série, le bon résultat « nouvelle série pour le
+  foyer ». Inchangés : les playlists **privées par usager** (v1.13.16.0 —
+  chacune garde SON prochain épisode), l'**intersection parentale** de la
+  publique (toujours ce que tout compte actif peut lire) et le repli
+  « premier épisode non vu » par usager. Journal : préfixe « Playlist foyer »
+  et un résumé par série (position résolue par usager + l'épisode retenu).
+- **Liste « comptes ignorés »** (config, section « À regarder ce soir », un
+  nom d'usager Emby par ligne — casse et accents tolérés, « rene » =
+  « René ») : exclut des comptes des mécanismes **foyer**, à trois endroits
+  uniquement — (1) la **résolution foyer** de la playlist publique : la
+  position d'un compte ignoré ne compte pas dans le « plus avancé »
+  (porteur compris) ; (2) le **repli du porteur** (champ usager vide) : le
+  « premier admin » saute les comptes ignorés — il ne peut plus retomber
+  sur un compte technique sans historique (vécu 2026-10-08, prod) ; (3) le
+  **déclencheur login** : le login d'un compte ignoré ne lance plus de run
+  « À regarder ce soir » (fin des runs LLM au profil vide et des favoris
+  parasites — un login admin en générait, découvert 2026-10-08). Jamais
+  appliquée à l'**intersection parentale** (tous les comptes restreints
+  actifs comptent toujours) ni aux **surfaces par usager** (recos,
+  playlist privée — un compte ignoré garde ses surfaces en rafraîchissement
+  manuel). Noms introuvables journalisés (warn) sans bloquer la sauvegarde ;
+  liste vide = aucun changement. Au passage : le placeholder trompeur
+  « René » du champ usager Tonight est retiré (il a induit en erreur sur la
+  prod — la valeur paraissait déjà saisie).
+
+### Added (EN)
+- **Public "AI Tonight" playlist: household "most advanced" resolution** — a
+  series/season recommendation there is now resolved to **the most advanced
+  episode across the household's active accounts** (Tonight carrier included)
+  instead of the carrier's next-up alone. Motive (verified in production
+  2026-10-08): the carrier is often a technical account with no viewing
+  history (empty "User for AI Tonight favorites and playlist" field → falls
+  back to the first admin account) — its "first unwatched episode"
+  resolution then yields **episode 1 for every recommended series**,
+  regardless of the household's real progress (real case: "Élémentaire"
+  suggested at episode 1 while the daily user is at season 4; that same
+  user's own run resolved their private playlist correctly). "Most
+  advanced" makes history-less accounts **neutral** — their episode 1 only
+  wins when nobody has started the series, the right "new series for the
+  household" outcome. Unchanged: the **private per-user playlists**
+  (v1.13.16.0 — each keeps ITS OWN next episode), the public playlist's
+  **parental intersection** (still only what every active account may read)
+  and the per-user "first unwatched episode" fallback. Logging: "Playlist
+  foyer" prefix and a one-line summary per series (per-user resolved
+  positions + the retained episode).
+- **"Ignored accounts" list** (config, "Watch tonight" section, one Emby
+  user name per line — case and accents tolerated, "rene" = "René"):
+  excludes accounts from the **household** mechanisms, at exactly three
+  places — (1) the public playlist's **household resolution**: an ignored
+  account's viewing position doesn't count toward the "most advanced"
+  (carrier included); (2) the **carrier fallback** (empty user field): the
+  "first admin" skips ignored accounts — it can no longer land on a
+  history-less technical account (lived 2026-10-08, production); (3) the
+  **login trigger**: an ignored account's login no longer fires an
+  "AI Tonight" run (ends profile-less LLM runs and parasite favorites —
+  an admin login triggered one, discovered 2026-10-08). Never applied to
+  the **parental intersection** (every active restricted account still
+  counts) nor to **per-user surfaces** (recos, private playlist — an
+  ignored account keeps its surfaces on manual refresh). Unresolved names
+  are logged (warn) without blocking the save; an empty list = no change.
+  Also: the misleading "René" placeholder of the Tonight user field is
+  removed (it misled on production — the value looked already filled in).
+
+---
+
 ## [2.1.0] — 2026-10-07
 
 ### Added (FR)
