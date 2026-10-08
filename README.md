@@ -263,32 +263,52 @@ Prérequis : Emby Server (build net8.0), .NET SDK 8.
 
 La page de config (`config.html` / `config.js`, localisée via `i18n.js`) expose :
 
-### Backends LLM
+### Serveurs LLM
 
-Plusieurs backends peuvent être activés simultanément avec une **priorité**. Le backend
-activé de plus haute priorité est le backend **primaire**. Chaque backend :
+Plusieurs serveurs peuvent être activés simultanément avec une **priorité**. Le serveur
+activé de plus haute priorité est le serveur **primaire**. Chaque serveur :
 
 | Champ | Rôle |
 |---|---|
 | `Provider` | `OllamaLocal`, `OllamaCloud` ou `Gemini` |
 | `Url` | URL de l'API (ex. `http://localhost:11434` pour [Ollama](https://ollama.com) local) |
 | `Model` | Nom du modèle (ex. `llama3.1`, `gemini-1.5-flash`) |
-| `Enabled` | Activer ce backend |
+| `Enabled` | Activer ce serveur |
 | `Priority` | Ordre de préférence (plus haut = primaire) |
 
 > Modèle recommandé en local : la famille **gemma4** — `gemma4:latest` (rapide, ~8 Go de
 > VRAM) ou `gemma4:26b` (plus de qualité, ~1,5-2× plus lent, mémoire de contexte la plus légère).
 
 Champs hérités `LlmUrl` / `ModelName` restent supportés (repli legacy : un `LlmUrl` non
-vide est traité comme un backend local).
+vide est traité comme un serveur local).
+
+**Tâches LLM simultanées max** (`LlmMaxConcurrentTasks`, défaut `1`) : porte de concurrence
+des tâches planifiées LLM (agent EPG quotidien, analyse de rétroaction et mémoire réflexive
+hebdo) — une tâche qui arrive pendant qu'un run est en cours **attend son tour puis passe**
+(aucun passage nocturne perdu, réveil immédiat à la libération). Défaut `1` pour un Ollama
+local, qui traite une conversation à la fois ; montez-le si votre serveur traite plusieurs
+conversations en parallèle (cloud ou Ollama à slots parallèles). Le chat, « À regarder ce
+soir » et l'audit restent toujours immédiats (hors porte — la cascade timeout → serveur
+suivant les protège). La capacité est relue à chaque passage : un changement s'applique sans
+redémarrage.
 
 ### Aides de la page de configuration
 
-- **Bouton « Tester » par backend** (`POST /Plugins/LLMAI/TestLlm`, admin-only) : appel
-  rapide au backend **tel qu'édité** (une question-sonde dans la langue configurée,
+- **Bouton « Tester » par serveur** (`POST /Plugins/LLMAI/TestLlm`, admin-only) : appel
+  rapide au serveur **tel qu'édité** (une question-sonde dans la langue configurée,
   timeout 30 s) — testable avant enregistrement. Les clés API ne sont pas postées par
   la page : le serveur les relit depuis la config enregistrée. Résultat inline sous
   l'en-tête de la ligne : OK + latence ou message d'échec.
+- **Boutons « Tester » TMDB / TVDB / SearXNG** (`POST /Plugins/LLMAI/TestTmdb`,
+  `TestTvdb`, `TestSearxng`, admin-only) : sondes de connexion réelles sous chaque
+  champ de la section « Clés API ». TMDB : `/3/configuration` (valide la clé sans
+  consommer de quota) ; TVDB : le vrai `POST /v4/login` (l'authentification EST la
+  validation — token obtenu, valide ~23 h) ; SearXNG : recherche JSON réelle sur
+  l'URL **telle qu'éditée** (testable avant enregistrement — le 403 d'un
+  `format=json` non activé produit un message explicite). Clés relues depuis la
+  config **enregistrée** (enregistrer la page avant de tester une nouvelle clé) ;
+  TVDB suit la résolution réelle de l'outil (repli `TVDB_API_KEY`). Réponse
+  {Ok, Ms, Reply, Error}, timeout 20 s, aucune écriture de configuration.
 - **Bouton « Réinitialiser » sur les cinq prompts éditables** (Directives RAG, tâche
   Séries, tâche Films, prompt « ce soir », audit santé) : restaure la version propre
   dans la langue de réponse (`?Lang=` forcé, sinon `ResponseLanguage` si renseignée,
@@ -870,8 +890,9 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | Fichier | Classe | Rôle |
 |---|---|---|
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Point d'entrée. Nom `LLM_AI`, Id `e7d3…2e60`. Enregistre les pages web (config, recommandations, i18n). Version pilotée par `<AssemblyVersion>` du `.csproj`. |
-| `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + backends multi-source. |
-| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie les notifications. Délègue l'orchestration à `LlmRunner`. |
+| `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + serveurs multi-source. |
+| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie les notifications. Délègue l'orchestration à `LlmRunner`. Défaut quotidien 3 h 10 ; passe par la porte `LlmTaskGate` autour de ses runs agent. |
+| `LlmTaskGate.cs` | `LlmTaskGate` (classe statique) | **Porte de concurrence des tâches LLM planifiées** (v2.2.1) : au plus `LlmMaxConcurrentTasks` runs simultanés (défaut 1) — une tâche qui arrive sur une porte pleine attend (réveil immédiat à la libération, pas de sondage) puis passe, aucun passage nocturne perdu ; un attendant annulé sort de la file sans consommer de slot. Hors porte : chat, Tonight, audit (interactifs — cascade timeout → serveur suivant). Capacité relue à chaque passage : changement de config sans redémarrage. Utilisée par `LlmScheduledTask`, `RecoAnalysisTask` et `MemoryTask`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService`, `TonightLoginService` et le tool chat `run_tonight_run` (directives de session éphémères + origin chat, v1.13). |
 | `AutoProgrammer.cs` | `AutoProgrammer` (interne) | Auto-programmation : crée les timers Emby (SeriesTimer / Timer unique) du **record bucket** — recos à enregistrer non possédées/non déjà programmées/hors drop list. Portage serveur de la logique « Programmer » de `recommendations.js`. `ProgramOneAsync(Reco, …)` (retour `OneOutcome`) partagé avec l'endpoint Activate. |
@@ -883,13 +904,13 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, **cumul additif v1.13.18.0** — ajoute les manquants avec dédup, run 0-reco sans effet, reset quotidien par la tâche 3 h) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le tag `AI Tonight` (+ genre hérité, migration) + vide la collection (toujours actif). Porte aussi la sonde disque quotidienne (passe tag « AI Delete », opt-in). |
 | `RecordingDiskManager.cs` | `RecordingDiskManager` (statique) | Seuil disque du dossier d'enregistrements : résolution chemin/volume, gate « sous le seuil » (fail-open), passe d'étiquetage « AI Delete » (clear-first, visionnés uniquement, plus ancien d'abord, objectif ×1.2) + notification. |
-| `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:00, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
+| `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:10, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Passe par la porte `LlmTaskGate`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internes) | Helpers de la boucle de rétroaction : journal roulant `RecoLog` (parse/persist/prune), directives `PromptDirectives` (parse/persist/troncature), blocs de prompt réinjectés (par usager pour Tonight, fusionnés pour la tâche d'enregistrement). |
 | `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (statique interne) | Stores de la mémoire réflexive : `decisions.json` (une reco émise par entrée, avec sa raison LLM et la version de fiche en vigueur `mv`), `run_pool.json` (le « menu » de candidats soumis à chaque run — distingue une mauvaise reco d'une erreur de classement), `playback.json` (télémétrie `PlaybackWatcher`). Contexte de run statique (`BeginRun`/`EndRun`/`ActiveRunId`) reliant le tool global `get_emby_info` au run en cours ; lectures `ParseAllDecisions/Pools/Playback`. Rétention 30 j, plafonné, fail-open. |
 | `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Observateur de télémétrie : branche `ISessionManager.PlaybackStopped`, écrit une entrée `playback.json` par session terminée (item, usager, durée réelle, fraction lue, source bibliothèque/.strm/direct, chaîne, client, appareil). Opt-in `PlaybackTelemetryEnabled` vérifié à chaque événement ; le % du direct est dérivé à l'analyse via `EpgSnapshotStore`. Best-effort, n'affecte jamais la lecture. |
 | `EpgSnapshotStore.cs` | `EpgSnapshotStore` / `EpgSnapshotEntry` (statique interne) | Snapshot EPG (`epg_snapshot.json`, rétention 90 j) : fige les métadonnées éphémères dès l'émission au LLM (titre, synopsis ≤ 300, chaîne, **durée de diffusion** = dénominateur du % du direct, genres normalisés GenreCleanerMap, année, flags série/film) et à la création de timer (`AutoProgrammer` → `MarkTimer`). Un programme diffusé disparaît d'Emby : sans snapshot, tout ce qu'on en savait est perdu. |
 | `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (statique interne) | Fiche mémoire réflexive (`memory_card.json`) : version courante + **historique immuable des 4 versions précédentes** (contrepoids anti-dérive), plafond ~250 mots, fail-open (échec LLM → fiche précédente). `BuildInjectionBlock` : le bloc « MÉMOIRE DE L'ASSISTANT » réinjecté dans les prompts quand `MemoryCardEnabled` — **remplace** la directive de la boucle classique (repli transparent sinon). |
-| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 30, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Voir [Mémoire réflexive](#mémoire-réflexive). |
+| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 40, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Passe par la porte `LlmTaskGate`. Voir [Mémoire réflexive](#mémoire-réflexive). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (statique interne) | Mémoire de conversation du chat (`chat_memory.json`, par usager, 5 sessions / 30 j) : tours verbatim (compressés aux 6 derniers après résumé), résumé de session (≤ 1500 car.). `BuildInjectionBlock` : résumé de la session précédente + derniers échanges, accolé au workflow de chat (jetable — le résumé suivant le remplace). Opt-in `ChatMemoryEnabled`. Voir [Mémoire de conversation](#mémoire-de-conversation). |
 | `ChatActions.cs` | `ChatActions` (statique interne) | **Couche d'action du chat** (v1.13) : 11 tools deux phases (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `stop_session`, `trigger_task`, `send_message`, `run_tonight_run`) réutilisant les primitives du plugin — dépôt d'une proposition (pending figé outil+arguments dans `ChatActionStore`) puis exécution à l'approbation via l'endpoint `ChatAction/Approve` (v1.13.29 ; remédiation + run toujours proposables v1.13.30 — la carte remplace l'opt-in config) ; budget par tour + par conversation (consommé à l'exécution, lots all-or-nothing), gate « un run chat à la fois », trace des items ajoutés (seuls retirables), bloc de workflow (budget + protocole deux phases), trace visuelle des actions réussies (toast Emby + libellé `TurnActions` renvoyé à la page — v1.13.1/v1.13.4). Voir [Couche d'action du chat](#couche-daction-du-chat). |
 | `ServerRemediation.cs` | `ServerRemediation` (statique interne) | **Primitives de remédiation serveur** (v1.13.30) : arrêt de lecture d'une session (PlaystateCommand Stop), déclenchement d'une tâche planifiée (`QueueScheduledTask`, exclusion des tâches cachées pour le chemin chat), message Emby à un usager (notification inbox/cloche ou toast OSD). Code métier unique pour deux appelants : les tools d'action du chat (deux phases, carte) et `system_audit` (chemin direct gated `AuditRemediationEnabled`, formes JSON historiques conservées). |
@@ -907,18 +928,18 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (statique interne) | Chargeur de l'**overlay communautaire** (v1.16.0, fichier `LLM_AI_i18n.json` — relecture throttle mtime, sans restart) : familles `server`/`ext` validées **par clé** (multiset placeholders `{n}` + balises HTML vs natives EN ; `ext` = texte brut, {n} seul) + slice `web` servie brute (validée côté client au merge) ; snapshot immuable échangé par référence, patch fr/en autoritaire, clés inconnues/invalide sautées + log, résumé de chargement. |
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | Endpoints i18n pour traducteurs (v1.16.0) : `GET /Plugins/LLMAI/I18n` (slices de l'overlay, fail-open), `?base=1` (base EN native à chaud — web extraite du i18n.js embarqué sans eval, server + ext direct), `?missing=1&lang=xx` (diff des clés restant à traduire, sortie RAW collable). |
 | `I18nDoses.cs` | `I18nDoses` / `I18nDoses.Split` / `Validate` (statique interne) | Découpe des cibles en **doses famille-atomiques** ≤ 50 clés (cohérence > cap — fidèle au kit de doses v1.16) + validation miroir du chargeur **par clé** (placeholders `{n}` multiset, balises HTML, `ext` = texte brut strict, vide, clé inconnue) + garde anti-copie-EN dose-majoritaire (`TriviallyIdenticalEn` : icônes, courts, marques). (v1.17.0) |
-| `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, statiques internes) | **Moteur de l'atelier de langues** (v1.17.0) : 8 étapes — natives+FR contexte, cibles par mode (full/missing/skipped), glossaire officiel Emby, directive à comptes dynamiques, boucle par dose (complétion 2 messages, sorties LLM sous **tokens sentinelle** `[NL]`/`[QU]` décodés C# *après* le parse, validation par clé, réparation ciblée ≤ 3, **escalade parse-dead** vers les backends suivants), fusion non destructive + écriture atomique (n'écrit que si ≥ 1 clé acceptée), rapport persisté + SecurityMonitor. `BoundedDump` = dump RAW borné toute dose morte (␊/␍/␉ visibles). |
-| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), backends résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. v2.0.0 : les doses portent les inventaires préventifs (étiquettes de données, entités HTML littérales) et la batterie de validation complète — réparation ciblée, raison du refus par clé. |
+| `I18nGenerator.cs` | `I18nGenerator` (+ `I18nSentinel` / `I18nDirective` / `BoundedDump`, statiques internes) | **Moteur de l'atelier de langues** (v1.17.0) : 8 étapes — natives+FR contexte, cibles par mode (full/missing/skipped), glossaire officiel Emby, directive à comptes dynamiques, boucle par dose (complétion 2 messages, sorties LLM sous **tokens sentinelle** `[NL]`/`[QU]` décodés C# *après* le parse, validation par clé, réparation ciblée ≤ 3, **escalade parse-dead** vers les serveurs suivants), fusion non destructive + écriture atomique (n'écrit que si ≥ 1 clé acceptée), rapport persisté + SecurityMonitor. `BoundedDump` = dump RAW borné toute dose morte (␊/␍/␉ visibles). |
+| `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), serveurs résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. v2.0.0 : les doses portent les inventaires préventifs (étiquettes de données, entités HTML littérales) et la batterie de validation complète — réparation ciblée, raison du refus par clé. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | Tools du **chat admin** (v1.17.0) : `i18n_search` (recherche PAR TEXTE — sous-chaîne dans les natives EN/FR et les overlays ; natives toujours sondées même avec filtre de langue : le texte vu peut être un repli natif), `i18n_get` (lecture complète d'une clé : natives EN+FR par famille, overlay par langue avec verdict structurel + flag identique-EN, **bloc « contract »** v1.17.1.0 quand la native porte des éléments immuables — inventaire exact des balises HTML / `{n}` / sauts de ligne + directive de recopie pour le dépôt, omis pour une clé nue, inconnue → suggestions) et `i18n_set_key` — **two-phase** depuis v1.17.0.2 (dépôt validé après gates structurelles puis carte Avant/Après « Approuver/Refuser », endpoints `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` en C# déterministe ; dépôt possible SEULEMENT dans le mode déroulant « Éditer — Atelier de langues » — v1.17.0.2, libellé aligné sur le patron des modes « Éditer — … » en v1.17.1.2). Réponses sérialisées en JSON **relaxé** (v1.17.1.1 : balises littérales — l'échappement par défaut faisait partir `<b>` en `\u003C` et le modèle ne voyait jamais une vraie balise). Enregistrés quand le protocole tool-calling est déjà actif (budget d'actions, édition de prompts) ou en mode i18n ; avec budget et prompts désactivés, le mode EST l'initiateur du protocole (quirk des modèles non-thinking). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | Chat **externe** (app compagnon, v1.13.21+) : `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, listes), erreurs localisées par langue (v1.16.0) et `GET /Plugins/LLMAI/I18nExt` — tranche `ext` de la langue résolue servie à l'app (pas de token Emby côté app) ; famille servie overlay-seul + complément natif EN par clé pour une langue ≠ fr (v1.17.1.4). Voir [Langues d'interface communautaires](#langues-dinterface-communautaires). |
 | `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware ; **comptes ignorés** filtrés, v2.2.0), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
-| `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs backend LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
+| `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs serveur LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
 | `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | Endpoint HTTP **admin** `GET /Plugins/LLMAI/SecurityMetrics` : relevé des compteurs + fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`). Lecture seule, zéro LLM. |
 | `AuditReportStore.cs` | `AuditReportStore` / `LastAuditReport` (statique interne) | Persistance du **dernier rapport d'audit** (`audit_report.json`, dossier de configuration du plugin, convention `ChatMemoryStore`) : date, mode, focus, rapport Markdown. Best-effort fail-open ; un seul enregistrement écrasé à chaque run réussi. |
 | `ChatApiService.cs` | `ChatApiService : BaseApiService` | Endpoint HTTP **chat interactif admin** `POST /Plugins/LLMAI/Chat` : corps `{Message, History:[{role,content}], Session}` (la page garde l'historique ; `Session` = identifiant de mémoire de conversation), filtre les rôles user/assistant, délègue le tour à `LlmRunner.RunChatAsync` (tous les outils existants, priorités LLM usager, bloc mémoire accolé). Le system prompt (doc outils + directives) est construit serveur-side, une fois par conversation. Porte aussi la **mémoire de conversation** : résolution de session, journalisation des tours (`ChatMemoryStore`), condensation paresseuse des sessions passées (un appel LLM en tâche de fond, note de continuité + ligne `SIGNALS:` → décisions `kind="chat"`), et les endpoints `GET /Plugins/LLMAI/ChatMemory` / `POST /Plugins/LLMAI/ChatMemory/Forget`. |
 | `CrossKindApiService.cs` | `CrossKindApiService : BaseApiService` | Endpoints **admin** de la file de régularisation cross-kind (v1.13.31, étendue v1.14.0) : `GET /Plugins/LLMAI/CrossKindQueue` (items taggés `llmai-cross-kind` « confirmés » + items `llmai-not-found` sous la racine DVR « suspects » — sonde du type opposé à égalité exacte de titre ; fiche TMDB relue en lecture seule via la cascade tmdb→imdb, kind item/fiche, fichiers source vidéo — cartes `.strm` exclues —, cible suggérée « Titre (Année) », statuts copie faite/ignoré ; `IncludeIgnored=true` réaffiche les taggés `llmai-cross-kind-ignored`), `GET /Plugins/LLMAI/CrossKindLibraries` (bibliothèques cibles : films/séries/contenu mixte — la bibliothèque `.strm` du plugin jamais suggérée ; celle contenant la racine DVR proposée si elle supporte le type visé, flag `IsDvr`), `POST /Plugins/LLMAI/CrossKindRegularize` (copie **vérifiée par taille**, idempotente, suffixe « (2)… », tag `llmai-regularized` add-only posé sur succès complet, avertissements destination DVR/hors-bibliothèque, message dédié en cas d'accès refusé, **jamais de suppression** — l'original reste en place), `POST /Plugins/LLMAI/CrossKindConvert` (conversion sur place d'un enregistrement DVR mal typé : renommage dossier/vidéo/.nfo/poster « Titre (Année) », réécriture des .nfo en racine `<movie>`, suppression opt-in de tvshow.nfo, garde « enregistrement en cours », **journal de rollback** — le .ts n'est jamais supprimé) et `POST /Plugins/LLMAI/CrossKindIgnore` (pose/retire le tag d'oubli). Voir [Régularisation cross-kind](#régularisation-cross-kind-file-dattente-admin). |
-| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un backend **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les cinq prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
+| `ConfigApiService.cs` | `ConfigApiService : BaseApiService` | Endpoints utilitaires **admin** de la page de config : `POST /Plugins/LLMAI/TestLlm` (test d'un serveur **tel qu'édité** — provider/url/modèle postés, clés API relues côté serveur depuis la config, réponse OK/échec + latence + extrait, timeout 30 s), `GET /Plugins/LLMAI/DefaultPrompts` (les cinq prompts par défaut dans la langue résolue : `?Lang=` → `ResponseLanguage` → langue d'affichage Emby — volontairement PAS la cascade métadonnées/TmdbLanguage) et `GET`/`POST /Plugins/LLMAI/MemoryCard` (consultation / édition admin de la fiche mémoire — version et historique inchangés). Voir [Aides de la page de configuration](#aides-de-la-page-de-configuration). |
 | `DefaultPrompts.cs` | `DefaultPrompts` (statique interne) | **Source unique** des cinq prompts/directives par défaut (FR + EN) : baseline `RagDirectives` (outils avant d'affirmer, jamais un titre possédé/programmé, préférence légère productions récentes sans pénaliser l'année absente), `ScheduleTask`, `ScheduleTaskMovies`, `TonightPrompt`, `AuditPrompt`. Sert à la fois d'initialiseurs de `PluginConfiguration` (nouvelles installations) et de contenu du bouton « Réinitialiser ». |
 | `GenreApiService.cs` | `GenreApiService : BaseApiService` | Endpoints **traduction IA des genres** (admin) : `GET /Plugins/LLMAI/GenreProposals` (collecte les genres EPG des programmes **à venir** non couverts par GenreCleaner, par section films/séries, plafonnés à 60/section, puis un appel LLM one-shot via `ChatWithFallbackAsync` propose pour chacun une cible du vocabulaire curaté, un nouveau genre, ou rien) et `POST /Plugins/LLMAI/GenreApply` (re-valide puis écrit dans `GenreCleaner.xml` via `GenreCleanerMap`, enregistre dans `GenreAliasApplied`, déclenche `NotifyPendingRestart`). Langue des suggestions = cascade `ResolveMetaLangKey` (`ResponseLanguage`). Voir [Traduction IA des genres](#traduction-ia-des-genres-epg-genrecleaner). |
 | `GenreCleanerMap.cs` | `GenreCleanerMap` (statique interne) | **Pont GenreCleaner.xml** : lecture (`Allowed`/`IsMapped`/`IsCovered` — un genre est couvert s'il est mappé OU présent tel quel dans AllowedGenres), écriture idempotente (`AddMappings` — dedup par clé normalisée, ajout AllowedGenres pour les entrées `new`, rejet des mappages identité `Action→Action` sauf nouveaux genres) et **auto-guérison** (`HealApplied` : ré-écrit dans le XML les mappages enregistrés dans `GenreAliasApplied` qui manqueraient — `new:true` restaure aussi l'entrée AllowedGenres). |
@@ -942,7 +963,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 
 **Tâche planifiée (Séries/Films) :**
 1. Cron `ScheduleTask`/`ScheduleTaskMovies` → `LlmScheduledTask.Execute`.
-2. `LlmRunner.ResolveBackends` choisit le backend primaire.
+2. `LlmRunner.ResolveBackends` choisit le serveur primaire.
 3. Prompt + outils → `LlmAgentService` boucle d'agent (le LLM appelle `get_emby_info`
    `epg_series`/`epg_movies`, `tmdb_lookup`, `web_search`/`web_fetch`, `new_releases…`).
 4. `EnrichRecommendations` → posters/notes/id/chaîne.
@@ -1035,10 +1056,10 @@ déterministes C# :
 | `recording` | Enregistrement récent non visionné | Regarder · Oublier |
 | `library` | Réserve bibliothèque (fallback) | Regarder · Oublier |
 
-**Mode compact (local)** — Si le backend primaire est `OllamaLocal`, `TonightApiService`
+**Mode compact (local)** — Si le serveur primaire est `OllamaLocal`, `TonightApiService`
 passe en **mode compact** : les plafonds d'items injectés (profil, enregistrements,
 réserve) et la troncature des résumés EPG sont réduits, pour éviter de surcharger un
-modèle local (souvent plus lent / contexte limité). Les backends cloud reçoivent le
+modèle local (souvent plus lent / contexte limité). Les serveurs cloud reçoivent le
 contexte complet.
 
 **Cache par usager** — `Dictionary<userId, CacheEntry>` + verrou, TTL
@@ -1082,7 +1103,7 @@ ayant du signal, un tableau de corrélation est construit **en C# déterministe*
 joué après la reco — date exacte via `IUserDataManager`) vs **IGNORÉES**,
 rejets explicites, et **visionnages SANS recommandation** (opportunités
 manquées, avec genres). Puis un **seul appel LLM sans outils**
-(`LlmRunner.RunSynthesisAsync`, repli multi-backend) produit une **directive
+(`LlmRunner.RunSynthesisAsync`, repli multi-serveur) produit une **directive
 concise** (≤ 1200 caractères, puces actionnables, repart de la directive
 précédente, contrainte explicite de **préserver la diversité**).
 
@@ -1393,7 +1414,7 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
 | Logs & flux | `list_logs` (dossier `LogPath`, `*.txt`), `inspect_log` (tail ou **grep + contexte**, confiné au dossier des journaux), `log_scan` (v1.15 — scan de motifs d'anomalies : exceptions groupées par classe, HTTP 4xx/5xx entrant/sortant, échecs ffmpeg, échec fournisseurs métadonnées + « Too Many Requests », Live TV/DVR, scans de bibliothèque, signal `[LLM_AI]` groupé par signature, refus d'authentification + verrouillages — profil `{error, fatal, warn}` **avec lignes témoins brutes**), `transcode`, `gpu_transcode` |
 | Matériel & OS | `host_metrics` (BCL : process, GC, runtime, uptime, scan en cours, CPU transcodage agrégé — GPU uniquement par transcodage), `disk_storage` (`DriveInfo` + mapping chemins Emby), `processes` (détection d'**orphelins ffmpeg** par corrélation + top RAM/CPU + compteurs Emby) |
 | Bibliothèque | `library_stats` (comptes par type + bibliothèques configurées + état du scan, via `ILibraryManager` — couche DB, pas FS brut), `missing_metadata` (échantillonnage des items sans synopsis/image/genres), `duplicates_check` (constat « Doublons » **natif** : groupes de films/séries partageant la même `PresentationUniqueKey` — même œuvre fichée en plusieurs dossiers ; cartes `.strm` et épisodes exclus) |
-| Sécurité & hygiène | `security_check` (mots de passe manquants — **sonde suspendue près du seuil de verrouillage Emby** et jamais comptée dans ses échecs, comptes administrateurs multiples, clés API Emby avec âge/dernière utilisation, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous), `security_metrics` (compteurs d'activité + fenêtre d'événements de sécurité **du plugin** : SSRF bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés, actions déposées/approuvées/refusées — détection, voir ci-dessous) |
+| Sécurité & hygiène | `security_check` (mots de passe manquants — **sonde suspendue près du seuil de verrouillage Emby** et jamais comptée dans ses échecs, comptes administrateurs multiples, clés API Emby avec âge/dernière utilisation, HTTPS, accès externe, IP publiques — volet sécurité ci-dessous), `upnp_check` (mapping UPnP/NAT), `metadata_health` (état des marquages `llmai-*` du plugin : comptes par tag, couverture DVR), `ratings_check` (hygiène des cotes, voir ci-dessous), `security_metrics` (compteurs d'activité + fenêtre d'événements de sécurité **du plugin** : SSRF bloqués, appels d'outils malformés/inconnus, échecs serveur, tours de chat refusés, actions déposées/approuvées/refusées — détection, voir ci-dessous) |
 
 | Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
 |---|---|
@@ -1461,7 +1482,7 @@ métadonnées », le mode `single` l'appelle via le prompt d'audit par défaut.
 
 - **Compteurs** : appels/erreurs de `web_fetch`, hits de cache, SSRF bloqués
   (pré-contrôle et garde au connect), appels d'outils malformés ou inconnus,
-  échecs backend LLM, tours de chat refusés (rate limiter), actions déposées /
+  échecs serveur LLM, tours de chat refusés (rate limiter), actions déposées /
   approuvées / refusées / consommations refusées.
 - **Journal borné** : les 200 derniers événements de sécurité (en mémoire, reset au
   restart). Chaque événement est **tracé durablement** dans le journal Emby sous la
@@ -1490,7 +1511,7 @@ son mode et son focus. Un seul enregistrement, écrasé à chaque run : la relec
 coûte **aucun LLM**.
 
 - **Écriture à chaque run réussi** : les messages d'échec de `RunAuditAsync`
-  (« Aucun backend configuré… », « Échec de l'audit… ») ne peuvent **jamais** écraser
+  (« Aucun serveur LLM configuré… », « Échec de l'audit… ») ne peuvent **jamais** écraser
   le dernier vrai rapport.
 - **`GET /Plugins/LLMAI/Audit?Last=true`** : lecture seule du dernier rapport persisté,
   **sans exécuter d'audit** (zéro LLM), admin-only. La réponse porte
@@ -1571,7 +1592,7 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 2. **S2 — proposition LLM validée par TMDB** (si S1 échoue). `LlmRunner.ResolveIdsAsync`
    demande au LLM un id IMDb/TMDB — **ou TVDB pour une série** (v1.13.27, validé via
    `TMDB /find` par `tvdb_id`) — à partir du titre EPG + overview + chaîne (appel
-   one-shot, multi-backend avec repli). La proposition n'est **jamais appliquée telle
+   one-shot, multi-serveur avec repli). La proposition n'est **jamais appliquée telle
    quelle** : elle est validée via `FindByExternalIdAsync` (TMDB `/find` par
    `imdb_id`/`tvdb_id`) ou `LookupMetaByIdAsync` (détail par `tmdb_id`) — **TMDB est
    la source de vérité**, un id halluciné renvoie null. À défaut, le titre original
@@ -1877,7 +1898,7 @@ défaut sont bilingues (`documentary`/`news` + `documentaire`/`nouvelles`).
    Requête library calquée sur `BuildGenreMap` (les DTO de `GetPrograms` ne portent
    pas `Genres` sur ce build). Plafond : 60 genres non mappés par section.
 2. **Prompt LLM** — un appel one-shot (`ChatWithFallbackAsync`, mêmes
-   backends/priorités que le reste du plugin, repli multi-backend) reçoit les deux
+   serveurs/priorités que le reste du plugin, repli multi-serveur) reçoit les deux
    listes **et** les deux vocabulaires curatés. La langue des propositions suit la
    cascade de langue du plugin (`ResponseLanguage` → langue d'affichage Emby →
    `TmdbLanguage`).
@@ -1989,7 +2010,7 @@ seule de la config de l'autre plugin, jamais une écriture.
 Page **« LLM_AI Chat »** (menu admin, section « Serveur », `chat.html`/`chat.js`) :
 conversation multi-tours **plein cadre** avec l'agent LLM — les mêmes outils que la
 tâche planifiée (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
-**pas** les actions de remédiation d'audit), les backends/priorités du plugin.
+**pas** les actions de remédiation d'audit), les serveurs/priorités du plugin.
 
 - **Endpoint :** `POST /Plugins/LLMAI/Chat`, corps
   `{Message, History:[{role,content}], Session}` — la page garde l'historique
@@ -2303,7 +2324,7 @@ GET /Plugins/LLMAI/SecurityMetrics
 
 **Relevé de sécurité (admin, lecture seule, zéro LLM)** : compteurs d'activité et
 fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`) — SSRF
-bloqués, appels d'outils malformés/inconnus, échecs backend, tours de chat refusés,
+bloqués, appels d'outils malformés/inconnus, échecs serveur, tours de chat refusés,
 actions déposées/approuvées/refusées. Volatile (en mémoire, reset au restart) ; la
 trace durable est le journal Emby (`LLM_AI[SEC]`). Voir [Monitoring de
 sécurité](#monitoring-de-sécurité-détection).
@@ -2346,7 +2367,7 @@ config admin, donc 403 pour un non-admin.
 POST /Plugins/LLMAI/Chat          corps : {Message, History:[{role,content}], Session}
 ```
 
-**Chat LLM admin** : un tour de conversation avec l'agent (tous les outils, backends/
+**Chat LLM admin** : un tour de conversation avec l'agent (tous les outils, serveurs/
 priorités du plugin). `History` est renvoyé par la page, filtré aux rôles user/assistant ;
 `Session` (optionnel) active la mémoire de conversation — l'identifiant est retourné
 dans chaque réponse et rejoué par la page. Voir
@@ -2604,7 +2625,7 @@ porte l'inventaire quand la clé en porte), **entités HTML littérales**
 (`&lt;movie&gt;` — inventaire préventif, jamais dés-échappées) et
 détection des copies identiques-EN ; les clés refusées bénéficient d'une
 **réparation ciblée** (raison réelle, clé par clé). Une dose rendue
-imparsable par un backend est **re-tentée sur les backends suivants** ;
+imparsable par un serveur est **re-tentée sur les serveurs suivants** ;
 seul le nombre d'**appels LLM réels** est affiché. Fin de campagne : **écriture atomique**
 tmp+move + `.bak` (n'écrit que si ≥ 1 clé acceptée — les autres langues du
 fichier sont conservées) et **rapport final** (acceptées / refusées /
@@ -2643,7 +2664,7 @@ utilisable.
 **Le LLM local « choke » sur « À regarder ce soir » :**
 Le contexte injecté est trop volumineux pour un modèle local. Le mode compact s'active
 automatiquement si le primaire est `OllamaLocal`. Ajuster : réduire `MaxTonightBatch`,
-vérifier que le backend local a la plus haute `Priority`, ou utiliser un backend cloud.
+vérifier que le serveur local a la plus haute `Priority`, ou utiliser un serveur cloud.
 
 **L'EPG renvoie 0 programmes :**
 Vérifier `TonightWindowStart`/`TonightWindowEnd` (format `HH:mm`) et que l'EPG est peuplé.

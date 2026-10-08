@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -164,6 +166,209 @@ namespace LLM_AI
         {
             if (string.IsNullOrEmpty(s) || s.Length <= max) return s;
             return s.Substring(0, max) + "…";
+        }
+
+        // ------------------------------------------------------------------
+        //  Tests de connexion TMDB / TVDB / SearXNG (boutons de la section
+        //  « Clés API ») — même modèle que TestLlm : les clés ne sont PAS
+        //  postées (relues depuis la config ENREGISTRÉE + variable
+        //  d'environnement pour TVDB), l'URL SearXNG est postée telle
+        //  qu'éditée (non secrète), réponse {Ok, Ms, Reply, Error}, timeout
+        //  court, aucune écriture de config.
+        // ------------------------------------------------------------------
+
+        /// <summary>Réponse des tests de connexion TMDB/TVDB/SearXNG (même
+        /// forme que <see cref="TestLlmResponse"/>) : <c>Ok</c> — le service
+        /// a répondu ; <c>Ms</c> — latence ; <c>Reply</c> — résumé court du
+        /// succès ; <c>Error</c> — message d'échec (clé absente/rejetée,
+        /// connexion, timeout, HTTP…).</summary>
+        public class TestProbeResult
+        {
+            public bool Ok { get; set; }
+            public string Reply { get; set; }
+            public int Ms { get; set; }
+            public string Error { get; set; }
+        }
+
+        /// <summary>POST <c>/Plugins/LLMAI/TestTmdb</c> : interroge
+        /// <c>/3/configuration</c> — la sonde la plus légère qui valide la
+        /// clé (sans coût de quota de recherche).</summary>
+        [Route("/Plugins/LLMAI/TestTmdb", "POST")]
+        public class TestTmdbRequest : IReturn<object> { }
+
+        /// <summary>POST <c>/Plugins/LLMAI/TestTvdb</c> : réalise le
+        /// <c>POST /v4/login</c> réel de l'outil (l'authentification EST la
+        /// validation).</summary>
+        [Route("/Plugins/LLMAI/TestTvdb", "POST")]
+        public class TestTvdbRequest : IReturn<object> { }
+
+        /// <summary>POST <c>/Plugins/LLMAI/TestSearxng</c> : recherche JSON
+        /// réelle sur l'instance postée telle qu'éditée (le champ n'est pas
+        /// secret) — le 403 typique d'un format JSON non activé produit un
+        /// message explicite.</summary>
+        [Route("/Plugins/LLMAI/TestSearxng", "POST")]
+        public class TestSearxngRequest : IReturn<object>
+        {
+            public string Url { get; set; }
+        }
+
+        /// <summary>Test TMDB : la clé est relue depuis la configuration
+        /// enregistrée (testez une clé NOUVELLE après enregistrement).
+        /// Réservé aux administrateurs (état d'un service externe).</summary>
+        public async Task<object> Post(TestTmdbRequest req)
+        {
+            var guarded = GuardProbe();
+            if (guarded != null) return guarded;
+
+            string key = (Plugin.Instance.Configuration.TmdbApiKey ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(key))
+                return new TestProbeResult { Ok = false, Error = "Clé TMDB non renseignée — enregistrez-la d'abord." };
+
+            var sw = Stopwatch.StartNew();
+            var (ok, status, body) = await ProbeHttpAsync(
+                "GET", "https://api.themoviedb.org/3/configuration?api_key=" + Uri.EscapeDataString(key),
+                null).ConfigureAwait(false);
+            sw.Stop();
+
+            if (!ok)
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
+                    Error = Truncate(InterpretTmdbError(status, body), 300) };
+            return new TestProbeResult { Ok = true, Ms = (int)sw.ElapsedMilliseconds, Reply = "configuration TMDB récupérée" };
+        }
+
+        /// <summary>Test TVDB : résolution de clé identique au vrai outil
+        /// (config enregistrée, repli variable d'environnement
+        /// <c>TVDB_API_KEY</c>).</summary>
+        public async Task<object> Post(TestTvdbRequest req)
+        {
+            var guarded = GuardProbe();
+            if (guarded != null) return guarded;
+
+            var cfg = Plugin.Instance.Configuration;
+            string key = LlmRunner.ResolveKey(cfg.TvdbApiKey, "TVDB_API_KEY");
+            if (string.IsNullOrWhiteSpace(key))
+                return new TestProbeResult { Ok = false, Error = "Clé TVDB non renseignée — enregistrez-la d'abord." };
+
+            var sw = Stopwatch.StartNew();
+            var (ok, status, body) = await ProbeHttpAsync("POST",
+                "https://api4.thetvdb.com/v4/login",
+                JsonSerializer.Serialize(new { apikey = key })).ConfigureAwait(false);
+            sw.Stop();
+
+            if (!ok)
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
+                    Error = Truncate((status == 401 || status == 403)
+                        ? "Clé TVDB rejetée (HTTP " + status + ")." : body, 300) };
+
+            string token = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(body ?? string.Empty);
+                if (doc.RootElement.TryGetProperty("data", out var data) &&
+                    data.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String)
+                    token = t.GetString();
+            }
+            catch { }
+            if (string.IsNullOrWhiteSpace(token))
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
+                    Error = "Réponse TVDB inattendue (token absent)." };
+            return new TestProbeResult { Ok = true, Ms = (int)sw.ElapsedMilliseconds, Reply = "token TVDB obtenu (valide ~23 h)" };
+        }
+
+        /// <summary>Test SearXNG : recherche JSON réelle (une requête
+        /// « test ») sur l'URL postée telle qu'éditée — testable avant
+        /// enregistrement.</summary>
+        public async Task<object> Post(TestSearxngRequest req)
+        {
+            var guarded = GuardProbe();
+            if (guarded != null) return guarded;
+
+            string url = (req?.Url ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(url))
+                return new TestProbeResult { Ok = false, Error = "URL SearXNG non renseignée (ex. http://localhost:8888)." };
+
+            var sw = Stopwatch.StartNew();
+            var (ok, status, body) = await ProbeHttpAsync("GET",
+                url.TrimEnd('/') + "/search?q=" + Uri.EscapeDataString("test") + "&format=json",
+                null).ConfigureAwait(false);
+            sw.Stop();
+
+            if (!ok && status == 403)
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
+                    Error = "SearXNG HTTP 403 — format JSON non activé dans ses réglages (search.formats doit inclure « json »)." };
+            if (!ok)
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds, Error = Truncate(body, 300) };
+
+            int results = 0;
+            try
+            {
+                using var doc = JsonDocument.Parse(body ?? string.Empty);
+                results = doc.RootElement.GetProperty("results").GetArrayLength();
+            }
+            catch
+            {
+                return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
+                    Error = "HTTP 200 mais réponse non JSON — format=json n'est pas actif sur cette instance." };
+            }
+            return new TestProbeResult { Ok = true, Ms = (int)sw.ElapsedMilliseconds,
+                Reply = results + " résultat(s) retourné(s)" };
+        }
+
+        /// <summary>Garde commune aux trois sondes : administrateur +
+        /// configuration disponible (même porte que TestLlm).</summary>
+        private object GuardProbe()
+        {
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new TestProbeResult { Ok = false, Error = I18n.SDisplay("err.admin", ApplicationHost) };
+            if (Plugin.Instance?.Configuration == null)
+                return new TestProbeResult { Ok = false, Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
+            return null;
+        }
+
+        /// <summary>Appel HTTP d'une sonde : client jetable, timeout 20 s,
+        /// statut et corps rendus pour interprétation par service. NB :
+        /// le timeout HttpClient lève TaskCanceledException alors que le
+        /// token passé n'est PAS annulé — distingué par
+        /// <c>cts.IsCancellationRequested</c> (cf. gotcha LLM HTTP).</summary>
+        private static async Task<(bool Ok, int Status, string Body)> ProbeHttpAsync(
+            string method, string url, string jsonBody)
+        {
+            using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
+            using (var http = new HttpClient())
+            {
+                http.Timeout = TimeSpan.FromSeconds(20);
+                using (var req = new HttpRequestMessage(new HttpMethod(method), url))
+                {
+                    if (!string.IsNullOrEmpty(jsonBody))
+                        req.Content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
+
+                    try
+                    {
+                        using var resp = await http.SendAsync(req, cts.Token).ConfigureAwait(false);
+                        string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        return (resp.IsSuccessStatusCode, (int)resp.StatusCode, body);
+                    }
+                    catch (OperationCanceledException) when (cts.IsCancellationRequested)
+                    {
+                        return (false, 0, "Aucune réponse en 20 s (timeout).");
+                    }
+                    catch (Exception ex)
+                    {
+                        return (false, 0, ex.Message);
+                    }
+                }
+            }
+        }
+
+        private static string InterpretTmdbError(int status, string body)
+        {
+            if (status == 401)
+                return "Clé TMDB rejetée (401) — vérifiez la clé sur themoviedb.org.";
+            if (!string.IsNullOrEmpty(body) && body.TrimStart().StartsWith("<"))
+                return "Réponse TMDB inattendue (HTTP " + status + ").";
+            return "TMDB HTTP " + status + " — " + (body ?? string.Empty);
         }
 
         // ------------------------------------------------------------------

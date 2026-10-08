@@ -480,6 +480,44 @@ define(["loading"], function (loading) {
         });
     }
 
+    // Tests de connexion TMDB / TVDB / SearXNG : même modèle que le test
+    // d'un serveur LLM — POST du service correspondant, résultat inline
+    // sous le champ (OK + latence et résumé, ou l'erreur exacte). Les clés
+    // ne sont pas postées : le serveur teste la clé ENREGISTRÉE ; Seule
+    // l'URL SearXNG part telle qu'éditée (testable avant enregistrement).
+    function testExternalService(btn, resultEl, endpoint, payload) {
+        btn.disabled = true;
+        var prevLabel = btn.textContent;
+        btn.textContent = i18n.t("cfg.backend.testing");
+        if (resultEl) {
+            resultEl.style.display = "block";
+            resultEl.textContent = i18n.t("cfg.backend.testing");
+        }
+
+        ApiClient.ajax({
+            url: ApiClient.getUrl(endpoint),
+            type: "POST",
+            data: JSON.stringify(payload || {}),
+            contentType: "application/json",
+            dataType: "json"
+        }).then(function (data) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            data = data || {};
+            if (!resultEl) return;
+            resultEl.textContent = data.Ok
+                ? i18n.t("cfg.backend.test.ok", data.Ms || 0, (data.Reply || "").trim())
+                : i18n.t("cfg.backend.test.fail", data.Error || "?");
+        }, function (err) {
+            btn.disabled = false;
+            btn.textContent = prevLabel;
+            if (resultEl) {
+                resultEl.textContent = i18n.t("cfg.backend.test.fail",
+                    (err && err.statusText ? err.statusText : err));
+            }
+        });
+    }
+
     // Test des sources new_releases : POST /Plugins/LLMAI/TestNewReleaseSources
     // avec le CONTENU ÉDITÉ du champ (testable avant enregistrement — aucune
     // écriture de config, aucun impact sur le cache 24h du run). Une ligne
@@ -791,6 +829,8 @@ define(["loading"], function (loading) {
         view.querySelector("#numMaxSeriesBatch").value = isNaN(msb) ? 40 : msb;
         var mmb = parseInt(cfg.MaxMovieBatch, 10);
         view.querySelector("#numMaxMovieBatch").value = isNaN(mmb) ? 30 : mmb;
+        var lmc = parseInt(cfg.LlmMaxConcurrentTasks, 10);
+        view.querySelector("#numLlmMaxConcurrent").value = isNaN(lmc) ? 1 : Math.max(1, lmc);
         view.querySelector("#txtDroppedTitles").value = droppedArrayToText(cfg.DroppedTitles);
         view.querySelector("#chkTonightEnabled").checked = cfg.TonightEnabled !== false;
         view.querySelector("#chkTonightGenreTagEnabled").checked = !!cfg.TonightGenreTagEnabled;
@@ -918,6 +958,7 @@ define(["loading"], function (loading) {
             ScheduleTaskMovies: view.querySelector("#txtScheduleTaskMovies").value,
             MaxSeriesBatch: parseInt(view.querySelector("#numMaxSeriesBatch").value, 10) || 40,
             MaxMovieBatch: parseInt(view.querySelector("#numMaxMovieBatch").value, 10) || 30,
+            LlmMaxConcurrentTasks: Math.max(1, parseInt(view.querySelector("#numLlmMaxConcurrent").value, 10) || 1),
             DroppedTitles: droppedTextToArray(view.querySelector("#txtDroppedTitles").value),
             TonightEnabled: view.querySelector("#chkTonightEnabled").checked,
             TonightGenreTagEnabled: view.querySelector("#chkTonightGenreTagEnabled").checked,
@@ -1107,6 +1148,22 @@ define(["loading"], function (loading) {
                 // Pré-remplit URL/modèle par défaut quand on change de provider.
                 wireProviderChange(host);
             }
+
+            // Boutons de test TMDB / TVDB / SearXNG (section « Clés API »).
+            [["btnTestTmdb", "tmdbTestResult", "Plugins/LLMAI/TestTmdb", {}],
+             ["btnTestTvdb", "tvdbTestResult", "Plugins/LLMAI/TestTvdb", {}],
+             ["btnTestSearxng", "searxngTestResult", "Plugins/LLMAI/TestSearxng",
+              function (v) { return { Url: ((v.querySelector("#txtSearXngUrl") || {}).value || "").trim() }; }]
+            ].forEach(function (spec) {
+                var btn = view.querySelector("#" + spec[0]);
+                var res = view.querySelector("#" + spec[1]);
+                if (!btn) return;
+                var payloadSpec = spec[3];
+                once(btn, "click", function () {
+                    var payload = typeof payloadSpec === "function" ? payloadSpec(view) : payloadSpec;
+                    testExternalService(btn, res, spec[2], payload);
+                });
+            });
 
             // Sections repliables + bouton global « Replier tout » + boutons
             // « Réinitialiser » des prompts. Indépendants de la config

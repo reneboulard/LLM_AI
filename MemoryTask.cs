@@ -166,6 +166,10 @@ namespace LLM_AI
             _logger?.Info("[LLM_AI] Mémoire : {0} décision(s) et {1} lecture(s) cette semaine (store complet : {2} déc., {3} lect.).",
                 week.Count, weekPlayback.Count, decisions.Count, playback.Count);
 
+            // Porte LLM (capacité LlmMaxConcurrentTasks, défaut 1) : attend
+            // un run LLM en cours au lieu de l'empiler sur le backend.
+            await LlmTaskGate.AcquireAsync("Mémoire réflexive", _logger, cancellationToken).ConfigureAwait(false);
+
             try
             {
                 string table = BuildEventTable(cfg, decisions, week, playback, weekPlayback,
@@ -231,6 +235,7 @@ namespace LLM_AI
             }
             finally
             {
+                LlmTaskGate.Release("Mémoire réflexive");
                 progress?.Report(100);
             }
         }
@@ -509,7 +514,8 @@ namespace LLM_AI
             {
                 Type = "WeeklyTrigger",
                 DayOfWeek = 0,
-                TimeOfDayTicks = new TimeSpan(4, 30, 0).Ticks
+                // 4h40 : décalé de l'analyse hebdo (4h10) — cf. LlmTaskGate.
+                TimeOfDayTicks = new TimeSpan(4, 40, 0).Ticks
             };
         }
     }

@@ -105,6 +105,18 @@ namespace LLM_AI
         public List<LlmBackend> LlmBackends { get; set; } = new List<LlmBackend>();
 
         /// <summary>
+        /// Nombre maximal de tâches planifiées LLM (agent EPG, analyse de
+        /// rétroaction, mémoire réflexive) autorisées à tourner en même
+        /// temps — capacité de la porte <see cref="LlmTaskGate"/>. Défaut 1 :
+        /// un Ollama local traite une conversation à la fois, des runs
+        /// empilés s'étouffent sur le timeout par appel (2 min) et épuisent
+        /// la cascade de replis. Monter à 2+ pour un setup cloud ou un
+        /// Ollama à slots parallèles. Les surfaces interactives (chat,
+        /// Tonight) ne passent pas par la porte.
+        /// </summary>
+        public int LlmMaxConcurrentTasks { get; set; } = 1;
+
+        /// <summary>
         /// URL de l'API Ollama (legacy, mono-serveur). Conservée pour migrer
         /// les configs existantes : si <see cref="LlmBackends"/> est vide, la
         /// tâche planifiée construit un backend unique depuis ce champ. La
@@ -703,7 +715,7 @@ namespace LLM_AI
 
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, la tâche
-        /// hebdomadaire « Mémoire réflexive » (dimanche 4 h 30) fait réécrire
+        /// hebdomadaire « Mémoire réflexive » (dimanche 4 h 40) fait réécrire
         /// par le LLM sa <b>fiche mémoire</b> (~250 mots, Markdown) à partir
         /// des événements bruts de la semaine (décisions × télémétrie ×
         /// candidats écartés × snapshot EPG) — <c>memory_card.json</c>,

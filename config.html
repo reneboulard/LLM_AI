@@ -249,6 +249,17 @@
                             </button>
                         </div>
 
+                        <div class="inputContainer" style="max-width:420px;">
+                            <input is="emby-input" type="number" id="numLlmMaxConcurrent"
+                                   label="Tâches LLM simultanées max"
+                                   data-i18n-label="cfg.llmconcurrent.label"
+                                   min="1" max="4" />
+                            <div class="fieldDescription" data-i18n-html="cfg.llmconcurrent.desc">
+                                Nombre maximal de tâches planifiées LLM tournant en même temps.
+                                Défaut 1 : les tâches en trop attendent leur tour.
+                            </div>
+                        </div>
+
                         <div class="inputContainer">
                             <input is="emby-input" type="text" id="txtEmbyPublicUrl"
                                    label="URL publique Emby"
@@ -364,6 +375,14 @@
                                    data-i18n-ph="cfg.tmdb.ph"
                                    placeholder="clé themoviedb.org" />
                             <div class="fieldDescription" data-i18n-html="cfg.tmdb.desc">Clé de l'API TMDB, utilisée pour enrichir les fiches (synopsis, statut). Laisser vide pour désactiver l'outil.</div>
+                            <button is="emby-button" type="button" class="raised" id="btnTestTmdb"
+                                    data-i18n="cfg.tmdb.test"
+                                    data-i18n-title="cfg.keys.test.title"
+                                    title="Teste la clé telle qu'ENREGISTRÉE — enregistrez la page avant de tester une nouvelle clé.">
+                                Tester la clé TMDB
+                            </button>
+                            <div id="tmdbTestResult" class="fieldDescription backendTestResult"
+                                 style="display:none;white-space:pre-wrap;"></div>
                         </div>
 
                         <div class="inputContainer">
@@ -381,6 +400,14 @@
                                    data-i18n-ph="cfg.tvdb.ph"
                                    placeholder="clé api4.thetvdb.com" />
                             <div class="fieldDescription" data-i18n-html="cfg.tvdb.desc">Clé de l'API TheTVDB (v4), utilisée pour enrichir les séries (synopsis FR en priorité). À défaut, la variable d'environnement TVDB_API_KEY est utilisée. Vide = outil désactivé.</div>
+                            <button is="emby-button" type="button" class="raised" id="btnTestTvdb"
+                                    data-i18n="cfg.tvdb.test"
+                                    data-i18n-title="cfg.keys.test.title"
+                                    title="Teste la clé telle qu'ENREGISTRÉE — enregistrez la page avant de tester une nouvelle clé.">
+                                Tester la clé TVDB
+                            </button>
+                            <div id="tvdbTestResult" class="fieldDescription backendTestResult"
+                                 style="display:none;white-space:pre-wrap;"></div>
                         </div>
 
                         <div class="inputContainer">
@@ -402,6 +429,14 @@
                                 réglages (search.formats). Sans SearXNG, la recherche web passe par
                                 Ollama cloud. Vide = désactivé.
                             </div>
+                            <button is="emby-button" type="button" class="raised" id="btnTestSearxng"
+                                    data-i18n="cfg.searxng.test"
+                                    data-i18n-title="cfg.searxng.test.title"
+                                    title="Teste l'URL telle qu'éditée dans le champ (sans enregistrement) : une recherche JSON réelle est envoyée à l'instance.">
+                                Tester SearXNG
+                            </button>
+                            <div id="searxngTestResult" class="fieldDescription backendTestResult"
+                                 style="display:none;white-space:pre-wrap;"></div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">

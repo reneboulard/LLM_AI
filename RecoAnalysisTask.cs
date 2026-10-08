@@ -164,6 +164,10 @@ namespace LLM_AI
             }
             _logger?.Info("[LLM_AI] Analyse hebdo : {0} entrée(s) de journal, dont {1} cette semaine.", log.Count, week.Count);
 
+            // Porte LLM (capacité LlmMaxConcurrentTasks, défaut 1) : attend
+            // un run LLM en cours au lieu de l'empiler sur le backend.
+            await LlmTaskGate.AcquireAsync("Analyse des recommandations", _logger, cancellationToken).ConfigureAwait(false);
+
             try
             {
                 var users = (_users.GetUserList(new UserQuery()) ?? Enumerable.Empty<User>()).ToList();
@@ -236,6 +240,7 @@ namespace LLM_AI
             }
             finally
             {
+                LlmTaskGate.Release("Analyse des recommandations");
                 progress?.Report(100);
             }
         }
@@ -480,7 +485,11 @@ namespace LLM_AI
             {
                 Type = "WeeklyTrigger",
                 DayOfWeek = 0,   // dimanche (DayOfWeek : dimanche = 0)
-                TimeOfDayTicks = new TimeSpan(4, 0, 0).Ticks
+                // 4h10 : décalé de l'agent EPG quotidien (3h10) et de la
+                // mémoire réflexive (4h40) pour ne pas empiler les runs LLM
+                // sur un backend local (la porte LlmTaskGate sérialise de
+                // toute façon — moins d'attente en premier lieu).
+                TimeOfDayTicks = new TimeSpan(4, 10, 0).Ticks
             };
         }
     }

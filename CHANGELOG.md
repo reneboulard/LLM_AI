@@ -10,6 +10,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.2.1] — 2026-10-08
+
+### Added (FR)
+- **Porte de concurrence des tâches LLM planifiées** (nouveau champ config
+  « Tâches LLM simultanées max », section « Serveurs LLM », défaut **1**) :
+  l'agent EPG, l'analyse de rétroaction et la mémoire réflexive ne s'empilent
+  plus sur le serveur LLM — une tâche qui arrive alors qu'un run est en
+  cours **attend son tour puis passe** (réveil immédiat à la libération,
+  aucun passage nocturne perdu). Motif : un Ollama local traite une
+  conversation à la fois ; des runs empilés s'étouffent sur le timeout par
+  appel (2 min) et la cascade de replis s'épuise sur une installation sans
+  serveur de secours. Le chat, « À regarder ce soir » et l'audit ne passent
+  pas par la porte (surfaces interactives — toujours immédiates, la cascade
+  timeout → serveur suivant les protège). Journal : « Porte LLM occupée
+  (capacité N) — « X » attend la fin de : Y. » puis « passe après N min
+  d'attente ». La capacité est relue à chaque passage — un changement de
+  config s'applique **sans redémarrage**.
+- **Espacement des déclencheurs par défaut** (nouvelles installations ;
+  un serveur existant garde ses horaires enregistrés — tableau de bord
+  Emby → Tâches planifiées pour les ajuster) : agent EPG quotidien
+  décalé à **3h10** (le nettoyage « AI Tonight » reste à 3h00 — sans
+  LLM, aucune contention), analyse de rétroaction hebdo à **4h10**,
+  mémoire réflexive à **4h40**. Moins de rencontres = moins d'attente en
+  premier lieu ; la porte garantit qu'une rencontre éventuelle se passe
+  bien.
+- **Boutons « Tester » TMDB / TVDB / SearXNG** (section « Clés API » de
+  la page de configuration) : sondes de connexion réelles sous chaque
+  champ — `/3/configuration` pour TMDB (valide la clé sans consommer de
+  quota), le vrai `POST /v4/login` pour TVDB (token obtenu, valide
+  ~23 h), recherche JSON réelle pour SearXNG sur l'URL telle qu'éditée
+  (le 403 d'un format JSON non activé produit un message explicite).
+  Même modèle que le test des serveurs LLM : clés relues depuis la config
+  enregistrée (jamais postées, jamais renvoyées), admin-only, timeout
+  20 s, zéro écriture de configuration ; TVDB suit la résolution réelle
+  de l'outil (repli variable d'environnement TVDB_API_KEY).
+
+### Added (EN)
+- **Concurrency gate for scheduled LLM tasks** (new config field "Max
+  concurrent LLM tasks", "LLM servers" section, default **1**): the EPG
+  agent, the feedback analysis and the reflective memory no longer pile up
+  on the LLM backend — a task arriving while a run is in progress **waits
+  its turn, then proceeds** (instant wake on release, no nightly pass is
+  lost). Motive: a local Ollama processes one conversation at a time;
+  stacked runs choke on the per-call timeout (2 min) and exhaust the
+  fallback chain on installs without a backup backend. Chat, "Watch
+  tonight" and the audit do not go through the gate (interactive
+  surfaces — always immediate, the timeout → next-backend fallback chain
+  protects them). Logging: "Porte LLM occupée (capacité N) — « X »
+  attend la fin de : Y." then "passe après N min d'attente". The capacity
+  is re-read on every pass — a config change applies **without
+  restarting**.
+- **Default trigger spacing** (fresh installs; an existing server keeps
+  its stored schedules — Emby dashboard → Scheduled Tasks to adjust
+  them): the daily EPG agent moves to **3:10 AM** (the "AI Tonight"
+  cleanup stays at 3:00 AM — no LLM, no contention), the weekly feedback
+  analysis to **4:10 AM**, the reflective memory to **4:40 AM**. Fewer
+  encounters = less waiting in the first place; the gate guarantees any
+  remaining encounter goes well.
+- **TMDB / TVDB / SearXNG "Test" buttons** ("API keys" section of the
+  config page): real connection probes under each field — `/3/configuration`
+  for TMDB (validates the key without consuming search quota), the tool's
+  real `POST /v4/login` for TVDB (token obtained, valid ~23 h), a real
+  JSON search for SearXNG against the URL as edited (a 403 from a disabled
+  JSON format yields an explicit message). Same model as the LLM-server
+  test: keys re-read from the saved configuration (never posted, never
+  returned), admin-only, 20 s timeout, zero configuration writes; TVDB
+  follows the tool's real key resolution (TVDB_API_KEY env fallback).
+
+### Changed (FR)
+- **Textes de la page « Tâches planifiées » allégés** (tableau de bord
+  Emby) : noms débarrassés du préfixe « LLM AI — » (la catégorie le porte
+  déjà) et descriptions condensées à l'essentiel — le détail vivant reste
+  dans le README, et les heures par défaut citées dans les anciennes
+  descriptions ne reflétaient de toute façon pas les déclencheurs réels
+  d'un serveur existant (le tableau de bord les affiche lui-même). Noms
+  affichés : « Recommandations d'enregistrement (EPG) », « Nettoyage
+  « AI Tonight » », « Identification des enregistrements orphelins »,
+  « Analyse des recommandations », « Mémoire réflexive ». Sans effet
+  fonctionnel : les identifiants de tâches (et donc les déclencheurs
+  enregistrés) ne dépendent pas des noms affichés.
+
+### Changed (EN)
+- **Scheduled Tasks page texts trimmed** (Emby dashboard): names shed the
+  "LLM AI — " prefix (the category already carries it) and descriptions
+  condensed to the essentials — the living detail stays in the README, and
+  the default times cited in the old descriptions didn't reflect an
+  existing server's actual triggers anyway (the dashboard shows those
+  themselves). Displayed names: "Recording recommendations (EPG)",
+  "\"AI Tonight\" cleanup", "Orphan recording identification",
+  "Recommendation analysis", "Reflective memory". No functional effect:
+  task identifiers (and therefore stored triggers) don't depend on
+  displayed names.
+
+---
+
 ## [2.2.0] — 2026-10-08
 
 ### Added (FR)

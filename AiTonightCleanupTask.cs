@@ -187,6 +187,8 @@ namespace LLM_AI
             yield return new TaskTriggerInfo
             {
                 Type = "DailyTrigger",
+                // 3h00 — sans LLM, aucune contention Ollama. L'agent EPG
+                // (l'agent EPG) suit à 3h10.
                 TimeOfDayTicks = new TimeSpan(3, 0, 0).Ticks
             };
         }

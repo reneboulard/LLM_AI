@@ -191,6 +191,13 @@ namespace LLM_AI
                 }
             }
 
+            // Porte LLM : sérialise les tâches planifiées LLM entre elles
+            // (capacité LlmMaxConcurrentTasks, défaut 1) — attend un run en
+            // cours au lieu de l'empiler sur le backend. Acquisition AVANT
+            // le try : une annulation pendant l'attente remonte sans rien
+            // avoir à libérer (le finally ci-dessous libère tout le reste).
+            await LlmTaskGate.AcquireAsync("Recommandations d'enregistrement (EPG)", _logger, cancellationToken).ConfigureAwait(false);
+
             try
             {
                 string p1 = "", p2 = "";
@@ -423,6 +430,7 @@ namespace LLM_AI
             }
             finally
             {
+                LlmTaskGate.Release("Recommandations d'enregistrement (EPG)");
                 progress?.Report(100);
             }
         }
