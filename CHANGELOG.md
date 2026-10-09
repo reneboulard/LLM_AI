@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.3.1] — 2026-10-09
+
+### Fixed (FR)
+- **Texte d'état vide du panneau « Recommandations LLM AI »** : le message
+  invitant à lancer la tâche planifiée citait encore l'ancien nom « LLM AI
+  Task » alors que la tâche s'appelle « Recommandations d'enregistrement
+  (EPG) » depuis l'allègement des noms de tâches. Le texte cite désormais
+  le nom réel affiché dans Tâches planifiées.
+
+### Fixed (EN)
+- **Empty-state text of the "LLM AI Recommendations" panel**: the message
+  prompting to run the scheduled task still cited the old "LLM AI Task"
+  name although the task has been "Recording recommendations (EPG)" since
+  the task-name cleanup. The text now cites the real name shown in
+  Scheduled Tasks.
+
 ## [2.3.0] — 2026-10-09
 
 ### Added (FR)
