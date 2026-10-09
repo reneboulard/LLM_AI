@@ -841,6 +841,7 @@ define(["loading"], function (loading) {
         view.querySelector("#txtTonightIgnoredUsers").value = cfg.TonightIgnoredUsers || "";
         view.querySelector("#txtTonightWindowStart").value = cfg.TonightWindowStart || "";
         view.querySelector("#txtTonightWindowEnd").value = cfg.TonightWindowEnd || "23:59";
+        view.querySelector("#txtTonightProductionWindow").value = cfg.TonightProductionWindow || "";
         view.querySelector("#txtTonightPrompt").value = cfg.TonightPrompt || "";
         var tnb = parseInt(cfg.MaxTonightBatch, 10);
         view.querySelector("#numTonightBatch").value = isNaN(tnb) ? 10 : tnb;
@@ -969,6 +970,7 @@ define(["loading"], function (loading) {
             TonightIgnoredUsers: view.querySelector("#txtTonightIgnoredUsers").value,
             TonightWindowStart: view.querySelector("#txtTonightWindowStart").value.trim(),
             TonightWindowEnd: view.querySelector("#txtTonightWindowEnd").value.trim(),
+            TonightProductionWindow: view.querySelector("#txtTonightProductionWindow").value.trim(),
             TonightPrompt: view.querySelector("#txtTonightPrompt").value,
             MaxTonightBatch: parseInt(view.querySelector("#numTonightBatch").value, 10) || 10,
             TonightCacheHours: parseInt(view.querySelector("#numTonightCache").value, 10) || 4,

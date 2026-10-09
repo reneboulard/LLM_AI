@@ -673,6 +673,19 @@
                         </div>
 
                         <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtTonightProductionWindow"
+                                   label="Période de grande écoute (HH:mm-HH:mm)"
+                                   data-i18n-label="cfg.tonight.prodwindow"
+                                   placeholder="17:00-02:00" />
+                            <div class="fieldDescription" data-i18n-html="cfg.tonight.prodwindow.desc">
+                                Fenêtre pendant laquelle le login déclenche le run « ce soir » (ex. 17:00 → 02:00 ;
+                                une fin avant le début franchit minuit). Hors fenêtre : pas de run ni de toast au
+                                login, et la page Recommandations sert la dernière sélection en lecture seule.
+                                « Rafraîchir » et le chat produisent toujours. Vide = toujours actif.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
                             <textarea is="emby-textarea" id="txtTonightPrompt"
                                       label="Prompt « ce soir »"
                                       data-i18n-label="cfg.tonight.prompt"

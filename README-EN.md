@@ -341,6 +341,11 @@ is empty):
 - `MaxTonightBatch` (default 10) — recommendation cap.
 - `TonightCacheHours` (default 4) — per-user cache TTL.
 - `TonightRecordingsDays` (default 7) — "recorded within the last N days" window.
+- `TonightProductionWindow` (`"HH:mm-HH:mm"`, e.g. `"17:00-02:00"`, **default empty = always active**)
+  — prime viewing period: window during which login triggers the "tonight" run (an end before the
+  start crosses midnight). Outside the window: no run or toast at login, and the Recommendations
+  page serves the last selection read-only. Explicit requests ("Refresh", chat tool
+  `run_tonight_run`) always produce, 24/7.
 - `TonightMinRecommendations` (default 3) — guaranteed minimum (see [Watch tonight](#watch-tonight)).
 - `TonightBingeEnabled` (bool, **default `false` — explicit opt-in**) — surfaces **binge-ready**
   series: the user records a series and waits for several episodes before starting; when the
@@ -2600,6 +2605,12 @@ local backend has the highest `Priority`, or use a cloud backend.
 Check `TonightWindowStart`/`TonightWindowEnd` (`HH:mm` format) and that the EPG is
 populated. The "library reserve" fallback still guarantees `TonightMinRecommendations`
 recos.
+
+**No more toast at login while the section works on demand:**
+Check `TonightProductionWindow` ("prime viewing period", `HH:mm-HH:mm` format): outside the
+window, login is deliberately silent (no run, no toast) and the Recommendations page serves the
+last selection read-only. A malformed value is reported in the log (`TonightProductionWindow …
+invalid`) then ignored (fail-open: 24/7 production). "Refresh" and chat always produce.
 
 **Genre analysis says "everything is already covered" while genres seem missing:**
 The analysis only covers **upcoming** EPG programs (`HasAired=false`) — that is the

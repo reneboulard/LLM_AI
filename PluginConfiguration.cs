@@ -459,6 +459,21 @@ namespace LLM_AI
         public int TonightCacheHours { get; set; } = 4;
 
         /// <summary>
+        /// Période de grande écoute (v2.3.0) : fenêtre horaire pendant laquelle
+        /// le run « ce soir » peut être produit par un déclencheur AUTOMATIQUE
+        /// (login). Format <c>"HH:mm-HH:mm"</c>, ex. <c>"17:00-02:00"</c> — une
+        /// borne de fin antérieure au début franchit minuit (17 h → 2 h).
+        /// Hors fenêtre : le login ne déclenche ni run ni toast, et la page
+        /// Recommandations sert le dernier résultat en lecture seule (sans
+        /// relancer le LLM). Les demandes explicites — bouton « Rafraîchir »
+        /// de la page et tool chat <c>run_tonight_run</c> — produisent
+        /// toujours, 24 h/24. Vide = toujours actif (défaut, fail-open) ;
+        /// valeur invalide (hors format, bornes égales) = ignorée avec un
+        /// avertissement.
+        /// </summary>
+        public string TonightProductionWindow { get; set; } = "";
+
+        /// <summary>
         /// Fenêtre de recherche (en jours) pour les enregistrements récents NON
         /// visionnés injectés dans le prompt « ce soir » : l'usager peut avoir
         /// fait enregistrer un film/épisode ces N derniers jours sans l'avoir

@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.3.0] — 2026-10-09
+
+### Added (FR)
+- **Période de grande écoute (`TonightProductionWindow`) — le run « ce soir »
+  automatique n'existe plus que quand le foyer écoute réellement.** Nouveau
+  réglage `HH:mm-HH:mm` (ex. `17:00-02:00` ; une fin avant le début franchit
+  minuit). **Motivation vécue** : la production étant déclenchée par le login,
+  toute ouverture d'Emby — check administratif de journée, reconnect
+  d'application, redémarrage du serveur — produisait un run complet avec l'EPG
+  de l'après-midi ; servie depuis le cache quelques heures plus tard, cette
+  sélection périmait la session de visionnement du soir (programmes déjà
+  diffusés, candidats choisis sous la mauvaise fenêtre). Avec la grande écoute :
+  hors fenêtre, le login est **inerte** (ni run, ni toast, pas même servi depuis
+  un cache frais) et la page Recommandations affiche la **dernière sélection
+  en lecture seule** (note explicative, sans relancer le LLM) ; le run du soir
+  n'est plus jamais « empoisonné » par un run de jour. Les **demandes explicites
+  produisent toujours 24 h/24** : bouton « Rafraîchir » de la page et tool chat
+  `run_tonight_run`. **Fail-open** : fenêtre vide (défaut) ou invalide (mauvais
+  format, bornes égales — signalée une fois dans le log) = production toujours
+  active ; aucun autre serveur ne découvre un plugin muet après mise à jour.
+  Bonus : plus de runs parasites sur les reconnects nocturnes, et le « mur »
+  collection/favoris du jour ne contient plus que la sélection du soir.
+
+### Added (EN)
+- **Prime viewing period (`TonightProductionWindow`) — the automatic "tonight"
+  run now only exists when the household actually watches.** New `HH:mm-HH:mm`
+  setting (e.g. `17:00-02:00`; an end before the start crosses midnight).
+  **Lived motivation**: production is login-triggered, so any Emby opening —
+  a daytime admin check, an app reconnect, a server restart — produced a full
+  run on the afternoon's EPG; served from cache a few hours later, that
+  selection poisoned the evening viewing session (already-aired programs,
+  candidates picked under the wrong window). With the prime period: outside
+  the window, login is **inert** (no run, no toast — not even a fresh-cache
+  toast) and the Recommendations page shows the **last selection read-only**
+  (explanatory note, without re-running the LLM); the evening run is never
+  again "poisoned" by a daytime run. **Explicit requests always produce 24/7**:
+  the page's "Refresh" button and the chat tool `run_tonight_run`. **Fail-open**:
+  empty window (default) or invalid value (bad format, equal bounds — warned
+  once in the log) = production always active; no other server discovers a
+  silent plugin after upgrading. Bonus: no more spurious runs on overnight
+  reconnects, and the day's collection/favorites "wall" holds only the
+  evening's picks.
+
 ## [2.2.2] — 2026-10-08
 
 ### Fixed (FR)

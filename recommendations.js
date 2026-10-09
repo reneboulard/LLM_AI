@@ -394,6 +394,14 @@ define([], function () {
                 viaChat = ' <span class="tonight-cache">' + esc(i18n.t("reco.viaChat.short")) + '</span>';
             }
         }
+        // Hors période de grande écoute (v2.3.0) : production automatique
+        // en pause — note explicative au-dessus de la grille (le résultat
+        // servi est le dernier en date, en lecture seule ; « Rafraîchir »
+        // produit toujours à la demande).
+        var outsideNote = (data && data.OutsideWindow)
+            ? '<div class="recEmpty">' +
+                esc(i18n.t("rec.tonight.outsideWindow", String(data.ProductionWindow || ""))) + '</div>'
+            : '';
         var head = '<h3 class="recSectionTitle">🌙 ' + esc(i18n.t("rec.section.tonight")) +
             ' <span class="section-counter">' + (count ? i18n.t("rec.count", count) : '') + '</span>' +
             badge + viaChat + '</h3>' +
@@ -401,7 +409,7 @@ define([], function () {
             esc(i18n.t("rec.tonight.refresh")) + '</button></div>';
         var body = count ? renderCards(items)
             : '<div class="recEmpty">' + i18n.t("rec.tonight.empty") + '</div>';
-        return '<div class="recSection tonightSection" data-kind="tonight">' + head + body + '</div>';
+        return '<div class="recSection tonightSection" data-kind="tonight">' + head + outsideNote + body + '</div>';
     }
 
     function tonightLoadingHtml() {

@@ -145,6 +145,20 @@ namespace LLM_AI
                     return;
                 }
 
+                // Période de grande écoute (v2.3.0) : hors fenêtre configurée,
+                // le déclencheur login est INERTE — ni run, ni toast, pas
+                // même servi depuis un cache frais (silence total ; le run
+                // du soir n'est jamais « empoisonné » par un run de jour).
+                // Les demandes explicites (bouton « Rafraîchir » de la page,
+                // tool chat run_tonight_run) produisent toujours. Fail-open :
+                // fenêtre vide/invalide = comportement inchangé.
+                if (!TonightService.IsInProductionWindow(cfg, _logger))
+                {
+                    _logger?.Info("[LLM_AI] Login « {0} » : hors période de grande écoute ({1}) → déclencheur silencieux.",
+                        user.Name, cfg.TonightProductionWindow);
+                    return;
+                }
+
                 string sid = session.Id;
 
                 // 1) Cache frais → toast immédiat (pas de run LLM, pas

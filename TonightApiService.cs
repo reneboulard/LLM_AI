@@ -116,6 +116,16 @@ namespace LLM_AI
             /// recos que le minimum — affichée à l'usager pour expliquer une
             /// liste courte. Null si aucune note.</summary>
             public string Warning { get; set; }
+            /// <summary>Hors période de grande écoute (v2.3.0) : true quand la
+            /// production automatique est coupée et que ce résultat est le
+            /// dernier en date, servi en lecture seule (même expiré) — la
+            /// page affiche une note explicative. Le bouton « Rafraîchir »
+            /// (Refresh=1) n'arrive jamais ici : il produit toujours.</summary>
+            public bool OutsideWindow { get; set; }
+            /// <summary>Période de grande écoute configurée (valeur brute
+            /// « HH:mm-HH:mm », ex. « 17:00-02:00 ») — affichée dans la note
+            /// <see cref="OutsideWindow"/>. Vide si la gate est inactive.</summary>
+            public string ProductionWindow { get; set; }
         }
 
         // ------------------------------------------------------------------
@@ -162,6 +172,32 @@ namespace LLM_AI
                     CanLiveTv = PermissionGate.CanWatchLive(user),
                     Warning = cached.Value.Warning
                 };
+
+            // Période de grande écoute (v2.3.0) : hors fenêtre, la production
+            // AUTOMATIQUE de la page est coupée — on sert le DERNIER résultat
+            // en lecture seule (même expiré), sans relancer le LLM, avec la
+            // note explicative côté client. Refresh=1 (bouton « Rafraîchir »)
+            // est une demande EXPLICITE : il produit toujours et n'arrive
+            // jamais ici. Un cache FRAIS (run chat, run en fenêtre) est servi
+            // normalement ci-dessus, quelle que soit l'heure.
+            if (!refresh && !TonightService.IsInProductionWindow(cfg, Logger))
+            {
+                var last = TonightService.TryGetLastResult(user.Id.ToString());
+                return new TonightResponse
+                {
+                    Enabled = true,
+                    Items = last?.Payload,
+                    Date = last?.Date,
+                    FromCache = true,
+                    ViaChat = last?.ViaChat ?? false,
+                    ChatDirectives = last?.ChatDirectives,
+                    CanRecord = PermissionGate.CanRecordLive(user),
+                    CanLiveTv = PermissionGate.CanWatchLive(user),
+                    Warning = last?.Warning,
+                    OutsideWindow = true,
+                    ProductionWindow = cfg.TonightProductionWindow
+                };
+            }
 
             var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
 

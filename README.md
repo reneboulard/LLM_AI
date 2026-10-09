@@ -350,6 +350,11 @@ Les clés API sont stockées dans la config **OU** lues dans des variables d'env
 - `MaxTonightBatch` (défaut 10) — plafond de recommandations.
 - `TonightCacheHours` (défaut 4) — TTL du cache par usager.
 - `TonightRecordingsDays` (défaut 7) — fenêtre « enregistrés il y a moins de N jours ».
+- `TonightProductionWindow` (`"HH:mm-HH:mm"`, ex. `"17:00-02:00"`, **défaut vide = toujours actif**)
+  — période de grande écoute : fenêtre pendant laquelle le login déclenche le run « ce soir »
+  (une fin avant le début franchit minuit). Hors fenêtre : pas de run ni de toast au login, et la
+  page Recommandations sert la dernière sélection en lecture seule. Les demandes explicites
+  (« Rafraîchir », tool chat `run_tonight_run`) produisent toujours, 24 h/24.
 - `TonightMinRecommendations` (défaut 3) — minimum garanti (voir [À regarder ce soir](#à-regarder-ce-soir)).
 - `TonightBingeEnabled` (bool, **défaut `false` — opt-in explicite**) — signale les séries
   « prêtes à dévorer » : l'usager enregistre une série et attend d'avoir plusieurs épisodes
@@ -2683,6 +2688,13 @@ vérifier que le serveur local a la plus haute `Priority`, ou utiliser un serveu
 **L'EPG renvoie 0 programmes :**
 Vérifier `TonightWindowStart`/`TonightWindowEnd` (format `HH:mm`) et que l'EPG est peuplé.
 Le fallback « réserve bibliothèque » garantit quand même `TonightMinRecommendations` recos.
+
+**Plus de toast au login alors que la section fonctionne à la demande :**
+Vérifier `TonightProductionWindow` (« période de grande écoute », format `HH:mm-HH:mm`) : hors
+fenêtre, le login est volontairement silencieux (ni run, ni toast) et la page Recommandations
+sert la dernière sélection en lecture seule. Une valeur mal formée est signalée dans le log
+(`TonightProductionWindow … invalide`) puis ignorée (fail-open : production 24 h). « Rafraîchir »
+et le chat produisent toujours.
 
 **Analyse des genres : « tout est déjà couvert » alors que des genres semblent manquer :**
 L'analyse ne couvre que les programmes EPG **à venir** (`HasAired=false`) — c'est le

@@ -213,6 +213,32 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Lecture seule du DERNIER résultat — même expiré — pour servir la
+        /// page Recommandations hors période de grande écoute (v2.3.0) :
+        /// affichage du dernier état sans production, sans toast. Ne relance
+        /// jamais le LLM et n'écrit rien. Null si aucun cache n'existe du
+        /// tout pour cet usager (première visite avant toute production).
+        /// </summary>
+        internal static TonightResult? TryGetLastResult(string userId)
+        {
+            if (string.IsNullOrEmpty(userId)) return null;
+            lock (_cacheLock)
+            {
+                if (_cache.TryGetValue(userId, out var e))
+                    return new TonightResult
+                    {
+                        Payload = e.Items,
+                        Date = e.Date,
+                        FromCache = true,
+                        ViaChat = e.ViaChat,
+                        ChatDirectives = e.ChatDirectives,
+                        Warning = e.Warning
+                    };
+            }
+            return null;
+        }
+
+        /// <summary>
         /// Invalide le cache d'un usager (force le prochain appel à relancer le
         /// LLM). Utilisé par le login après auto-programmation si l'on veut
         /// rafraîchir. Optionnel — l'endpoint utilise <c>Refresh=1</c>.
@@ -221,6 +247,62 @@ namespace LLM_AI
         {
             if (string.IsNullOrEmpty(userId)) return;
             lock (_cacheLock) { _cache.Remove(userId); }
+        }
+
+        // ------------------------------------------------------------------
+        //  Période de grande écoute (gate des déclencheurs automatiques)
+        // ------------------------------------------------------------------
+
+        /// <summary>Dernière valeur invalide déjà signalée (anti-spam : une
+        /// seule ligne Warn par valeur erronée distincte).</summary>
+        private static string _prodWindowWarned;
+
+        /// <summary>
+        /// Gate « période de grande écoute » (<see
+        /// cref="PluginConfiguration.TonightProductionWindow"/>, ex.
+        /// « 17:00-02:00 ») : un run « ce soir » peut-il être lancé par un
+        /// déclencheur AUTOMATIQUE (login, production de la page sans demande
+        /// explicite) à l'heure courante ? Les demandes explicites (bouton
+        /// « Rafraîchir » de la page, tool chat <c>run_tonight_run</c>)
+        /// n'appellent PAS cette gate — elles produisent toujours.
+        /// <para>
+        /// Fail-open : fenêtre vide (défaut) ou invalide (format
+        /// <c>HH:mm-HH:mm</c> attendu, bornes égales) = toujours actif — une
+        /// valeur invalide est signalée UNE fois en Warn puis ignorée (jamais
+        /// de production muette à cause d'une coquille de config).
+        /// </para>
+        /// <para>
+        /// Heures LOCALES (celles du foyer), comme les fenêtres EPG. Une fin
+        /// antérieure au début franchit minuit (17:00-02:00 = 17 h → 2 h).
+        /// Containment en demi-intervalle [début ; fin[.
+        /// </para>
+        /// </summary>
+        internal static bool IsInProductionWindow(PluginConfiguration cfg, ILogger logger)
+        {
+            var w = cfg?.TonightProductionWindow?.Trim();
+            if (string.IsNullOrEmpty(w))
+                return true; // gate inactive (défaut) : production 24 h
+
+            int dash = w.IndexOf('-');
+            if (dash <= 0 || dash >= w.Length - 1 ||
+                !TimeSpan.TryParseExact(w.Substring(0, dash).Trim(), @"hh\:mm",
+                    CultureInfo.InvariantCulture, out var start) ||
+                !TimeSpan.TryParseExact(w.Substring(dash + 1).Trim(), @"hh\:mm",
+                    CultureInfo.InvariantCulture, out var end) ||
+                start == end)
+            {
+                if (w != _prodWindowWarned)
+                {
+                    _prodWindowWarned = w;
+                    logger?.Warn("[LLM_AI] TonightProductionWindow « {0} » invalide (format HH:mm-HH:mm attendu, ex. 17:00-02:00 ; bornes égales interdites) — gate ignorée, production toujours active.", w);
+                }
+                return true;
+            }
+
+            var t = DateTimeOffset.Now.TimeOfDay;
+            return end > start
+                ? (t >= start && t < end)   // fenêtre d'un même jour
+                : (t >= start || t < end); // fenêtre franchissant minuit
         }
 
         // ------------------------------------------------------------------
