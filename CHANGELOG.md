@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.4.0] — 2026-10-10
+
+### Added (FR)
+- **Toasts d'enregistrement des recommandations** : quand l'enregistrement
+  d'un programme recommandé « live » démarre (il passe à l'antenne — nudge
+  « ça commence »), puis quand il se complète (« prêt à regarder »),
+  l'usager dont le dernier résultat « ce soir » contenait ce programme
+  reçoit un toast sur ses clients actifs, avec la notification cloche
+  persistante en relais. Appariement par titre normalisé corroboré par
+  l'horaire du guide (±15 min) ; seules les recos « live » sont appariées —
+  une reco « regarde l'épisode déjà enregistré » ne doit jamais déclencher
+  de toast (un timer quotidien ne toaste pas pour elle). Garde de
+  fraîcheur de 48 h, comptes ignorés exclus, seuls les enregistrements
+  complétés sont annoncés à la fin. Nouvelle option `TonightRecordingToast`
+  (activée par défaut, page de configuration, liée à « AI Tonight »).
+  Purement informatif — aucune action sur les timers ou la bibliothèque.
+
+### Added (EN)
+- **Recording toasts for recommendations**: when the recording of a
+  "live" recommended program starts (it goes on air — "starting now"
+  nudge), then when it completes ("ready to watch"), the user whose
+  latest "tonight" result contained that program receives a toast on
+  their active clients, with the persistent bell notification as
+  backup. Matching by normalized title corroborated by the guide's
+  start time (±15 min); only "live" recommendations are matched — a
+  "watch the already-recorded episode" reco never triggers a toast (a
+  daily timer stays silent for it). 48-hour freshness gate, ignored
+  accounts excluded, only completed recordings are announced at the
+  end. New `TonightRecordingToast` option (enabled by default,
+  configuration page, gated by "AI Tonight"). Informational only — no
+  action on timers or the library.
+
+---
+
 ## [2.3.4] — 2026-10-10
 
 ### Fixed (FR)

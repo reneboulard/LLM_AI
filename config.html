@@ -952,6 +952,18 @@
                             </div>
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightRecordingToast" />
+                            <span class="checkboxLabel" data-i18n="cfg.rectoast.flag">Toast au début et à la complétion des enregistrements recommandés</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.rectoast.desc">
+                            Quand l'enregistrement d'un programme de vos recommandations « ce soir » démarre
+                            (il passe à l'antenne) puis quand il se complète, un toast le signale sur vos
+                            clients actifs et une notification persistante prend le relais. Seuls les
+                            programmes recommandés « live » sont appariés (résultat de moins de 48 h) ;
+                            aucune action sur vos timers ou votre bibliothèque.
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.strmlib.h">Bibliothèque .strm des recommandations</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.strmlib.desc">
                             Alternative manuelle à l'auto-programmation : après chaque exécution, l'extension

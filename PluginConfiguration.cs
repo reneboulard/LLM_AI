@@ -871,6 +871,23 @@ namespace LLM_AI
         public bool LoginPopup { get; set; } = true;
 
         /// <summary>
+        /// Active les toasts d'enregistrement des recommandations « AI
+        /// Tonight » (v2.4.0) : quand l'enregistrement d'un programme
+        /// recommandé <b>live</b> démarre (il passe à l'antenne — nudge « ça
+        /// commence ») puis quand il se COMPLÈTE (« prêt à regarder »),
+        /// l'usager dont le dernier résultat Tonight contenait ce programme
+        /// reçoit un toast sur ses sessions actives + une notification
+        /// cloche persistante. Purement informatif — aucune action sur les
+        /// timers ou la bibliothèque. Garde de fraîcheur fixe : résultat de
+        /// moins de 48 h ; recos <c>source="recording"</c> jamais appariées
+        /// (un timer quotidien ne doit pas toaster pour une reco « regarde
+        /// l'épisode déjà enregistré »). Fail-open silencieux : événement non
+        /// résolvable → pas de toast, pas d'erreur. Défaut <c>true</c>,
+        /// gated par <see cref="TonightEnabled"/>.
+        /// </summary>
+        public bool TonightRecordingToast { get; set; } = true;
+
+        /// <summary>
         /// Durée d'affichage (secondes) du toast au login. Le toast est texte
         /// seul (pas de bouton) — d'où la cloche deep-link en complément. Défaut
         /// 8. Ne s'applique qu'aux clients supportant <c>DisplayMessage</c>.

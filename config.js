@@ -872,6 +872,7 @@ define(["loading"], function (loading) {
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
         view.querySelector("#chkAiOwnedBadgeEnabled").checked = cfg.AiOwnedBadgeEnabled !== false;
         view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
+        view.querySelector("#chkTonightRecordingToast").checked = cfg.TonightRecordingToast !== false;
         var lps = parseInt(cfg.LoginPopupSeconds, 10);
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
         view.querySelector("#chkStrmLibraryEnabled").checked = !!cfg.StrmLibraryEnabled;
@@ -1011,6 +1012,7 @@ define(["loading"], function (loading) {
             AiBadgeProgramIds: (loadedCfg && loadedCfg.AiBadgeProgramIds) || [],
             LoginPopup: view.querySelector("#chkLoginPopup").checked,
             LoginPopupSeconds: parseInt(view.querySelector("#numLoginPopupSeconds").value, 10) || 8,
+            TonightRecordingToast: view.querySelector("#chkTonightRecordingToast").checked,
             StrmLibraryEnabled: view.querySelector("#chkStrmLibraryEnabled").checked,
             StrmLibraryName: (view.querySelector("#txtStrmLibraryName").value || "").trim(),
             // Carry-forward : StrmSecret est auto-généré côté serveur et n'est

@@ -243,6 +243,36 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Énumère les DERNIERS résultats Tonight (même expirés) de TOUS les
+        /// usagers en cache, bornés à <paramref name="maxAge"/> (v2.4.0) —
+        /// consommé par les toasts d'enregistrement
+        /// (<c>TonightRecordingService</c>) pour apparier un enregistrement
+        /// démarré/complété contre les recommandations « live » courantes de
+        /// chaque usager. Retourne (userId, payload JSON). Best-effort :
+        /// une entrée sans date lisible est sautée (fail-open — pas de toast,
+        /// pas d'erreur). NB : un cache désactivé
+        /// (<see cref="PluginConfiguration.TonightCacheHours"/> = 0) n'écrit
+        /// JAMAIS d'entrée → l'appariement n'a rien à lire.
+        /// </summary>
+        internal static List<(string UserId, string Items)> GetRecentResults(TimeSpan maxAge)
+        {
+            var list = new List<(string, string)>();
+            lock (_cacheLock)
+            {
+                foreach (var kv in _cache)
+                {
+                    var e = kv.Value;
+                    if (e == null || string.IsNullOrWhiteSpace(e.Items)) continue;
+                    if (!DateTimeOffset.TryParse(e.Date, CultureInfo.InvariantCulture,
+                            DateTimeStyles.RoundtripKind, out var d)) continue;
+                    if (d < DateTimeOffset.UtcNow - maxAge) continue;
+                    list.Add((kv.Key, e.Items));
+                }
+            }
+            return list;
+        }
+
+        /// <summary>
         /// Invalide le cache d'un usager (force le prochain appel à relancer le
         /// LLM). Utilisé par le login après auto-programmation si l'on veut
         /// rafraîchir. Optionnel — l'endpoint utilise <c>Refresh=1</c>.

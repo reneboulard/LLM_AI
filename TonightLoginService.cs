@@ -442,8 +442,12 @@ namespace LLM_AI
         /// <summary>Durée (ms) de CHAQUE popup de la séquence (et du toast
         /// unique) : <see cref="PluginConfiguration.LoginPopupSeconds"/>,
         /// plancher 4 s (en dessous, pas le temps de lire titre + méta ;
-        /// défaut 8 s ≈ 24 s de séquence pour 3 recos).</summary>
-        private static int PopupDurationMs() =>
+        /// <summary>
+        /// Durée (ms) demandée pour une popup de toast. Internal (v2.4.0) :
+        /// partagée avec <see cref="TonightRecordingService"/> — un seul
+        /// réglage de durée pour tous les toasts du plugin.
+        /// </summary>
+        internal static int PopupDurationMs() =>
             (int)(Math.Max(4, Plugin.Instance?.Configuration?.LoginPopupSeconds ?? 8) * 1000);
 
         /// <summary>
