@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.3.2] — 2026-10-10
+
+### Fixed (FR)
+- **Recommandations d'enregistrements perdues faute d'id recopié** : le petit
+  modèle local omet parfois le champ `id` en recopiant une ligne du menu des
+  enregistrements — la recommandation, pourtant juste, était alors rejetée
+  en « items introuvables » (vécu : la meilleure reco du soir, une série
+  suivie fraîchement enregistrée, perdue). La validation rattrape désormais
+  ces recommandations sans id par rapprochement de titre sur le magasin
+  d'enregistrements (mêmes bornes que le menu : fenêtre configurée, non
+  visionnés), et le menu exige explicitement l'id.
+- **Annotations de position des séries du menu** (introduites en 2.2.2) :
+  sur ce build serveur, l'enregistrement d'une série est exposé sans le
+  marqueur attendu, si bien que les lignes sortaient en `kind=other` et les
+  annotations (`start=`/`unwatched=`/`user_started=`) ne se déclenchaient
+  jamais. La détection traite désormais ces enregistrements comme des
+  séries (repli sur le nom de série, puis sur la résolution de l'id) : le
+  modèle reçoit la position réelle de l'usager, protection effective contre
+  la suggestion « du dernier épisode » d'une série jamais commencée.
+
+### Fixed (EN)
+- **Recording recommendations lost to a missing copied id**: the small local
+  model sometimes omits the `id` field when copying a line from the
+  recordings menu — the recommendation, although correct, was then rejected
+  as "items not found" (field-tested: the best pick of the evening, a
+  freshly recorded followed series, was lost). Validation now recovers
+  those id-less recommendations by matching their title against the
+  recordings store (same bounds as the menu: configured window, unplayed),
+  and the menu now explicitly requires the id.
+- **Series position annotations in the menu** (introduced in 2.2.2): on this
+  server build, a series recording is exposed without the expected flag, so
+  the lines came out as `kind=other` and the annotations
+  (`start=`/`unwatched=`/`user_started=`) never fired. Detection now treats
+  those recordings as series (falling back to the series name, then to id
+  resolution): the model receives the user's real position, effectively
+  guarding against suggesting "the latest episode" of a never-started
+  series.
+
 ## [2.3.1] — 2026-10-09
 
 ### Fixed (FR)

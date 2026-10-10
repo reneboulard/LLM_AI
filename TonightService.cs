@@ -501,7 +501,7 @@ namespace LLM_AI
             // déjà vues (gardées, mais sans actions obsolètes côté UI).
             // Fail-open : une erreur de requête transitoire ne vide jamais les
             // recos.
-            payload = ValidateAndFilter(payload, watchedIdx, ct, canLive, user);
+            payload = ValidateAndFilter(payload, watchedIdx, ct, canLive, user, cfg);
             if (string.IsNullOrWhiteSpace(payload))
             {
                 if (cfg.DecisionLogEnabled) DecisionStore.EndRun(runId); // purge
@@ -790,8 +790,15 @@ namespace LLM_AI
         ///   un BaseItem via <see cref="ILibraryManager.GetItemList"/>. Un id
         ///   Guid hérité qui résout via <c>GetItemById</c> est normalisé en
         ///   InternalId avant le check (le Guid n'est pas consommable côté
-        ///   REST/UI). Introuvable sous aucune forme → drop (item supprimé /
-        ///   id halluciné).</item>
+        ///   REST/UI). Rattrapage v2.3.2 : une reco recording SANS id est
+        ///   d'abord rapprochée par titre normalisé sur le magasin
+        ///   d'enregistrements (mêmes bornes que le menu : fenêtre
+        ///   <see cref="PluginConfiguration.TonightRecordingsDays"/>, non
+        ///   joués) — vécu prod 2026-10-09 : le petit modèle local omet
+        ///   parfois le champ id en recopiant la ligne du menu, et la
+        ///   meilleure reco du soir (« Élémentaire », priority high) mourait
+        ///   en « items bibli. introuvables ». Introuvable sous aucune forme →
+        ///   drop (item supprimé / id halluciné).</item>
         /// <item>source absente/autre : gardé tel quel (recos hors flux « ce
         ///   soir », non concernées par la validation EPG).</item>
         /// </list>
@@ -808,7 +815,7 @@ namespace LLM_AI
         /// logique fail-open existante est inchangée.</para>
         /// </summary>
         private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct,
-            bool canLive = true, User user = null)
+            bool canLive = true, User user = null, PluginConfiguration cfg = null)
         {
             if (string.IsNullOrWhiteSpace(payload)) return payload;
 
@@ -905,6 +912,74 @@ namespace LLM_AI
                     var resolved = ItemIdResolver.Resolve(_library, id);
                     if (resolved != null)
                         obj["id"] = resolved.InternalId.ToString();
+                }
+
+                // Rattrapage v2.3.2 — recos « recording » SANS id : le petit
+                // modèle local omet parfois le champ id en recopiant la ligne
+                // du menu (vécu prod 2026-10-09 : « Élémentaire » et « Aurora
+                // Teagarden » proposées à juste titre, puis droppées « items
+                // bibli. introuvables » — la meilleure reco du soir perdue ;
+                // lendemain, même pipeline avec id recopié : gardée). Avant
+                // le drop, rapprochement best-effort par titre normalisé sur
+                // le magasin d'enregistrements, mêmes bornes que le menu
+                // (fenêtre TonightRecordingsDays, non joués). Sans match →
+                // inchangé : le drop existant s'applique. Fail-open : erreur
+                // de requête → recos sans id laissées inchangées.
+                var noIdRecording = new List<JsonObject>();
+                foreach (var node in arr)
+                {
+                    if (!(node is JsonObject o)) continue;
+                    if (!string.Equals(ObjStr(o, "source"), "recording", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrEmpty(ObjStr(o, "id"))) continue;
+                    noIdRecording.Add(o);
+                }
+                if (noIdRecording.Count > 0 && user != null)
+                {
+                    try
+                    {
+                        int recDays = Math.Max(0, cfg?.TonightRecordingsDays ?? 7);
+                        var recCutoff = now.AddDays(-recDays);
+                        var rq = new InternalItemsQuery
+                        {
+                            User = user,
+                            IsPlayed = false,
+                            Recursive = true,
+                            OrderBy = new[] { ("DateCreated", SortOrder.Descending) },
+                            EnableTotalRecordCount = false
+                        };
+                        var recDtos = (_liveTv.GetRecordings(rq, ct)?.Items) ?? Array.Empty<BaseItemDto>();
+                        int recovered = 0;
+                        foreach (var o in noIdRecording)
+                        {
+                            string key = LlmRunner.NormTitle(ObjStr(o, "title"));
+                            if (string.IsNullOrEmpty(key)) continue;
+                            BaseItemDto match = null;
+                            foreach (var d in recDtos)
+                            {
+                                if (d == null) continue;
+                                if ((d.DateCreated ?? DateTimeOffset.MinValue) < recCutoff) continue;
+                                if (d.UserData?.Played == true) continue;
+                                string t = !string.IsNullOrEmpty(d.SeriesName) ? d.SeriesName : d.Name;
+                                if (string.IsNullOrEmpty(t)) continue;
+                                if (string.Equals(LlmRunner.NormTitle(t), key, StringComparison.Ordinal))
+                                { match = d; break; }
+                            }
+                            if (match?.Id != null)
+                            {
+                                o["id"] = match.Id.ToString();
+                                recovered++;
+                                _logger?.Info("[LLM_AI] Tonight validation : reco « {0} » sans id — rapprochée par titre (id={1}, enregistrement).",
+                                    ObjStr(o, "title"), match.Id);
+                            }
+                        }
+                        if (recovered == 0)
+                            _logger?.Info("[LLM_AI] Tonight validation : {0} reco(s) recording sans id sans correspondance dans le magasin d'enregistrements — drop si introuvables.",
+                                noIdRecording.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Warn("[LLM_AI] Tonight validation : rattrapage recordings indispo ({0}) — recos sans id inchangées.", ex.Message);
+                    }
                 }
 
                 // Lookup bibliothèque (batché) pour source="recording"/"library"
@@ -1645,6 +1720,30 @@ namespace LLM_AI
 
                     bool isSeries = r.IsSeries == true;
                     bool isMovie = r.IsMovie == true;
+
+                    // v2.3.2 : le DTO série-level de GetRecordings in-process
+                    // (vérifié 4.10.1.0 en prod, 2026-10-09/10) ne porte PAS
+                    // IsSeries=true — sans repli, la ligne sort « kind=other »
+                    // et l'annotation de position v2.2.2 (start=/unwatched=/
+                    // user_started=) ne se déclenche JAMAIS (vécu : zéro ligne
+                    // « position annotée » sur tous les runs observés, y
+                    // compris avec « Élémentaire » S04E19 fraîchement
+                    // enregistré au menu). Repli double : SeriesName présent
+                    // (forme série-level de ce build — le titre ci-dessous en
+                    // dépend déjà) ou id résolvant en série/saison/épisode
+                    // (formes per-épisode d'autres builds). Best-effort.
+                    if (!isSeries && !isMovie)
+                    {
+                        isSeries = !string.IsNullOrEmpty(r.SeriesName);
+                        if (!isSeries)
+                        {
+                            var resolved = ItemIdResolver.Resolve(_library, r?.Id?.ToString());
+                            isSeries = resolved is MediaBrowser.Controller.Entities.TV.Series
+                                    || resolved is MediaBrowser.Controller.Entities.TV.Season
+                                    || resolved is MediaBrowser.Controller.Entities.TV.Episode;
+                        }
+                    }
+
                     string title = !string.IsNullOrEmpty(r.SeriesName) ? r.SeriesName : r.Name;
                     if (string.IsNullOrWhiteSpace(title)) continue;
 
@@ -1678,7 +1777,8 @@ namespace LLM_AI
                     foreach (var l in lines) sb.AppendLine(l);
                     sb.AppendLine("Ces éléments sont DÉJÀ enregistrés (ne PAS re-programmer). Pour un de " +
                                   "ces titres qui correspond aux goûts de l'usager, recommande-le avec " +
-                                  "source=\"recording\" et reprends son id tel quel (l'UI proposera « Regarder »).");
+                                  "source=\"recording\" en recopiant son id dans le champ \"id\" — OBLIGATOIRE : " +
+                                  "une reco recording sans id est rejetée (l'UI proposera « Regarder »).");
                     if (positionLog.Count > 0)
                     {
                         sb.AppendLine("Lignes kind=series : « start=SxxEyy » est l'épisode où la lecture " +
