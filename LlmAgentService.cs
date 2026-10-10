@@ -230,8 +230,8 @@ namespace LLM_AI
                         // format (audit, chat — _formatSection == "") on réclame du
                         // Markdown, cohérent avec le system prompt correspondant.
                         string finalFormatHint = _formatSection == null
-                            ? "Si tu as terminé, réponds avec le tableau JSON des recommandations " +
-                              "(champs title, kind, reason, priority, channel, start)."
+                            ? "Si tu as terminé, réponds avec le tableau JSON des recommandations, " +
+                              "conforme au schéma exigé par la tâche (sections WORKFLOW/FORMAT du prompt système)."
                             : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.";
                         messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                             "Ton tableau d'appels d'outils est malformé (JSON invalide). " +
@@ -288,9 +288,9 @@ namespace LLM_AI
                             messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                                 "Ta réponse finale n'est pas un tableau JSON exploitable " +
                                 "(texte autour du tableau, guillemets non échappés, ou format non respecté). " +
-                                "Renvoie UNIQUEMENT le tableau JSON des recommandations " +
-                                "(champs title, kind, reason, priority, channel, start), sans texte " +
-                                "avant/après ni balises ```, et avec tous les guillemets internes " +
+                                "Renvoie UNIQUEMENT le tableau JSON des recommandations, conforme au " +
+                                "schéma exigé par la tâche (sections WORKFLOW/FORMAT du prompt système), " +
+                                "sans texte avant/après ni balises ```, et avec tous les guillemets internes " +
                                 "échappés (\\\") dans les valeurs de type chaîne." });
                             continue;
                         }
@@ -317,8 +317,8 @@ namespace LLM_AI
                                 "à un appel d'outil malformé. Renvoie soit un tableau d'appels " +
                                 "d'outils BIEN FORMÉ [{\"tool\":\"...\",\"arguments\":{...}}], " +
                                 "soit, si tu as terminé, le tableau JSON des recommandations " +
-                                "(champs title, kind, reason, priority, channel, start) — sans " +
-                                "texte autour ni balises ```." });
+                                "conforme au schéma exigé par la tâche (sections WORKFLOW/FORMAT " +
+                                "du prompt système) — sans texte autour ni balises ```." });
                             continue;
                         }
                     }
@@ -710,9 +710,21 @@ namespace LLM_AI
             sb.AppendLine("valide — les arguments seuls doivent être enveloppés dans un tableau avec le nom de l'outil.");
             sb.AppendLine("Tu peux mettre plusieurs appels dans le même tableau. Les résultats te seront ");
             sb.AppendLine("renvoyés sous la forme [{\"tool\":\"...\",\"result\":{...}}].");
-            sb.AppendLine("L'absence de tableau JSON est le signal que tu as terminé : quand tu as toutes les ");
-            sb.AppendLine("informations nécessaires pour répondre à la demande, réponds en Markdown (texte normal) — ");
-            sb.AppendLine("une réponse finale ne doit contenir AUCUN tableau JSON, même partiel.");
+            // v2.3.4 : la règle « final = Markdown, aucun tableau JSON » contredit
+            // le contrat des tâches de recommandation (Tonight, enregistrements
+            // séries/films) qui EXIGENT un tableau JSON de recos — le modèle
+            // hésitait entre les deux (prose + clôture ```json + tours de
+            // réparation ; vécu 2026-10-09/10, dont un « id »:null synthétisé
+            // des deux schémes). Exception explicite : la boucle aval reconnaît
+            // déjà un tableau portant « title » comme réponse FINALE (pas comme
+            // un appel d'outil malformé), la mécanique est inchangée.
+            sb.AppendLine("L'absence de tableau JSON d'appels d'outils est le signal que tu as terminé : ");
+            sb.AppendLine("quand tu as toutes les informations nécessaires pour répondre à la demande, ");
+            sb.AppendLine("réponds en Markdown (texte normal) — une réponse finale ne doit contenir ");
+            sb.AppendLine("AUCUN tableau JSON, même partiel. EXCEPTION : si la tâche exige explicitement ");
+            sb.AppendLine("un tableau JSON de recommandations (sections WORKFLOW ou FORMAT ci-dessous), ");
+            sb.AppendLine("la réponse finale EST ce tableau JSON — renvoie-le UNIQUEMENT, sans texte ");
+            sb.AppendLine("autour ni balise de code.");
             sb.AppendLine("Ne retourne que l'information demandée, rien de plus. Sois concis.");
             sb.AppendLine();
             if (!string.IsNullOrWhiteSpace(workflow))

@@ -108,7 +108,11 @@ namespace LLM_AI
             "[{title, kind, reason, priority, source, channel, start, id, year, showbizz_match}] " +
             "(id pour source=\"recording\"/\"library\" ; channel/start pour source=\"live\" ; " +
             "year = année de production reprise du champ year d'epg_tonight/tmdb_lookup si " +
-            "présent, ne l'invente jamais).";
+            "présent, ne l'invente jamais). " +
+            "La position réelle de l'usager dans une série (start=/unwatched=/user_started= des " +
+            "lignes d'enregistrements) et son profil de goût PRIMENT sur toute tendance générale " +
+            "de ta fiche mémoire : ses « rejets constants » ne s'appliquent ni aux séries en " +
+            "cours de l'usager, ni aux genres que l'historique de visionnage confirme.";
 
         // ------------------------------------------------------------------
         //  Résultat de génération

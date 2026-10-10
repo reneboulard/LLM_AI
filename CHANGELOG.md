@@ -10,6 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.3.4] — 2026-10-10
+
+### Fixed (FR)
+- **Contradiction du protocole de tool-calling** : le prompt système
+  interdisait tout tableau JSON dans la réponse finale (« réponds en
+  Markdown ») alors que les tâches de recommandation — la sélection du
+  soir comme les enregistrements séries/films — exigent précisément un
+  tableau JSON. Le modèle hésitait entre les deux consignes (prose
+  autour du tableau, tours de réparation supplémentaires). Le protocole
+  porte désormais l'exception explicite : si la tâche exige un tableau
+  de recommandations, la réponse finale EST ce tableau. La boucle
+  d'exécution reconnaissait déjà un tableau d'items « title » comme
+  réponse finale — la mécanique est inchangée.
+- **Indices de réparation alignés sur le schéma canonique** : les
+  messages de renvoi énuméraient chacun une liste partielle de champs
+  qui dérivait du vrai contrat de la tâche ; ils renvoient désormais
+  tous vers le schéma exigé par la tâche (sections WORKFLOW/FORMAT),
+  une seule source de vérité.
+- **Priorité de la position réelle de l'usager** : le workflow du soir
+  précise que la position de l'usager dans une série (annotations
+  start=/unwatched=/user_started=) et son profil de goût priment sur
+  toute tendance générale de la fiche mémoire — les « rejets constants »
+  autogénérés ne s'appliquent ni aux séries en cours, ni aux genres que
+  l'historique confirme.
+
+### Fixed (EN)
+- **Tool-calling protocol contradiction**: the system prompt forbade any
+  JSON array in the final answer ("answer in Markdown") while the
+  recommendation tasks — the nightly selection and the series/movies
+  recordings — require exactly a JSON array. The model wavered between
+  the two instructions (prose around the array, extra repair turns).
+  The protocol now carries the explicit exception: when the task
+  requires a recommendations array, the final answer IS that array. The
+  execution loop already recognized a "title"-bearing array as a final
+  answer — the mechanics are unchanged.
+- **Repair hints aligned with the canonical schema**: each retry
+  message used to enumerate a partial field list that drifted from the
+  task's real contract; they all now defer to the schema required by
+  the task (WORKFLOW/FORMAT sections) — a single source of truth.
+- **Real user position takes precedence**: the nightly workflow now
+  states that the user's position in a series
+  (start=/unwatched=/user_started= annotations) and their taste profile
+  override any general trend from the assistant's memory card — the
+  auto-generated "constant rejections" apply neither to in-progress
+  series nor to genres confirmed by the viewing history.
+
+---
+
 ## [2.3.3] — 2026-10-10
 
 ### Added (FR)
