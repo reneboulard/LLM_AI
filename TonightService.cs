@@ -387,11 +387,11 @@ namespace LLM_AI
             //     position RÉELLE de l'usager (start=/unwatched=/user_started=,
             //     v2.2.2) : sans elles, le LLM recommandait « le dernier
             //     épisode » d'une série jamais commencée (vécu 2026-10-08, prod).
-            string recs = BuildUnwatchedRecordings(user, cfg, ct, compact, watchedIdx);
+            string recs = BuildUnwatchedRecordings(user, cfg, ct, compact, watchedIdx, out var menuTitles);
 
             // 2c) Réserve bibliothèque (items non visionnés) : utilisée par le
             //    LLM uniquement si EPG + enregistrements < TonightMinRecommendations.
-            string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot);
+            string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot, menuTitles);
 
             // 2d) Séries « prêtes à dévorer » (opt-in, gate anti-spam persistant) :
             //    séries dont l'enregistrement est actif et dont le stock d'épisodes
@@ -411,11 +411,14 @@ namespace LLM_AI
             if (string.IsNullOrEmpty(feedback) && cfg.RecoFeedbackEnabled)
                 feedback = RecoFeedback.BuildTonightBlock(cfg, user.Id.ToString());
 
-            // 3) Prompt personnalisé = template config + profil + enregistrements
-            //    + réserve (+ binge + directive) + contrainte de minimum dynamique.
+            // 3) Prompt personnalisé = template config + HEURE ACTUELLE (v2.3.3 :
+            //    le modèle n'a aucune horloge — même incident classe que le
+            //    chat v1.13.21.1) + profil + enregistrements + réserve
+            //    (+ binge + directive) + contrainte de minimum dynamique.
             int minRec = Math.Max(0, cfg.TonightMinRecommendations);
             string prompt = (cfg.TonightPrompt ?? string.Empty).Trim()
-                + "\n\n" + profile + recs + reserve + binge + feedback;
+                + "\n\n" + BuildTonightTimeBlock()
+                + profile + recs + reserve + binge + feedback;
 
             // Directives de session (chat, tool run_tonight_run) : one-shot,
             // injectées dans LE prompt de ce run uniquement — jamais
@@ -1685,8 +1688,14 @@ namespace LLM_AI
         /// <c>IsPlayed</c> est par usager : le tool est global/sans usager.</para>
         /// </summary>
         private string BuildUnwatchedRecordings(User user, PluginConfiguration cfg, CancellationToken ct,
-            bool compact, WatchedIndex watchedIdx)
+            bool compact, WatchedIndex watchedIdx, out HashSet<string> menuTitles)
         {
+            // Titres normalisés des lignes ÉMISES (v2.3.3) : alimente la
+            // déduplication menu ↔ réserve — un titre déjà au menu ne doit
+            // pas réapparaître à la réserve avec un autre id (vécu
+            // 2026-10-10 : « Élémentaire » visible 2 fois, dossier série
+            // id=779011 au menu + épisode id=779013 en réserve).
+            menuTitles = new HashSet<string>(StringComparer.Ordinal);
             var sb = new StringBuilder();
             try
             {
@@ -1760,6 +1769,9 @@ namespace LLM_AI
                     if (isSeries)
                         AppendSeriesPosition(line, r, user, title, watchedIdx, stockBySeries, positionLog);
                     lines.Add(line.ToString());
+                    // Titre normalisé de la ligne ÉMISE → set de déduplication
+                    // menu ↔ réserve (consommé par BuildLibraryFallbackPool).
+                    menuTitles.Add(LlmRunner.NormTitle(title));
 
                     // Mémoire réflexive : les enregistrements listés font
                     // partie du menu soumis au LLM — capturés. No-op hors run.
@@ -1779,6 +1791,14 @@ namespace LLM_AI
                                   "ces titres qui correspond aux goûts de l'usager, recommande-le avec " +
                                   "source=\"recording\" en recopiant son id dans le champ \"id\" — OBLIGATOIRE : " +
                                   "une reco recording sans id est rejetée (l'UI proposera « Regarder »).");
+                    // Exemple travaillé (v2.3.3) : les petits modèles suivent le
+                    // schéma du USER prompt (quirk gemma4 documenté) — un exemple
+                    // complet avec l'id rempli renforce mieux le contrat que la
+                    // prose seule (les ids omis 2 jours de suite en prod).
+                    sb.AppendLine("Exemple de reco bien formée pour un de ces enregistrements : " +
+                                  "{\"title\": \"<title exact de la ligne>\", \"kind\": \"<kind de la ligne>\", " +
+                                  "\"reason\": \"pourquoi ce titre convient ce soir\", \"priority\": \"high|medium|low\", " +
+                                  "\"source\": \"recording\", \"id\": \"<id de la ligne, recopié EXACTEMENT>\"}.");
                     if (positionLog.Count > 0)
                     {
                         sb.AppendLine("Lignes kind=series : « start=SxxEyy » est l'épisode où la lecture " +
@@ -1874,6 +1894,33 @@ namespace LLM_AI
             catch { /* annotation best-effort : ligne sans position */ }
         }
 
+        /// <summary>
+        /// Bloc « HEURE ACTUELLE » du prompt Tonight (v2.3.3) — même pattern
+        /// que le chat (<see cref="LlmRunner"/>, v1.13.21.1, incident live :
+        /// le LLM déduisait « maintenant » des horaires EPG et se croyait
+        /// plusieurs heures plus tard qu'il ne l'est). Le modèle n'a AUCUN
+        /// accès à l'horloge : sans ancre, il raisonne sur « ce soir »,
+        /// « diffusé à 22:35 », « enregistré hier » sans savoir qu'il est.
+        /// Heure locale du serveur (celle du foyer) avec décalage UTC
+        /// explicite ; recalculée à chaque run, jamais mise en cache.
+        /// </summary>
+        private static string BuildTonightTimeBlock()
+        {
+            var now = DateTimeOffset.Now;
+            var local = TimeZoneInfo.Local;
+            var offset = now.Offset.ToString(@"hh\:mm", CultureInfo.InvariantCulture);
+            var sign = now.Offset >= TimeSpan.Zero ? "+" : "−";
+            return "### HEURE ACTUELLE\n" +
+                "Il est actuellement le " +
+                now.ToString("yyyy-MM-dd 'à' HH:mm", CultureInfo.InvariantCulture) +
+                " (heure locale du serveur, fuseau " + local.Id + ", UTC" + sign + offset + ").\n" +
+                "C'est ta SEULE source fiable pour « maintenant » : « ce soir » désigne la soirée " +
+                "à venir à partir de cette date. Les horaires des programmes (start/end) sont déjà " +
+                "en heure locale du serveur — cite-les tels quels. Ne déduis JAMAIS l'heure " +
+                "actuelle des dates internes (recorded=, etc.) : elles peuvent être relatives ou " +
+                "en UTC.\n\n";
+        }
+
         // ------------------------------------------------------------------
         //  Réserve bibliothèque (fallback < min recommandations)
         // ------------------------------------------------------------------
@@ -1895,7 +1942,8 @@ namespace LLM_AI
         /// 2026-10-08, prod : pointer « le dernier épisode » d'une série
         /// jamais commencée).</para>
         /// </summary>
-        private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot)
+        private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot,
+            HashSet<string> menuTitles = null)
         {
             var sb = new StringBuilder();
             try
@@ -1984,6 +2032,15 @@ namespace LLM_AI
                     if (string.IsNullOrWhiteSpace(title)) continue;
                     string key = LlmRunner.NormTitle(title);
                     if (string.IsNullOrEmpty(key)) continue;
+
+                    // Dédup menu ↔ réserve (v2.3.3) : un titre déjà présent au
+                    // menu des enregistrements n'occupe PAS une ligne de réserve —
+                    // le LLM voyait la même série deux fois avec deux ids
+                    // différents (vécu 2026-10-10 : « Élémentaire » menu
+                    // id=779011 dossier série + réserve id=779013 épisode).
+                    // Le menu prime : plus frais, et le contrat source=
+                    // "recording" est le canal naturel de la soirée.
+                    if (menuTitles != null && menuTitles.Contains(key)) continue;
 
                     if (isEpisode)
                     {

@@ -1564,6 +1564,14 @@ namespace LLM_AI
             int wlFiltered = 0, flagRejected = 0, wlRejected = 0;
             var flagSamples = new List<string>();
             var wlSamples = new List<string>();
+            // Anti-privation (v2.3.3) : rejets exclusivement par exclude_genres
+            // (les exclusions de genres ÉMISES PAR LE LLM ce tour) — candidats
+            // à la ré-inclusion si le pool curaté affame (vécu 2026-10-09
+            // 18:11 : pool de 1 programme, le run n'avait presque rien de
+            // live à proposer). Les rejets whitelists (préférences chaînes/
+            // genres du foyer) et flags catégories ne sont PAS collectés :
+            // ces filtres-là restent DURS.
+            var genreExcluded = new List<(BaseItemDto p, string[] genres, bool isScheduled)>();
             foreach (var p in best.Values.OrderBy(x => x.StartDate ?? DateTimeOffset.MaxValue))
             {
                 var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
@@ -1578,7 +1586,14 @@ namespace LLM_AI
                     kept.Add((p, genres, scheduled.Contains(key)));
                     continue;
                 }
-                if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p))) continue;
+                if (IsExcludedGenre(genres, excludeGenres, SeriesCtx(p)))
+                {
+                    // Rejet de SES propres exclusions seulement — conservé pour
+                    // la ré-inclusion anti-privation ci-dessous (whitelists et
+                    // flags n'ont pas encore été évalués sur cet item).
+                    genreExcluded.Add((p, genres, scheduled.Contains(key)));
+                    continue;
+                }
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
                     wlFiltered++; wlRejected++;
@@ -1604,6 +1619,31 @@ namespace LLM_AI
             if ((cfg?.DebugVerbose ?? false) && flagRejected > 0)
                 _logger?.Info("[LLM_AI] epg_tonight flags rejetés={0}, échantillons : {1}",
                     flagRejected, string.Join(" | ", flagSamples));
+
+            // Anti-privation (v2.3.3) : si le pool curaté ne couvre même pas
+            // le minimum de recommandations du run, les programmes écartés
+            // PAR LES exclude_genres DU LLM SEULEMENT sont ré-inclus, marqués
+            // « hors_vos_genres » — c'est le LLM qui reste juge : il peut
+            // toujours les ignorer. À la ré-inclusion, whitelists (chaînes/
+            // genres préférés du foyer) et flags catégories restent DURS —
+            // on ne ré-admet JAMAIS leurs rejets. Vécu 2026-10-09 18:11 :
+            // pool de 1 programme, run quasi sans options live.
+            int curatedCount = kept.Count;
+            int minPool = Math.Max(1, cfg?.TonightMinRecommendations ?? 3);
+            var horsGenresIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!uncurated && curatedCount < minPool && genreExcluded.Count > 0)
+            {
+                foreach (var g in genreExcluded)
+                {
+                    if (wl.Any && !PassesWhitelists(g.p, g.genres, wl)) continue;
+                    if (!PassesFlags(g.p, flags)) continue;
+                    kept.Add(g);
+                    if (!string.IsNullOrEmpty(g.p.Id)) horsGenresIds.Add(g.p.Id);
+                }
+                if (horsGenresIds.Count > 0)
+                    _logger?.Info("[LLM_AI] epg_tonight : pool curaté mince ({0} < min {1}) — {2} programme(s) écarté(s) par exclude_genres ré-inclu(s), marqués « hors_vos_genres ».",
+                        curatedCount, minPool, horsGenresIds.Count);
+            }
 
             // Pré-tri et cap. Chat externe (ParentalUser) : RÉPARTITION sur
             // TOUTE la fenêtre — programmes triés chronologiquement puis
@@ -1677,7 +1717,11 @@ namespace LLM_AI
                     is_series = p.IsSeries == true,
                     is_movie = p.IsMovie == true,
                     is_scheduled = t.isScheduled,
-                    is_onair = onAir
+                    is_onair = onAir,
+                    // v2.3.3 anti-privation : programme ré-admis après rejet par
+                    // les exclude_genres du LLM (pool curaté trop mince) — le
+                    // LLM sait qu'il sort de SES critères de ce tour.
+                    hors_vos_genres = horsGenresIds.Contains(p.Id)
                 });
             }
             // Recensement des genres émis au LLM (POST-mapping GenreCleaner) :
@@ -1718,7 +1762,24 @@ namespace LLM_AI
                     EpgSnapshotStore.Upsert(t.p, mapped, _logger);
                 }
 
-            return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
+            // Note d'anti-privation (v2.3.3) : informe le LLM de l'état réel
+            // du pool — ré-inclusions marquées, ou maigreur persistante (il
+            // doit alors s'appuyer sur enregistrements + réserve). Émise en
+            // plus de « total » ; null quand le pool est sain.
+            string note = null;
+            if (!uncurated)
+            {
+                if (horsGenresIds.Count > 0)
+                    note = "Pool mince ce soir (" + curatedCount + " programme(s) dans tes critères) : "
+                         + horsGenresIds.Count + " programme(s) écartés par tes exclude_genres ont été "
+                         + "ré-inclus (marqués hors_vos_genres=true) pour ne pas t'affamer — "
+                         + "recommande-les seulement s'ils collent au profil de l'usager.";
+                else if (kept.Count < minPool)
+                    note = "Pool curaté mince ce soir (" + kept.Count + " programme(s) dans tes "
+                         + "chaînes/genres préférés) — appuie-toi sur les ENREGISTREMENTS non "
+                         + "visionnés et la RÉSERVE BIBLIOTHÈQUE pour compléter tes recommandations.";
+            }
+            return JsonSerializer.Serialize(new { total = results.Count, note, results }, s_json);
         }
 
         /// <summary>

@@ -10,6 +10,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.3.3] — 2026-10-10
+
+### Added (FR)
+- **Bloc « HEURE ACTUELLE » dans le prompt du soir** : le modèle n'a aucun
+  accès à l'horloge — sans ancre, il raisonne sur « ce soir », « diffusé à »
+  ou « enregistré hier » sans savoir l'heure qu'il est (même classe
+  d'incident que le chat, corrigée là autrefois). Le prompt du run du soir
+  porte désormais l'heure locale du serveur avec son décalage UTC explicite,
+  recalculée à chaque run.
+- **Anti-privation du pool EPG** : si les genres exclus à la demande du
+  modèle laissent un pool trop mince pour couvrir le minimum de
+  recommandations, les programmes écartés par ces exclusions seules sont
+  ré-inclus, marqués `hors_vos_genres` — le modèle reste juge et peut les
+  ignorer. Une note accompagne la réponse du tool : ré-inclusions marquées,
+  ou maigreur persistante (le modèle est alors orienté vers les
+  enregistrements et la réserve). Les préférences de chaînes/genres du
+  foyer et les catégories bloquées restent strictes — leurs rejets ne sont
+  jamais ré-admis.
+- **Exemple de recommandation complète dans le menu des enregistrements** :
+  les petits modèles suivent le schéma du prompt utilisateur ; un exemple
+  travaillé avec l'id rempli renforce mieux le contrat d'id que la prose
+  seule (les ids omis coûtaient des recommandations valides).
+- **Déduplication menu ↔ réserve** : un titre déjà présent au menu des
+  enregistrements n'occupe plus une ligne de réserve avec un id différent —
+  le modèle voyait la même série deux fois, source d'hésitation sur l'id à
+  recopier.
+
+### Added (EN)
+- **"CURRENT TIME" block in the nightly prompt**: the model has no clock
+  access — without an anchor, it reasons about "tonight", "airs at" or
+  "recorded yesterday" without knowing the current time (same incident
+  class the chat had, fixed there previously). The nightly run prompt now
+  carries the server's local time with its explicit UTC offset,
+  recomputed on every run.
+- **EPG pool anti-starvation**: when the genres excluded at the model's own
+  request leave a pool too thin to cover the minimum recommendations, the
+  programs dropped by those exclusions only are re-included, flagged
+  `hors_vos_genres` — the model remains the judge and may still ignore
+  them. A note rides along with the tool response: flagged re-inclusions,
+  or persistent thinness (the model is then steered toward recordings and
+  the library reserve). The household's channel/genre preferences and
+  blocked categories remain strict — their rejects are never re-admitted.
+- **Worked recommendation example in the recordings menu**: small models
+  follow the user prompt's schema; a complete example with the id filled
+  in enforces the id contract better than prose alone (omitted ids were
+  costing valid recommendations).
+- **Menu ↔ reserve deduplication**: a title already present in the
+  recordings menu no longer takes a reserve line with a different id — the
+  model was seeing the same series twice, a source of hesitation about
+  which id to copy.
+
+---
+
 ## [2.3.2] — 2026-10-10
 
 ### Fixed (FR)
