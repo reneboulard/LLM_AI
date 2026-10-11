@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.4.1] — 2026-10-11
+
+### Fixed (FR)
+- **Appariement des toasts d'enregistrement par ID** : l'enrichissement
+  live rattache l'id EPG à une reco mais ne réécrit pas son titre — le
+  résultat garde donc le titre proposé par le modèle, parfois reformulé
+  ou fautif (vécu : « Miss Scarlet, détectives privé » contre le titre
+  du guide « Miss Scarlet, détective privée »). Un appariement par
+  titre seul aurait raté l'enregistrement d'une reco enrichie. Le
+  programme enregistré est désormais apparié d'abord par son id EPG
+  (égalité d'identifiant, insensible au titre), le titre normalisé +
+  l'horaire restant en repli pour les recos sans id.
+
+### Fixed (EN)
+- **ID-based matching for the recording toasts**: the live enrichment
+  attaches the EPG id to a recommendation but does not rewrite its
+  title — the result keeps the model's title, sometimes rephrased or
+  misspelled (observed: "Miss Scarlet, détectives privé" vs the guide
+  title "Miss Scarlet, détective privée"). Title-only matching would
+  have missed the recording of an enriched recommendation. The
+  recorded program is now matched primarily by its EPG id (identity
+  comparison, immune to title drift), with the normalized title +
+  time remaining as the fallback for id-less recommendations.
+
+---
+
 ## [2.4.0] — 2026-10-10
 
 ### Added (FR)

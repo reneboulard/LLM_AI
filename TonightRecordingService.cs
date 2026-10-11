@@ -41,13 +41,12 @@ namespace LLM_AI
     /// <para><b>Appariement</b> (forme des args éprouvée au champ par
     /// <c>RecordingWatcher</c> sur 4.10.1.0 : l'argument porte
     /// <c>ActiveRecordingInfo</c> directement — aucune résolution
-    /// <c>GetActiveRecordingInfo</c> nécessaire) : titre normalisé
-    /// (<see cref="LlmRunner.NormTitle"/>) du programme enregistré
-    /// (<c>ActiveRecordingInfo.Program.Name</c>, repli
-    /// <c>Timer.Name</c>) comparé aux recos <c>source="live"</c> du dernier
-    /// résultat Tonight de CHAQUE usager en cache
-    /// (<see cref="TonightService.GetRecentResults"/>), corroboré par
-    /// l'heure de début du guide (±15 min) quand les deux sont connues.</para>
+    /// <c>GetActiveRecordingInfo</c> nécessaire) : <b>id d'abord</b>
+    /// (v2.4.1) — l'InternalId du programme de l'événement contre l'id EPG
+    /// enrichi de la reco (le titre du payload reste celui du LLM, parfois
+    /// reformulé/faux — vécu 2026-10-10) ; sans id, repli titre normalisé
+    /// (<see cref="LlmRunner.NormTitle"/>) corroboré par l'heure de début
+    /// du guide (±15 min).</para>
     /// <para><b>Piège évité</b> : les recos <c>source="recording"</c>
     /// (« regarde l'épisode déjà enregistré ») ne sont JAMAIS appariées —
     /// sinon le timer quotidien d'une série consommée comme enregistrement
@@ -180,11 +179,14 @@ namespace LLM_AI
                 }
             }
 
-            // Heure de début du guide (corroboration) + chaîne (affichage).
+            // Heure de début du guide (corroboration) + chaîne (affichage) +
+            // id EPG du programme (appariement primaire v2.4.1 — le titre du
+            // payload peut être celui, fautif, du LLM).
             DateTimeOffset? start = rec.Program?.StartDate ?? rec.Timer?.StartDate;
             string channel = rec.Channel?.Name;
+            long? programId = rec.Program?.InternalId;
 
-            var matches = MatchAgainstTonight(cfg, title, start);
+            var matches = MatchAgainstTonight(cfg, title, start, programId);
             if (matches.Count == 0)
             {
                 _logger?.Info("[LLM_AI] Enregistrement « {0} » {1} — absent des recommandations live (< 48 h), silence.",
@@ -205,16 +207,28 @@ namespace LLM_AI
         /// <summary>
         /// Apparie le programme enregistré contre les recos
         /// <c>source="live"</c> du dernier résultat Tonight de chaque usager
-        /// en cache (&lt; 48 h, comptes ignorés exclus). Retourne
-        /// (userId, raison LLM de la reco appariée) — une reco appariée par
-        /// usager suffit. Best-effort : payload illisible → usager sauté.
+        /// en cache (&lt; 48 h, comptes ignorés exclus). Appariement par
+        /// <b>id d'abord</b> (v2.4.1) : l'enrichissement live rattache l'id
+        /// EPG (InternalId du programme) mais ne réécrit PAS le titre — le
+        /// payload garde le titre du LLM, parfois reformulé ou fautif (vécu
+        /// 2026-10-10 : « Miss Scarlet, détectives privé » vs le titre EPG
+        /// « Miss Scarlet, détective privée », id 774657 rattaché par
+        /// chaîne+heure) ; un appariement par titre seul raterait
+        /// l'enregistrement d'une reco enrichie. Sans id (ou sans match
+        /// d'id), repli titre normalisé + corroboration d'horaire.
+        /// Retourne (userId, raison LLM de la reco appariée) — une reco
+        /// appariée par usager suffit. Best-effort : payload illisible →
+        /// usager sauté.
         /// </summary>
         private List<(string UserId, string Reason)> MatchAgainstTonight(
-            PluginConfiguration cfg, string title, DateTimeOffset? start)
+            PluginConfiguration cfg, string title, DateTimeOffset? start, long? programId)
         {
             var matches = new List<(string, string)>();
-            string norm = LlmRunner.NormTitle(title);
-            if (string.IsNullOrEmpty(norm)) return matches;
+            string norm = LlmRunner.NormTitle(title ?? string.Empty);
+            // NB : pas de retour anticipé sur norm vide (v2.4.1) — un titre
+            // dégénéré (tout-punctuation) normaliserait vide alors que l'id
+            // reste exploitable ; le chemin TITRE est neutralisé dans la
+            // boucle dans ce cas.
 
             var ignored = TonightService.IgnoredUserKeys(_users, cfg, _logger);
             foreach (var (userId, items) in TonightService.GetRecentResults(s_resultMaxAge))
@@ -241,18 +255,38 @@ namespace LLM_AI
                             !string.Equals(src.GetString(), "live", StringComparison.OrdinalIgnoreCase))
                             continue;
 
-                        if (!el.TryGetProperty("title", out var t) || t.ValueKind != JsonValueKind.String) continue;
-                        if (!string.Equals(LlmRunner.NormTitle(t.GetString() ?? string.Empty), norm, StringComparison.Ordinal))
-                            continue;
+                        // Appariement par ID d'abord (v2.4.1) : l'id enrichi
+                        // EST le programme du guide (même InternalId que le
+                        // Program de l'événement) → égalité infaillible, même
+                        // si le titre du payload a été reformulé par le LLM.
+                        // Un id non-numérique ou absent retombe sur le titre.
+                        bool idHit = false;
+                        if (programId.HasValue && el.TryGetProperty("id", out var idn))
+                        {
+                            long recoId = 0;
+                            if (idn.ValueKind == JsonValueKind.String)
+                                long.TryParse(idn.GetString(), out recoId);
+                            else if (idn.ValueKind == JsonValueKind.Number)
+                                recoId = idn.GetInt64();
+                            idHit = recoId != 0 && recoId == programId.Value;
+                        }
 
-                        // Corroboration d'horaire (±15 min) quand les DEUX
-                        // heures sont connues — sinon le titre seul fait foi
-                        // (échelle du foyer : peu d'homonymes concurrents).
-                        if (start.HasValue &&
-                            el.TryGetProperty("start", out var st) && st.ValueKind == JsonValueKind.String &&
-                            DateTimeOffset.TryParse(st.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var recoStart) &&
-                            Math.Abs((recoStart - start.Value).TotalMinutes) > StartToleranceMinutes)
-                            continue;
+                        if (!idHit)
+                        {
+                            if (string.IsNullOrEmpty(norm)) continue; // pas de titre exploitable → id seul
+                            if (!el.TryGetProperty("title", out var t) || t.ValueKind != JsonValueKind.String) continue;
+                            if (!string.Equals(LlmRunner.NormTitle(t.GetString() ?? string.Empty), norm, StringComparison.Ordinal))
+                                continue;
+
+                            // Corroboration d'horaire (±15 min) quand les DEUX
+                            // heures sont connues — sinon le titre seul fait foi
+                            // (échelle du foyer : peu d'homonymes concurrents).
+                            if (start.HasValue &&
+                                el.TryGetProperty("start", out var st) && st.ValueKind == JsonValueKind.String &&
+                                DateTimeOffset.TryParse(st.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var recoStart) &&
+                                Math.Abs((recoStart - start.Value).TotalMinutes) > StartToleranceMinutes)
+                                continue;
+                        }
 
                         string reason = null;
                         if (el.TryGetProperty("reason", out var rs) && rs.ValueKind == JsonValueKind.String)
