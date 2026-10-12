@@ -305,7 +305,10 @@ redémarrage.
   consommer de quota) ; TVDB : le vrai `POST /v4/login` (l'authentification EST la
   validation — token obtenu, valide ~23 h) ; SearXNG : recherche JSON réelle sur
   l'URL **telle qu'éditée** (testable avant enregistrement — le 403 d'un
-  `format=json` non activé produit un message explicite). Clés relues depuis la
+  `format=json` non activé produit un message explicite), avec les moteurs du champ
+  **tels qu'édités** — la sonde liste ceux qui ont réellement répondu et dénonce
+  l'écart si des noms inconnus font retomber l'instance silencieusement sur sa
+  surface générale. Clés relues depuis la
   config **enregistrée** (enregistrer la page avant de tester une nouvelle clé) ;
   TVDB suit la résolution réelle de l'outil (repli `TVDB_API_KEY`). Réponse
   {Ok, Ms, Reply, Error}, timeout 20 s, aucune écriture de configuration.
@@ -592,7 +595,11 @@ détaillés dans [Surfaces natives des recommandations](#surfaces-natives-des-re
 
 ### Divers
 
-`TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée — [SearXNG](https://docs.searxng.org/)), `WebFetchDirect`,
+`TmdbLanguage`, `SearXngUrl` (recherche web auto-hébergée — [SearXNG](https://docs.searxng.org/)),
+`SearXngEngines` (moteurs imposés à l'instance SearXNG, noms exacts séparés par des
+virgules — vide = surface générale de l'instance ; s'applique à l'outil `web_search` et
+au S3 des orphelins ; noms exacts visibles sur `/config` de l'instance, testables par la
+sonde « Tester SearXNG »), `WebFetchDirect`,
 `NewReleaseSources` (sources de l'outil `new_releases`, une par ligne — migré depuis
 l'ancienne paire `ShowbizzUrl` / `ShowbizzPattern` — valables au premier run après
 enregistrement, et vérifiables via le bouton « Tester les sources » de la page), `RagDirectives` (directives additionnelles injectées
@@ -1633,7 +1640,8 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
      accepté sur la seule foi de l'id. Le verdict + la justification sont logués.
 3. **S3 — recherche web (SearXNG) → ids IMDb/TMDB** (si S1 et S2 échouent, et
    `OrphanSearXngEnabled`). La tâche interroge l'instance **SearXNG** auto-hébergée
-   (champ `SearXngUrl`, déjà utilisé par l'outil `web_search` du LLM —
+   (champ `SearXngUrl`, moteurs éventuellement forcés via `SearXngEngines`,
+   déjà utilisé par l'outil `web_search` du LLM —
    [SearXNG](https://docs.searxng.org/) ; repli Ollama
    cloud), extrait les **ids IMDb et TMDB** des URLs de résultats (regex
    `imdb.com/.../title/tt…` et `themoviedb.org/(movie|tv)/<id>`, ordre

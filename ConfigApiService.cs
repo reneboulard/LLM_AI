@@ -203,13 +203,17 @@ namespace LLM_AI
         public class TestTvdbRequest : IReturn<object> { }
 
         /// <summary>POST <c>/Plugins/LLMAI/TestSearxng</c> : recherche JSON
-        /// réelle sur l'instance postée telle qu'éditée (le champ n'est pas
-        /// secret) — le 403 typique d'un format JSON non activé produit un
-        /// message explicite.</summary>
+        /// réelle sur l'instance postée telle qu'éditée (les champs ne sont
+        /// pas secrets) — le 403 typique d'un format JSON non activé produit
+        /// un message explicite. Si des moteurs sont postés, ils sont imposés
+        /// à la requête et la réponse liste les moteurs ayant réellement
+        /// répondu — un nom inconnu/inactif (fallback silencieux de SearXNG
+        /// sur sa surface générale) est dénoncé.</summary>
         [Route("/Plugins/LLMAI/TestSearxng", "POST")]
         public class TestSearxngRequest : IReturn<object>
         {
             public string Url { get; set; }
+            public string Engines { get; set; }
         }
 
         /// <summary>Test TMDB : la clé est relue depuis la configuration
@@ -276,8 +280,8 @@ namespace LLM_AI
         }
 
         /// <summary>Test SearXNG : recherche JSON réelle (une requête
-        /// « test ») sur l'URL postée telle qu'éditée — testable avant
-        /// enregistrement.</summary>
+        /// « test ») sur l'URL et les moteurs postés tels qu'édités —
+        /// testable avant enregistrement.</summary>
         public async Task<object> Post(TestSearxngRequest req)
         {
             var guarded = GuardProbe();
@@ -286,10 +290,12 @@ namespace LLM_AI
             string url = (req?.Url ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(url))
                 return new TestProbeResult { Ok = false, Error = "URL SearXNG non renseignée (ex. http://localhost:8888)." };
+            string engines = WebSearchTool.NormalizeEngines(req?.Engines);
 
             var sw = Stopwatch.StartNew();
             var (ok, status, body) = await ProbeHttpAsync("GET",
-                url.TrimEnd('/') + "/search?q=" + Uri.EscapeDataString("test") + "&format=json",
+                url.TrimEnd('/') + "/search?q=" + Uri.EscapeDataString("test") + "&format=json"
+                + (string.IsNullOrEmpty(engines) ? "" : "&engines=" + Uri.EscapeDataString(engines)),
                 null).ConfigureAwait(false);
             sw.Stop();
 
@@ -300,18 +306,39 @@ namespace LLM_AI
                 return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds, Error = Truncate(body, 300) };
 
             int results = 0;
+            var contributors = new List<string>();
             try
             {
                 using var doc = JsonDocument.Parse(body ?? string.Empty);
-                results = doc.RootElement.GetProperty("results").GetArrayLength();
+                var arr = doc.RootElement.GetProperty("results");
+                results = arr.GetArrayLength();
+                foreach (var r in arr.EnumerateArray())
+                    if (r.TryGetProperty("engine", out var e) && e.ValueKind == JsonValueKind.String)
+                    {
+                        string n = e.GetString();
+                        if (!string.IsNullOrWhiteSpace(n) && !contributors.Contains(n))
+                            contributors.Add(n);
+                    }
             }
             catch
             {
                 return new TestProbeResult { Ok = false, Ms = (int)sw.ElapsedMilliseconds,
                     Error = "HTTP 200 mais réponse non JSON — format=json n'est pas actif sur cette instance." };
             }
+
+            string reply = results + " résultat(s) retourné(s)";
+            if (contributors.Count > 0)
+                reply += " — moteurs : " + string.Join(", ", contributors);
+            // engines= n'est PAS une garantie d'emploi : un nom inconnu ou
+            // inactif retombe silencieusement sur la surface générale. Un
+            // moteur répondant hors de la liste demandée EST cette chute.
+            if (engines.Length > 0 && contributors.Count > 0 &&
+                !contributors.All(engines.Split(',').Contains))
+                reply += "  ATTENTION : moteurs répondants ≠ moteurs demandés — un nom est "
+                    + "inconnu ou inactif sur l'instance (SearXNG retombe alors silencieusement "
+                    + "sur sa surface générale ; noms exacts : /config de l'instance).";
             return new TestProbeResult { Ok = true, Ms = (int)sw.ElapsedMilliseconds,
-                Reply = results + " résultat(s) retourné(s)" };
+                Reply = reply };
         }
 
         /// <summary>Garde commune aux trois sondes : administrateur +

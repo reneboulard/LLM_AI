@@ -16,7 +16,9 @@ namespace LLM_AI
     /// <list type="bullet">
     /// <item><b>SearXNG</b> (auto-hébergé) si <see cref="PluginConfiguration.SearXngUrl"/>
     ///   est renseigné — privilégié (gratuit, sans quota, réponse JSON native).
-    ///   Requête <c>{url}/search?q=…&amp;format=json</c>.</item>
+    ///   Requête <c>{url}/search?q=…&amp;format=json</c>, avec
+    ///   <c>&amp;engines=…</c> si <see cref="PluginConfiguration.SearXngEngines"/>
+    ///   est renseigné (moteurs imposés à l'instance).</item>
     /// <item><b>Ollama Cloud</b> (<c>https://ollama.com/api/web_search</c>) en repli,
     ///   authentifié par bearer (<see cref="PluginConfiguration.OllamaApiKey"/> ou
     ///   variable <c>OLLAMA_API_KEY</c>).</item>
@@ -57,28 +59,39 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(query))
                 return Err("paramètre 'query' requis pour web_search");
 
+            string searxng = ResolveSearXngUrl();
+            // Moteurs imposés (SearXngEngines, normalisés) : inclus dans la clé
+            // de cache — changer de moteurs ne doit pas resservir des résultats
+            // de l'ancienne surface pendant le TTL de 24h.
+            string engines = ResolveSearXngEngines();
+
             // Cache 24h (une info de série ne bouge pas en 24h ; économise quota
             // Ollama cloud et allège l'instance SearXNG sur les requêtes identiques).
-            string cacheKey = "search:" + WebResultCache.NormalizeQuery(query);
+            string cacheKey = "search:[" + (engines ?? string.Empty) + "]:" + WebResultCache.NormalizeQuery(query);
             if (WebResultCache.TryGet(cacheKey, out var cached))
             {
                 _logger?.Info("[LLM_AI] web_search cache hit query={0}", query);
                 return cached;
             }
 
-            string searxng = ResolveSearXngUrl();
             try
             {
                 string result;
                 if (!string.IsNullOrWhiteSpace(searxng))
-                    result = await SearchSearXng(searxng, query, ct).ConfigureAwait(false);
+                    result = await SearchSearXng(searxng, query, engines, ct).ConfigureAwait(false);
                 else
                     result = await SearchOllamaCloud(query, ct).ConfigureAwait(false);
 
-                // Ne cache QUE les résultats valids (pas les erreurs).
+                // Ne cache QUE les résultats valids (pas les erreurs). Une
+                // réponse de moteurs IMPOSÉS portant un moteur sans réponse
+                // n'est pas cachée non plus : geler un échec transitoire
+                // (quota, CAPTCHA) pendant 24h empêcherait de réessayer dès
+                // que le moteur revient. La surface générale reste cachée —
+                // un mur chronique ne doit pas vider le cache.
                 bool valid = false;
                 try { using (JsonDocument.Parse(result)) { valid = true; } } catch { }
-                if (valid && !result.Contains("\"error\""))
+                if (valid && !result.Contains("\"error\"")
+                    && !(engines.Length > 0 && result.Contains("\"unresponsive\"")))
                 {
                     WebResultCache.Set(cacheKey, result);
                     _logger?.Info("[LLM_AI] web_search query={0} -> {1} (caché 24h)", query, Truncate(result, 200));
@@ -99,11 +112,19 @@ namespace LLM_AI
         /// <c>{baseUrl}/search?q=…&amp;format=json</c> renvoie un JSON contenant
         /// <c>results</c> (tableau de {title, content, url, publishedDate, score}),
         /// <c>answers</c> (réponses instantanées) et <c>infoboxes</c> (résumés).
+        /// <paramref name="engines"/> non vide ajoute <c>&amp;engines=…</c> :
+        /// moteurs imposés à l'instance — le nom doit exister dans son registre
+        /// (<c>disabled</c> suffit ; <c>inactive</c> est invisible), sinon
+        /// SearXNG retombe silencieusement sur sa surface générale.
         /// On projette un JSON compact pour le LLM (top 8 résultats par score).
+        /// Les moteurs tombés (<c>unresponsive_engines</c>, paires nom/raison)
+        /// sont exposés au LLM (<c>unresponsive</c>) et journalisés — une
+        /// ligne dédiée n'apparaît QUE si au moins un moteur est sans réponse.
         /// </summary>
-        private async Task<string> SearchSearXng(string baseUrl, string query, CancellationToken ct)
+        private async Task<string> SearchSearXng(string baseUrl, string query, string engines, CancellationToken ct)
         {
-            string url = baseUrl.TrimEnd('/') + "/search?q=" + Uri.EscapeDataString(query) + "&format=json";
+            string url = baseUrl.TrimEnd('/') + "/search?q=" + Uri.EscapeDataString(query) + "&format=json"
+                + (string.IsNullOrEmpty(engines) ? "" : "&engines=" + Uri.EscapeDataString(engines));
             using (var req = new HttpRequestMessage(HttpMethod.Get, url))
             using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
             {
@@ -135,6 +156,38 @@ namespace LLM_AI
                         }
                     }
 
+                    // Moteurs sans réponse : paires [nom, raison] (format
+                    // défensif : éléments chaîne acceptés aussi). Une ligne de
+                    // log dédiée n'apparaît QUE si au moins un moteur est
+                    // tombé — jamais quand tout répond. Warn si des moteurs
+                    // étaient imposés (SearXngEngines : la liste choisie est
+                    // en échec, signal actionnable), Info sur la surface
+                    // générale (murs chroniques attendus, ex. CAPTCHA ddg).
+                    var unresponsive = new List<string>();
+                    if (root.TryGetProperty("unresponsive_engines", out var unr) && unr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var e in unr.EnumerateArray())
+                        {
+                            if (e.ValueKind == JsonValueKind.Array && e.GetArrayLength() >= 1)
+                            {
+                                string n = e[0].ValueKind == JsonValueKind.String ? e[0].GetString() : null;
+                                string r = e.GetArrayLength() >= 2 && e[1].ValueKind == JsonValueKind.String ? e[1].GetString() : null;
+                                if (!string.IsNullOrWhiteSpace(n))
+                                    unresponsive.Add(string.IsNullOrWhiteSpace(r) ? n : n + ": " + r);
+                            }
+                            else if (e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+                                unresponsive.Add(e.GetString());
+                        }
+                    }
+                    if (unresponsive.Count > 0)
+                    {
+                        string detail = string.Join("; ", unresponsive);
+                        if (engines.Length > 0)
+                            _logger?.Warn("[LLM_AI] web_search moteurs sans réponse : {0}", detail);
+                        else
+                            _logger?.Info("[LLM_AI] web_search moteurs sans réponse : {0}", detail);
+                    }
+
                     // Résultats : top 8 par score (SearXNG les renvoie déjà triés,
                     // mais on sécurise).
                     var results = new List<object>();
@@ -161,6 +214,7 @@ namespace LLM_AI
                     {
                         backend = "searxng",
                         query,
+                        unresponsive = unresponsive.Count > 0 ? unresponsive : null,
                         answers = answers.Count > 0 ? answers : null,
                         infobox = string.IsNullOrWhiteSpace(infobox) ? null : infobox,
                         results
@@ -201,6 +255,23 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             return cfg?.SearXngUrl;
+        }
+
+        /// <summary>Moteurs imposés (config), normalisés — vide = surface générale.</summary>
+        private static string ResolveSearXngEngines()
+        {
+            return NormalizeEngines(Plugin.Instance?.Configuration?.SearXngEngines);
+        }
+
+        /// <summary>
+        /// Normalise une liste de moteurs SearXNG : éléments séparés par des
+        /// virgules, trimés, vides écartés. Vide = aucun paramètre engines
+        /// envoyé (surface générale des réglages de l'instance).
+        /// </summary>
+        internal static string NormalizeEngines(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+            return string.Join(",", raw.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0));
         }
 
         private static string ResolveApiKey()

@@ -177,6 +177,17 @@ namespace LLM_AI
         public string SearXngUrl { get; set; } = "";
 
         /// <summary>
+        /// Moteurs de recherche SearXNG imposés : noms exacts séparés par des
+        /// virgules (ex. <c>braveapi,bing</c> — liste sur <c>/config</c> de
+        /// l'instance). Vide = aucun paramètre <c>engines</c> envoyé, l'instance
+        /// garde la surface générale de ses réglages. Un nom inconnu ou
+        /// <c>inactive</c> fait retomber SearXNG <b>silencieusement</b> sur sa
+        /// surface générale (le dénoncer : sonde TestSearxng, qui liste les
+        /// moteurs ayant répondu). Sans effet sans <see cref="SearXngUrl"/>.
+        /// </summary>
+        public string SearXngEngines { get; set; } = "";
+
+        /// <summary>
         /// Active le backend <b>direct auto-hébergé</b> pour l'outil
         /// <c>web_fetch</c> : récupération de la page par <c>HttpClient</c> côté
         /// plugin + extraction locale (titre, métadonnées og:/twitter,

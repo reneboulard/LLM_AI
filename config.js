@@ -815,6 +815,7 @@ define(["loading"], function (loading) {
         view.querySelector("#txtTvdbApiKey").value = cfg.TvdbApiKey || "";
         view.querySelector("#txtOllamaApiKey").value = cfg.OllamaApiKey || "";
         view.querySelector("#txtSearXngUrl").value = cfg.SearXngUrl || "";
+        view.querySelector("#txtSearXngEngines").value = cfg.SearXngEngines || "";
         view.querySelector("#txtGeminiApiKey").value = cfg.GeminiApiKey || "";
         // Sources de l'outil new_releases — le getter serveur migre
         // automatiquement l'ancienne paire ShowbizzUrl/ShowbizzPattern :
@@ -948,6 +949,7 @@ define(["loading"], function (loading) {
             TvdbApiKey: view.querySelector("#txtTvdbApiKey").value,
             OllamaApiKey: view.querySelector("#txtOllamaApiKey").value,
             SearXngUrl: view.querySelector("#txtSearXngUrl").value.trim(),
+            SearXngEngines: view.querySelector("#txtSearXngEngines").value.trim(),
             GeminiApiKey: view.querySelector("#txtGeminiApiKey").value,
             // new_releases : sources multi-lignes (legacy ShowbizzUrl/Pattern
             // abandonnés — non postés, ils se vident à la première sauvegarde
@@ -1157,7 +1159,8 @@ define(["loading"], function (loading) {
             [["btnTestTmdb", "tmdbTestResult", "Plugins/LLMAI/TestTmdb", {}],
              ["btnTestTvdb", "tvdbTestResult", "Plugins/LLMAI/TestTvdb", {}],
              ["btnTestSearxng", "searxngTestResult", "Plugins/LLMAI/TestSearxng",
-              function (v) { return { Url: ((v.querySelector("#txtSearXngUrl") || {}).value || "").trim() }; }]
+              function (v) { return { Url: ((v.querySelector("#txtSearXngUrl") || {}).value || "").trim(),
+                                       Engines: ((v.querySelector("#txtSearXngEngines") || {}).value || "").trim() }; }]
             ].forEach(function (spec) {
                 var btn = view.querySelector("#" + spec[0]);
                 var res = view.querySelector("#" + spec[1]);

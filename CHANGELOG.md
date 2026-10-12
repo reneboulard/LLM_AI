@@ -10,6 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.4.2] — 2026-10-12
+
+### Added (FR)
+- **Moteurs SearXNG configurables** : un nouveau champ de configuration
+  impose des moteurs de recherche à l'instance SearXNG (noms exacts séparés
+  par des virgules, ex. un moteur d'API sollicité à la demande). Vide, le
+  plugin n'envoie aucun paramètre `engines` et l'instance garde la surface
+  générale de ses réglages. S'applique à l'outil `web_search` et au S3
+  d'identification des orphelins (même consommateur). La clé du cache de
+  résultats intègre les moteurs : changer de liste ne ressert pas des
+  résultats de l'ancienne surface pendant le TTL de 24 h. Piège couvert :
+  un nom inconnu ou inactif fait retomber SearXNG **silencieusement** sur sa
+  surface générale — la sonde « Tester SearXNG » teste désormais aussi les
+  moteurs, liste ceux qui ont réellement répondu et dénonce l'écart (noms
+  exacts visibles sur `/config` de l'instance). Sans effet sans URL SearXNG.
+- **Moteurs sans réponse journalisés** : quand SearXNG rapporte des moteurs
+  tombés (`unresponsive_engines`, paires nom/raison), le résultat de
+  `web_search` expose la liste au LLM et **une** ligne de log dédiée
+  apparaît — jamais quand tout répond. Warn si des moteurs étaient imposés
+  (la liste choisie est en échec — signal actionnable), Info sur la surface
+  générale (murs chroniques attendus). Une réponse à moteurs imposés
+  portant un échec n'est pas cachée : un échec transitoire (quota, CAPTCHA)
+  ne doit pas être gelé 24 h ; la surface générale reste cachée.
+
+### Added (EN)
+- **Configurable SearXNG engines**: a new configuration field forces
+  specific search engines onto the SearXNG instance (exact names,
+  comma-separated, e.g. an on-demand API engine). When empty, the plugin
+  sends no `engines` parameter and the instance keeps its configured
+  general surface. Applies to the `web_search` tool and to the
+  orphan-identify S3 stage (same consumer). The result-cache key now
+  includes the engines: switching lists does not replay results from the
+  previous surface during the 24h TTL. Trap covered: an unknown or
+  inactive name makes SearXNG fall back **silently** to its general
+  surface — the "Test SearXNG" probe now also tests the engines, lists the
+  engines that actually answered, and flags the mismatch (exact names
+  visible on the instance's `/config`). No effect without a SearXNG URL.
+- **Unresponsive engines logged**: when SearXNG reports engines down
+  (`unresponsive_engines`, name/reason pairs), the `web_search` result
+  exposes the list to the LLM and **one** dedicated log line appears —
+  never when everything responds. Warn when engines were forced (the
+  chosen list is failing — the actionable signal), Info on the general
+  surface (chronic walls expected). A forced-engine response carrying a
+  failure is not cached: a transient failure (quota, CAPTCHA) must not
+  be frozen for 24h; the general surface stays cached.
+
+---
+
 ## [2.4.1] — 2026-10-11
 
 ### Fixed (FR)

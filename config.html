@@ -432,11 +432,26 @@
                             <button is="emby-button" type="button" class="raised" id="btnTestSearxng"
                                     data-i18n="cfg.searxng.test"
                                     data-i18n-title="cfg.searxng.test.title"
-                                    title="Teste l'URL telle qu'éditée dans le champ (sans enregistrement) : une recherche JSON réelle est envoyée à l'instance.">
+                                    title="Teste l'URL et les moteurs tels qu'édités dans les champs (sans enregistrement) : une recherche JSON réelle est envoyée à l'instance.">
                                 Tester SearXNG
                             </button>
                             <div id="searxngTestResult" class="fieldDescription backendTestResult"
                                  style="display:none;white-space:pre-wrap;"></div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtSearXngEngines"
+                                   label="Moteurs SearXNG (optionnel — ex. braveapi,bing)"
+                                   data-i18n-label="cfg.searxng.engines.label"
+                                   placeholder="braveapi,bing" />
+                            <div class="fieldDescription" data-i18n-html="cfg.searxng.engines.desc">
+                                Moteurs de recherche imposés à SearXNG, séparés par des virgules
+                                (noms exacts listés par /config de l'instance). Vide = surface
+                                générale des réglages SearXNG. Un nom inconnu ou inactif retombe
+                                silencieusement sur la surface générale — la sonde « Tester
+                                SearXNG » affiche les moteurs ayant réellement répondu et
+                                dénonce l'écart. Sans effet sans URL SearXNG.
+                            </div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
