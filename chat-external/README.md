@@ -63,7 +63,12 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   pas distinguable de la lecture naturelle — il est annoncé comme envoyé,
   non vérifiable) ; si le client ignore la commande — certaines apps ne
   traitent pas tout le contrôle distant — l'agent le dit honnêtement au
-  lieu de promettre un succès fantôme. Validé en production sur une app
+  lieu de promettre un succès fantôme. Et quand le client ignore la
+  commande directe mais honore la lecture à distance (certains clients
+  web), le plugin retente le saut en relançant le même titre directement
+  à la position demandée, et l'arrêt par un retour à l'accueil qui ferme
+  le lecteur — saut et arrêt deviennent fonctionnels sur ces clients
+  aussi. Validé en production sur une app
   TV native : sauts successifs confirmés par le client en ~5-10 s ;
 - **Enregistrements à la voix (opt-in)** : si l'admin active la fonction et
   liste l'usager (en plus du droit natif Emby d'enregistrer la TV en

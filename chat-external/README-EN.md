@@ -57,7 +57,12 @@ nothing to compile, nothing to install with pip, no web server
   ~15 s is indistinguishable from natural playback — announced as
   sent, not verifiable); if the client ignores the command — some apps
   don't handle every remote-control command — the agent says so
-  honestly instead of promising a phantom success. Validated in
+  honestly instead of promising a phantom success. And when the client
+  ignores the direct command but honors remote play (some web
+  clients), the plugin retries the skip by replaying the same title
+  straight at the requested position, and the stop through a home
+  navigation that closes the player — making both work on those clients
+  too. Validated in
   production on a native TV app: successive jumps confirmed by the
   client within ~5-10 s;
 - **Voice DVR recordings (opt-in)**: if the admin enables the feature and

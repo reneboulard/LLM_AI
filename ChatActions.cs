@@ -297,7 +297,7 @@ namespace LLM_AI
                     if (cfg == null) return null;
                     return new RunTonightTool(cfg, sessionId, adminUser, adminUserId, users, json, library, liveTv, host, logger);
                 case "stop_session":
-                    return new StopSessionTool(cfg, sessionId, adminUserId, sessions, logger);
+                    return new StopSessionTool(cfg, sessionId, adminUserId, sessions, users, logger);
                 case "trigger_task":
                     return new TriggerTaskTool(cfg, sessionId, adminUserId, tasks, logger);
                 case "send_message":
@@ -385,7 +385,7 @@ namespace LLM_AI
                 // Remédiation serveur (v1.13.30) : la carte d'approbation
                 // remplace l'opt-in config — proposable en permanence, la
                 // décision appartient au clic admin.
-                new StopSessionTool(cfg, sessionId, userId, sessions, logger),
+                new StopSessionTool(cfg, sessionId, userId, sessions, users, logger),
                 new TriggerTaskTool(cfg, sessionId, userId, tasks, logger),
                 new SendMessageTool(cfg, sessionId, userId, sessions, users, notifications, logger),
                 // run_tonight_run : toujours proposable (v1.13.30 — la carte
@@ -1366,20 +1366,25 @@ namespace LLM_AI
             private readonly string _sessionId;
             private readonly string _adminUserId;
             private readonly ISessionManager _sessions;
+            private readonly IUserManager _users;
             private readonly ILogger _logger;
 
             public StopSessionTool(PluginConfiguration cfg, string sessionId, string adminUserId,
-                ISessionManager sessions, ILogger logger)
+                ISessionManager sessions, IUserManager users, ILogger logger)
             {
-                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _sessions = sessions; _logger = logger;
+                _cfg = cfg; _sessionId = sessionId; _adminUserId = adminUserId; _sessions = sessions;
+                _users = users; _logger = logger;
             }
 
             public string ToolKey => "stop_session";
             public string Name => "stop_session";
             public string Description =>
-                "Arrête la lecture d'une session Emby active (PlaystateCommand Stop — coupe la lecture et le " +
-                "transcodage en cours, n'agit pas sur la session elle-même ; si aucune lecture n'est en cours, " +
-                "l'exécution le rapporte : « rien à arrêter »). Les sessions actives et leurs ids " +
+                "Arrête la lecture d'une session Emby active (commande Stop à contrôleur admin, " +
+                "CONFIRMÉE par relecture ; si le client ignore l'arrêt direct, repli par retour à " +
+                "l'accueil GoHome qui ferme son lecteur ; non confirmé = rapporté honnêtement, " +
+                "jamais annoncé comme arrêté). N'agit pas sur la session elle-même ; si aucune " +
+                "lecture n'est en cours, l'exécution le rapporte : « rien à arrêter ». Les sessions " +
+                "actives et leurs ids " +
                 "viennent de system_audit (action active_sessions). C'est LE chemin du chat pour arrêter une " +
                 "lecture — n'utilisez PAS system_audit action=stop_session (remédiation de l'audit, gated " +
                 "AuditRemediationEnabled). DEUX PHASES : l'appel DÉPOSE une proposition " +
@@ -1429,8 +1434,10 @@ namespace LLM_AI
                     if (verdict != BudgetVerdict.Ok)
                         return BudgetRefusal(_sessionId, verdict, _cfg);
 
-                    // Primitive partagée avec system_audit (ServerRemediation).
-                    var r = await ServerRemediation.StopSessionAsync(_sessions, sid.Trim(), ct).ConfigureAwait(false);
+                    // Primitive partagée avec system_audit (ServerRemediation) —
+                    // v2.6.4 : contrôleur admin + confirmation par relecture +
+                    // repli GoHome, tout dans la primitive.
+                    var r = await ServerRemediation.StopSessionAsync(_sessions, _users, sid.Trim(), ct).ConfigureAwait(false);
                     if (r.Error != null)
                     {
                         Refund(_sessionId, 1); // garde-fou : pas une action réelle
@@ -1450,6 +1457,29 @@ namespace LLM_AI
                         await ToastActionAsync(_sessionId, LF("act.toast.stop.idle", who),
                             _logger).ConfigureAwait(false);
                         return Json(new { status = "ok", detail = LF("act.ok.stop.idle", who) });
+                    }
+
+                    // v2.6.4 — la carte ne promet JAMAIS un arrêt non
+                    // confirmé : la primitive a déjà essayé le stop direct
+                    // PUIS le repli GoHome ; non confirmé = échec honnête,
+                    // sans toast de célébration.
+                    if (!r.Confirmed)
+                    {
+                        _logger?.Info("[LLM_AI] Chat action stop_session : NON confirmé pour {0} " +
+                            "(session={1}) — le client n'a appliqué ni l'arrêt direct ni le retour accueil.",
+                            who, r.SessionId);
+                        return Json(new { status = "ok",
+                            detail = LF("act.ok.stop.unconfirmed", who, r.NowPlaying) });
+                    }
+
+                    if (r.Via == "gohome")
+                    {
+                        _logger?.Info("[LLM_AI] Chat action stop_session : lecture arrêtée pour {0} " +
+                            "via repli GoHome (session={1}).", who, r.SessionId);
+                        await ToastActionAsync(_sessionId, LF("act.toast.stop", who, r.NowPlaying),
+                            _logger).ConfigureAwait(false);
+                        return Json(new { status = "ok",
+                            detail = LF("act.ok.stop.gohome", who, r.NowPlaying) });
                     }
 
                     _logger?.Info("[LLM_AI] Chat action stop_session : lecture arrêtée pour {0} (session={1}).",

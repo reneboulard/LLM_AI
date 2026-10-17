@@ -4061,10 +4061,10 @@ namespace LLM_AI
             }, s_json);
 
         /// <summary>
-        /// Arrête la lecture d'une session (envoie un PlaystateCommand Stop).
-        /// N'agit pas sur la session elle-même (Emby n'expose pas de fermeture
-        /// de session propre en in-process) : arrête le transcodage/lecture en
-        /// cours — c'est l'action utile d'un audit (« ce stream consomme trop »).
+        /// Arrête la lecture d'une session — primitive partagée
+        /// <see cref="ServerRemediation.StopSessionAsync"/> : contrôleur
+        /// premier admin (v2.6.3), arrêt CONFIRMÉ PAR RELECTURE, repli
+        /// GoHome (v2.6.4) — jamais d'arrêt annoncé sur le seul ok d'envoi.
         /// </summary>
         private async Task<string> StopSessionAsync(JsonElement args, CancellationToken ct)
         {
@@ -4075,11 +4075,14 @@ namespace LLM_AI
 
             // Primitive partagée avec les tools d'action du chat (v1.13.30) —
             // deux chemins, un seul code métier.
-            var r = await ServerRemediation.StopSessionAsync(_sessions, sessionId, ct).ConfigureAwait(false);
+            var r = await ServerRemediation.StopSessionAsync(_sessions, _users, sessionId, ct).ConfigureAwait(false);
             if (r.Error != null) return Err(r.Error);
             return JsonSerializer.Serialize(new
             {
                 stopped = r.Stopped,
+                confirmed = r.Confirmed,
+                via = r.Via,
+                note = r.Note,
                 session_id = r.SessionId,
                 user_name = r.UserName,
                 now_playing = r.NowPlaying

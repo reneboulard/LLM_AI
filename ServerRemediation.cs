@@ -41,10 +41,21 @@ namespace LLM_AI
         /// <summary>Résultat d'un arrêt de session.</summary>
         public sealed class StopResult
         {
+            /// <summary>Lecture arrêtée (vérifiée) — ou déjà absente.</summary>
             public bool Stopped;
+            /// <summary>Le client a CONFIRMÉ l'arrêt par ses rapports (v2.6.4) —
+            /// sinon l'arrêt n'est qu'envoyé, jamais prouvé.</summary>
+            public bool Confirmed;
+            /// <summary>Chemin de l'arrêt : null = commande directe,
+            /// « gohome » = repli navigation (v2.6.4).</summary>
+            public string Via;
+            /// <summary>Id du contrôleur admin inscrit dans la commande (v2.6.3).</summary>
+            public string Controller;
             public string SessionId;
             public string UserName;
             public string NowPlaying;
+            /// <summary>Note d'état (« aucune lecture en cours », échec honnête…) — sinon null.</summary>
+            public string Note;
             /// <summary>Message d'erreur (session introuvable…) — sinon null.</summary>
             public string Error;
         }
@@ -80,12 +91,24 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Arrête la lecture d'une session (envoie un PlaystateCommand Stop).
-        /// N'agit pas sur la session elle-même (Emby n'expose pas de fermeture
-        /// de session propre en in-process) : arrête le transcodage/lecture en
-        /// cours — c'est l'action utile (« ce stream consomme trop »).
+        /// Arrête la lecture d'une session — au standard v2.6.3/v2.6.4 :
+        /// (1) la commande <c>PlaystateCommand.Stop</c> porte
+        /// <c>ControllingUserId</c> = premier admin (patron ComSkipper —
+        /// sans contrôleur, l'app TV native prod ignore la commande) ;
+        /// (2) l'arrêt est CONFIRMÉ PAR RELECTURE (session close ou plus de
+        /// lecture, ~12 s max, sortie anticipée) — un ok d'envoi ne prouve
+        /// rien (constat 2026-10-16/17 : des clients ignorent le stop) ;
+        /// (3) repli <c>GoHome</c> si le stop direct n'est pas confirmé —
+        /// la navigation FERME le lecteur du client web, qui signale
+        /// l'arrêt lui-même (58 ms au banc 2026-10-17). N'agit pas sur la
+        /// session elle-même (Emby n'expose pas de fermeture de session
+        /// propre en in-process) : arrête le transcodage/lecture en cours —
+        /// c'est l'action utile (« ce stream consomme trop »). Si le client
+        /// ne confirme NI le direct NI le repli, <c>Stopped=false</c> :
+        /// l'appelant ne doit jamais annoncer un arrêt.
         /// </summary>
-        public static async Task<StopResult> StopSessionAsync(ISessionManager sessions, string sessionId, CancellationToken ct)
+        public static async Task<StopResult> StopSessionAsync(ISessionManager sessions,
+            IUserManager users, string sessionId, CancellationToken ct)
         {
             var result = new StopResult { SessionId = sessionId };
             if (string.IsNullOrWhiteSpace(sessionId))
@@ -102,13 +125,92 @@ namespace LLM_AI
                 return result;
             }
 
-            await sessions.SendPlaystateCommand(null, sessionId,
-                new PlaystateRequest { Command = PlaystateCommand.Stop }, ct).ConfigureAwait(false);
-
-            result.Stopped = true;
             result.UserName = session.UserName;
             result.NowPlaying = session.NowPlayingItem?.Name;
+            if (session.NowPlayingItem == null)
+            {
+                // Rien à arrêter : état cible vérifié D'ENTRÉE — les
+                // appelants ont leur branche « idle » dédiée (carte du
+                // chat « rien à arrêter » depuis 2026-09-21).
+                result.Stopped = true;
+                result.Confirmed = true;
+                result.Note = "aucune lecture en cours";
+                return result;
+            }
+
+            // v2.6.3 — contrôleur identifié : premier admin (repli silencieux
+            // sans contrôleur si la liste échoue — jamais l'ancien envoi nu).
+            result.Controller = FirstAdminControllerId(users);
+            await sessions.SendPlaystateCommand(null, sessionId,
+                new PlaystateRequest { Command = PlaystateCommand.Stop,
+                    ControllingUserId = result.Controller }, ct).ConfigureAwait(false);
+
+            // v2.6.2/2.6.4 — CONFIRMATION PAR RELECTURE puis repli GoHome.
+            if (await PlaybackGoneAsync(sessions, sessionId, ct).ConfigureAwait(false))
+            {
+                result.Stopped = true;
+                result.Confirmed = true;
+                return result;
+            }
+
+            // Repli GoHome (v2.6.4) : ferme le lecteur des clients qui
+            // ignorent PlaystateCommand.Stop (client web — banc 2026-10-17).
+            await sessions.SendGeneralCommand(null, sessionId,
+                new GeneralCommand { Name = "GoHome" }, ct).ConfigureAwait(false);
+            if (await PlaybackGoneAsync(sessions, sessionId, ct).ConfigureAwait(false))
+            {
+                result.Stopped = true;
+                result.Confirmed = true;
+                result.Via = "gohome";
+                return result;
+            }
+
+            // Honnête : envoyé, NON confirmé — jamais d'arrêt fantôme.
+            result.Stopped = false;
+            result.Confirmed = false;
+            result.Note = "le client n'a pas confirmé l'arrêt (ni direct, ni retour accueil) — la lecture poursuit probablement";
             return result;
+        }
+
+        /// <summary>
+        /// Relecture d'arrêt : la session a fermé ou ne rapporte plus de
+        /// lecture (24 sondages × 500 ms = 12 s max, sortie anticipée) —
+        /// le drapeau ne bascule qu'au prochain rapport du client
+        /// (~5-10 s de cadence selon l'app).
+        /// </summary>
+        private static async Task<bool> PlaybackGoneAsync(ISessionManager sessions,
+            string sessionId, CancellationToken ct)
+        {
+            for (int i = 0; i < 24; i++)
+            {
+                await Task.Delay(500, ct).ConfigureAwait(false);
+                var s = (sessions?.Sessions ?? Enumerable.Empty<SessionInfo>())
+                    .FirstOrDefault(x => x.Id == sessionId);
+                if (s == null || s.NowPlayingItem == null)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Id du PREMIER administrateur du serveur (patron ComSkipper,
+        /// v2.6.3) — ou null si la liste échoue / aucun admin. Chemin
+        /// partagé avec <c>ClientCommandTool.FirstAdminControllerId</c>,
+        /// qui ajoute repli sur l'usager du chat + journalisation.
+        /// </summary>
+        internal static string FirstAdminControllerId(IUserManager users)
+        {
+            try
+            {
+                var admin = (users.GetUserList(
+                    new UserQuery { IsAdministrator = true })
+                    ?? Array.Empty<User>()).FirstOrDefault();
+                return admin?.Id.ToString();
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // ------------------------------------------------------------------

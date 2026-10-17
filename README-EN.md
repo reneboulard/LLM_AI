@@ -837,13 +837,22 @@ modify another plugin's config). Full details:
   success — some clients ignore the skip command even when it is
   correctly sent (v2.6.1), pause/resume/stop `pause`/`unpause`/`stop` —
   confirmed by re-reading the reported state (`IsPaused`, end of playback):
-  unconfirmed → explicit error, never a phantom success (v2.6.2),
+  unconfirmed → explicit error, never a phantom success; an `unpause` with
+  no pause in progress is honestly refused ("nothing to resume") instead of
+  falsely confirmed (v2.6.2, v2.6.4),
   identified controller — every playback command carries `ControllingUserId`
   = the server's first administrator (aligned with Emby.ComSkipper,
   silent fallback to the chat user if no admin exists); validated in
   production on a native TV app over HLS remux delivery: consecutive
   jumps confirmed by the client within ~5-10 s, the player downloading
-  the segment matching the exact target (v2.6.3), launching
+  the segment matching the exact target (v2.6.3), confirmed fallbacks —
+  an unconfirmed direct skip is retried by replaying the SAME item
+  straight at the target position (`PlayNow` + `StartPositionTicks`,
+  jumps ≥ 30 s), re-verified by read-back; an unconfirmed stop is retried
+  through `GoHome` navigation, which closes the web player — the client
+  reports the stop itself; these fallbacks never touch `pause` or
+  `unpause` and trigger ONLY on direct-command failure: clients honoring
+  the direct commands never see them (v2.6.4), launching
   `play_item` — movie or
   episode; a series/season starts at its next unwatched episode (the client does
   not expand a series id), next episode `play_next` — "skip to the next one"
@@ -1425,7 +1434,7 @@ button) or the `GET /Plugins/LLMAI/Audit` endpoint.
 
 | Family | **Remediation** actions (gate `AuditRemediationEnabled`) |
 |---|---|
-| Control | `stop_session` (PlaystateCommand Stop), `trigger_task` (`QueueScheduledTask`), `send_message` (inbox notification **or** OSD toast) |
+| Control | `stop_session` (admin-controller Stop command, **confirmed by read-back** — `GoHome` fallback if the client ignores the direct stop, unconfirmed honestly reported, v2.6.4), `trigger_task` (`QueueScheduledTask`), `send_message` (inbox notification **or** OSD toast) |
 
 When `AuditRemediationEnabled` is off, remediation actions return a JSON error — the LLM
 must then **recommend** the action in its report instead of executing it.
@@ -2096,7 +2105,9 @@ the Tonight run — reusing the existing primitives, under strict limits
   **admin account's private** playlist "AI Tonight · {admin}", v1.13.18.0 —
   never the public household playlist, filled only by the Tonight run;
   removal only accepts items the chat added itself in the conversation),
-  `stop_session` (stop playback of an active session — v1.13.30),
+  `stop_session` (stop playback of an active session — v1.13.30;
+  admin controller, stop confirmed by read-back, `GoHome` fallback and
+  honest report if the client doesn't confirm, v2.6.4),
   `trigger_task` (trigger a scheduled task, hidden tasks excluded —
   v1.13.30), `send_message` (inbox notification or OSD toast to a user —
   v1.13.30) and `run_tonight_run`.

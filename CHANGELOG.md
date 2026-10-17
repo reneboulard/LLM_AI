@@ -10,6 +10,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.4] — 2026-10-17
+
+### Added (FR)
+- **Replis confirmés pour `seek` et `stop` du chat externe** — constat banc
+  du jour (client web Emby Web/Chrome) : ce modèle de client ignore
+  royalement le transport distant (`PlaystateCommand.Seek/Pause/Stop`
+  absents de ses capacités déclarées — même le tableau de bord officiel
+  Emby, avec session administrateur, ne parvient ni à le mettre en pause
+  ni à l'arrêter), mais il honore les commandes `Play` et la navigation
+  `GoHome`. Deux replis, déclenchés UNIQUEMENT quand la commande directe
+  n'est pas confirmée par relecture : (1) `seek` → relance `PlayNow` du
+  MÊME item directement à la position cible (`StartPositionTicks`),
+  re-vérifiée par relecture — validé deux fois en direct (168→471 s puis
+  532→835 s, progression ensuite linéaire au second près) ; le repli ne
+  s'applique qu'aux sauts ≥ 30 s (en dessous, la lecture naturelle
+  pourrait rejoindre la fenêtre de confirmation et faussement valider un
+  repli ignoré) ; (2) `stop` → navigation `GoHome`, qui ferme le lecteur
+  web — le client signale l'arrêt lui-même (58 ms au banc) ; `pause` /
+  `unpause` n'y ont PAS droit (`GoHome` tuerait la lecture au lieu de la
+  suspendre). Sur les clients qui honorent les commandes directes (app
+  générique Android en DirectPlay, app TV native en production), les
+  replis ne se déclenchent jamais ; sur ceux qui ignorent tout, l'échec
+  reste signalé honnêtement.
+
+### Fixed (FR)
+- **Faux positif `unpause` du chat externe** — la relecture v2.6.2
+  confirmait une « reprise » dès que `IsPaused=false`, or c'est aussi
+  l'état d'une lecture qui n'a JAMAIS été en pause : sur un client qui
+  ignore `pause`, l'outil répondait « reprise confirmée » alors qu'il
+  n'y avait rien à reprendre (constaté en direct au banc). Sans pause
+  signalée au moment de la commande, l'outil répond désormais
+  honnêtement « aucune pause en cours — rien à reprendre » et n'envoie
+  rien : une confirmation ne peut pas exister.
+- **`stop_session` (audit + carte d'action du chat) aligné sur le même
+  standard** — la primitive partagée `ServerRemediation.StopSessionAsync`
+  cumulait les trois défauts : envoi sans `ControllingUserId` (l'app TV
+  native en production ignore les commandes sans contrôleur admin),
+  `stopped:true` sur le seul ok d'envoi (succès fantôme sur un client qui
+  ignore l'arrêt), et aucun repli. Désormais : contrôleur premier admin,
+  arrêt confirmé par relecture (session close ou plus de lecture),
+  repli `GoHome` si l'arrêt direct n'est pas confirmé, et échec honnête
+  (`stopped:false` + note) si le client ne confirme aucune des deux
+  voies — la carte d'action et le rapport d'audit ne promettent jamais
+  un arrêt non vérifié ; nouvelle clé de rapport localisée pour le cas
+  non confirmé (FR+EN).
+
+### Added (EN)
+- **Confirmed fallbacks for the external chat's `seek` and `stop`** —
+  same-day bench finding (Emby Web/Chrome client): this client model
+  flatly ignores remote transport (`PlaystateCommand.Seek/Pause/Stop`
+  missing from its declared capabilities — even the official Emby
+  dashboard, with an administrator session, cannot pause or stop it),
+  but it honors `Play` commands and `GoHome` navigation. Two fallbacks,
+  triggered ONLY when the direct command is not confirmed by read-back:
+  (1) `seek` → `PlayNow` replay of the SAME item straight at the target
+  position (`StartPositionTicks`), re-verified by read-back — validated
+  twice live (168→471 s then 532→835 s, then linear progression to the
+  second); the fallback only applies to jumps ≥ 30 s (below that,
+  natural playback could reach the confirmation window and falsely
+  validate an ignored fallback); (2) `stop` → `GoHome` navigation, which
+  closes the web player — the client reports the stop itself (58 ms on
+  the bench); `pause` / `unpause` are NOT eligible (`GoHome` would kill
+  playback instead of suspending it). On clients honoring the direct
+  commands (generic Android app over DirectPlay, native TV app in
+  production) the fallbacks never trigger; on clients ignoring
+  everything, the failure stays honestly reported.
+
+### Fixed (EN)
+- **External chat `unpause` false positive** — the v2.6.2 read-back
+  confirmed a "resume" as soon as `IsPaused=false`, which is also the
+  state of a playback that was NEVER paused: on a client ignoring
+  `pause`, the tool answered "resume confirmed" with nothing to resume
+  (caught live on the bench). With no pause reported at command time,
+  the tool now honestly answers "no pause in progress — nothing to
+  resume" and sends nothing: no confirmation can exist.
+- **`stop_session` (audit + chat action card) aligned on the same
+  standard** — the shared primitive `ServerRemediation.StopSessionAsync`
+  accumulated all three defects: a send without `ControllingUserId` (the
+  native TV app in production ignores commands without an admin
+  controller), `stopped:true` on the send-ok alone (phantom success on a
+  client that ignores the stop), and no fallback. It now carries: the
+  first-admin controller, a stop confirmed by read-back (session closed
+  or no more playback), a `GoHome` fallback when the direct stop is not
+  confirmed, and an honest failure (`stopped:false` + note) when the
+  client confirms neither path — the action card and the audit report
+  never promise an unverified stop; a new localized report key covers
+  the unconfirmed case (FR+EN).
+
+---
+
 ## [2.6.3] — 2026-10-17
 
 ### Fixed (FR)

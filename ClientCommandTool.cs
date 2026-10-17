@@ -76,6 +76,23 @@ namespace LLM_AI
     ///     contrôleur, admin chez ComSkipper, non-admin chez nous).
     ///     Repli silencieux sur l'usager du chat si aucun admin
     ///     n'existe (voir <see cref="FirstAdminControllerId"/>).</item>
+    /// <item><b>replis confirmés (v2.6.4)</b> : banc 2026-10-17, client
+    ///     web (Emby Web/Chrome) — il déclare honnêtement ses capacités
+    ///     (ni Seek ni Pause ni Stop dans <c>SupportedCommands</c>) et les
+    ///     ignore pareil, même depuis le dashboard officiel Emby avec
+    ///     session admin ; il honore en revanche les <c>PlayRequest</c>,
+    ///     les pistes, le volume, <c>DisplayContent</c> (visible seulement
+    ///     hors lecture) et <c>GoHome</c> (qui FERME son lecteur — le
+    ///     client signale l'arrêt lui-même, 58 ms au banc). Deux replis
+    ///     donc, déclenchés UNIQUEMENT quand la commande directe n'est
+    ///     pas confirmée par relecture : seek → <c>PlayNow</c> MÊME item
+    ///     + <c>StartPositionTicks</c>=cible (validé ×2 : 168→471 s puis
+    ///     532→835 s) ; stop → <c>GoHome</c> (pause/unpause n'y ont PAS
+    ///     droit — GoHome tuerait la lecture au lieu de la suspendre).
+    ///     unpause : sans pause en cours signalée au moment de la
+    ///     commande, plus de « reprise confirmée » creuse — l'état cible
+    ///     <c>IsPaused=false</c> étant déjà atteint, la relecture ne
+    ///     pouvait rien prouver (faux positif constaté au banc).</item>
     /// <item><b>Session bornée</b> : seules les sessions DONT l'usager est
     ///     celui de la requête sont ciblées (même règle que <c>Show</>,
     ///     forme « plus récente gagne ») — un usager ne pilote jamais
@@ -140,20 +157,13 @@ namespace LLM_AI
         /// n'existe.</summary>
         private string FirstAdminControllerId()
         {
-            try
-            {
-                var admin = (_users.GetUserList(
-                    new UserQuery { IsAdministrator = true })
-                    ?? Array.Empty<User>()).FirstOrDefault();
-                if (admin != null)
-                    return admin.Id.ToString();
-                _logger.Info("[LLM_AI] [CHAT-EXT] aucun admin trouvé — le contrôleur retombe sur l'usager du chat.");
-            }
-            catch (Exception ex)
-            {
-                _logger.Info("[LLM_AI] [CHAT-EXT] contrôleur admin introuvable ({0}) — repli sur l'usager du chat.",
-                    ex.Message);
-            }
+            // Chemin partagé avec ServerRemediation (stop_session de l'audit
+            // et des actions du chat) — ici avec repli journalisé sur
+            // l'usager du chat.
+            var admin = ServerRemediation.FirstAdminControllerId(_users);
+            if (admin != null)
+                return admin;
+            _logger.Info("[LLM_AI] [CHAT-EXT] aucun admin trouvé (ou liste en échec) — le contrôleur retombe sur l'usager du chat.");
             return _user.Id.ToString();
         }
 
@@ -187,6 +197,14 @@ namespace LLM_AI
         // anticipée dès confirmation. Saut < 15 s : indiscernable de la
         // lecture naturelle dans le bruit de remontée → non vérifiable.
         private const int MinVerifiedJumpSeconds = 15;
+        // v2.6.4 — repli PlayNow du seek : en dessous de ce seuil, la
+        // lecture NATURELLE peut rejoindre la fenêtre de confirmation
+        // pendant les DEUX fenêtres de relecture (24 s cumulées + retard
+        // de remontée ~5 s) — un client qui ignorerait le repli serait
+        // faussement « confirmé ». Au-dessus, la progression naturelle
+        // ne peut pas atteindre la cible dans le budget : discriminant
+        // propre. Les replis testés au banc étaient de +300 s.
+        private const int MinFallbackJumpSeconds = 30;
         private const int SeekConfirmToleranceSeconds = 2;
         private const int SeekConfirmWindowSeconds = 12;
         private const int SeekConfirmPolls = 24;
@@ -520,6 +538,25 @@ namespace LLM_AI
             string sessionId = session.Id;
             bool wasPaused = session.PlayState?.IsPaused ?? false;
 
+            // v2.6.4 — FAUX POSITIF unpause (banc 2026-10-17 : le client
+            // web ignore pause, IsPaused reste false, et la relecture
+            // « confirmait » une reprise que rien n'avait interrompue —
+            // l'état cible était déjà atteint AVANT l'envoi, la relecture
+            // ne pouvait rien prouver). Sans pause signalée au moment de
+            // la commande, une confirmation ne peut pas exister : on
+            // n'envoie rien et on le dit honnêtement (un client peut
+            // rapporter son état avec quelques secondes de retard —
+            // l'usager relancera et la reprise sera alors vérifiable).
+            if (command == "unpause" && !wasPaused)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command unpause : aucune pause en cours signalée — rien à reprendre — usager {0}.",
+                    _user.Name);
+                return Json(new { ok = false, command = command, confirmed = false,
+                    paused = false, device = session.DeviceName,
+                    now_playing = session.NowPlayingItem?.Name,
+                    error = "Aucune pause en cours signalée sur cet appareil — rien à reprendre. N'annonce PAS une reprise : la lecture n'est pas en pause." });
+            }
+
             var state = command == "pause" ? PlaystateCommand.Pause
                 : command == "unpause" ? PlaystateCommand.Unpause
                 : PlaystateCommand.Stop;
@@ -592,6 +629,44 @@ namespace LLM_AI
                         paused = lastPaused, device = session.DeviceName,
                         now_playing = s2.NowPlayingItem?.Name });
                 }
+            }
+
+            // v2.6.4 — REPLI GoHome (stop). Banc 2026-10-17, client web
+            // Emby Web/Chrome : il IGNORE PlaystateCommand.Stop (absent de
+            // ses SupportedCommands — le dashboard officiel Emby avec
+            // session admin ne l'arrête pas non plus) mais la navigation
+            // GoHome FERME son lecteur — le client signale l'arrêt
+            // LUI-MÊME (Playing/Stopped 58 ms après l'envoi au banc).
+            // Ne se déclenche QUE si le stop direct n'est pas confirmé et
+            // que la lecture est toujours là ; pause/unpause n'y ont PAS
+            // droit (GoHome tuerait la lecture au lieu de la suspendre).
+            if (command == "stop" && lastPlaying)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : non confirmé — REPLI GoHome (ferme le lecteur du client) — usager {0}.",
+                    _user.Name);
+                await _sessions.SendGeneralCommand(null, sessionId,
+                    new GeneralCommand { Name = "GoHome" }, ct).ConfigureAwait(false);
+                for (int i = 0; i < SeekConfirmPolls; i++)
+                {
+                    await Task.Delay(500, ct).ConfigureAwait(false);
+                    var s3 = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
+                        .FirstOrDefault(s => s != null
+                            && string.Equals(s.Id, sessionId, StringComparison.OrdinalIgnoreCase));
+                    if (s3 == null || s3.NowPlayingItem == null)
+                    {
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : CONFIRMÉ via repli GoHome (plus de lecture en session) — usager {0}.",
+                            _user.Name);
+                        return Json(new { ok = true, command = command, confirmed = true,
+                            device = session.DeviceName, via = "gohome_fallback",
+                            note = "L'arrêt a été obtenu par retour à l'écran d'accueil du client (ce modèle ne répond pas à l'arrêt direct). Annonce l'arrêt comme effectué — l'appareil est sur son accueil." });
+                    }
+                }
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : NON confirmé même via repli GoHome ({0} s) — usager {1}.",
+                    SeekConfirmPolls / 2, _user.Name);
+                return Json(new { ok = false, command = command, confirmed = false,
+                    paused = lastPaused, device = session.DeviceName,
+                    now_playing = lastSeen.NowPlayingItem?.Name,
+                    error = "La commande directe ET le repli (retour accueil) n'ont pas été confirmés par le client. N'annonce PAS l'arrêt comme effectué : cet appareil n'a probablement appliqué aucune des deux." });
             }
 
             string detail = command == "pause"
@@ -782,6 +857,90 @@ namespace LLM_AI
             _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : NON confirmé en {0} s (cible {1} s, position rapportée {2} s) — usager {3}.",
                 SeekConfirmPolls / 2, target / TicksPerSecond,
                 lastPos / TicksPerSecond, _user.Name);
+
+            // v2.6.4 — REPLI PlayNow MÊME ITEM + POSITION CIBLE (banc
+            // 2026-10-17, client web Emby Web/Chrome : IGNORE
+            // PlaystateCommand.Seek — absent de ses SupportedCommands —
+            // mais HONORE les PlayRequest ; un PlayNow sur le même item à
+            // la position cible déplace la lecture exactement, validé ×2 :
+            // 168→471 s puis 532→835 s, progression ensuite linéaire). Ne se
+            // déclenche QUE si le même item joue toujours ET que le saut
+            // est assez grand pour rester discriminant malgré les deux
+            // fenêtres de relecture (voir MinFallbackJumpSeconds) : sur
+            // les clients qui honorent le seek direct (app générique en
+            // DirectPlay, TV native prod) il ne s'exécute jamais ; sur
+            // ceux qui ignorent tout, il échoue honnêtement pareil.
+            if (Math.Abs(jump) >= MinFallbackJumpSeconds * TicksPerSecond)
+            {
+                var s3 = ResolveSession();
+                var np3 = s3?.NowPlayingItem;
+                if (s3 == null || np3 == null ||
+                    !string.Equals((np3.Id ?? "").Trim(), itemId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : lecture interrompue ou changée pendant la vérification — pas de repli — usager {0}.",
+                        _user.Name);
+                }
+                else
+                {
+                    var replayItem = ItemIdResolver.Resolve(_library, itemId);
+                    if (replayItem == null)
+                    {
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : repli impossible (item {0} non résolu) — usager {1}.",
+                            itemId, _user.Name);
+                    }
+                    else
+                    {
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : REPLI PlayNow même item à {0} s (contrôleur admin, voir le seek direct) — usager {1}.",
+                            target / TicksPerSecond, _user.Name);
+                        await _sessions.SendPlayCommand(null, s3.Id, new PlayRequest
+                        {
+                            ItemIds = new[] { replayItem.InternalId },
+                            PlayCommand = PlayCommand.PlayNow,
+                            StartPositionTicks = target,
+                            // v2.6.3 — contrôleur identifié (patron ComSkipper).
+                            ControllingUserId = FirstAdminControllerId()
+                        }, ct).ConfigureAwait(false);
+
+                        // Seconde relecture, même budget/tolérance : le
+                        // PlayNow REPART de la cible (bref rechargement de
+                        // flux côté image) et le client rapporte la nouvelle
+                        // position sous ~5 s. La lecture naturelle de
+                        // l'ANCIENNE position ne peut pas rejoindre la
+                        // fenêtre dans le budget (seuil
+                        // MinFallbackJumpSeconds) — un rapport dans la
+                        // fenêtre prouve la relance à la cible.
+                        for (int i = 0; i < SeekConfirmPolls; i++)
+                        {
+                            await Task.Delay(500, ct).ConfigureAwait(false);
+                            var s4 = ResolveSession();
+                            var np4 = s4?.NowPlayingItem;
+                            var ps4 = s4?.PlayState;
+                            if (s4 == null || np4 == null || ps4 == null ||
+                                !string.Equals((np4.Id ?? "").Trim(), itemId, StringComparison.OrdinalIgnoreCase))
+                                continue; // bascule en cours (arrêt/relance) — la fenêtre court
+                            long p4 = ps4.PositionTicks ?? 0;
+                            if (p4 >= target - tol && p4 <= target + SeekConfirmWindowSeconds * TicksPerSecond)
+                            {
+                                _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : CONFIRMÉ par repli PlayNow (position rapportée {0} s, cible {1} s) — usager {2}.",
+                                    p4 / TicksPerSecond, target / TicksPerSecond, _user.Name);
+                                return Json(new { ok = true, command = "seek", confirmed = true,
+                                    device = s4.DeviceName, item = np4.Name,
+                                    new_position_seconds = target / TicksPerSecond,
+                                    via = "playnow_replay",
+                                    note = "Saut appliqué en RELANÇANT la lecture directement à la position demandée (repli lecteur) : le flux s'est brièvement rechargé. Annonce le saut comme effectué." });
+                            }
+                        }
+
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : NON confirmé même via repli PlayNow ({0} s) — usager {1}.",
+                            SeekConfirmPolls / 2, _user.Name);
+                        return Json(new { ok = false, command = "seek", confirmed = false,
+                            device = session.DeviceName, item = np.Name,
+                            new_position_seconds = target / TicksPerSecond,
+                            error = "La commande directe ET le repli (relance à la position demandée) n'ont pas été confirmés par le client. N'annonce PAS le saut comme effectué : cet appareil n'a probablement appliqué aucune des deux." });
+                    }
+                }
+            }
+
             return Json(new { ok = false, command = "seek", confirmed = false,
                 device = session.DeviceName, item = np.Name,
                 new_position_seconds = target / TicksPerSecond,

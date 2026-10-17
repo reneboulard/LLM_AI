@@ -861,13 +861,22 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   clients ignorent la commande de saut même quand elle est correctement
   envoyée (v2.6.1), pause/reprise/arrêt `pause`/`unpause`/`stop` — confirmés par
   relecture de l'état rapporté (`IsPaused`, fin de la lecture) : non confirmé →
-  erreur explicite, jamais un succès fantôme (v2.6.2), contrôleur identifié —
+  erreur explicite, jamais un succès fantôme ; un `unpause` sans pause en
+  cours est refusé honnêtement (« rien à reprendre ») plutôt que
+  faussement confirmé (v2.6.2, v2.6.4), contrôleur identifié —
   toutes les commandes de lecture portent `ControllingUserId` = le premier
   administrateur du serveur (alignement sur Emby.ComSkipper, repli silencieux
   sur l'usager du chat si aucun admin n'existe) ; validé en production sur
   une app TV native en livraison remux HLS : sauts consécutifs confirmés par
   le client en ~5-10 s, le lecteur téléchargeant le segment correspondant à
-  la cible exacte (v2.6.3), lancement `play_item` —
+  la cible exacte (v2.6.3), replis confirmés — un saut direct non confirmé
+  est retenté en relançant le MÊME item directement à la position cible
+  (`PlayNow` + `StartPositionTicks`, sauts ≥ 30 s), re-vérifié par
+  relecture ; un arrêt non confirmé est retenté par la navigation `GoHome`,
+  qui ferme le lecteur web — le client signale l'arrêt lui-même ; ces
+  replis ne touchent ni `pause` ni `unpause` et ne se déclenchent QUE sur
+  échec de la commande directe : les clients qui honorent les commandes
+  directes ne les voient jamais (v2.6.4), lancement `play_item` —
   film ou épisode ;
   une série/saison démarre à son prochain épisode non visionné (le client ne
   développe pas un id de série), épisode suivant `play_next` — « passe au
@@ -1457,7 +1466,7 @@ page de config (bouton « Lancer l'audit santé ») ou l'endpoint `GET /Plugins/
 
 | Famille | Actions de **remédiation** (gate `AuditRemediationEnabled`) |
 |---|---|
-| Contrôle | `stop_session` (PlaystateCommand Stop), `trigger_task` (`QueueScheduledTask`), `send_message` (notification inbox **ou** toast OSD) |
+| Contrôle | `stop_session` (commande Stop à contrôleur admin, **confirmée par relecture** — repli `GoHome` si le client ignore l'arrêt direct, non confirmé rapporté honnêtement, v2.6.4), `trigger_task` (`QueueScheduledTask`), `send_message` (notification inbox **ou** toast OSD) |
 
 Quand `AuditRemediationEnabled` est décoché, les actions de remédiation renvoient une
 erreur JSON — le LLM doit alors **recommander** l'action dans son rapport sans
@@ -2160,7 +2169,8 @@ strictes (`ChatActions.cs`) :
   jamais la playlist publique foyer, remplie uniquement par le run Tonight ;
   le retrait n'accepte que les items que le chat a ajoutés lui-même dans la
   conversation), `stop_session` (arrêt de lecture d'une session active —
-  v1.13.30), `trigger_task` (déclenchement d'une tâche planifiée, tâches
+  v1.13.30 ; contrôleur admin, arrêt confirmé par relecture, repli `GoHome`
+  et rapport honnête si le client ne confirme pas, v2.6.4), `trigger_task` (déclenchement d'une tâche planifiée, tâches
   cachées exclues — v1.13.30), `send_message` (notification inbox ou toast
   OSD à un usager — v1.13.30) et `run_tonight_run`.
 - **Remédiation et run : toujours proposables (v1.13.30)** — `stop_session`,
