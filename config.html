@@ -348,6 +348,18 @@
                             </div>
                         </div>
 
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkNotifyRecommendations" />
+                            <span class="checkboxLabel" data-i18n="cfg.notifyrecos.flag">Notification « N nouvelles recommandations » à la fin de la tâche</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.notifyrecos.desc">
+                            À la fin de chaque exécution réussie de la tâche recommandations, tous les usagers
+                            reçoivent une notification persistante. C'est la seule notification « générale » du plugin :
+                            Emby ne peut pas la filtrer par usager côté livraison (tout-ou-rien par usager),
+                            la granularité vit donc ici. Décochez pour la couper pour tout le monde — la notification
+                            d'échec (admins) reste inconditionnelle.
+                        </div>
+
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.gtx.h">Traduction des genres (IA)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.gtx.desc">L'extension repère les genres du guide TV qui ne sont pas encore traduits et suggère des équivalents basés sur votre liste de genres. Si un genre est totalement nouveau, le LLM peut vous proposer de le créer et de l'ajouter à votre liste en un clic. Vous gardez le contrôle total en validant chaque proposition. Ces changements sont appliqués immédiatement aux recommandations, mais un redémarrage du serveur est requis pour mettre à jour l'ensemble du système GenreCleaner.</div>
                         <div class="inputContainer">
@@ -664,7 +676,7 @@
                             run « À regarder ce soir ». Jamais appliquée à l'intersection parentale ni aux
                             surfaces par usager (recos, playlist privée — un compte ignoré garde ses
                             surfaces en rafraîchissement manuel). Casse et accents tolérés
-                            (« rene » = « René »). Vide = aucun changement.
+                            (« elodie » = « Élodie »). Vide = aucun changement.
                         </div>
                         </div>
 
@@ -962,13 +974,73 @@
                                 Indépendant de l'auto-programmation : le popup liste ce soir ce que l'usager peut
                                 regarder (enregistrements non visionnés, bibliothèque). Le message s'affiche
                                 sur le client qui se connecte ; si le client ne le supporte pas, une notification
-                                persistante (cloche) prend le relais. La cloche reste même si la session ferme
+                                persistante prend le relais. La notification reste même si la session ferme
                                 avant la fin du calcul (~30 à 60 s).
                             </div>
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkTonightRecordingToast" />
+                            <span class="checkboxLabel" data-i18n="cfg.rectoast.flag">Toast au début et à la complétion des enregistrements recommandés</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.rectoast.desc">
+                            Quand l'enregistrement d'un programme de vos recommandations « ce soir » démarre
+                            (il passe à l'antenne) puis quand il se complète, un toast le signale sur vos
+                            clients actifs et une notification persistante prend le relais. Seuls les
+                            programmes recommandés « live » sont appariés (résultat de moins de 48 h) ;
+                            aucune action sur vos timers ou votre bibliothèque.
+                        </div>
+
+                        <h3 class="sectionTitle" id="secNotifications" style="margin-top:1.5em;" data-i18n="cfg.notifs.h">Notifications &amp; messages à l'écran</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.notifs.intro">
+                            Deux canaux de livraison distincts : la notification persistante (stockée, livrée
+                            par vos services de notification — Webhooks, SMTP…) et le message éphémère à
+                            l'écran (popup / toast, quelques secondes sur le client actif). Portée serveur
+                            (page administrateur) : pour exclure un usager précis des messages « ce soir »,
+                            utilisez la liste « comptes ignorés » de la section « À regarder ce soir » ;
+                            chaque usager règle sa propre livraison dans ses réglages Emby « Notifications »
+                            (tout-ou-rien par usager). Chaque interrupteur ci-dessous est LE MÊME réglage
+                            que celui de sa section d'origine — activé ici ou là, l'effet est global.
+                        </div>
+
+                        <div style="font-weight:600;margin:0.8em 0 0.2em;" data-i18n="cfg.notifs.persist.h">Notifications persistantes (livrées par vos services de notification)</div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkNotifyRecommendationsN" />
+                            <span class="checkboxLabel" data-i18n="cfg.notifyrecos.flag">Notification « N nouvelles recommandations » à la fin de la tâche</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.notifyrecos.desc">
+                            À la fin de chaque exécution réussie de la tâche recommandations, tous les usagers
+                            reçoivent une notification persistante. C'est la seule notification « générale » du plugin :
+                            Emby ne peut pas la filtrer par usager côté livraison (tout-ou-rien par usager),
+                            la granularité vit donc ici. Décochez pour la couper pour tout le monde — la notification
+                            d'échec (admins) reste inconditionnelle.
+                        </div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.notifs.persist.static">
+                            Sans interrupteur, réservées aux administrateurs : notification « fiche croisée »,
+                            passe disque « AI Delete », échec de la tâche recommandations (opérationnelles) ;
+                            la messagerie dirigée du chat va au destinataire choisi par l'assistant.
+                        </div>
+
+                        <div style="font-weight:600;margin:1.2em 0 0.2em;" data-i18n="cfg.notifs.ephem.h">Messages éphémères à l'écran (popup / toast)</div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkLoginPopupN" />
+                            <span class="checkboxLabel" data-i18n="cfg.loginpopup.flag">Popup au login (suggestions « à regarder ce soir »)</span>
+                        </label>
+                        <div class="inputContainer" style="margin-top:0.4em;">
+                            <input is="emby-input" type="number" id="numLoginPopupSecondsN" style="max-width:200px;"
+                                   label="Durée d'affichage du popup (secondes)"
+                                   data-i18n-label="cfg.loginpopup.seconds"
+                                   min="2" max="60" />
+                        </div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.loginpopup.desc">
+                            Indépendant de l'auto-programmation : le popup liste ce soir ce que l'usager peut
+                            regarder (enregistrements non visionnés, bibliothèque). Le message s'affiche
+                            sur le client qui se connecte ; si le client ne le supporte pas, une notification
+                            persistante prend le relais. La notification reste même si la session ferme
+                            avant la fin du calcul (~30 à 60 s).
+                        </div>
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkTonightRecordingToastN" />
                             <span class="checkboxLabel" data-i18n="cfg.rectoast.flag">Toast au début et à la complétion des enregistrements recommandés</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.rectoast.desc">
@@ -1107,7 +1179,10 @@
                             chaîne S1→S2→S3. Respecte le mode simulation. Modifie des métadonnées.
                         </div>
 
-                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.crosskind.h">File de régularisation « cross-kind »</h3>
+                        <!-- id : cible du lien profond de notification « fiche
+                             croisée » (&section=crosskind dans le hash —
+                             config.js déplie et défile jusqu'à la section). -->
+                        <h3 class="sectionTitle" id="secCrossKind" style="margin-top:1.5em;" data-i18n="cfg.crosskind.h">File de régularisation « cross-kind »</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.crosskind.desc">
                             Œuvres enregistrées par Emby sous le mauvais type. Deux sources alimentent la
                             file : les items étiquetés llmai-cross-kind (fiche film sur un item série, ou

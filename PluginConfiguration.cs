@@ -568,6 +568,21 @@ namespace LLM_AI
         public bool RecoFeedbackEnabled { get; set; } = false;
 
         /// <summary>
+        /// Active la cloche « N nouvelles recommandations » envoyée à tous
+        /// les usagers à la fin de chaque run réussi de la tâche planifiée
+        /// (<c>LlmScheduledTask.SendRecommendationNotification</c>).
+        /// <para>Seule cloche « générale » du plugin : Emby ne peut pas la
+        /// filtrer par usager côté livraison (tout-ou-rien par usager — le
+        /// type d'événement <c>external.externalnotification</c> est unique
+        /// pour toutes les cloches de tous les plugins), la granularité vit
+        /// donc ici. Défaut <c>true</c> (comportement historique) ; décoché
+        /// = plus aucune cloche reco, pour tout le monde. La cloche d'échec
+        /// (<c>SendFailureNotification</c>) reste inconditionnelle :
+        /// opérationnelle, admins uniquement.</para>
+        /// </summary>
+        public bool NotifyRecommendationsEnabled { get; set; } = true;
+
+        /// <summary>
         /// Journal roulant des recommandations pour la boucle de
         /// rétroaction : tableau JSON
         /// <c>[{"u":"userId","k":"tonight|record|drop","d":"ISO","t":"Titre","s":"source","i":"id"}]</c>.
@@ -677,7 +692,7 @@ namespace LLM_AI
         /// <summary>
         /// <b>Comptes ignorés des mécanismes foyer</b> (v2.2.0) : liste libre,
         /// <b>un nom d'usager Emby par ligne</b> — résolution tolérante
-        /// (casse et accents : « rene » = « René »). Trois usages
+        /// (casse et accents : « elodie » = « Élodie »). Trois usages
         /// <b>exclusivement</b> :
         /// <para>1) <b>Résolution foyer</b> de la playlist publique « AI
         /// Tonight » : la position de visionnage d'un compte ignoré ne

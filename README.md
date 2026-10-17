@@ -442,7 +442,7 @@ Lire une carte « AI Suggestions » n'est plus un geste silencieux
   Titre » (succès), « Déjà programmé » (un timer existant couvre déjà le
   programme), « Échec de l'enregistrement » ou « Disque d'enregistrements plein —
   programmation suspendue » (gate v1.11). Session retrouvée par le chemin du
-  `.strm` en cours de lecture ; **pas de notification cloche** — l'usager a
+  `.strm` en cours de lecture ; **pas de notification persistante** — l'usager a
   cliqué la carte, le toast suffit.
 - **Suppression de la carte en cas de succès** : ~60 s après l'activation (fin de
   la lecture du clip), le plugin demande à **Emby** de supprimer l'item de la
@@ -854,8 +854,21 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
   destructives sur le client actif de l'usager : projection, lecture/pause/arrêt,
   volume, état de lecture `playback_status` — position, durée restante, pistes
   actives, `series_id`/`season`/`episode` de ce qui joue, sauts en avant/arrière
-  `seek` — approximatifs, la position connue du
-  serveur a quelques secondes de retard, lancement `play_item` — film ou épisode ;
+  `seek` — approximatifs (la position connue du serveur a quelques secondes de
+  retard) et confirmés par une RELECTURE de la position rapportée
+  (~12 s max, sortie anticipée dès confirmation) : un saut non confirmé
+  devient une erreur explicite plutôt qu'un succès fantôme — certains
+  clients ignorent la commande de saut même quand elle est correctement
+  envoyée (v2.6.1), pause/reprise/arrêt `pause`/`unpause`/`stop` — confirmés par
+  relecture de l'état rapporté (`IsPaused`, fin de la lecture) : non confirmé →
+  erreur explicite, jamais un succès fantôme (v2.6.2), contrôleur identifié —
+  toutes les commandes de lecture portent `ControllingUserId` = le premier
+  administrateur du serveur (alignement sur Emby.ComSkipper, repli silencieux
+  sur l'usager du chat si aucun admin n'existe) ; validé en production sur
+  une app TV native en livraison remux HLS : sauts consécutifs confirmés par
+  le client en ~5-10 s, le lecteur téléchargeant le segment correspondant à
+  la cible exacte (v2.6.3), lancement `play_item` —
+  film ou épisode ;
   une série/saison démarre à son prochain épisode non visionné (le client ne
   développe pas un id de série), épisode suivant `play_next` — « passe au
   suivant » en pleine lecture, confirmé par une RELECTURE de ce que le client
@@ -903,7 +916,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 |---|---|---|
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Point d'entrée. Nom `LLM_AI`, Id `e7d3…2e60`. Enregistre les pages web (config, recommandations, i18n). Version pilotée par `<AssemblyVersion>` du `.csproj`. |
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + serveurs multi-source. |
-| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie les notifications. Délègue l'orchestration à `LlmRunner`. Défaut quotidien 3 h 10 ; passe par la porte `LlmTaskGate` autour de ses runs agent. |
+| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie la notification « N nouvelles recos » (opt-out `NotifyRecommendationsEnabled`, v2.5.0) et la notification d'échec (admins, inconditionnelle). Délègue l'orchestration à `LlmRunner`. Défaut quotidien 3 h 10 ; passe par la porte `LlmTaskGate` autour de ses runs agent. |
 | `LlmTaskGate.cs` | `LlmTaskGate` (classe statique) | **Porte de concurrence des tâches LLM planifiées** (v2.2.1) : au plus `LlmMaxConcurrentTasks` runs simultanés (défaut 1) — une tâche qui arrive sur une porte pleine attend (réveil immédiat à la libération, pas de sondage) puis passe, aucun passage nocturne perdu ; un attendant annulé sort de la file sans consommer de slot. Hors porte : chat, Tonight, audit (interactifs — cascade timeout → serveur suivant). Capacité relue à chaque passage : changement de config sans redémarrage. Utilisée par `LlmScheduledTask`, `RecoAnalysisTask` et `MemoryTask`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). Utilisé par `TonightApiService`, `TonightLoginService` et le tool chat `run_tonight_run` (directives de session éphémères + origin chat, v1.13). |
@@ -915,7 +928,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `AiTagger.cs` | `AiTagger` (statique) | Étiquetage **tags** `AI Tonight` / `AI Delete` : `AddAsync` / `RemoveAllAsync` via `UpdateToRepository` (retire aussi le genre hérité du même nom — migration v1.13.3). |
 | `AiTonightCollectionManager.cs` | `AiTonightCollectionManager` (statique) | Collection `AI Tonight` : `EnsureAsync` (find-or-create BoxSet, **cumul additif v1.13.18.0** — ajoute les manquants avec dédup, run 0-reco sans effet, reset quotidien par la tâche 3 h) + `ClearAsync` via `ICollectionManager`. |
 | `AiTonightCleanupTask.cs` | `AiTonightCleanupTask : IScheduledTask` | Nettoyage quotidien 03:00 : retire le tag `AI Tonight` (+ genre hérité, migration) + vide la collection (toujours actif). Porte aussi la sonde disque quotidienne (passe tag « AI Delete », opt-in). |
-| `RecordingDiskManager.cs` | `RecordingDiskManager` (statique) | Seuil disque du dossier d'enregistrements : résolution chemin/volume, gate « sous le seuil » (fail-open), passe d'étiquetage « AI Delete » (clear-first, visionnés uniquement, plus ancien d'abord, objectif ×1.2) + notification. |
+| `RecordingDiskManager.cs` | `RecordingDiskManager` (statique) | Seuil disque du dossier d'enregistrements : résolution chemin/volume, gate « sous le seuil » (fail-open), passe d'étiquetage « AI Delete » (clear-first, visionnés uniquement, plus ancien d'abord, objectif ×1.2) + notification aux administrateurs (v2.4.7 — action admin, lien aussi en description). |
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:10, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Passe par la porte `LlmTaskGate`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internes) | Helpers de la boucle de rétroaction : journal roulant `RecoLog` (parse/persist/prune), directives `PromptDirectives` (parse/persist/troncature), blocs de prompt réinjectés (par usager pour Tonight, fusionnés pour la tâche d'enregistrement). |
 | `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (statique interne) | Stores de la mémoire réflexive : `decisions.json` (une reco émise par entrée, avec sa raison LLM et la version de fiche en vigueur `mv`), `run_pool.json` (le « menu » de candidats soumis à chaque run — distingue une mauvaise reco d'une erreur de classement), `playback.json` (télémétrie `PlaybackWatcher`). Contexte de run statique (`BeginRun`/`EndRun`/`ActiveRunId`) reliant le tool global `get_emby_info` au run en cours ; lectures `ParseAllDecisions/Pools/Playback`. Rétention 30 j, plafonné, fail-open. |
@@ -925,7 +938,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 40, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Passe par la porte `LlmTaskGate`. Voir [Mémoire réflexive](#mémoire-réflexive). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (statique interne) | Mémoire de conversation du chat (`chat_memory.json`, par usager, 5 sessions / 30 j) : tours verbatim (compressés aux 6 derniers après résumé), résumé de session (≤ 1500 car.). `BuildInjectionBlock` : résumé de la session précédente + derniers échanges, accolé au workflow de chat (jetable — le résumé suivant le remplace). Opt-in `ChatMemoryEnabled`. Voir [Mémoire de conversation](#mémoire-de-conversation). |
 | `ChatActions.cs` | `ChatActions` (statique interne) | **Couche d'action du chat** (v1.13) : 11 tools deux phases (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `stop_session`, `trigger_task`, `send_message`, `run_tonight_run`) réutilisant les primitives du plugin — dépôt d'une proposition (pending figé outil+arguments dans `ChatActionStore`) puis exécution à l'approbation via l'endpoint `ChatAction/Approve` (v1.13.29 ; remédiation + run toujours proposables v1.13.30 — la carte remplace l'opt-in config) ; budget par tour + par conversation (consommé à l'exécution, lots all-or-nothing), gate « un run chat à la fois », trace des items ajoutés (seuls retirables), bloc de workflow (budget + protocole deux phases), trace visuelle des actions réussies (toast Emby + libellé `TurnActions` renvoyé à la page — v1.13.1/v1.13.4). Voir [Couche d'action du chat](#couche-daction-du-chat). |
-| `ServerRemediation.cs` | `ServerRemediation` (statique interne) | **Primitives de remédiation serveur** (v1.13.30) : arrêt de lecture d'une session (PlaystateCommand Stop), déclenchement d'une tâche planifiée (`QueueScheduledTask`, exclusion des tâches cachées pour le chemin chat), message Emby à un usager (notification inbox/cloche ou toast OSD). Code métier unique pour deux appelants : les tools d'action du chat (deux phases, carte) et `system_audit` (chemin direct gated `AuditRemediationEnabled`, formes JSON historiques conservées). |
+| `ServerRemediation.cs` | `ServerRemediation` (statique interne) | **Primitives de remédiation serveur** (v1.13.30) : arrêt de lecture d'une session (PlaystateCommand Stop), déclenchement d'une tâche planifiée (`QueueScheduledTask`, exclusion des tâches cachées pour le chemin chat), message Emby à un usager (notification persistante inbox ou toast OSD). Code métier unique pour deux appelants : les tools d'action du chat (deux phases, carte) et `system_audit` (chemin direct gated `AuditRemediationEnabled`, formes JSON historiques conservées). |
 | `ChatActionStore.cs` | `ChatActionStore` (statique interne) | **Store des propositions d'action en attente** (v1.13.29, deux phases) : pending figé outil+arguments déposé par les tools du chat, relevé par `ChatResponse.PendingActions` (carte « Approuver / Refuser » de la page), consommé single-use par l'endpoint `ChatAction/Approve` (liaison usager+session, TTL 10 min, plafond 10 propositions/session, en mémoire uniquement — le redémarrage vide les pendings, aucun effet destructeur). Voir [Couche d'action du chat](#couche-daction-du-chat). |
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (statique interne) | **Contextes d'édition du chat** (v1.13.8, portage du pattern « contextes » de llm_core) : cinq modes déroulants (un par prompt éditable). `BuildBlock` injecte à CHAQUE tour : guide d'édition (rôle, invariants, conventions), TEXTE COURANT du prompt (source de vérité read-modify-write, relu de la config) et langue cible résolue serveur. Porte aussi les `CommonRules` (canal de livraison ```text, read-modify-write, conventions de rédaction, langues, sauvegarde, mode exclusif) appendées en fin de bloc. La liste servie à la page et la validation `context_id` dérivent du registre `All` (une entrée = un mode). Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (statique interne) | Store des propositions de modification en attente (`chat_pending.json`, expiration 10 min, une par conversation, par usager). `TakePagePending` (relève la carte de diff pour le tour), `PeekPagePending` (consulte sans consommer — filet nudge), `Consume` (approbation : retire l'action si elle existe, n'a pas expiré, appartient à cet usager ET à cette session). |
@@ -944,7 +957,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `I18nGenerateApiService.cs` | `I18nGenerateApiService : BaseApiService` + `I18nGenState` | Endpoint admin **`GET /Plugins/LLMAI/I18nGenerate`** (v1.17.0) : `?Lang&Mode` démarre une campagne en **run détaché** (single-flight `I18nGenState`, survit à la fermeture d'onglet, CTS 25 min), serveurs résolus par l'appelant (LlmRunner jetable) ; `?Status=true` = snapshot + dernier rapport (`i18n_gen_report.json` persisté par le moteur) dans la même réponse. v2.0.0 : les doses portent les inventaires préventifs (étiquettes de données, entités HTML littérales) et la batterie de validation complète — réparation ciblée, raison du refus par clé. |
 | `I18nChatTools.cs` | `I18nChatTools : ILlmTool` ×3 | Tools du **chat admin** (v1.17.0) : `i18n_search` (recherche PAR TEXTE — sous-chaîne dans les natives EN/FR et les overlays ; natives toujours sondées même avec filtre de langue : le texte vu peut être un repli natif), `i18n_get` (lecture complète d'une clé : natives EN+FR par famille, overlay par langue avec verdict structurel + flag identique-EN, **bloc « contract »** v1.17.1.0 quand la native porte des éléments immuables — inventaire exact des balises HTML / `{n}` / sauts de ligne + directive de recopie pour le dépôt, omis pour une clé nue, inconnue → suggestions) et `i18n_set_key` — **two-phase** depuis v1.17.0.2 (dépôt validé après gates structurelles puis carte Avant/Après « Approuver/Refuser », endpoints `POST /Plugins/LLMAI/I18nKey/Approve&#124;Refuse` en C# déterministe ; dépôt possible SEULEMENT dans le mode déroulant « Éditer — Atelier de langues » — v1.17.0.2, libellé aligné sur le patron des modes « Éditer — … » en v1.17.1.2). Réponses sérialisées en JSON **relaxé** (v1.17.1.1 : balises littérales — l'échappement par défaut faisait partir `<b>` en `\u003C` et le modèle ne voyait jamais une vraie balise). Enregistrés quand le protocole tool-calling est déjà actif (budget d'actions, édition de prompts) ou en mode i18n ; avec budget et prompts désactivés, le mode EST l'initiateur du protocole (quirk des modèles non-thinking). |
 | `ExternalChatApiService.cs` | `ExternalChatApiService : BaseApiService` | Chat **externe** (app compagnon, v1.13.21+) : `POST /Plugins/LLMAI/ChatExternal` / `Show`, gates (loopback, secret, listes), erreurs localisées par langue (v1.16.0) et `GET /Plugins/LLMAI/I18nExt` — tranche `ext` de la langue résolue servie à l'app (pas de token Emby côté app) ; famille servie overlay-seul + complément natif EN par clé pour une langue ≠ fr (v1.17.1.4). Voir [Langues d'interface communautaires](#langues-dinterface-communautaires). |
-| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware ; **comptes ignorés** filtrés, v2.2.0), auto-programme (si `AutoProgram`), envoie un **toast** (`SendMessageCommand`, gated `DisplayMessage`) + **cloche** persistante (deep-link). Pattern `Emby.ComSkipper`. |
+| `TonightLoginService.cs` | `TonightLoginService : IServerEntryPoint` | Déclencheur de login : branche `ISessionManager.SessionStarted`, lance `TonightService` (cache-aware ; **comptes ignorés** filtrés, v2.2.0), auto-programme (si `AutoProgram`), envoie un **toast** (message éphémère à l'écran, `SendMessageCommand`, gated `DisplayMessage`) + **notification persistante** (deep-link). Pattern `Emby.ComSkipper`. |
 | `AuditApiService.cs` | `AuditApiService : BaseApiService` | Endpoint HTTP **à la demande admin** `GET /Plugins/LLMAI/Audit` : résout l'admin appelant, construit le prompt d'audit (template `AuditPrompt` + `Focus` optionnel) puis délègue le run agent à `LlmRunner.RunAuditAsync`. Retourne le rapport Markdown brut ; persiste chaque rapport réussi (`AuditReportStore`) et sert `?Last=true` (lecture seule du dernier rapport, zéro LLM). |
 | `SecurityMonitor.cs` | `SecurityMonitor` (statique interne) | **Moniteur de sécurité** (détection, v1.14.0.6) : compteurs in-process (appels web_fetch/web_search, SSRF bloqués, appels d'outils malformés/inconnus, échecs serveur LLM, tours de chat refusés, actions déposées/approuvées/refusées) + journal borné (200 événements) de sécurité. Sans configuration, en mémoire (reset au restart) ; chaque événement est tracé durablement `LLM_AI[SEC]` dans le journal Emby. Ne lève jamais. |
 | `SecurityMetricsApiService.cs` | `SecurityMetricsApiService : BaseApiService` | Endpoint HTTP **admin** `GET /Plugins/LLMAI/SecurityMetrics` : relevé des compteurs + fenêtre des derniers événements de sécurité du plugin (`SecurityMonitor`). Lecture seule, zéro LLM. |
@@ -1070,7 +1083,7 @@ déterministes C# :
   per-usager des épisodes joués (clés « s{S}e{E} », repli nom d'épisode) et des films
   joués ; toute reco live correspondante est **marquée, pas droppée** (le minimum de
   recos reste garanti) : badge « Déjà visionné », actions Programmer / Regarder en
-  direct masquées, **aucun timer créé**, exclusion des popups et de la cloche.
+  direct masquées, **aucun timer créé**, exclusion des popups et de la notification persistante.
   Fail-open (index indisponible → recos non marquées, jamais vidées) ; bibliothèque
   `.strm` exclue de l'index (anti-circulaire).
 
@@ -1092,7 +1105,7 @@ contexte complet.
 `TonightCacheHours`. `Refresh=1` force un nouveau run (bouton **Rafraîchir**).
 
 **Comptes ignorés (v2.2.0)** — `TonightIgnoredUsers` (config, un nom d'usager
-Emby par ligne, casse et accents tolérés — « rene » = « René ») exclut des
+Emby par ligne, casse et accents tolérés — « elodie » = « Élodie ») exclut des
 comptes des mécanismes **foyer**, à **trois endroits uniquement** :
 
 1. **Résolution foyer** de la playlist publique « AI Tonight » : la position
@@ -1176,7 +1189,7 @@ l’action juste ; il peut annuler un timer au besoin.
 pattern `Emby.ComSkipper`) branche `SessionManager.SessionStarted` :
 
 1. **Cache frais** → toast immédiat (pas de run LLM).
-2. **Cache froid** → run `TonightService` (~30–60 s), puis toast + cloche.
+2. **Cache froid** → run `TonightService` (~30–60 s), puis toast + notification persistante.
 3. Garde-fou **in-flight** : un seul run par usager même sur plusieurs appareils
    connectés à la fois (cache partagé endpoint + login).
 4. **Comptes ignorés** (v2.2.0) : le login d'un compte de la liste
@@ -1626,7 +1639,15 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
    Chaque candidat doit ensuite passer une **porte d'acceptation sémantique** :
    - **garde-fou année** (`YearCompatible`, ±1 an ; toute année inconnue ou
      aberrante `< 1900` — « 0 si inconnu » du LLM, gracenote `Year=1` —
-     lève la garde) ;
+     lève la garde). **Année-thème** (v2.4.4, cas réel « 1945: l'année qui
+     a changé l'histoire » — documentaire de 2020 dont le guide porte
+     `ProductionYear=1945`, l'année-SUJET, ≥ 1900 donc invisible au garde
+     aberrante) : un enregistrement DVR ne peut pas précéder son œuvre —
+     une fiche postérieure de plus d'un an à l'année de l'item désigne une
+     année-thème, l'année de l'item est traitée comme **non fiable** pour
+     ce candidat (garde levée, preuve par égalité exacte du titre du guide
+     ou juge synopsis — un homonyme d'une autre époque reste rejeté par le
+     titre) ;
    - **juge LLM de synopsis** (`LlmRunner.JudgeSynopsisMatchAsync`) qui compare le
      synopsis EPG au synopsis TMDB et confirme qu'ils décrivent la *même œuvre* — un id
      qui existe mais qui pointe vers un film homonyme d'une autre époque (ex. « Le
@@ -1825,8 +1846,17 @@ grand public » — + juge synopsis) :
   retirer l'id si la fiche est fausse, sinon laisser converger).
 - **Tag + notification** : la fiche croisée appliquée pose un tag add-only
   `llmai-cross-kind` (survit à la confirmation — filtrable dans Emby) et une
-  notification est envoyée aux usagers (compteur limité aux nouvelles). Pour
-  replacer l'œuvre dans la bibliothèque de son type : déplacez le fichier
+  notification courte et nominative est envoyée aux administrateurs
+  (v2.4.6 : route admin-only de la page de configuration, usagers « Autoriser
+  la gestion du serveur » seulement — limitée aux
+  nouvelles : l'œuvre y est nommée avec le sens du croisement). Le lien de la
+  notification est un lien profond — fiche Emby de l'œuvre pour un item unique, file
+  « cross-kind » de la page de configuration (section dépliée) pour plusieurs.
+  Le lien voyage dans le champ `Url` d'Emby **et en fin de description**
+  (v2.4.5 : les canaux de lecture — webhooks, courriel — ignorent le champ
+  `Url` mais rendent la description) ; l'envoi est journalisé avec le lien
+  construit (« — lien : … », ou « (aucun) » en fail-open).
+  Pour replacer l'œuvre dans la bibliothèque de son type : déplacez le fichier
   (Emby le ré-importe avec le bon type et le plugin le ré-identifie) — le
   plugin ne déplace jamais de média.
 

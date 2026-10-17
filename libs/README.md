@@ -5,7 +5,7 @@ Ce dossier contient les **assemblies de référence Emby** utilisées à la comp
 (+ `SkiaSharp.dll`, aussi fournie par l'hôte Emby, utilisée par `AiBadgeEnhancer`).
 
 **Version vendorisée : 4.10.1.0** (alignée sur le serveur local, upgradé le
-2026-09-30 ; la production DellXPS est passée en 4.10.1.0 le 2026-09-29) —
+2026-09-30 ; la production est passée en 4.10.1.0 le 2026-09-29) —
 build clean (0 warning, 0 erreur) contre ce SDK ; le code garde ses replis
 runtime pour compatibilité 4.9.x (voir les remarques de classe dans le code).
 

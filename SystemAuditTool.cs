@@ -167,7 +167,7 @@ namespace LLM_AI
                     "\n  \"user_id|user_name\": \"(send_message) identifiant Guid OU nom de l'usager destinataire\"," +
                     "\n  \"header\": \"(send_message) titre du message (défaut « Message »)\"," +
                     "\n  \"text\": \"(send_message) corps du message — requis\"," +
-                    "\n  \"delivery\": \"(send_message) notification (défaut, inbox/cloche) | osd (toast à l'écran, requiert une session active)\"," +
+                    "\n  \"delivery\": \"(send_message) notification (défaut — persistante, inbox) | osd (toast à l'écran, message éphémère, requiert une session active)\"," +
                     "\n  \"timeout_ms\": \"(send_message, osd) durée d'affichage du toast en ms (défaut 5000)\"";
             }
             return "{\n" +
@@ -1034,7 +1034,7 @@ namespace LLM_AI
 
                     // ---- Live TV / DVR / scan de bibliothèque --------------
                     // Contexte Live TV calibré sur le premier run prod
-                    // (2026-10-01, DellXPS) : « Error copying live stream »
+                    // (2026-10-01, serveur de production) : « Error copying live stream »
                     // (SharedHttpPipelineSource) et « Error getting channels »
                     // (cat. LiveTvManager) — le vocabulaire local n'avait
                     // rien donné, zéro échec dans la fenêtre.
@@ -2535,7 +2535,7 @@ namespace LLM_AI
                         // JAMAIS à des échecs existants. On ne teste PAS
                         // User.IsLockedOut/LockedOutDate : la date peut rester
                         // non-nulle POUR TOUJOURS après un vieux verrouillage
-                        // déjà expiré (terrain 16:0x : René LockedOutDate=15:22
+                        // déjà expiré (terrain 16:0x : LockedOutDate=15:22
                         // encore posé, login pourtant rétabli 15:42) — la lire
                         // suspendrait le compte pour tous les audits futurs.
                         User fresh = null;
@@ -3358,7 +3358,7 @@ namespace LLM_AI
         /// <summary>TENTATIVES d'authentification max PAR COMPTE PAR RUN — la
         /// sonde ne doit JAMAIS faire basculer le verrouillage de connexion
         /// d'Emby (constat terrain 2026-10-01 15:22 : « Temporarily locking
-        /// out user René due to 5 unsuccessful login attempts » — le serveur
+        /// out user Élodie due to 5 unsuccessful login attempts » — le serveur
         /// verrouille le compte au-delà de ~5 échecs, compteur
         /// <c>UserPolicy.InvalidLoginAttemptCount</c>, remis à zéro
         /// UNIQUEMENT par une connexion réussie du compte). Cap = 3 (marge de
@@ -3389,7 +3389,7 @@ namespace LLM_AI
         /// compte « Test » sans mdp = DA39A3EE…709, et le DTO REST l'exclut
         /// aussi : HasPassword=false). Sur 4.10 un compte sans mdp n'a donc
         /// PAS Password/Salt vides : sans ce test sur le hash vide, FAUX
-        /// POSITIF « a un mot de passe ». (René qui a un vrai mdp n'a pas de
+        /// POSITIF « a un mot de passe ». (Un compte à vrai mot de passe n'a pas de
         /// Salt du tout : le champ Salt est un reliquat legacy.)</summary>
         private static readonly string EmptyPasswordSha1 =
             Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(Array.Empty<byte>()));
@@ -3424,7 +3424,7 @@ namespace LLM_AI
         /// du compte en 2 casses, nom du serveur en 2 casses, « emby »,
         /// « test ») puis triviaux universels — dédup ORDINEL exact (les
         /// variantes minuscules doivent rester probed : un mot de passe
-        /// « rené » ≠ « René »), cap <see cref="ProbeCandidateCap"/>. Ne lève
+        /// « elodie » ≠ « Élodie »), cap <see cref="ProbeCandidateCap"/>. Ne lève
         /// jamais.</summary>
         private static List<string> BuildTrivialCandidates(string username, string serverName)
         {

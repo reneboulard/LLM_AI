@@ -1297,6 +1297,35 @@ namespace LLM_AI
 
             bool seriesKind = string.Equals(m.Kind, "series", StringComparison.OrdinalIgnoreCase);
 
+            // Année-thème (piège de terrain 2026-10-13, « 1945: l'année qui a
+            // changé l'histoire ») : le guide porte l'année-SUJET d'un
+            // documentaire (ProductionYear=1945 pour une œuvre de 2020 SUR
+            // l'année 1945) — ≥ 1900, elle échappe au garde « année aberrante »
+            // et empoisonne toute la chaîne (filtre year=1945 → 0 candidat S1 ;
+            // garde YearCompatible(1945, 2020) → rejet de la VRAIE fiche
+            // proposée par S2 ; requête S3 « titre + 1945 » → mauvaise œuvre).
+            // Un enregistrement DVR ne peut pas PRÉCÉDER son œuvre : une
+            // fiche postérieure de plus d'un an à l'année de l'item désigne
+            // une année-thème, pas une vraie année de diffusion. L'année de
+            // l'item devient non fiable POUR CE CANDIDAT : garde d'année
+            // passée, preuve par la doctrine « sans année fiable » (égalité
+            // exacte du titre du guide, ou juge synopsis). Un homonyme d'une
+            // autre époque reste rejeté par le titre (« 1945: The Year that
+            // Changed the World » ≠ titre du guide). L'ancrage frère (séries)
+            // garde sa règle dédiée (année antérieure = autre œuvre).
+            int? itemYear = gateYear ?? epgYear;
+            if (!siblingAnchor && itemYear.HasValue && itemYear.Value >= 1900
+                && m.Year.HasValue && m.Year.Value >= 1900
+                && m.Year.Value > itemYear.Value + 1)
+            {
+                _logger?.Info(
+                    "[LLM_AI] OrphanIdentify : « {0} » — année de l'item ({1}) antérieure de plus d'un an à la fiche ({2}) : année-thème probable, traitée comme non fiable (titre exact / juge décident).",
+                    epgTitle, itemYear.Value.ToString(CultureInfo.InvariantCulture),
+                    m.Year.Value.ToString(CultureInfo.InvariantCulture));
+                epgYear = null;
+                gateYear = null;
+            }
+
             // Garde-fou année (deux œuvres d'époques différentes). Rejet
             // logué : ce garde est silencieux sinon, et un « 0 si inconnu »
             // du LLM y a déjà caché une fiche correcte (cas 2026-09-20).
@@ -1867,21 +1896,85 @@ namespace LLM_AI
         //  items tagués llmai-cross-kind sont filtrables dans Emby ; le
         //  déplacement du fichier dans la bibliothèque de son type reste une
         //  action de l'usager (le plugin ne déplace jamais de média).
+        //  v2.4.3 : description courte et NOMINATIVE (l'œuvre en cause y
+        //  est nommée — vécu 2026-10-13 : la cloche ne disait pas quel
+        //  vidéo était en cause) ; le lien de la cloche est un lien
+        //  profond — fiche Emby de l'œuvre pour un item unique, file
+        //  « cross-kind » de la page de configuration (section dépliée
+        //  par &section=crosskind) sinon.
         // ------------------------------------------------------------------
 
-        internal static void NotifyCrossKind(INotificationManager notifications, IUserManager users,
-            PluginConfiguration cfg, IServerApplicationHost host, ILogger logger, int count)
+        /// <summary>Notification cloche « fiche croisée » — nominative :
+        /// l'œuvre (ou les œuvres) en cause est nommée, la file
+        /// « cross-kind » de la page de configuration porte le reste
+        /// (fiche relue, fichiers source, actions copie/conversion).</summary>
+        internal static async Task NotifyCrossKindAsync(INotificationManager notifications, IUserManager users,
+            PluginConfiguration cfg, IServerApplicationHost host, ILogger logger, IReadOnlyList<BaseItem> items)
         {
-            if (notifications == null || users == null || count <= 0) return;
+            if (notifications == null || users == null || items == null || items.Count == 0) return;
 
             string langKey = I18n.ResolveDisplayLangKey(host);
             string title = I18n.S("crosskind.notif.title", langKey);
-            string desc = string.Format(CultureInfo.InvariantCulture,
-                I18n.S("crosskind.notif.desc", langKey), count, OrphanIdentifyTask.TagCrossKind);
-            string url = (cfg?.EmbyPublicUrl ?? string.Empty).Trim();
+            string tag = OrphanIdentifyTask.TagCrossKind;
 
+            string desc;
+            if (items.Count == 1)
+            {
+                // Item unique : l'œuvre est nommée avec le sens du
+                // croisement (« fiche film sur un item série ») — la
+                // fiche est du type OPPOSÉ à l'item, c'est le sens du tag.
+                var it = items[0];
+                bool itemIsSeries = it is Series;
+                desc = string.Format(CultureInfo.InvariantCulture,
+                    I18n.S("crosskind.notif.desc.one", langKey),
+                    it?.Name ?? string.Empty,
+                    I18n.S(itemIsSeries ? "rec.kind.movie" : "rec.kind.series", langKey),
+                    I18n.S(itemIsSeries ? "rec.kind.series" : "rec.kind.movie", langKey),
+                    tag);
+            }
+            else
+            {
+                // Plusieurs : jusqu'à 3 titres nommés, le surplus en
+                // abrégé — la file « cross-kind » reste l'inventaire
+                // complet (fiches, fichiers, actions).
+                var names = new List<string>();
+                for (int i = 0; i < items.Count && i < 3; i++)
+                {
+                    string n = items[i]?.Name;
+                    if (!string.IsNullOrWhiteSpace(n)) names.Add("« " + n + " »");
+                }
+                string titleList = string.Join(", ", names);
+                if (items.Count > 3)
+                    titleList += string.Format(CultureInfo.InvariantCulture,
+                        I18n.S("crosskind.notif.more", langKey), items.Count - 3);
+                desc = string.Format(CultureInfo.InvariantCulture,
+                    I18n.S("crosskind.notif.desc.many", langKey), items.Count, titleList, tag);
+            }
+
+            string url = await ResolveCrossKindUrlAsync(cfg, host, items, logger).ConfigureAwait(false);
+
+            // Le lien voyage AUSSI dans la description (cas de terrain
+            // 2026-10-13, Emby.Webhooks 1.0.39) : le consommateur du canal
+            // de lecture rend Title+Description mais IGNORE le champ Url
+            // de la notification Emby — une URL nue en fin de description
+            // est affichée par tout canal qui rend la description (et
+            // auto-liée par la plupart). Le champ Url reste posé pour les
+            // clients qui l'honorent. LF seul : les payloads webhook/JSON
+            // n'ont pas à trimballer de CR.
+            if (!string.IsNullOrWhiteSpace(url))
+                desc = desc + "\n" + url;
+
+            // Administrateurs uniquement : la file « cross-kind » vit sur la
+            // page de configuration du plugin (route admin-only du routeur
+            // web Emby) — un non-admin recevrait une cloche dont le guidage
+            // ET le lien profond lui sont inaccessibles.
             List<MediaBrowser.Controller.Entities.User> list;
-            try { list = users.GetUserList(new UserQuery()).ToList(); }
+            try
+            {
+                list = users.GetUserList(new UserQuery())
+                    .Where(u => u != null && (u.Policy?.IsAdministrator ?? false))
+                    .ToList();
+            }
             catch (Exception ex)
             {
                 logger?.Warn("[LLM_AI] OrphanIdentify : lecture des usagers pour notification échouée ({0}).", ex.Message);
@@ -1889,9 +1982,8 @@ namespace LLM_AI
             }
 
             int sent = 0;
-            foreach (var u in list ?? new List<MediaBrowser.Controller.Entities.User>())
+            foreach (var u in list)
             {
-                if (u == null) continue;
                 try
                 {
                     notifications.SendNotification(new NotificationRequest
@@ -1911,8 +2003,71 @@ namespace LLM_AI
                 }
             }
             if (sent > 0)
-                logger?.Info("[LLM_AI] OrphanIdentify : notification fiche croisée ({0}) envoyée à {1}/{2} usager(s).",
-                    count, sent, list?.Count ?? 0);
+            {
+                logger?.Info("[LLM_AI] OrphanIdentify : notification fiche croisée ({0} œuvre(s)) envoyée à {1}/{2} administrateur(s) — lien : {3}.",
+                    items.Count, sent, list.Count,
+                    string.IsNullOrWhiteSpace(url) ? "(aucun)" : url);
+            }
+            else
+            {
+                logger?.Warn("[LLM_AI] OrphanIdentify : notification fiche croisée ({0} œuvre(s)) NON envoyée — aucun administrateur.",
+                    items.Count);
+            }
+        }
+
+        /// <summary>Lien profond de la cloche « fiche croisée » : fiche Emby
+        /// de l'œuvre pour un item unique (id currency UI =
+        /// <c>InternalId</c>, même gabarit que les liens du chat et les
+        /// cartes .strm), sinon la file « cross-kind » de la page de
+        /// configuration — le paramètre <c>section=crosskind</c> du hash y
+        /// déplie la section (config.js). Fail-open : file de configuration
+        /// si le <c>serverId</c> manque, URL de base seule si elle est
+        /// vide (aucun lien plus fiable à fabriquer).</summary>
+        private static async Task<string> ResolveCrossKindUrlAsync(
+            PluginConfiguration cfg, IServerApplicationHost host, IReadOnlyList<BaseItem> items, ILogger logger)
+        {
+            // Base : URL publique configurée prioritaire (liens joignables
+            // depuis les clients externes), sinon URL locale du serveur —
+            // même priorité que LlmScheduledTask.ResolveEmbyUrl.
+            string baseUrl = (cfg?.EmbyPublicUrl ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                try { baseUrl = host == null ? string.Empty : (host.GetLocalHostApiUrl() ?? string.Empty); }
+                catch { baseUrl = string.Empty; }
+            }
+            if (string.IsNullOrWhiteSpace(baseUrl)) return string.Empty;
+            baseUrl = baseUrl.TrimEnd('/');
+
+            // serverId : requis par le routeur web de la fiche item (même
+            // doctrine que StrmLibraryGenerator.EpgLink — jamais de lien
+            // fabriqué sans lui). GetPublicSystemInfo est le chemin fiable
+            // (GetSystemInfo lève une NRE sur certains hôtes Windows).
+            string serverId = null;
+            try
+            {
+                var pub = host == null
+                    ? null
+                    : await host.GetPublicSystemInfo(CancellationToken.None).ConfigureAwait(false);
+                serverId = pub?.Id;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] CrossKind : serverId indisponible ({0}) — repli sur la file de configuration.", ex.Message);
+            }
+
+            // Item unique → la fiche Emby de l'œuvre (le vidéo en cause).
+            if (items.Count == 1 && items[0] != null && !string.IsNullOrWhiteSpace(serverId))
+                return string.Format(CultureInfo.InvariantCulture,
+                    "{0}/web/index.html#!/item?id={1}&serverId={2}",
+                    baseUrl,
+                    items[0].InternalId.ToString(CultureInfo.InvariantCulture),
+                    Uri.EscapeDataString(serverId));
+
+            // Sinon → la file « cross-kind » de la page de configuration.
+            string url = baseUrl + "/web/index.html#!/configurationpage?name=LLMAIConfigPage&section=crosskind";
+            if (!string.IsNullOrWhiteSpace(serverId))
+                url += "&serverId=" + Uri.EscapeDataString(serverId);
+            return url;
         }
     }
 }

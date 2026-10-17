@@ -560,13 +560,18 @@ namespace LLM_AI
             if (_notifications == null || user == null) return;
             try
             {
+                string url = ResolveEmbyUrl();
+                // Lien aussi en description (v2.4.5 : les canaux de lecture —
+                // webhooks, courriel — ignorent le champ Url d'Emby).
+                if (!string.IsNullOrWhiteSpace(url))
+                    text = text + "\n" + url;
                 var req = new NotificationRequest
                 {
                     // 🤖 en préfixe du titre : même marque que les popups
                     // (la cloche est le canal principal sur les clients TV).
                     Title = "🤖 LLM AI — À regarder ce soir",
                     Description = text,
-                    Url = ResolveEmbyUrl(),
+                    Url = url,
                     Date = DateTimeOffset.UtcNow,
                     Severity = LogSeverity.Info,
                     User = user,

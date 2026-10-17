@@ -205,7 +205,9 @@ namespace LLM_AI
             }
 
             int scanned = 0, orphans = 0, resolved = 0, review = 0, notFound = 0, skipped = 0, errors = 0;
-            int crossKind = 0;
+            // Œuvres à nommer dans la notification (seules les fiches
+            // croisées NOUVELLES de cette passe — tag add-only).
+            var crossItems = new List<BaseItem>();
             int total = items.Length;
             int idx = 0;
 
@@ -239,7 +241,8 @@ namespace LLM_AI
                     continue;
                 }
 
-                if (!hadCross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind)) crossKind++;
+                if (!hadCross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
+                    crossItems.Add(item);
 
                 switch (st)
                 {
@@ -254,16 +257,18 @@ namespace LLM_AI
 
             _logger?.Info(
                 "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} introuvables={4} ignorés(non-orphelin/.strm/déjà taggé)={5} erreurs={6} fiches-croisées-nouvelles={7} ({8}).",
-                scanned, orphans, resolved, review, notFound, skipped, errors, crossKind, dry ? "DRY-RUN" : "application");
+                scanned, orphans, resolved, review, notFound, skipped, errors, crossItems.Count, dry ? "DRY-RUN" : "application");
 
             // Notification (pattern des tags disque) : uniquement les fiches
-            // croisées NOUVELLES de cette passe — le compte est nul sinon.
-            if (crossKind > 0)
+            // croisées NOUVELLES de cette passe — nominatives (l'œuvre y
+            // est nommée) avec lien profond (fiche Emby pour un item
+            // unique, file « cross-kind » sinon). La liste est vide sinon.
+            if (crossItems.Count > 0)
             {
-                OrphanResolver.NotifyCrossKind(
+                await OrphanResolver.NotifyCrossKindAsync(
                     _host.TryResolve<INotificationManager>(),
                     _host.TryResolve<IUserManager>(),
-                    cfg, _host, _logger, crossKind);
+                    cfg, _host, _logger, crossItems).ConfigureAwait(false);
             }
         }
     }

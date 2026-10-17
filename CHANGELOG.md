@@ -10,6 +10,337 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.3] — 2026-10-17
+
+### Fixed (FR)
+- **Contrôleur identifié sur toutes les commandes de lecture distantes du
+  chat** — `seek`, `pause`/`unpause`/`stop` (via `PlaystateRequest`) et
+  `play_item`/`play_next` (via `PlayRequest`) portent désormais
+  `ControllingUserId` = le premier administrateur du serveur, avec repli
+  silencieux sur l'usager du chat si aucun n'existe (l'identifiant retenu
+  est journalisé sur la ligne du seek). Alignement sur Emby.ComSkipper, la
+  référence du domaine, qui inscrit ce champ dans chacune de ses
+  commandes. Validé en production sur une app TV native (Emby for Android
+  TV 2.1.55g, livraison remux HLS) : deux sauts consécutifs demandés au
+  chat confirmés par le client en ~5 et ~10 s — le lecteur télécharge le
+  segment HLS correspondant à la cible exacte du saut, puis la position
+  rapportée rejoint la cible.
+
+### Fixed (EN)
+- **Identified controller on every remote playback command of the chat** —
+  `seek`, `pause`/`unpause`/`stop` (through `PlaystateRequest`) and
+  `play_item`/`play_next` (through `PlayRequest`) now carry
+  `ControllingUserId` = the server's first administrator, silently
+  falling back to the chat user if none exists (the retained id is
+  logged on the seek line). This aligns with Emby.ComSkipper, the domain
+  reference, which sets this field on every command it sends. Validated
+  in production on a native TV app (Emby for Android TV 2.1.55g, HLS
+  remux delivery): two consecutive chat-requested jumps confirmed by the
+  client in ~5 and ~10 s — the player downloads the HLS segment matching
+  the exact jump target, then the reported position joins the target.
+
+## [2.6.2] — 2026-10-17
+
+### Fixed (FR)
+- **`pause` / `unpause` / `stop` du chat externe : confirmation par relecture
+  de l'état** — même remède que le `seek` v2.6.1 : l'outil répondait
+  `ok:true` dès l'envoi de la commande (`PlaystateCommand.Pause/Unpause/Stop`)
+  sans preuve que le client l'ait appliquée. Constat banc du 2026-10-17 : une
+  app TV native ignore la commande Pause (la lecture poursuit, position
+  +16 s en 16 s) alors que l'ancien code retournait `ok:true` — l'assistant
+  promettait une pause fantôme. `pause`/`unpause` RELIT maintenant le
+  drapeau `IsPaused` rapporté par le client, et `stop` la disparition de la
+  lecture (12 s max, sortie anticipée) ; la session est relue par
+  identifiant (et non par résolution « plus récente », qui pourrait élire
+  une autre session de l'usager une fois celle-ci inactive). Non confirmé →
+  `ok:false` avec consigne explicite de ne PAS annoncer l'action. Le prompt
+  du chat généralise la consigne à toute commande non confirmée.
+
+### Fixed (EN)
+- **External chat `pause` / `unpause` / `stop`: read-back confirmation of
+  the state** — same remedy as the v2.6.1 `seek`: the tool returned
+  `ok:true` as soon as the command (`PlaystateCommand.Pause/Unpause/Stop`)
+  was sent, with no proof the client had applied it. Bench finding from
+  2026-10-17: a native TV app ignores the Pause command (playback
+  continues, position +16 s over 16 s) while the old code returned
+  `ok:true` — the assistant promised a phantom pause. `pause`/`unpause` now
+  RE-READ the `IsPaused` flag reported by the client, and `stop` the
+  disappearance of playback (12 s max, early exit); the session is
+  re-read by id (not by "most recent" resolution, which could elect
+  another of the user's sessions once this one is idle). Unconfirmed →
+  `ok:false` with an explicit instruction NOT to announce the action. The
+  chat prompt generalizes the instruction to any unconfirmed command.
+
+## [2.6.1] — 2026-10-17
+
+### Fixed (FR)
+- **`seek` du chat externe : confirmation par relecture de la position** —
+  jusqu'ici, l'outil retournait `ok:true` dès l'envoi de la commande de saut
+  (`PlaystateCommand.Seek`), sans preuve que le client l'ait appliquée : un
+  `ok:true` ne prouvait que l'envoi. Constat terrain du 2026-10-16 : 8 sauts
+  « réussis » annoncés à l'usager en une soirée alors qu'aucun n'avait été
+  appliqué par le client — la lecture a suivi son cours linéaire du début à
+  la fin, et l'assistant a promis huit fois un déplacement fantôme. Comme
+  `play_next` le fait déjà pour l'épisode, le seek RELIT maintenant la
+  position rapportée par le client (12 s max, sortie anticipée dès
+  confirmation) : saut confirmé → `ok:true` ; non confirmé → `ok:false`
+  avec consigne explicite de ne PAS annoncer le saut ; saut inférieur à
+  15 s (indiscernable de la lecture naturelle dans le retard de remontée
+  de la position) → « envoyé, non confirmable », jamais un succès inventé.
+  Les erreurs sont journalisées de façon verifiable (`CONFIRMÉ` /
+  `NON confirmé` / `non vérifié`).
+
+### Fixed (EN)
+- **External chat `seek`: read-back confirmation of the position** — until
+  now the tool returned `ok:true` as soon as the jump command
+  (`PlaystateCommand.Seek`) was sent, with no proof the client had applied
+  it: an `ok:true` only proved the send. Field finding from 2026-10-16:
+  eight "successful" jumps announced to the user in a single evening while
+  none had been applied by the client — playback ran linearly from start
+  to finish, and the assistant promised eight phantom jumps. Like
+  `play_next` already does for episodes, `seek` now RE-READS the position
+  reported by the client (12 s max, early exit as soon as confirmed):
+  confirmed jump → `ok:true`; unconfirmed → `ok:false` with an explicit
+  instruction NOT to announce the jump; jumps smaller than 15 s
+  (indistinguishable from natural playback within the position reporting
+  lag) → "sent, not confirmable", never an invented success. Errors are
+  logged verifiably (`CONFIRMÉ` / `NON confirmé` / `non vérifié`).
+
+## [2.6.0] — 2026-10-13
+
+### Added (FR)
+- **Tableau de bord « Notifications & messages à l'écran »** dans la page de
+  configuration : tous les opt-ins de messages regroupés par canal de
+  livraison (notifications persistantes / messages éphémères à l'écran),
+  avec l'inventaire des notifications réservées aux administrateurs sans
+  interrupteur (fiche croisée, passe disque « AI Delete », échec de la
+  tâche — opérationnelles) et la messagerie dirigée du chat. Chaque
+  interrupteur est LE MÊME réglage que celui de sa section d'origine
+  (clé unique) : les deux instances se synchronisent en direct dans la
+  page et l'activation/désactivation est effective globalement, quel que
+  soit l'endroit. Aucune nouvelle clé — les opt-ins d'origine restent à
+  leur place dans leur section fonctionnelle.
+
+### Added (EN)
+- **"Notifications & on-screen messages" dashboard** in the configuration
+  page: every message opt-in grouped by delivery channel (persistent
+  notifications / ephemeral on-screen messages), with the inventory of
+  administrator-only notifications that carry no switch (cross-kind,
+  disk tag pass, task failure — operational) and the chat's directed
+  messaging. Each switch IS THE SAME setting as the one in its original
+  section (single config key): both instances stay in sync live within
+  the page, and toggling either applies globally. No new key — the
+  original opt-ins stay in place in their feature sections.
+
+## [2.5.1] — 2026-10-13
+
+### Changed (FR)
+- **Vocabulaire aligné sur Emby** : les surfaces visibles par l'usager
+  disent désormais « notification » (le terme d'Emby) — libellé et
+  description de l'option `NotifyRecommendationsEnabled`, entrées de
+  changelog 2.4.3→2.5.0 et documentation. Le raccourci interne « cloche »
+  (pour distinguer la notification persistante du toast éphémère) reste
+  réservé aux journaux et aux commentaires de code.
+- **Les deux canaux de livraison sont désormais nommés distinctement**
+  (documentation, page de configuration, descriptions d'outils du chat)
+  puisque leur livraison diffère : **notification persistante** (stockée,
+  livrée par les services de notification — Webhooks, SMTP…) vs
+  **message éphémère à l'écran** (toast/popup, quelques secondes sur le
+  client actif).
+
+### Changed (EN)
+- **Vocabulary aligned with Emby**: user-facing surfaces now say
+  "notification" (Emby's term) — `NotifyRecommendationsEnabled` option
+  label and description, changelog entries 2.4.3→2.5.0 and
+  documentation. The internal shorthand "bell" (to tell the persistent
+  notification from the ephemeral toast) stays confined to logs and code
+  comments.
+- **The two delivery channels are now named distinctly** (documentation,
+  configuration page, chat tool descriptions) since their delivery
+  differs: **persistent notification** (stored, delivered by
+  notification services — webhooks, SMTP…) vs **ephemeral on-screen
+  message** (toast/popup, a few seconds on the active client).
+
+## [2.5.0] — 2026-10-13
+
+### Added (FR)
+- **Opt-out pour la notification « N nouvelles recommandations »** — nouvelle
+  option `NotifyRecommendationsEnabled` (défaut **activé**, comportement
+  historique préservé). À la fin de chaque run réussi de la tâche
+  recommandations, la notification partait à tous les usagers sans aucun
+  contrôle : c'est la seule notification « générale » du plugin, et Emby
+  ne peut pas la filtrer par usager côté livraison (le type d'événement
+  `external.externalnotification` est unique pour toutes les notifications
+  de tous les plugins — livraison tout-ou-rien par usager). La granularité
+  vit donc côté plugin : décocher l'option coupe la notification pour
+  tout le monde (page de config, section « tâche recommandations »). La
+  notification d'échec (admins, technique) reste inconditionnelle.
+
+### Added (EN)
+- **Opt-out for the "N new recommendations" notification** — new
+  `NotifyRecommendationsEnabled` option (default **on**, historical
+  behavior preserved). At the end of every successful recommendations-task
+  run, the notification went to all users with no control: it is the
+  plugin's only "general" notification, and Emby cannot filter it per user
+  on the delivery side (the `external.externalnotification` event type is
+  unique for every notification of every plugin — all-or-nothing per
+  user). The granularity therefore lives plugin-side: unchecking the
+  option turns the notification off for everyone (config page,
+  recommendations-task section).
+  The failure notification (admins, technical) stays unconditional.
+
+## [2.4.7] — 2026-10-13
+
+### Changed (FR)
+- **Audit des notifications du plugin — destinataires et portée du lien** :
+  - Notification « passe tag disque » (« AI Delete ») : désormais réservée aux
+    **administrateurs** — le guidage (filtrer les enregistrements par le
+    tag puis supprimer à la main) est une action admin, même motif que
+    la notification « fiche croisée » (v2.4.6) ; un ensemble administrateur
+    vide est loggé en avertissement (fail-loud).
+  - Notification d'échec de la tâche recommandations : également réservée aux
+    **administrateurs** (le message est technique — backends LLM
+    indisponibles, garde anti-effacement — seul l'admin peut agir) ; la
+    notification « N nouvelles recommandations » reste pour tous (la page
+    Recommandations est user-facing).
+  - Leçon v2.4.5 appliquée à **toutes les notifications** : l'URL voyage aussi
+    en fin de description (les canaux de lecture — webhooks, courriel —
+    ignorent le champ `Url` d'Emby). Les notifications ciblées (login du soir,
+    enregistrement recommandé) et la messagerie LLM dirigée restent par
+    usager, par design.
+
+### Changed (EN)
+- **Plugin notifications audit — recipients and link reach**:
+  - Disk tag pass notification ("AI Delete"): now restricted to
+    **administrators** — the guidance (filter recordings by the tag then
+    delete by hand) is an admin action, same rationale as the cross-kind
+    notification (v2.4.6); an empty administrator set is logged as a warning
+    (fail-loud).
+  - Recommendations task failure notification: also restricted to
+    **administrators** (the message is technical — LLM backends
+    unavailable, anti-wipe guard — only the admin can act); the "N new
+    recommendations" notification stays for everyone (the Recommendations
+    page is user-facing).
+  - v2.4.5 lesson applied to **every notification**: the URL also rides at the
+    end of the description (reading channels — webhooks, email — ignore
+    Emby's `Url` field). The targeted notifications (Tonight login,
+    recommended recording) and the directed LLM messaging stay per-user,
+    by design.
+
+## [2.4.6] — 2026-10-13
+
+### Changed (FR)
+- **Cloche « fiche croisée » réservée aux administrateurs** : la file
+  « cross-kind » vit sur la page de configuration du plugin (route
+  admin-only d'Emby) — la notification n'est plus envoyée qu'aux usagers
+  « Autoriser la gestion du serveur » (`Policy.IsAdministrator`) ; un
+  non-admin ne recevait qu'une notification dont le guidage et le lien profond
+  lui étaient inaccessibles. Le log compte désormais les
+  administrateur(s), et une absence d'administrateur est loggée en
+  avertissement (fail-loud).
+
+### Changed (EN)
+- **Cross-kind notification restricted to administrators**: the "cross-kind"
+  queue lives on the plugin's configuration page (an Emby admin-only
+  route) — the notification is now sent only to users with "Allow this
+  user to manage the server" (`Policy.IsAdministrator`); a non-admin only
+  received a notification whose guidance and deep link were unreachable to them.
+  The log now counts administrator(s), and an empty administrator set is
+  logged as a warning (fail-loud).
+
+## [2.4.5] — 2026-10-13
+
+### Fixed (FR)
+- **Lien profond visible sur tous les canaux de notification** (cas réel :
+  webhooks Emby) : le champ `Url` de la notification est rempli depuis la
+  v2.4.3, mais le consommateur du canal de lecture (webhook, courriel)
+  rend `Title`+`Description` et ignore ce champ — le lien était posé mais
+  jamais affiché. L'URL voyage désormais AUSSI en fin de description (URL
+  nue sur sa propre ligne) : tout canal qui rend la description rend le
+  lien. Le champ `Url` reste posé pour les clients qui l'honorent, et
+  l'envoi est journalisé avec le lien construit (« — lien : … », ou
+  « (aucun) » en fail-open).
+
+### Fixed (EN)
+- **Deep link visible on every notification channel** (real case: Emby
+  webhooks): the notification's `Url` field has been filled since v2.4.3,
+  but the reading channel's consumer (webhook, email) renders
+  `Title`+`Description` and ignores that field — the link was set but
+  never displayed. The URL now also rides at the end of the description
+  (bare URL on its own line): any channel that renders the description
+  renders the link. The `Url` field stays set for clients that honor it,
+  and the send is logged with the built link ("— lien : …", or
+  "(aucun)" on fail-open).
+
+## [2.4.4] — 2026-10-13
+
+### Fixed (FR)
+- **Piège « année-thème » dans la porte d'acceptation** (cas réel :
+  « 1945: l'année qui a changé l'histoire », documentaire de 2020 dont le
+  guide porte `ProductionYear=1945` — l'année-SUJET, ≥ 1900 donc invisible
+  au garde « année aberrante »). Toute la chaîne était empoisonnée :
+  filtre de recherche `year=1945` (aucun candidat S1), rejet de la VRAIE
+  fiche proposée par le LLM (`YearCompatible(1945, 2020)` → faux), et
+  requête S3 « titre + 1945 » attirant une autre œuvre (un documentaire
+  de 2005 sur l'année 1945). Un enregistrement DVR ne peut pas précéder
+  son œuvre : une fiche postérieure de plus d'un an à l'année de l'item
+  désigne désormais une année-thème — l'année de l'item est traitée
+  comme non fiable pour ce candidat et la preuve repasse par la doctrine
+  « sans année fiable » (égalité exacte du titre du guide, ou juge
+  synopsis). Un homonyme d'une autre époque reste rejeté par le titre ;
+  l'ancrage frère (séries) garde sa règle dédiée.
+
+### Fixed (EN)
+- **"Theme-year" trap in the acceptance gate** (real case: "1945:
+  l'année qui a changé l'histoire", a 2020 documentary whose guide
+  carries `ProductionYear=1945` — the year it is ABOUT, ≥ 1900 so the
+  bogus-year guard never saw it). The whole chain was poisoned:
+  `year=1945` search filter (no S1 candidate), rejection of the CORRECT
+  fiche proposed by the LLM (`YearCompatible(1945, 2020)` → false), and
+  an S3 "title + 1945" query pulling another work (a 2005 documentary
+  about the year 1945). A DVR recording cannot precede its work: a fiche
+  more than one year POSTERIOR to the item year now flags a theme year —
+  the item year is treated as unreliable for that candidate and the
+  proof falls back to the "no reliable year" doctrine (exact
+  guide-title equality, or synopsis judge). A same-name work from
+  another era stays rejected by the title; the series sibling-anchor
+  keeps its dedicated rule.
+
+## [2.4.3] — 2026-10-13
+
+### Changed (FR)
+- **Notification « fiche croisée » courte et nominative** : la notification
+  `llmai-cross-kind` ne disait pas quel vidéo était en cause (paragraphe
+  générique, aucune œuvre nommée). La description est désormais courte et
+  nominative : pour un item unique elle nomme l'œuvre et le sens du
+  croisement (« fiche film sur un item série ») ; pour plusieurs elle liste
+  jusqu'à trois titres (« + N autre(s) » au-delà). Le type de l'item Emby
+  n'est jamais modifié ; le guidage de régularisation reste sur la file
+  « cross-kind ». Le lien de la notification est un lien profond : fiche Emby de
+  l'œuvre pour un item unique (gabarit des liens du chat, id `InternalId`),
+  ou page de configuration du plugin avec la section « cross-kind »
+  **dépliée et défilée automatiquement** (paramètre `&section=crosskind`
+  du hash, lu par `config.js`) pour plusieurs items. Fail-open habituel :
+  sans `serverId` résoluble la notification pointe sur la file ; sans URL de
+  base, aucun lien.
+
+### Changed (EN)
+- **Short, nominative cross-kind notification**: the `llmai-cross-kind`
+  notification did not say which video was concerned (a generic paragraph, no work
+  named). The description is now short and nominative: for a single item it
+  names the work and the crossing direction ("movie fiche on a series
+  item"); for several it lists up to three titles ("+ N more" beyond). The
+  Emby item kind is never changed; the regularization guidance lives on
+  the "cross-kind" queue. The notification link is now a deep link: the work's Emby
+  page for a single item (chat-link template, `InternalId` id), or the
+  plugin configuration page with the "cross-kind" section **automatically
+  expanded and scrolled into view** (`&section=crosskind` hash parameter,
+  read by `config.js`) for several items. Usual fail-open: without a
+  resolvable `serverId` the notification points at the queue; without a base URL,
+  no link.
+
+---
+
 ## [2.4.2] — 2026-10-12
 
 ### Added (FR)
@@ -499,8 +830,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   « premier épisode non vu » par usager. Journal : préfixe « Playlist foyer »
   et un résumé par série (position résolue par usager + l'épisode retenu).
 - **Liste « comptes ignorés »** (config, section « À regarder ce soir », un
-  nom d'usager Emby par ligne — casse et accents tolérés, « rene » =
-  « René ») : exclut des comptes des mécanismes **foyer**, à trois endroits
+  nom d'usager Emby par ligne — casse et accents tolérés, « elodie » =
+  « Élodie ») : exclut des comptes des mécanismes **foyer**, à trois endroits
   uniquement — (1) la **résolution foyer** de la playlist publique : la
   position d'un compte ignoré ne compte pas dans le « plus avancé »
   (porteur compris) ; (2) le **repli du porteur** (champ usager vide) : le
@@ -514,8 +845,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   playlist privée — un compte ignoré garde ses surfaces en rafraîchissement
   manuel). Noms introuvables journalisés (warn) sans bloquer la sauvegarde ;
   liste vide = aucun changement. Au passage : le placeholder trompeur
-  « René » du champ usager Tonight est retiré (il a induit en erreur sur la
-  prod — la valeur paraissait déjà saisie).
+  (un nom propre) du champ usager Tonight est retiré (il a induit en erreur sur
+  la prod — la valeur paraissait déjà saisie).
 
 ### Added (EN)
 - **Public "AI Tonight" playlist: household "most advanced" resolution** — a
@@ -538,7 +869,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   foyer" prefix and a one-line summary per series (per-user resolved
   positions + the retained episode).
 - **"Ignored accounts" list** (config, "Watch tonight" section, one Emby
-  user name per line — case and accents tolerated, "rene" = "René"):
+  user name per line — case and accents tolerated, "elodie" = "Élodie"):
   excludes accounts from the **household** mechanisms, at exactly three
   places — (1) the public playlist's **household resolution**: an ignored
   account's viewing position doesn't count toward the "most advanced"
@@ -552,7 +883,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   counts) nor to **per-user surfaces** (recos, private playlist — an
   ignored account keeps its surfaces on manual refresh). Unresolved names
   are logged (warn) without blocking the save; an empty list = no change.
-  Also: the misleading "René" placeholder of the Tonight user field is
+  Also: the misleading name placeholder of the Tonight user field is
   removed (it misled on production — the value looked already filled in).
 
 ---

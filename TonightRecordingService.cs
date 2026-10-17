@@ -388,11 +388,16 @@ namespace LLM_AI
                 var desc = toast;
                 if (!string.IsNullOrWhiteSpace(reason))
                     desc += "\n🤖 " + reason.Trim();
+                string url = ResolveEmbyUrl();
+                // Lien aussi en description (v2.4.5 : les canaux de lecture —
+                // webhooks, courriel — ignorent le champ Url d'Emby).
+                if (!string.IsNullOrWhiteSpace(url))
+                    desc += "\n" + url;
                 var req = new NotificationRequest
                 {
                     Title = "🤖 LLM AI — Enregistrement recommandé",
                     Description = desc,
-                    Url = ResolveEmbyUrl(),
+                    Url = url,
                     Date = DateTimeOffset.UtcNow,
                     Severity = LogSeverity.Info,
                     User = user,

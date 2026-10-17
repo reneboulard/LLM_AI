@@ -1313,8 +1313,8 @@ namespace LLM_AI
         /// <summary>
         /// Clé de comparaison tolérante d'un nom d'usager (liste « comptes
         /// ignorés », v2.2.0) : trim + décomposition NFKD + retrait des
-        /// diacritiques (accents) + minuscules invariantes — « René »,
-        /// « rene » et « RENÉ » produisent la même clé.
+        /// diacritiques (accents) + minuscules invariantes — « Élodie »,
+        /// « elodie » et « ÉLODIE » produisent la même clé.
         /// </summary>
         internal static string NormUserName(string name)
         {

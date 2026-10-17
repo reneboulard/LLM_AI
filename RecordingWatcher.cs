@@ -309,14 +309,16 @@ namespace LLM_AI
                     _logger?.Warn("[LLM_AI] Recording : erreur sur « {0} » ({1}) — abandon de l'entrée.", item?.Name, ex.Message);
                 }
 
-                // Fiche croisée fraîchement appliquée → notification immédiate
-                // (add-only : un gain seulement, jamais les déjà taggés).
+                // Fiche croisée fraîchement appliquée → notification
+                // immédiate, nominative (l'œuvre est nommée, lien profond
+                // vers sa fiche Emby) — add-only : un gain seulement,
+                // jamais les déjà taggés.
                 if (!hadCross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
                 {
-                    OrphanResolver.NotifyCrossKind(
+                    await OrphanResolver.NotifyCrossKindAsync(
                         _host.TryResolve<INotificationManager>(),
                         _host.TryResolve<IUserManager>(),
-                        cfg, _host, _logger, 1);
+                        cfg, _host, _logger, new[] { item }).ConfigureAwait(false);
                 }
 
                 // Résolu ou abandonné : l'entrée sort du store (la passe 04 h

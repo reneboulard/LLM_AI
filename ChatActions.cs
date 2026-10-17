@@ -1591,8 +1591,9 @@ namespace LLM_AI
             public string ToolKey => "send_message";
             public string Name => "send_message";
             public string Description =>
-                "Envoie un message Emby à un usager : delivery=notification (défaut — inbox/cloche, persistante, " +
-                "livrée même sans session active) ou delivery=osd (toast à l'écran, requiert une session active). " +
+                "Envoie un message Emby à un usager : delivery=notification (défaut — notification persistante " +
+                "(inbox), livrée même sans session active) ou delivery=osd (toast à l'écran, message éphémère, " +
+                "requiert une session active). " +
                 "L'usager se résout par Guid (user_id) ou nom (user_name). C'est LE chemin du chat — n'utilisez PAS " +
                 "system_audit action=send_message (remédiation de l'audit, gated AuditRemediationEnabled). " +
                 "DEUX PHASES : l'appel DÉPOSE une " +

@@ -484,10 +484,17 @@ namespace LLM_AI
                     ["disktag.notif.title"] = "LLM AI — Disque des enregistrements presque plein",
                     ["disktag.notif.desc"] = "{0} enregistrement(s) visionné(s) étiqueté(s) « {1} » (~{2:0.#} Go récupérables). Le seuil disque est franchi. Pour libérer de l'espace : filtrez la bibliothèque des enregistrements par l'étiquette « {1} », multi-sélectionnez puis supprimez (l'extension ne supprime jamais rien lui-même).",
                     ["disktag.notif.desc.uncovered"] = "{0} enregistrement(s) visionné(s) étiqueté(s) « {1} » (~{2:0.#} Go récupérables) — insuffisant pour ramener le disque au-dessus du seuil. Supprimez-les, puis d'autres enregistrements (ou réduisez les timers) manuellement. L'extension ne supprime jamais rien lui-même.",
-                    // Notification « fiche croisée » (v1.13.28) — œuvre identifiée
-                    // sous le type opposé à l'item (film sur série, ou l'inverse).
+                    // Notification « fiche croisée » (v1.13.28, condensée et
+                    // rendue nominative v2.4.3) — œuvre identifiée sous le
+                    // type opposé à l'item (film sur série, ou l'inverse).
+                    // Description courte : l'œuvre en cause est nommée ; le
+                    // lien de la cloche pointe sur sa fiche Emby (item
+                    // unique) ou sur la file « cross-kind » de la page de
+                    // configuration (plusieurs), section dépliée.
                     ["crosskind.notif.title"] = "LLM AI — Œuvre(s) enregistrée(s) sous le mauvais type Emby",
-                    ["crosskind.notif.desc"] = "{0} enregistrement(s) identifié(s) avec une fiche du type opposé (film sur un item série, ou l'inverse) — étiqueté(s) « {1} ». Les ids, synopsis, genres et affiches corrects sont écrits et verrouillés ; le type de l'item Emby est figé par l'import des enregistrements et n'est jamais modifié. Pour replacer une œuvre dans la bonne bibliothèque : déplacez son fichier (ex. le .ts) vers la bibliothèque visée — Emby le ré-importera avec le bon type et l'extension le ré-identifiera. La page de configuration liste aussi ces items (file « cross-kind ») : copie vers la bonne bibliothèque, ou conversion sur place du dossier d'enregistrement (renommage « Titre (Année) » + retrait de tvshow.nfo). Filtrez par l'étiquette « {1} » pour retrouver ces items.",
+                    ["crosskind.notif.desc.one"] = "« {0} » : fiche {1} sur un item {2} — étiqueté « {3} ». Le type de l'item Emby n'est jamais modifié ; régularisez-le depuis la file « cross-kind » de la page de configuration LLM AI.",
+                    ["crosskind.notif.desc.many"] = "{0} œuvre(s) enregistrée(s) sous le mauvais type Emby : {1} — étiqueté(s) « {2} ». Le type des items Emby n'est jamais modifié ; régularisez-les depuis la file « cross-kind » de la page de configuration LLM AI.",
+                    ["crosskind.notif.more"] = ", + {0} autre(s)",
                     // Toasts d'activation d'une carte .strm (v1.12) — {0} = titre du programme.
                     ["activate.toast.programmed"] = "Enregistrement programmé : {0}",
                     ["activate.toast.duplicate"] = "Déjà programmé : {0}",
@@ -699,10 +706,17 @@ namespace LLM_AI
                     ["disktag.notif.title"] = "LLM AI — Recording disk almost full",
                     ["disktag.notif.desc"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable). The disk threshold is crossed. To free space: filter the recordings library by the tag \"{1}\", multi-select and delete (the plugin never deletes anything itself).",
                     ["disktag.notif.desc.uncovered"] = "{0} watched recording(s) tagged \"{1}\" (~{2:0.#} GB reclaimable) — not enough to bring the disk back above the threshold. Delete them, then other recordings (or reduce timers) manually. The plugin never deletes anything itself.",
-                    // Cross-kind notification (v1.13.28) — work identified under
-                    // the opposite kind of the item (movie on a series, or reverse).
+                    // Cross-kind notification (v1.13.28, condensed and made
+                    // nominative in v2.4.3) — work identified under the
+                    // opposite kind of the item (movie on a series, or
+                    // reverse). Short description: the work is named; the
+                    // notification link opens its Emby page (single item)
+                    // or the configuration page's "cross-kind" queue
+                    // (several), section expanded.
                     ["crosskind.notif.title"] = "LLM AI — Recording(s) typed under the wrong Emby kind",
-                    ["crosskind.notif.desc"] = "{0} recording(s) identified with a fiche of the opposite kind (movie on a series item, or the reverse) — tagged \"{1}\". Correct ids/metadata/poster are written and locked; the item's type is fixed by Emby at recording import and is never changed. To move a work to the right library: move its file (e.g. the .ts) to the target library — Emby re-imports it under the right kind and the plugin re-identifies it. The configuration page also lists these items (the \"cross-kind\" queue): copy to the right library, or convert the recording folder in place (\"Title (Year)\" renaming + tvshow.nfo removal). Filter by the tag \"{1}\" to find these items.",
+                    ["crosskind.notif.desc.one"] = "\"{0}\": {1} fiche on a {2} item — tagged \"{3}\". The Emby item kind is never changed; regularize it from the \"cross-kind\" queue on the LLM AI configuration page.",
+                    ["crosskind.notif.desc.many"] = "{0} work(s) typed under the wrong Emby kind: {1} — tagged \"{2}\". The Emby item kind is never changed; regularize them from the \"cross-kind\" queue on the LLM AI configuration page.",
+                    ["crosskind.notif.more"] = ", + {0} more",
                     // .strm card activation toasts (v1.12) — {0} = program title.
                     ["activate.toast.programmed"] = "Recording scheduled: {0}",
                     ["activate.toast.duplicate"] = "Already scheduled: {0}",

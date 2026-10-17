@@ -144,7 +144,11 @@ namespace LLM_AI
             "au suivant » en pleine lecture). Consulte playback_status " +
             "AVANT un saut de temps. La position connue du serveur a quelques " +
             "secondes de retard : présente les sauts comme approximatifs, ne " +
-            "promets jamais une précision à la seconde. Un toast s'affiche à " +
+            "promets jamais une précision à la seconde. Un résultat avec " +
+            "ok:false (ou confirmed:false) — seek, pause, unpause ou stop — " +
+            "signifie que le client n'a pas confirmé la commande : rapporte-le " +
+            "clairement à l'usager, n'annonce JAMAIS l'action comme effectuée. " +
+            "Un toast s'affiche à " +
             "l'écran pour les bascules de piste : inutile de le répéter dans " +
             "ta réponse." +
             "\n### RÈGLE ABSOLUE — ACTIONS RÉELLES UNIQUEMENT (CHAT EXTERNE)\n" +

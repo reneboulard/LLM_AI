@@ -272,7 +272,13 @@ namespace LLM_AI
                 }
 
                 PersistRecommendations(cfg, merged);
-                SendRecommendationNotification(merged);
+                // Opt-out (v2.5.0) : cloche « N nouvelles recos » — la seule
+                // notification générale du plugin. Emby ne peut pas la filtrer
+                // par usager côté livraison (external.externalnotification =
+                // un type unique, tout-ou-rien par usager), la granularité
+                // vit donc côté plugin.
+                if (cfg.NotifyRecommendationsEnabled)
+                    SendRecommendationNotification(merged);
 
                 // Journalisation des recos d'enregistrement pour la boucle de
                 // rétroaction hebdo (opt-in) : entrées kind=record, sans
@@ -645,6 +651,10 @@ namespace LLM_AI
             // d'une IP codée. Repli sur EmbyPublicUrl si la détection échoue ou
             // si l'utilisateur a renseigné un domaine public explicite.
             string url = ResolveEmbyUrl();
+            // Lien aussi en description (v2.4.5 : les canaux de lecture —
+            // webhooks, courriel — ignorent le champ Url d'Emby).
+            if (!string.IsNullOrWhiteSpace(url))
+                desc = desc + "\n" + url;
             var now = DateTimeOffset.UtcNow;
 
             int sent = 0;
@@ -673,13 +683,14 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Notification d'échec (cloche) à tous les utilisateurs : la tâche
+        /// Notification d'échec (cloche) aux administrateurs : la tâche
         /// n'a rien produit — soit run « réussi » mais vide (garde
         /// anti-effacement, LLM indisponible/dégradé), soit exception
-        /// (les deux runs agent ont jeté). Même boucle utilisateurs que
-        /// <see cref="SendRecommendationNotification"/> ; <c>Severity</c>
-        /// plus élevée pour la distinguer du carillon « nouvelles recos ».
-        /// Best-effort : jamais d'exception au-delà de cette méthode.
+        /// (les deux runs agent ont jeté). Le message est technique :
+        /// seul l'admin peut agir (backends LLM, clés… — même motif que
+        /// la cloche cross-kind). <c>Severity</c> plus élevée pour la
+        /// distinguer du carillon « nouvelles recos ». Best-effort :
+        /// jamais d'exception au-delà de cette méthode.
         /// </summary>
         private void SendFailureNotification(string reason)
         {
@@ -688,16 +699,26 @@ namespace LLM_AI
             List<User> users;
             try
             {
-                users = _users.GetUserList(new UserQuery()).ToList();
+                users = _users.GetUserList(new UserQuery())
+                    .Where(u => u != null && (u.Policy?.IsAdministrator ?? false))
+                    .ToList();
             }
             catch (Exception ex)
             {
                 _logger?.ErrorException("[LLM_AI] Récupération utilisateurs pour notification d'échec : {0}", ex, ex.Message);
                 return;
             }
-            if (users.Count == 0) return;
+            if (users.Count == 0)
+            {
+                _logger?.Warn("[LLM_AI] Notification d'échec NON envoyée — aucun administrateur.");
+                return;
+            }
 
             string url = ResolveEmbyUrl();
+            // Lien aussi en description (v2.4.5 : les canaux de lecture —
+            // webhooks, courriel — ignorent le champ Url d'Emby).
+            if (!string.IsNullOrWhiteSpace(url))
+                reason = reason + "\n" + url;
             var now = DateTimeOffset.UtcNow;
 
             int sent = 0;
@@ -722,7 +743,7 @@ namespace LLM_AI
                     _logger?.ErrorException("[LLM_AI] Notification d'échec à « {0} » : {1}", ex, u.Name, ex.Message);
                 }
             }
-            _logger?.Info("[LLM_AI] Notification d'échec envoyée à {0}/{1} utilisateur(s).", sent, users.Count);
+            _logger?.Info("[LLM_AI] Notification d'échec envoyée à {0}/{1} administrateur(s).", sent, users.Count);
         }
 
         /// <summary>

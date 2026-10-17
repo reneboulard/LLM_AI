@@ -763,6 +763,17 @@ define(["loading"], function (loading) {
                     lsSet(this.key, this.body.classList.contains("llmaiHidden") ? "0" : "1");
                     this.apply();
                     refreshLabel();
+                },
+                // Dépliage SANS toucher à l'état persisté (localStorage) :
+                // réservé au lien profond de notification
+                // (&section=crosskind) — l'état de repliage choisi par
+                // l'usager reste ce qui s'affichera à sa prochaine visite
+                // hors lien.
+                expand: function () {
+                    this.body.classList.remove("llmaiHidden");
+                    this.head.classList.remove("llmaiToggleCollapsed");
+                    this.head.setAttribute("aria-expanded", "true");
+                    refreshLabel();
                 }
             };
             h.addEventListener("click", function () { section.toggle(); });
@@ -790,6 +801,27 @@ define(["loading"], function (loading) {
         }
         view._llmaiRefreshLabel = refreshLabel;
         refreshLabel();
+
+        // Lien profond de notification « fiche croisée » : la cloche pointe
+        // sur …&section=crosskind — la section ciblée est dépliée puis la
+        // vue y défile. Ne s'exécute qu'au premier assemblage de la vue
+        // (les viewshow suivants repartent avant, sections déjà
+        // assemblées) ; silencieux si le paramètre est absent.
+        try {
+            var m = (location.hash || "").match(/[?&]section=crosskind(&|$)/);
+            if (m) {
+                var target = sections.filter(function (s) {
+                    return s.head.id === "secCrossKind";
+                })[0];
+                if (target) {
+                    target.expand();
+                    setTimeout(function () {
+                        try { target.head.scrollIntoView({ behavior: "smooth", block: "start" }); }
+                        catch (e) { /* silencieux — commodité */ }
+                    }, 150);
+                }
+            }
+        } catch (e) { /* silencieux — le lien reste une commodité */ }
     }
 
     function wireToggleAllButton(view) {
@@ -874,8 +906,16 @@ define(["loading"], function (loading) {
         view.querySelector("#chkAiOwnedBadgeEnabled").checked = cfg.AiOwnedBadgeEnabled !== false;
         view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
         view.querySelector("#chkTonightRecordingToast").checked = cfg.TonightRecordingToast !== false;
+        view.querySelector("#chkNotifyRecommendations").checked = cfg.NotifyRecommendationsEnabled !== false;
         var lps = parseInt(cfg.LoginPopupSeconds, 10);
         view.querySelector("#numLoginPopupSeconds").value = isNaN(lps) ? 8 : lps;
+        // Instances miroirs du tableau de bord « Notifications & messages à
+        // l'écran » : mêmes clés de config, chargées en même temps (la
+        // synchronisation interactive vit dans wireMirrorPairs).
+        view.querySelector("#chkLoginPopupN").checked = cfg.LoginPopup !== false;
+        view.querySelector("#chkTonightRecordingToastN").checked = cfg.TonightRecordingToast !== false;
+        view.querySelector("#chkNotifyRecommendationsN").checked = cfg.NotifyRecommendationsEnabled !== false;
+        view.querySelector("#numLoginPopupSecondsN").value = isNaN(lps) ? 8 : lps;
         view.querySelector("#chkStrmLibraryEnabled").checked = !!cfg.StrmLibraryEnabled;
         view.querySelector("#txtStrmLibraryName").value = cfg.StrmLibraryName || "";
         // Identification des orphelins — opt-in (modifie des enregistrements), dry-run par défaut pour les premiers runs.
@@ -1015,6 +1055,7 @@ define(["loading"], function (loading) {
             LoginPopup: view.querySelector("#chkLoginPopup").checked,
             LoginPopupSeconds: parseInt(view.querySelector("#numLoginPopupSeconds").value, 10) || 8,
             TonightRecordingToast: view.querySelector("#chkTonightRecordingToast").checked,
+            NotifyRecommendationsEnabled: view.querySelector("#chkNotifyRecommendations").checked,
             StrmLibraryEnabled: view.querySelector("#chkStrmLibraryEnabled").checked,
             StrmLibraryName: (view.querySelector("#txtStrmLibraryName").value || "").trim(),
             // Carry-forward : StrmSecret est auto-généré côté serveur et n'est
@@ -1179,6 +1220,31 @@ define(["loading"], function (loading) {
             wireToggleAllButton(view);
             wireResetPromptButtons(view);
             wireSaveMemoryCardButton(view);
+
+            // Paires miroir du tableau de bord « Notifications & messages à
+            // l'écran » : un même réglage (clé unique) affiché dans SA
+            // section d'origine ET dans le tableau de bord. Chaque côté suit
+            // l'autre en direct — « change » pour les cases, « input » pour
+            // les champs numériques (la frappe compte même sans blur avant
+            // sauvegarde, qui lit l'instance d'origine, toujours à jour).
+            [["#chkNotifyRecommendations", "#chkNotifyRecommendationsN"],
+             ["#chkLoginPopup", "#chkLoginPopupN"],
+             ["#numLoginPopupSeconds", "#numLoginPopupSecondsN"],
+             ["#chkTonightRecordingToast", "#chkTonightRecordingToastN"]
+            ].forEach(function (pair) {
+                var a = view.querySelector(pair[0]);
+                var b = view.querySelector(pair[1]);
+                if (!a || !b) return;
+                var copy = function (src, dst) {
+                    if (src.type === "checkbox") dst.checked = src.checked;
+                    else dst.value = src.value;
+                };
+                var evs = a.type === "checkbox" ? ["change"] : ["input"];
+                evs.forEach(function (ev) {
+                    once(a, ev, function () { copy(a, b); });
+                    once(b, ev, function () { copy(b, a); });
+                });
+            });
 
             // Filtre de recherche de la liste des chaines.
             var chFilter = view.querySelector("#wlChannelsFilter");

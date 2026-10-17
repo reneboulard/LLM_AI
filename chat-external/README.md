@@ -57,9 +57,14 @@ uniquement : rien à compiler, rien à installer avec pip, aucun serveur web
   au début ») et **basculer les pistes** (« mets les sous-titres en
   français », « coupe les sous-titres », « passe en version originale »).
   Les sauts sont **approximatifs** : la position connue du serveur a
-  quelques secondes de retard. Un **toast court** s'affiche à l'écran quand
-  une piste est basculée ; pour les sauts et la pause, l'écran lui-même
-  fait office de retour ;
+  quelques secondes de retard. Le plugin **vérifie l'application par
+  relecture** : l'agent n'annonce un saut, une pause ou un arrêt que si le
+  client confirme en rapportant son état (un saut de moins de ~15 s n'est
+  pas distinguable de la lecture naturelle — il est annoncé comme envoyé,
+  non vérifiable) ; si le client ignore la commande — certaines apps ne
+  traitent pas tout le contrôle distant — l'agent le dit honnêtement au
+  lieu de promettre un succès fantôme. Validé en production sur une app
+  TV native : sauts successifs confirmés par le client en ~5-10 s ;
 - **Enregistrements à la voix (opt-in)** : si l'admin active la fonction et
   liste l'usager (en plus du droit natif Emby d'enregistrer la TV en
   direct), l'agent peut programmer un enregistrement DVR — avec une

@@ -51,9 +51,15 @@ nothing to compile, nothing to install with pip, no web server
   seconds", "go back 10 seconds", "start from the beginning") and **switch
   tracks** ("turn subtitles on in French", "turn subtitles off", "switch to
   original audio"). Skips are **approximate**: the position the server
-  knows lags a few seconds behind. A **short toast** appears on screen
-  when a track is switched; for skips and pause, the picture itself is
-  the feedback;
+  knows lags a few seconds behind. The plugin **verifies application by
+  read-back**: the agent only announces a jump, a pause or a stop once
+  the client confirms it by reporting its state (a jump shorter than
+  ~15 s is indistinguishable from natural playback — announced as
+  sent, not verifiable); if the client ignores the command — some apps
+  don't handle every remote-control command — the agent says so
+  honestly instead of promising a phantom success. Validated in
+  production on a native TV app: successive jumps confirmed by the
+  client within ~5-10 s;
 - **Voice DVR recordings (opt-in)**: if the admin enables the feature and
   lists the user (on top of the native Emby right to manage Live TV
   recordings), the agent can schedule a DVR recording — with a

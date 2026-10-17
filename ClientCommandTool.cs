@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
+using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Model.Session;
 
@@ -39,6 +40,42 @@ namespace LLM_AI
     ///     numéros S/E de l'épisode en cours (v1.13.25.1) : « prochain
     ///     épisode » = <c>play_item(series_id)</c> en un seul tool, sans
     ///     recherche intermédiaire.</item>
+    ///     <item><b>seek confirmé (v2.6.1)</b> : le <c>ok:true</c> d'origine
+    ///     ne prouvait que l'ENVOI de <c>PlaystateRequest.Seek</c> — au
+    ///     champ (2026-10-16, « Emby for Android » 3.5.55 en layout TV),
+    ///     8/8 envois ok:true en une soirée, ZÉRO saut appliqué (positions
+    ///     rapportées = lecture naturelle du début à la fin), pendant que
+    ///     le LLM promettait le succès à l'usager. Comme
+    ///     <c>play_next</c>, le seek RELIT maintenant la position
+    ///     rapportée (~12 s max, sortie anticipée dès confirmation) :
+    ///     confirmé → ok:true ; non confirmé → ok:false + consigne de ne
+    ///     pas annoncer le saut ; saut &lt; 15 s — indiscernable de la
+    ///     lecture naturelle dans le retard de remontée — « envoyé, non
+    ///     confirmable », jamais un succès inventé.</item>
+    /// <item><b>pause/unpause/stop confirmés (v2.6.2)</b> : même remède
+    ///     que le seek — <c>PlaystateAsync</c> ne répond plus
+    ///     <c>ok:true</c> sur le seul envoi (constat banc 2026-10-17
+    ///     06:18 : l'app native AndroidTv 2.1.55g ignore Pause, position
+    ///     +16 s en 16 s — l'ancien code promettait une pause fantôme
+    ///     pendant que la lecture poursuivait). RELIT l'état rapporté
+    ///     (~12 s max, sortie anticipée) : pause/unpause via
+    ///     <c>IsPaused</c>, stop via la disparition de la lecture de la
+    ///     session — relue PAR ID (<c>ResolveSession</c> pourrait élire
+    ///     une autre session de l'usager une fois celle-ci idle). Non
+    ///     confirmé → ok:false + consigne de ne pas annoncer l'action.
+    /// </item>
+    /// <item><b>contrôleur identifié (v2.6.3)</b> : toutes les commandes
+    ///     de lecture (<c>PlayRequest</c> play_item/play_next,
+    ///     <c>PlaystateRequest</c> seek/pause/unpause/stop) portent
+    ///     <c>ControllingUserId</c> = le PREMIER ADMIN du serveur, patron
+    ///     ComSkipper (preuve terrain 2026-10-14 prod : l'app native
+    ///     Android TV 2.1.55g a appliqué le seek de ComSkipper — saut
+    ///     de segment HLS à la cible exacte — et ignorait le nôtre au
+    ///     banc, même version d'app, canal prouvé vivant par les toasts
+    ///     « AI Tonight » ; la seule différence restante était le
+    ///     contrôleur, admin chez ComSkipper, non-admin chez nous).
+    ///     Repli silencieux sur l'usager du chat si aucun admin
+    ///     n'existe (voir <see cref="FirstAdminControllerId"/>).</item>
     /// <item><b>Session bornée</b> : seules les sessions DONT l'usager est
     ///     celui de la requête sont ciblées (même règle que <c>Show</>,
     ///     forme « plus récente gagne ») — un usager ne pilote jamais
@@ -74,17 +111,50 @@ namespace LLM_AI
         private readonly ISessionManager _sessions;
         private readonly ILibraryManager _library;
         private readonly IServerApplicationHost _host;
+        private readonly IUserManager _users;
         private readonly User _user;
         private readonly ILogger _logger;
 
         public ClientCommandTool(ISessionManager sessions, ILibraryManager library,
-            IServerApplicationHost host, User user, ILogger logger)
+            IServerApplicationHost host, IUserManager users, User user, ILogger logger)
         {
             _sessions = sessions;
             _library = library;
             _host = host;
+            _users = users;
             _user = user;
             _logger = logger;
+        }
+
+        /// <summary>Contrôleur à inscrire dans les commandes de lecture
+        /// distantes (v2.6.3). Preuve terrain 2026-10-17 : l'app native
+        /// Android TV 2.1.55g a APPLIQUÉ le seek de ComSkipper en prod
+        /// (2026-10-14, saut de segment HLS 135→168 = la cible exacte)
+        /// et ignore le nôtre au banc, sur la même version d'app et la
+        /// même livraison remux ; le canal lui-même est prouvé vivant
+        /// (les toasts « AI Tonight » s'affichent sur la même app). La
+        /// seule différence restante : le contrôleur — ComSkipper
+        /// inscrit le PREMIER ADMIN, nous inscrivions l'usager du chat
+        /// (non-admin). Patron ComSkipper donc ; repli silencieux sur
+        /// l'usager du chat si la requête échoue ou qu'aucun admin
+        /// n'existe.</summary>
+        private string FirstAdminControllerId()
+        {
+            try
+            {
+                var admin = (_users.GetUserList(
+                    new UserQuery { IsAdministrator = true })
+                    ?? Array.Empty<User>()).FirstOrDefault();
+                if (admin != null)
+                    return admin.Id.ToString();
+                _logger.Info("[LLM_AI] [CHAT-EXT] aucun admin trouvé — le contrôleur retombe sur l'usager du chat.");
+            }
+            catch (Exception ex)
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] contrôleur admin introuvable ({0}) — repli sur l'usager du chat.",
+                    ex.Message);
+            }
+            return _user.Id.ToString();
         }
 
         public string Name => "client_command";
@@ -110,6 +180,16 @@ namespace LLM_AI
         // Bornes du contrôle du visionnement (fail-closed).
         private const long TicksPerSecond = 10_000_000;
         private const int MaxSeekOffsetSeconds = 1800;
+
+        // Confirmation du seek par relecture (v2.6.1) : la position ne
+        // remonte qu'au prochain rapport PROGRESS du client (cadence ~5-10 s
+        // selon l'app) — budget 24 sondages de 500 ms = 12 s, sortie
+        // anticipée dès confirmation. Saut < 15 s : indiscernable de la
+        // lecture naturelle dans le bruit de remontée → non vérifiable.
+        private const int MinVerifiedJumpSeconds = 15;
+        private const int SeekConfirmToleranceSeconds = 2;
+        private const int SeekConfirmWindowSeconds = 12;
+        private const int SeekConfirmPolls = 24;
 
         // ------------------------------------------------------------------
         //  Exécution
@@ -262,7 +342,10 @@ namespace LLM_AI
             await _sessions.SendPlayCommand(null, session.Id, new PlayRequest
             {
                 ItemIds = new[] { playTarget.InternalId },
-                PlayCommand = PlayCommand.PlayNow
+                PlayCommand = PlayCommand.PlayNow,
+                // v2.6.3 — contrôleur identifié (premier admin, patron
+                // ComSkipper — voir FirstAdminControllerId).
+                ControllingUserId = FirstAdminControllerId()
             }, ct).ConfigureAwait(false);
             return Json(new { ok = true, command = "play_item",
                 device = session.DeviceName, item = playTarget.Name,
@@ -343,7 +426,9 @@ namespace LLM_AI
             await _sessions.SendPlayCommand(null, session.Id, new PlayRequest
             {
                 ItemIds = new[] { next.InternalId },
-                PlayCommand = PlayCommand.PlayNow
+                PlayCommand = PlayCommand.PlayNow,
+                // v2.6.3 — contrôleur identifié (voir play_item).
+                ControllingUserId = FirstAdminControllerId()
             }, ct).ConfigureAwait(false);
 
             // Confirmation terrain : relire l'item que le client joue
@@ -432,15 +517,99 @@ namespace LLM_AI
                 return Json(new { error =
                     "Aucune session Emby active pour cet usager (ouvrir l'app Emby sur l'appareil)." });
 
+            string sessionId = session.Id;
+            bool wasPaused = session.PlayState?.IsPaused ?? false;
+
             var state = command == "pause" ? PlaystateCommand.Pause
                 : command == "unpause" ? PlaystateCommand.Unpause
                 : PlaystateCommand.Stop;
 
             await _sessions.SendPlaystateCommand(null, session.Id,
-                new PlaystateRequest { Command = state }, ct).ConfigureAwait(false);
-            return Json(new { ok = true, command = command,
-                device = session.DeviceName,
-                now_playing = session.NowPlayingItem?.Name });
+                new PlaystateRequest { Command = state,
+                    // v2.6.3 — contrôleur identifié (voir le seek).
+                    ControllingUserId = FirstAdminControllerId() }, ct).ConfigureAwait(false);
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} envoyé (état rapporté : {1}) — usager {2}.",
+                command, wasPaused ? "en pause" : "en lecture", _user.Name);
+
+            // v2.6.2 — CONFIRMATION PAR RELECTURE (même remède que le seek
+            // v2.6.1). Constat banc 2026-10-17 06:18 : l'app native AndroidTv
+            // 2.1.55g IGNORE Pause (position +16 s en 16 s, jamais IsPaused)
+            // alors que l'ancien code répondait ok:true sur le seul envoi —
+            // pause fantôme promise au LLM pendant que la lecture poursuivait.
+            // On RELIT l'état que le client rapporte : pause/unpause via
+            // IsPaused (le drapeau ne bascule qu'au prochain rapport PROGRESS,
+            // cadence ~5-10 s selon l'app), stop via la disparition de la
+            // lecture de la session. Celle-ci est relue PAR ID —
+            // ResolveSession pourrait élire une autre session de l'usager
+            // une fois celle-ci idle. Budget et sortie anticipée identiques
+            // au seek (SeekConfirmPolls × 500 ms = 12 s max).
+            bool lastPaused = wasPaused;
+            bool lastPlaying = session.NowPlayingItem != null;
+            SessionInfo lastSeen = session;
+            for (int i = 0; i < SeekConfirmPolls; i++)
+            {
+                await Task.Delay(500, ct).ConfigureAwait(false);
+                var s2 = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
+                    .FirstOrDefault(s => s != null
+                        && string.Equals(s.Id, sessionId, StringComparison.OrdinalIgnoreCase));
+                if (s2 == null)
+                {
+                    // Session fermée : pour stop c'est la confirmation
+                    // ultime ; pour pause/unpause, indécidable — échec
+                    // honnête, jamais un succès inventé.
+                    if (command == "stop")
+                    {
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : CONFIRMÉ (session close) — usager {0}.",
+                            _user.Name);
+                        return Json(new { ok = true, command = command, confirmed = true,
+                            device = session.DeviceName });
+                    }
+                    _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} : session disparue pendant la vérification — usager {1}.",
+                        command, _user.Name);
+                    return Json(new { ok = false, command = command, confirmed = false,
+                        error = "La session s'est fermée pendant la vérification — la commande n'a pas été confirmée. N'annonce PAS l'action comme effectuée." });
+                }
+                lastSeen = s2;
+                lastPaused = s2.PlayState?.IsPaused ?? lastPaused;
+                lastPlaying = s2.NowPlayingItem != null;
+
+                if (command == "stop")
+                {
+                    if (!lastPlaying)
+                    {
+                        _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : CONFIRMÉ par le client (plus de lecture en session) — usager {0}.",
+                            _user.Name);
+                        return Json(new { ok = true, command = command, confirmed = true,
+                            device = session.DeviceName });
+                    }
+                }
+                else if (command == "pause" ? lastPaused : !lastPaused)
+                {
+                    _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} : CONFIRMÉ par le client (IsPaused={1}) — usager {2}.",
+                        command, lastPaused, _user.Name);
+                    return Json(new { ok = true, command = command, confirmed = true,
+                        paused = lastPaused, device = session.DeviceName,
+                        now_playing = s2.NowPlayingItem?.Name });
+                }
+            }
+
+            string detail = command == "pause"
+                ? "la lecture poursuit d'après les rapports du client"
+                : command == "unpause"
+                    ? "la lecture est toujours en pause d'après les rapports du client"
+                    : "la lecture continue d'après les rapports du client";
+            string action = command == "pause" ? "la pause"
+                : command == "unpause" ? "la reprise de la lecture"
+                : "l'arrêt de la lecture";
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} : NON confirmé en {1} s (IsPaused={2}, lecture en session={3}) — usager {4}.",
+                command, SeekConfirmPolls / 2, lastPaused, lastPlaying, _user.Name);
+            return Json(new { ok = false, command = command, confirmed = false,
+                paused = lastPaused, device = session.DeviceName,
+                now_playing = lastSeen.NowPlayingItem?.Name,
+                error = "La commande a été envoyée mais le client n'a pas confirmé l'état demandé (" + detail
+                    + "). N'annonce PAS " + action
+                    + " comme effectuée : cet appareil n'a probablement pas appliqué la commande." });
         }
 
         // ------------------------------------------------------------------
@@ -504,7 +673,8 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  seek — saut de temps, cible calculée côté serveur (jamais SendKey)
+        //  seek — saut de temps, cible calculée côté serveur (jamais
+        //  SendKey), CONFIRMÉ par relecture de la position (v2.6.1)
         // ------------------------------------------------------------------
 
         private async Task<string> SeekAsync(JsonElement args, CancellationToken ct)
@@ -537,18 +707,85 @@ namespace LLM_AI
             target = Math.Max(0, target);
             if (runtime > 0) target = Math.Min(target, runtime);
 
+            // v2.6.3 — contrôleur identifié : le PREMIER ADMIN, patron
+            // ComSkipper (premier argument null, contrôleur DANS la
+            // requête — voir FirstAdminControllerId).
+            string controllerId = FirstAdminControllerId();
             await _sessions.SendPlaystateCommand(null, session.Id,
                 new PlaystateRequest { Command = PlaystateCommand.Seek,
-                    SeekPositionTicks = target }, ct).ConfigureAwait(false);
+                    SeekPositionTicks = target,
+                    ControllingUserId = controllerId }, ct).ConfigureAwait(false);
 
-            _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek {0} -> position {1} s — usager {2}.",
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek {0} -> position {1} s (contrôleur {2}) — usager {3}.",
                 absSec != null ? "absolu" : ("relatif " + offsetSec + " s"),
-                target / TicksPerSecond, _user.Name);
-            // PAS de toast ni de relecture : l'image est le feedback, et la
-            // position remonte avec quelques secondes de retard (gotcha).
-            return Json(new { ok = true, command = "seek",
+                target / TicksPerSecond, controllerId, _user.Name);
+
+            // v2.6.1 — CONFIRMATION PAR RELECTURE. SendPlaystateCommand est
+            // fire-and-forger : ok:true ne prouvait que l'envoi (constat
+            // terrain 2026-10-16 : 8/8 seek « ok:true » ignorés par le
+            // client TV, le LLM promettait le succès pendant que la
+            // lecture suivait son cours). Comme play_next, on RELIT ce que
+            // le client rapporte : la position ne saute qu'au prochain
+            // rapport PROGRESS post-saut (cadence ~5-10 s selon l'app) —
+            // budget 12 s, sortie anticipée dès confirmation. Le test est
+            // directionnel : en avant, toute remontée fraîche atteint la
+            // cible ; en arrière, la lecture naturelle ne peut PAS
+            // retomber dans la fenêtre cible (elle n'est jamais
+            // décroissante) — discriminant propre, même en pause (la
+            // position rapportée gèle et vaut alors la cible exacte si le
+            // saut a été appliqué). PAS de toast : l'image est le feedback.
+            long jump = target - pos;
+            string itemId = (np.Id ?? "").Trim();
+            if (Math.Abs(jump) < MinVerifiedJumpSeconds * TicksPerSecond)
+            {
+                // Trop petit : lecture naturelle et saut sont
+                // indiscernables dans le retard de remontée — honnête
+                // « envoyé », jamais un succès inventé.
+                _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : saut {0} s trop petit pour confirmation fiable — envoyé, non vérifié — usager {1}.",
+                    jump / TicksPerSecond, _user.Name);
+                return Json(new { ok = true, command = "seek", confirmed = false,
+                    device = session.DeviceName, item = np.Name,
+                    new_position_seconds = target / TicksPerSecond,
+                    note = "Commande envoyée — saut trop petit pour être confirmé côté serveur (retard de remontée) : présente-le comme envoyé, l'écran reste la référence." });
+            }
+
+            long tol = SeekConfirmToleranceSeconds * TicksPerSecond;
+            long lastPos = pos;
+            for (int i = 0; i < SeekConfirmPolls; i++)
+            {
+                await Task.Delay(500, ct).ConfigureAwait(false);
+                var s2 = ResolveSession();
+                var np2 = s2?.NowPlayingItem;
+                var ps2 = s2?.PlayState;
+                if (s2 == null || np2 == null || ps2 == null ||
+                    !string.Equals((np2.Id ?? "").Trim(), itemId, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : lecture interrompue ou changée pendant la vérification — usager {0}.",
+                        _user.Name);
+                    return Json(new { ok = false, command = "seek", confirmed = false,
+                        error = "La lecture s'est arrêtée ou a changé pendant la vérification — le saut n'a pas été confirmé. N'annonce PAS le saut comme effectué." });
+                }
+                lastPos = ps2.PositionTicks ?? lastPos;
+                bool applied = jump > 0
+                    ? lastPos >= target - tol
+                    : lastPos <= target + SeekConfirmWindowSeconds * TicksPerSecond;
+                if (applied)
+                {
+                    _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : CONFIRMÉ par le client (position rapportée {0} s) — usager {1}.",
+                        lastPos / TicksPerSecond, _user.Name);
+                    return Json(new { ok = true, command = "seek", confirmed = true,
+                        device = s2.DeviceName, item = np2.Name,
+                        new_position_seconds = target / TicksPerSecond });
+                }
+            }
+
+            _logger.Info("[LLM_AI] [CHAT-EXT] client_command seek : NON confirmé en {0} s (cible {1} s, position rapportée {2} s) — usager {3}.",
+                SeekConfirmPolls / 2, target / TicksPerSecond,
+                lastPos / TicksPerSecond, _user.Name);
+            return Json(new { ok = false, command = "seek", confirmed = false,
                 device = session.DeviceName, item = np.Name,
-                new_position_seconds = target / TicksPerSecond });
+                new_position_seconds = target / TicksPerSecond,
+                error = "La commande a été envoyée mais le client n'a pas confirmé le saut (la position rapportée n'a pas rejoint la cible). N'annonce PAS le saut comme effectué : cet appareil n'a probablement pas appliqué la commande." });
         }
 
         // ------------------------------------------------------------------

@@ -31,7 +31,7 @@ TODO.md
 ## Local script (offline validation of NewReleaseSources lines — python port of NewReleasesTool)
 validate_source.sh
 
-## Local prod deploy script (DellXPS transfer — private host/paths, never publish)
+## Local prod deploy script (private host/paths, never publish)
 deployDELL.sh
 
 ## i18n translation kit (local-only harness + community translation data — see TODO.md)

@@ -374,9 +374,10 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Notifie tous les usagers : N enregistrements tagués « AI Delete »
+        /// Notifie les administrateurs : N enregistrements tagués « AI Delete »
         /// (~X Go récupérables) — filtrer la bibliothèque par ce tag pour
-        /// supprimer à la main. <paramref name="covered"/> = false → mentionne
+        /// supprimer à la main (action admin — même destinataire que la
+        /// cloche cross-kind). <paramref name="covered"/> = false → mentionne
         /// que l'objectif n'est pas couvert par les seuls visionnés.
         /// </summary>
         private static void NotifyTagPass(
@@ -394,8 +395,23 @@ namespace LLM_AI
                 count, DeleteTag, reclaimedBytes / (double)GiB);
             string url = (cfg?.EmbyPublicUrl ?? string.Empty).Trim();
 
+            // Lien aussi en description (v2.4.5 : les canaux de lecture —
+            // webhooks, courriel — ignorent le champ Url d'Emby).
+            if (!string.IsNullOrWhiteSpace(url))
+                desc = desc + "\n" + url;
+
+            // Administrateurs uniquement : le guidage (filtrer la
+            // bibliothèque d'enregistrements par le tag puis supprimer à la
+            // main) est une action admin — même motif que la cloche
+            // cross-kind (OrphanResolver.NotifyCrossKindAsync).
             List<MediaBrowser.Controller.Entities.User> list;
-            try { list = users?.GetUserList(new UserQuery()).ToList(); }
+            try
+            {
+                list = (users?.GetUserList(new UserQuery())
+                        ?? Enumerable.Empty<MediaBrowser.Controller.Entities.User>())
+                    .Where(u => u != null && (u.Policy?.IsAdministrator ?? false))
+                    .ToList();
+            }
             catch (Exception ex)
             {
                 logger?.Warn("[LLM_AI] Passe tag disque : lecture des usagers pour notification échouée : {0}", ex.Message);
@@ -403,9 +419,8 @@ namespace LLM_AI
             }
 
             int sent = 0;
-            foreach (var u in list ?? new List<MediaBrowser.Controller.Entities.User>())
+            foreach (var u in list)
             {
-                if (u == null) continue;
                 try
                 {
                     notifications.SendNotification(new NotificationRequest
@@ -425,7 +440,9 @@ namespace LLM_AI
                 }
             }
             if (sent > 0)
-                logger?.Info("[LLM_AI] Passe tag disque : notification envoyée à {0}/{1} usager(s).", sent, list?.Count ?? 0);
+                logger?.Info("[LLM_AI] Passe tag disque : notification envoyée à {0}/{1} administrateur(s).", sent, list.Count);
+            else
+                logger?.Warn("[LLM_AI] Passe tag disque : notification NON envoyée — aucun administrateur.");
         }
     }
 }
