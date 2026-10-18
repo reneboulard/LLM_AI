@@ -491,7 +491,10 @@ define([], function () {
         ApiClient.getNewLiveTvTimerDefaults({ programId: id }).then(function (item) {
             item = item || {};
             if (!isMovie) {
-                item.RecordNewOnly = true;
+                // v2.6.6 — « tous les épisodes, sauf ceux déjà en bibliothèque »
+                // (défaut Emby pour RecordNewOnly ; le flag IsRepeat de la grille
+                // n'est pas fiable — timers Cancelled silencieux, field 2026-10-18).
+                item.RecordNewOnly = false;
                 item.SkipEpisodesInLibrary = true;
             }
             return isMovie

@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.6] — 2026-10-18
+
+### Changed (FR)
+- **Politique d'enregistrement des séries : « tous les épisodes, sauf ceux
+  déjà en bibliothèque »** — les timers de série (carte Activate, run planifié
+  record bucket, chat `record_program`, bouton « Programmer » de la page)
+  passent `RecordNewOnly=false` au lieu de `true` ; `SkipEpisodesInLibrary=true`
+  est conservé, `MatchExistingItemsWithAnyLibrary` reste au défaut Emby
+  (`true`). Motif (terrain DellXPS 2026-10-18) : le flag IsRepeat de la grille
+  Schedules Direct n'est pas fiable — des épisodes jamais vus sont marqués
+  « repeat » — et Emby annulait SILENCIEUSEMENT les timers correspondants
+  (« SEAL Team : cœur et courage », Noovo, série ended 2024 en rediffusion :
+  deux timers concrets `Cancelled` sous un toast « Enregistrement programmé »,
+  carte auto-supprimée comme un succès). `false` est de toute façon le défaut
+  natif d'Emby (Timers/Defaults) ; l'inédit reste défini par l'absence de la
+  bibliothèque — le critère local que toutes les autres couches (owned-guard,
+  dedup, watched-guard) appliquaient déjà.
+
+### Changed (EN)
+- **Series recording policy: "all episodes except those already in the
+  library"** — series timers (Activate card, record-bucket scheduled run, chat
+  `record_program`, the page's Programmer button) now set `RecordNewOnly=false`
+  instead of `true`; `SkipEpisodesInLibrary=true` is kept,
+  `MatchExistingItemsWithAnyLibrary` stays at the Emby default (`true`).
+  Rationale (DellXPS field 2026-10-18): the Schedules Direct IsRepeat flag is
+  unreliable — never-watched episodes get flagged as repeats — and Emby
+  silently cancelled the matching timers ("SEAL Team: cœur et courage", Noovo,
+  ended 2024 series in rerun: two `Cancelled` program timers under an
+  "Enregistrement programmé" toast, card auto-deleted as if a success).
+  `false` is Emby's own default anyway (Timers/Defaults); "new" remains
+  defined by library absence — the local criterion every other layer
+  (owned-guard, dedup, watched-guard) already applied.
+
 ## [2.6.5] — 2026-10-17
 
 ### Fixed (FR)

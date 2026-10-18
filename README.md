@@ -1177,7 +1177,9 @@ Si `AutoProgram` est coché, après chaque run les recommandations **à enregist
 (programmes EPG à venir, non déjà possédées, non déjà programmées, hors drop
 list) sont programmées en enregistrement :
 
-- **Série** → `SeriesTimerInfo` (RecordNewOnly, SkipEpisodesInLibrary) via
+- **Série** → `SeriesTimerInfo` (`RecordNewOnly=false` — tous les épisodes, le
+  flag « nouveaux » de la grille n'étant pas fiable, v2.6.6 ;
+  `SkipEpisodesInLibrary=true` — sauf ceux déjà en bibliothèque) via
   `ILiveTvManager.CreateSeriesTimer`.
 - **Film / one-off** → `TimerInfoDto` via `ILiveTvManager.CreateTimer`.
 

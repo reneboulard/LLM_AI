@@ -33,8 +33,9 @@ namespace LLM_AI
     /// minimal (champs requis manquants — le serveur ne crée alors rien) ; on
     /// récupère d'abord les valeurs par défaut dérivées du programme via
     /// <see cref="ILiveTvManager.GetNewTimerDefaults(string,System.Threading.CancellationToken)"/>
-    /// (Start/End/Channel/paddings), on les ajuste (RecordNewOnly /
-    /// SkipEpisodesInLibrary pour les séries), puis on crée le timer.</para>
+    /// (Start/End/Channel/paddings), on les ajuste (RecordNewOnly=false —
+    /// tous les épisodes, v2.6.6 — et SkipEpisodesInLibrary=true pour les
+    /// séries), puis on crée le timer.</para>
     /// <para><b>Gating absolu</b> : aucun timer n'est créé tant que
     /// <c>cfg.AutoProgram == false</c>. Les appelants
     /// (<c>LlmScheduledTask</c>, <c>TonightLoginService</c>) vérifient ce flag
@@ -318,7 +319,9 @@ namespace LLM_AI
         /// Crée un series timer (série récurrente). Récupère les valeurs par
         /// défaut dérivées du programme (Start/End/Channel/paddings/SeriesId)
         /// via <see cref="ILiveTvManager.GetNewTimerDefaults"/>, applique
-        /// RecordNewOnly + SkipEpisodesInLibrary, convertit le DTO en
+        /// RecordNewOnly=false (tous les épisodes — le flag IsRepeat de la
+        /// grille n'étant pas fiable, v2.6.6) + SkipEpisodesInLibrary=true
+        /// (sauf épisodes déjà en bibliothèque), convertit le DTO en
         /// <see cref="SeriesTimerInfo"/> (le type attendu par
         /// <see cref="ILiveTvManager.CreateSeriesTimer"/>) puis crée le timer.
         /// </summary>
@@ -327,9 +330,21 @@ namespace LLM_AI
             var dto = _liveTv.GetNewTimerDefaults(programId, ct);
             if (dto == null) throw new InvalidOperationException("GetNewTimerDefaults a renvoyé null.");
 
-            // Séries : on n'enregistre que les nouveaux épisodes, et on saute
-            // ceux déjà en bibliothèque (évite de re-enregistrer ce qu'on a).
-            dto.RecordNewOnly = true;
+            // Séries — politique v2.6.6 « tous les épisodes, sauf ceux déjà en
+            // bibliothèque » (alignée sur la pratique manuelle Emby de l'usager) :
+            // - RecordNewOnly=false : le flag IsRepeat de la grille (Schedules
+            //   Direct) n'est PAS fiable — des rediffusions jamais vues sont
+            //   marquées « repeat » — et Emby annulait SILENCIEUSEMENT les timers
+            //   correspondants (field 2026-10-18, « SEAL Team : cœur et
+            //   courage », Noovo, série ended en rediffusion : deux timers
+            //   concrets Cancelled sous un toast « Enregistrement programmé »).
+            //   false est aussi le défaut natif d'Emby (Timers/Defaults).
+            // - SkipEpisodesInLibrary=true : le critère local d'inédit —
+            //   l'absence de la bibliothèque — reste la seule barrière (match
+            //   épisode par ids provider + S:E, réévalué à chaque refresh de
+            //   grille). MatchExistingItemsWithAnyLibrary n'est pas exposé par
+            //   le SDK 4.10 : Emby le met à true par défaut (validé live).
+            dto.RecordNewOnly = false;
             dto.SkipEpisodesInLibrary = true;
 
             // CreateSeriesTimer attend le type interne SeriesTimerInfo (pas le

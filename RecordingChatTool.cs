@@ -175,7 +175,7 @@ namespace LLM_AI
 
             // Toast à l'écran du client : toute la famille voit la demande.
             string mode = string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
-                ? "tous les nouveaux épisodes" : "à l'heure prévue";
+                ? "tous les épisodes" : "à l'heure prévue";
             await ToastAsync(_sessions, _user, string.Format(
                 System.Globalization.CultureInfo.CurrentUICulture,
                 I18n.S("rec.toast.pending", LangKey()), title), ct).ConfigureAwait(false);
@@ -184,8 +184,8 @@ namespace LLM_AI
                 _user.Name, title, programId, postPadding);
             return Json(new {
                 ok = true, pending = true,
-                libelle = "Enregistrement de « " + title + " »" + (mode == "tous les nouveaux épisodes"
-                    ? " — tous les nouveaux épisodes de la série" : ""),
+                libelle = "Enregistrement de « " + title + " »" + (mode == "tous les épisodes"
+                    ? " — tous les épisodes de la série" : ""),
                 code_envoye_ecran = true,
                 note = "Un code à 4 chiffres s'affiche à l'écran de l'app : DEMANDE-le à l'usager. " +
                        "Ne le devine, ne l'invente et ne le réinterprète jamais." });

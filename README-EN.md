@@ -1153,8 +1153,9 @@ If `AutoProgram` is checked, after each run the **to-record** recommendations
 (upcoming EPG programs, not already owned, not already scheduled, outside the
 drop list) are scheduled as recordings:
 
-- **Series** → `SeriesTimerInfo` (RecordNewOnly, SkipEpisodesInLibrary) via
-  `ILiveTvManager.CreateSeriesTimer`.
+- **Series** → `SeriesTimerInfo` (`RecordNewOnly=false` — all episodes, the
+  guide's "new" flag being unreliable, v2.6.6; `SkipEpisodesInLibrary=true` —
+  except episodes already in the library) via `ILiveTvManager.CreateSeriesTimer`.
 - **Movie / one-off** → `TimerInfoDto` via `ILiveTvManager.CreateTimer`.
 
 Default values (Start/End/Channel/paddings) are derived from the program via

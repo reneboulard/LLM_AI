@@ -12,9 +12,9 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Version du plugin : BasePlugin.Version est sealed et renseignée par
          l'hôte Emby depuis la version de l'assembly au chargement. -->
-    <Version>2.6.4</Version>
-    <AssemblyVersion>2.6.4</AssemblyVersion>
-    <FileVersion>2.6.4</FileVersion>
+    <Version>2.6.6</Version>
+    <AssemblyVersion>2.6.6</AssemblyVersion>
+    <FileVersion>2.6.6</FileVersion>
   </PropertyGroup>
 
   <!-- Kit de tradution local (gitignored i18n-kit/) : ses .cs sont des
