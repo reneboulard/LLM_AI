@@ -136,8 +136,10 @@ namespace LLM_AI
             "\n### CONTRÔLE DU VISIONNEMENT (CHAT EXTERNE)\n" +
             "L'outil client_command couvre aussi la lecture en cours : " +
             "playback_status (position, durée restante, pistes disponibles), " +
-            "seek (avance/recule de N secondes, ou saute à N secondes / au " +
-            "début), set_subtitle_track / set_audio_track (langue, « off », " +
+            "seek (avance/recule de N secondes via offset_seconds, ou saute à N " +
+            "secondes via position_seconds — ces DEUX seuls arguments, jamais " +
+            "d'item_id ni de volume), " +
+            "set_subtitle_track / set_audio_track (langue, « off », " +
             "ou numéro de piste). Pour LANCER : play_item (film, épisode ou " +
             "série — une série démarre à son prochain épisode non visionné) " +
             "et play_next (l'épisode suivant APRÈS celui en cours — « passe " +

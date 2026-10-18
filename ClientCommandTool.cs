@@ -180,8 +180,8 @@ namespace LLM_AI
 
         public string ArgumentsSchema => @"{
   ""command"": ""playback_status | seek | set_subtitle_track | set_audio_track | display_item | play_item | play_next | go_home | pause | unpause | stop | set_volume | mute | unmute"",
-  ""offset_seconds"": ""(seek) décalage signé en secondes, ex. 30 ou -10 (|x| ≤ 1800)"",
-  ""position_seconds"": ""(seek) position absolue dans le programme (0 = début)"",
+  ""offset_seconds"": ""(seek) décalage signé en secondes, ex. 30 ou -10 (|x| ≤ 1800). seek n'accepte QUE offset_seconds OU position_seconds — AUCUN autre argument"",
+  ""position_seconds"": ""(seek) position absolue dans le programme (0 = début). offset_seconds OU position_seconds, jamais les deux, jamais autre chose (pas d'item_id, pas de volume)"",
   ""track"": ""(set_subtitle_track / set_audio_track) off | langue fr/fre | numéro de piste renvoyé par playback_status"",
   ""item_id"": ""(display_item / play_item) identifiant de l'item (id renvoyé par les outils) — play_item accepte un film, un épisode OU une série (jouée depuis son prochain épisode non visionné)"",
   ""volume"": ""(set_volume) entier 0-100""

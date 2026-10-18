@@ -178,7 +178,22 @@ namespace LLM_AI
             if (replayed > 0)
                 _logger?.Info("[LLM_AI] [CHAT] {0} tour(s) d'historique rejoué(s).", replayed);
 
-            messages.Add(new LlmClient.ChatMessage { Role = "user", Content = userTask ?? string.Empty });
+            // v2.6.5 — rappel de protocole en slot USAGER (bizarrerie
+            // gemma4 prouvée : le prompt usager prime sur le prompt
+            // système, et le protocole d'appel d'outils se noie dans un
+            // historique long — prod 2026-10-17 : 12-14 tours rejoués,
+            // le modèle narré au lieu d'appeler). Appended AU tour
+            // courant SEULEMENT : l'historique rejoué reste l'original
+            // (l'appelant stocke son propre message), donc exactement
+            // UN rappel par requête, jamais d'empilement.
+            string task = userTask ?? string.Empty;
+            if (task.Trim().Length > 0)
+                task += "\n\n[Rappel de protocole : pour TOUTE action sur Emby (lecture, saut, "
+                    + "pause, arrêt, fiche, volume…), réponds UNIQUEMENT par le tableau JSON "
+                    + "d'appels d'outils, ex. [{\"tool\":\"client_command\",\"arguments\":{...}}] "
+                    + "— une action annoncée sans appel d'outil n'existe pas et ne doit JAMAIS "
+                    + "être affirmée. Une simple question se répond normalement en Markdown.]";
+            messages.Add(new LlmClient.ChatMessage { Role = "user", Content = task });
             var (reply, _) = await RunLoopAsync(messages, tools, ct).ConfigureAwait(false);
             return reply;
         }
@@ -204,6 +219,16 @@ namespace LLM_AI
             // markdown brut (vécu 2026-09-01 avec glm-5.3:cloud).
             const int MaxReplyRepairs = 2;
             int replyRepairs = 0;
+
+            // v2.6.5 — borne de la garde anti-narration : le modèle
+            // « pense à voix haute » (décrit l'appel d'outil à faire
+            // SANS l'émettre en JSON — prod 2026-10-17 15:17, gemma4 :
+            // « I must use the client_command tool with command="seek"…
+            // offset_seconds = 300 ») ; la narration prise pour réponse
+            // finale part telle quelle à l'usager, AUCUNE commande
+            // n'est exécutée.
+            const int MaxNarrationRepairs = 2;
+            int narrationRepairs = 0;
 
             for (int iter = 0; iter < MaxIterations; iter++)
             {
@@ -245,6 +270,38 @@ namespace LLM_AI
                             "en texte : ne prétends JAMAIS qu'une action d'outil a été effectuée. " +
                             finalFormatHint });
                         continue;
+                    }
+
+                    // v2.6.5 — garde anti-narration : la réponse mentionne
+                    // un NOM D'OUTIL ENREGISTRÉ mais n'émet AUCUN appel,
+                    // et aucun outil n'a encore tourné dans ce run (une
+                    // réponse finale légitime qui mentionne l'outil
+                    // arrive APRÈS son exécution — toolResults > 0).
+                    // Signal vécu en prod 2026-10-17 15:17 : la narration
+                    // de l'intention (« I must use the client_command
+                    // tool… ») au lieu du JSON. Ré-injection exigeant
+                    // l'émission (ou une réponse honnête), bornée.
+                    if (narrationRepairs < MaxNarrationRepairs && toolResults.Count == 0)
+                    {
+                        string mentioned = FindMentionedToolName(reply, byName);
+                        if (mentioned != null)
+                        {
+                            narrationRepairs++;
+                            _logger?.Warn("[LLM_AI] Itération {0} — narration sans appel d'outil : la réponse mentionne « {1} » mais n'émet AUCUN appel ({2}/{3}). Demande d'émission.",
+                                iter, mentioned, narrationRepairs, MaxNarrationRepairs);
+                            SecurityMonitor.Record("NARRATION_SANS_APPEL", mentioned);
+                            messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
+                            messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                                "Ta réponse NARRATIVE l'action (elle mentionne l'outil « " + mentioned + " ») " +
+                                "mais NE CONTIENT AUCUN appel d'outil : RIEN n'a été exécuté, et une action " +
+                                "annoncée sans appel d'outil est une ERREUR. Pour exécuter l'action, réponds " +
+                                "UNIQUEMENT par le tableau JSON d'appels d'outils bien formé, ex. " +
+                                "[{\"tool\":\"" + mentioned + "\",\"arguments\":{...}}], sans texte autour " +
+                                "ni backticks. Si l'action est impossible, déjà faite, ou si l'usager demande " +
+                                "autre chose, réponds alors en Markdown normal SANS prétendre qu'une action " +
+                                "a été exécutée." });
+                            continue;
+                        }
                     }
 
                     // Mode recommandation : la réponse finale DOIT être un tableau
@@ -916,6 +973,31 @@ namespace LLM_AI
         /// (<see cref="I18nGenerator"/>) a le même besoin exact de béquilles
         /// JSON pour les petits modèles.</para>
         /// </summary>
+        /// <summary>
+        /// v2.6.5 — Nom d'outil enregistré mentionné en MOT-ENTIER
+        /// (insensible à la casse) dans une réponse qui n'a émis aucun
+        /// appel : signal de narration d'intention plutôt que d'émission.
+        /// </summary>
+        private static string FindMentionedToolName(string reply, Dictionary<string, ILlmTool> byName)
+        {
+            if (string.IsNullOrEmpty(reply) || byName == null) return null;
+            foreach (var name in byName.Keys)
+            {
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                int idx = reply.IndexOf(name, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) continue;
+                // mot-entier : ni lettre/digit/underscore accolé avant ni après
+                bool gluedBefore = idx > 0 &&
+                    (char.IsLetterOrDigit(reply[idx - 1]) || reply[idx - 1] == '_');
+                int after = idx + name.Length;
+                bool gluedAfter = after < reply.Length &&
+                    (char.IsLetterOrDigit(reply[after]) || reply[after] == '_');
+                if (!gluedBefore && !gluedAfter)
+                    return name;
+            }
+            return null;
+        }
+
         internal static string SanitizeJsonControlChars(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;

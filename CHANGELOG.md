@@ -10,6 +10,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.5] — 2026-10-17
+
+### Fixed (FR)
+- **Garde anti-narration dans la boucle agent** — certains modèles « pensent à
+  voix haute » : la réponse décrit l'appel d'outil à faire (nom de l'outil,
+  arguments) SANS l'émettre en JSON — la narration partait telle quelle comme
+  réponse finale et aucune commande n'était exécutée. La boucle détecte
+  désormais une réponse qui mentionne un nom d'outil enregistré sans contenir
+  d'appel, alors qu'aucun outil n'a encore tourné dans ce run (une réponse
+  finale légitime mentionne l'outil APRÈS son exécution) : elle est
+  réinjectée avec une demande d'émission du tableau JSON — ou une réponse
+  honnête si l'action est impossible — bornée à deux tentatives.
+
+### Added (FR)
+- **Rappel de protocole en slot usager (chat)** — les petits modèles suivent
+  le prompt usager plus fidèlement que le prompt système, et le protocole
+  d'appel d'outils se noie dans un historique long : un rappel compact
+  (« toute action = tableau JSON d'appels d'outils, jamais une annonce
+  narrative ») accompagne désormais chaque tour usager COURANT — jamais
+  l'historique rejoué (un seul rappel par requête, pas d'empilement).
+- **Schéma `seek` durci** — le schéma d'arguments de `client_command`
+  précise désormais que `seek` n'accepte QUE `offset_seconds` OU
+  `position_seconds`, aucun autre argument (un schéma plat partagé avait déjà
+  induit le modèle à inventer `item_id` et `volume` pour un simple saut) ; le
+  prompt du chat externe clarifie de même les deux seuls arguments.
+
+### Fixed (EN)
+- **Anti-narration guard in the agent loop** — some models "think out loud":
+  the reply describes the tool call it intends to make (tool name, arguments)
+  WITHOUT emitting it as JSON — the narration went out as-is as the final
+  answer and no command was executed. The loop now detects a reply that
+  mentions a registered tool name while containing no call and no tool has
+  run yet in this turn (a legitimate final reply mentions the tool AFTER its
+  execution): it is re-injected with a demand to emit the JSON array — or to
+  answer honestly if the action is impossible — capped at two attempts.
+
+### Added (EN)
+- **Protocol reminder in the user slot (chat)** — small models follow the
+  user prompt more faithfully than the system prompt, and the tool-calling
+  protocol drowns in a long history: a compact reminder ("any action = a
+  JSON array of tool calls, never a narrative announcement") now rides each
+  CURRENT user turn — never the replayed history (exactly one reminder per
+  request, no stacking).
+- **Hardened `seek` schema** — the `client_command` arguments schema now
+  states that `seek` accepts ONLY `offset_seconds` OR `position_seconds`, no
+  other argument (the shared flat schema had already led the model to invent
+  `item_id` and `volume` for a simple skip); the external chat prompt
+  likewise clarifies the only two arguments.
+
 ## [2.6.4] — 2026-10-17
 
 ### Added (FR)
