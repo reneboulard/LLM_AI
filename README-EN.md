@@ -268,8 +268,11 @@ enabled backend is the **primary**. Each backend:
 | `Enabled` | Enable this backend |
 | `Priority` | Preference order (higher = primary) |
 
-> Recommended local model: the **gemma4** family — `gemma4:latest` (fast, ~8 GB VRAM)
-> or `gemma4:26b` (more reasoning quality, ~1.5-2× slower, leanest context memory).
+> Recommended local models (measured with the plugin, 2026-10-19): **ministral-3:14b**
+> — the strongest so far (batched tool calls, very fast on large contexts), needs
+> ~16 GB VRAM — or **gemma4:latest** (fast, ~8 GB VRAM) on a smaller GPU. Both handle
+> the plugin's JSON tool protocol; the agent loop ships self-repair nets for modest
+> models (schema-bearing retry request, JSON repair crutches — see CHANGELOG 2.6.7).
 
 Legacy fields `LlmUrl` / `ModelName` are still supported (legacy fallback: a non-empty
 `LlmUrl` is treated as a local backend).

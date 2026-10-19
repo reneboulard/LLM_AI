@@ -276,8 +276,12 @@ activé de plus haute priorité est le serveur **primaire**. Chaque serveur :
 | `Enabled` | Activer ce serveur |
 | `Priority` | Ordre de préférence (plus haut = primaire) |
 
-> Modèle recommandé en local : la famille **gemma4** — `gemma4:latest` (rapide, ~8 Go de
-> VRAM) ou `gemma4:26b` (plus de qualité, ~1,5-2× plus lent, mémoire de contexte la plus légère).
+> Modèles locaux recommandés (mesurés avec le plugin, 2026-10-19) : **ministral-3:14b**
+> — le plus convaincant (appels d'outils en lot, très rapide sur les gros contextes),
+> requiert ~16 Go de VRAM — ou **gemma4:latest** (rapide, ~8 Go de VRAM) sur une carte
+> plus petite. Les deux jouent le protocole d'outils JSON du plugin ; la boucle intègre
+> des filets de réparation pour les modèles modestes (demande de renvoi avec gabarit,
+> béquilles de réparation JSON — voir CHANGELOG 2.6.7).
 
 Champs hérités `LlmUrl` / `ModelName` restent supportés (repli legacy : un `LlmUrl` non
 vide est traité comme un serveur local).

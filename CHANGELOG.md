@@ -10,6 +10,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.7] — 2026-10-19
+
+### Fixed (FR)
+- **Repli backend sur dépassement du délai par appel** — un timeout `HttpClient`
+  lève `TaskCanceledException` alors que le jeton du plugin n'est PAS annulé :
+  les catch `OperationCanceledException` historiques relançaient l'exception
+  telle quelle et la tâche entière mourait — aucun repli vers le serveur
+  suivant. Désormais, chaque dépassement du `DefaultCallTimeout` (2 min) est
+  signalé (« délai par appel dépassé » + télémétrie) et la chaîne continue
+  vers le backend suivant. Terrain : modèle « thinking » à réponse lente
+  (granite4.2:8b, 118-179 s par appel) — le repli atteint désormais le backend
+  suivant et la tâche se complète.
+- **Filets de réparation du tableau final de recommandations** (modèles
+  locaux modestes, banc ministral-3:14b du 2026-10-19) :
+  - **Demande de renvoi enrichie** — les deux messages de renvoi intègrent le
+    gabarit d'item attendu (title exact de l'EPG, kind, reason, priority,
+    channel et start obligatoires) dans le prompt usager — les petits modèles
+    suivent le schéma du prompt usager, pas celui du prompt système.
+  - **Béquilles JSON sur la réponse finale** — quand la réponse finale ne
+    parse pas, les mêmes béquilles que les appels d'outils
+    (contrôles non échappés, guillemets doubles non échappés, échappements
+    illégaux `\'`) sont appliquées AVANT de retourner au modèle : le JSON
+    réparé part à l'enrichissement sans aller-retour LLM.
+  - **Réparation de la dernière réponse aussi** — la validation et la
+    réparation s'appliquent même quand le budget de renvois est épuisé
+    (2/2) ; seul le RENVOI au modèle reste borné. Vécu : une 3e itération
+    avec échappements illégaux partait brute à l'enrichissement → tâche à
+    zéro recommandation et playlist fraîchement créée supprimée.
+
+### Fixed (EN)
+- **Backend fallback on per-call timeout** — an HttpClient timeout throws
+  `TaskCanceledException` while the plugin's token is NOT cancelled: the
+  historical `OperationCanceledException` catches rethrew as-is and the whole
+  task died — no fallback to the next server. Each `DefaultCallTimeout`
+  (2 min) expiry is now signalled ("délai par appel dépassé" + telemetry) and
+  the chain moves on to the next backend. Field case: a slow "thinking"
+  model (granite4.2:8b, 118-179 s per call) — the fallback now reaches the
+  next backend and the task completes.
+- **Repair nets for the final recommendations table** (modest local models,
+  ministral-3:14b bench of 2026-10-19):
+  - **Enriched retry request** — both retry messages now carry the expected
+    item template (exact EPG title, kind, reason, priority, mandatory channel
+    and start) in the user prompt — small models follow the user prompt's
+    schema, not the system prompt's.
+  - **JSON crutches on the final reply** — when the final reply fails to
+    parse, the same crutches as tool calls (unescaped control chars, unescaped
+    double quotes, illegal `\'` escapes) are applied BEFORE going back to the
+    model: the repaired JSON flows to enrichment without an extra LLM
+    round-trip.
+  - **Last reply gets repaired too** — validation and repair now apply even
+    when the retry budget (2/2) is exhausted; only the RENVOI to the model
+    stays bounded. Field case: a 3rd iteration with illegal escapes went raw
+    to enrichment → task with zero recommendations and a freshly created
+    playlist deleted.
+
 ## [2.6.6] — 2026-10-18
 
 ### Changed (FR)

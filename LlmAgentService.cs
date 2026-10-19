@@ -312,31 +312,38 @@ namespace LLM_AI
                     // validation ignorés, markdown brut affiché). Réparation
                     // bornée, même mécanisme que le renvoi d'appels d'outils :
                     // on signale et on continue la boucle.
-                    if (_formatSection == null && replyRepairs < MaxReplyRepairs)
+                    if (_formatSection == null)
                     {
+                        // v2.6.7 (live 2026-10-19, run page ministral-3:14b) : la
+                        // validation et la réparation par béquilles s'appliquent AUSSI à
+                        // la dernière réponse (budget renvois épuisé) — vécu : itération 3
+                        // avec échappements \' illégaux passés BRUTES à l'Enrichissement
+                        // (« payload non parsable » → zéro reco + playlist vidée), alors
+                        // que la béquille existante (vécu 2026-09-09) l'eût réparée.
+                        // Seul le RENVOI au modèle reste borné par MaxReplyRepairs.
                         var probe = LlmRunner.ExtractJsonPayload(reply);
-                        bool validArray = false;
-                        bool anyTitle = false;
-                        int itemCount = 0;
-                        try
+                        bool validArray = ValidateFinalArrayProbe(probe, out var anyTitle, out var itemCount);
+                        if (!validArray)
                         {
-                            using (var doc = JsonDocument.Parse(probe))
+                            // v2.6.7 (ministral-3:14b, live 2026-10-19) : le tableau
+                            // final arrive malformé (guillemets français non échappés dans
+                            // « reason », contrôles) — réparer par les MÊMES béquilles que
+                            // les appels d'outils AVANT de retourner au modèle, un
+                            // aller-retour LLM de moins et l'Enrichissement reçoit du JSON
+                            // propre (« payload non parsable … laissé tel quel » = run à
+                            // zéro reco alors que le gabarit était bon à 95 %).
+                            var repaired = TryRepairFinalArray(reply);
+                            if (repaired != null &&
+                                ValidateFinalArrayProbe(repaired, out anyTitle, out itemCount))
                             {
-                                if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                                {
-                                    validArray = true;
-                                    foreach (var el in doc.RootElement.EnumerateArray())
-                                    {
-                                        itemCount++;
-                                        if (el.ValueKind == JsonValueKind.Object &&
-                                            el.TryGetProperty("title", out _))
-                                            anyTitle = true;
-                                    }
-                                }
+                                _logger?.Info("[LLM_AI] Itération {0} — réponse finale réparée par béquilles (contrôles/guillemets) sans renvoi : {1} item(s).",
+                                    iter, itemCount);
+                                reply = repaired;               // le propre passe à l'aval
+                                probe = repaired;               // (ExtractJsonPayload + Enrichissement)
+                                validArray = true;
                             }
                         }
-                        catch { }
-                        if (!validArray)
+                        if (!validArray && replyRepairs < MaxReplyRepairs)
                         {
                             replyRepairs++;
                             _logger?.Warn("[LLM_AI] Itération {0} — réponse finale non parsable en tableau JSON. Demande de renvoi ({1}/{2}).",
@@ -345,10 +352,18 @@ namespace LLM_AI
                             messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                                 "Ta réponse finale n'est pas un tableau JSON exploitable " +
                                 "(texte autour du tableau, guillemets non échappés, ou format non respecté). " +
-                                "Renvoie UNIQUEMENT le tableau JSON des recommandations, conforme au " +
-                                "schéma exigé par la tâche (sections WORKFLOW/FORMAT du prompt système), " +
-                                "sans texte avant/après ni balises ```, et avec tous les guillemets internes " +
-                                "échappés (\\\") dans les valeurs de type chaîne." });
+                                "Renvoie UNIQUEMENT le tableau JSON des recommandations — le PREMIER caractère " +
+                                "est [ et le DERNIER est ], sans texte avant/après ni balises ```. " +
+                                "Gabarit d'item attendu (quirk documenté : le schéma doit être dans le " +
+                                "prompt user, pas seulement dans le system prompt) :\n" +
+                                "[{\"title\":\"Titre exact repris des résultats get_emby_info\"," +
+                                "\"kind\":\"series ou movie\"," +
+                                "\"reason\":\"1-2 phrases\"," +
+                                "\"priority\":\"high ou medium ou low\"," +
+                                "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
+                                "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}] " +
+                                "Échappe tous les guillemets doubles internes (\\\") dans les valeurs " +
+                                "de type chaîne. Ne renvoie JAMAIS un appel d'outil : la boucle est terminée." });
                             continue;
                         }
 
@@ -362,7 +377,7 @@ namespace LLM_AI
                         // « title » (champ obligatoire du format reco) n'est ni un
                         // tableau de recos ni un appel d'outil bien formé → renvoi.
                         // Un tableau VIDE ([] = « rien à recommander ») reste accepté.
-                        if (itemCount > 0 && !anyTitle)
+                        if (itemCount > 0 && !anyTitle && replyRepairs < MaxReplyRepairs)
                         {
                             replyRepairs++;
                             _logger?.Warn("[LLM_AI] Itération {0} — réponse finale : tableau de {1} item(s) SANS aucun « title » (appel d'outil malformé ?). Demande de renvoi ({2}/{3}).",
@@ -374,8 +389,14 @@ namespace LLM_AI
                                 "à un appel d'outil malformé. Renvoie soit un tableau d'appels " +
                                 "d'outils BIEN FORMÉ [{\"tool\":\"...\",\"arguments\":{...}}], " +
                                 "soit, si tu as terminé, le tableau JSON des recommandations " +
-                                "conforme au schéma exigé par la tâche (sections WORKFLOW/FORMAT " +
-                                "du prompt système) — sans texte autour ni balises ```." });
+                                "conforme au gabarit suivant (mêmes champs que la section FORMAT) :\n" +
+                                "[{\"title\":\"Titre exact repris des résultats get_emby_info\"," +
+                                "\"kind\":\"series ou movie\"," +
+                                "\"reason\":\"1-2 phrases\"," +
+                                "\"priority\":\"high ou medium ou low\"," +
+                                "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
+                                "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}] " +
+                                "sans texte autour ni balises ```." });
                             continue;
                         }
                     }
@@ -627,9 +648,14 @@ namespace LLM_AI
         /// réussit devient le backend actif pour les appels suivants.
         /// Toute exception hors annulation est considérée comme
         /// « backend indisponible → suivant » (serveur down, HTTP 4xx/5xx,
-        /// modèle introuvable, erreur Ollama…).
-        /// <see cref="OperationCanceledException"/> (annulation de la tâche)
-        /// est toujours propagée telle quelle.
+        /// modèle introuvable, erreur Ollama, délai par appel dépassé…).
+        /// Distinction annulation vs délai par appel (gotcha HttpClient.Timeout
+        /// vérifié live 2026-10-19, granite4.2:8b) : le dépassement du délai
+        /// par appel (LlmClient.SendWithTimeoutAsync, défaut 2 min) jette une
+        /// TaskCanceledException dont le token appelant n'est PAS annulé —
+        /// traitée comme un échec backend (repli priorité suivante) ; seule
+        /// l'annulation réelle (token appelant annulé : déconnexion navigateur,
+        /// arrêt de tâche) est propagée telle quelle.
         /// </summary>
         private async Task<string> ChatAsync(IReadOnlyList<LlmClient.ChatMessage> messages, CancellationToken ct)
         {
@@ -643,7 +669,15 @@ namespace LLM_AI
                 {
                     return await CallBackendAsync(_backends[_activeIndex], messages, ct).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException)
+                {
+                    var b = _backends[_activeIndex];
+                    _logger?.Warn("[LLM_AI] Backend actif {0}/{1} : délai par appel dépassé (timeout) — re-scanne les backends.",
+                        b.Url, b.Model);
+                    SecurityMonitor.Record("LLM_BACKEND_ECHEC", "actif " + b.Url + " / " + b.Model + " : délai par appel dépassé");
+                    _activeIndex = -1; // on relève la sélection
+                }
                 catch (Exception ex)
                 {
                     var b = _backends[_activeIndex];
@@ -669,7 +703,14 @@ namespace LLM_AI
                         b.Url, b.Model, b.Priority);
                     return r;
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (OperationCanceledException)
+                {
+                    var be = _backends[i];
+                    _logger?.Warn("[LLM_AI] Backend {0} / {1} : délai par appel dépassé (timeout) — passe au suivant.",
+                        be.Url, be.Model);
+                    SecurityMonitor.Record("LLM_BACKEND_ECHEC", be.Url + " / " + be.Model + " : délai par appel dépassé");
+                }
                 catch (Exception ex)
                 {
                     last = ex;
@@ -996,6 +1037,75 @@ namespace LLM_AI
                     return name;
             }
             return null;
+        }
+
+        /// <summary>
+        /// v2.6.7 (ministral-3:14b) : probe du tableau final — valide (array JSON),
+        /// remplit anyTitle/itemCount ; sinon false. Mêmes critères que la
+        /// validation historique inline (array + présence de « title »).
+        /// </summary>
+        private static bool ValidateFinalArrayProbe(string payloadText, out bool anyTitle, out int itemCount)
+        {
+            anyTitle = false;
+            itemCount = 0;
+            try
+            {
+                using (var doc = JsonDocument.Parse(payloadText))
+                {
+                    if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                        return false;
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        itemCount++;
+                        if (el.ValueKind == JsonValueKind.Object &&
+                            el.TryGetProperty("title", out _))
+                            anyTitle = true;
+                    }
+                    return true;
+                }
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// v2.6.7 : réparation « dernier recours » d'une réponse finale non
+        /// parsable — les MÊMES béquilles que les appels d'outils
+        /// (SanitizeJsonControlChars puis extraction puis RepairUnescapedQuotes),
+        /// appliquées AVANT le renvoi au modèle pour économiser un aller-retour
+        /// LLM. Renvoie le tableau réparé, ou null si aucune forme ne parse —
+        /// sans réparation possible, c'est la demande de renvoi qui tranche
+        /// (jamais d'invention de recommandation ici).
+        /// </summary>
+        private static string TryRepairFinalArray(string reply)
+        {
+            if (string.IsNullOrWhiteSpace(reply)) return null;
+
+            // 1) Contrôles (< 0x20) non échappés dans les chaînes (piège
+            // System.Text.Json strict — vécu sur les sorties gemma4).
+            string sanitized = SanitizeJsonControlChars(reply);
+            if (FinalArrayParses(sanitized)) return sanitized;
+
+            // 2) Extraction du tableau puis réparation des guillemets doubles
+            // non échappés (« (kind="series") » fermait prématurément la chaîne).
+            string payload = LlmRunner.ExtractJsonPayload(sanitized);
+            if (string.IsNullOrWhiteSpace(payload)) return null;
+            if (FinalArrayParses(payload)) return payload;
+            var repaired = RepairUnescapedQuotes(payload);
+            if (!string.Equals(repaired, payload, StringComparison.Ordinal) &&
+                FinalArrayParses(repaired))
+                return repaired;
+
+            return null;
+        }
+
+        private static bool FinalArrayParses(string text)
+        {
+            try
+            {
+                using (var doc = JsonDocument.Parse(text))
+                    return doc.RootElement.ValueKind == JsonValueKind.Array;
+            }
+            catch { return false; }
         }
 
         internal static string SanitizeJsonControlChars(string json)
