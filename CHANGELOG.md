@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.8] — 2026-10-20
+
+### Removed (FR)
+- **Alias d'outil `showbizz_new_releases` supprimé** (introduit 2026-08-31,
+  généralisé l'année du renommage multi-sources) — aucun run observé sur deux
+  serveurs ne l'a jamais appelé, les défauts (`DefaultPrompts`) et la
+  documentation pointent vers `new_releases` depuis 7 semaines, et la boucle
+  répondait déjà « outil inconnu » (télémétrie `TOOL_INCONNU`, récupérable en
+  un tour) au cas improbable d'un prompt sauvegardé poussiéreux. Effet :
+  catalogue d'outils allégé (~150-200 tokens de moins dans le prompt système
+  de chaque itération) et plus d'incitation au mauvais nom. La propriété de
+  config `ShowbizzUrl` (migration des anciens réglages) est conservée.
+
+### Removed (EN)
+- **`showbizz_new_releases` tool alias removed** (introduced 2026-08-31 when
+  the multi-source rename happened) — no observed run on two servers ever
+  called it, defaults (`DefaultPrompts`) and docs have pointed to
+  `new_releases` for 7 weeks, and the loop already answered "outil inconnu"
+  (`TOOL_INCONNU` telemetry, recoverable within one turn) in the unlikely case
+  of a dust-covered saved prompt. Effect: leaner tool catalog (~150-200 fewer
+  tokens in every iteration's system prompt) and no incentive toward the wrong
+  name. The `ShowbizzUrl` config property (legacy settings migration) is kept.
+
 ## [2.6.7] — 2026-10-19
 
 ### Fixed (FR)

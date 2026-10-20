@@ -485,8 +485,8 @@ namespace LLM_AI
         //  Défense prompt-injection — « delimiting + nonce » des payloads web
         // ------------------------------------------------------------------
 
-        //  Les résultats des outils web (web_fetch, web_search, new_releases /
-        //  alias showbizz_new_releases) sont du texte NON FIABLE : une page
+        //  Les résultats des outils web (web_fetch, web_search, new_releases)
+        //  sont du texte NON FIABLE : une page
         //  malveillante peut y glisser des injections de prompt (« ignore tes
         //  consignes », faux marqueurs de dialogue, instructions système).
         //  Avant réinjection au LLM, la sortie du tool est encadrée par des
@@ -513,7 +513,7 @@ namespace LLM_AI
         private static readonly HashSet<string> s_untrustedTools =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "web_fetch", "web_search", "new_releases", "showbizz_new_releases"
+                "web_fetch", "web_search", "new_releases"
             };
 
         /// <summary>

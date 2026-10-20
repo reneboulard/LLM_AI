@@ -169,10 +169,7 @@ namespace LLM_AI
             var newReleaseSources = NewReleasesTool.ParseSources(cfg.NewReleaseSources);
             if (newReleaseSources.Count > 0)
             {
-                var nrTool = new NewReleasesTool(newReleaseSources, _logger);
-                tools.Add(nrTool);
-                // Alias compatibilité : l'ancien nom reste appelable.
-                tools.Add(new NewReleasesTool.AliasTool(nrTool));
+                tools.Add(new NewReleasesTool(newReleaseSources, _logger));
             }
             // web_search : SearXNG (auto-hébergé) OU Ollama cloud.
             bool webSearchConfigured = !string.IsNullOrWhiteSpace(cfg.SearXngUrl) ||

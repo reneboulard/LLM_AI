@@ -33,8 +33,11 @@ namespace LLM_AI
     ///     + cache 24h en mémoire, clé fondée sur le SHA256 des sources :
     ///     modifier la config re-scrappe sans redémarrer.</item>
     /// </list>
-    /// Alias compatibilité : <see cref="AliasTool"/> réexpose l'ancien nom
-    /// <c>showbizz_new_releases</c> pour ne pas casser les prompts sauvegardés.
+    /// Alias compatibilité (2026-08-31 → 2026-10-20) : l'ancien nom
+    /// <c>showbizz_new_releases</c> est SUPPRIMÉ — aucun run observé ne l'a
+    /// jamais appelé (défauts/docs à <c>new_releases</c> depuis 7 semaines) et
+    /// la boucle répond déjà « outil inconnu » (récupérable en un tour) au cas
+    /// improbable d'un prompt sauvegardé poussiéreux.
     /// Ne lève jamais (erreur source → on saute ; erreur globale → JSON).
     /// </summary>
     public class NewReleasesTool : ILlmTool
@@ -584,27 +587,5 @@ namespace LLM_AI
 
         private static string Truncate(string s, int max) =>
             string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
-
-        /// <summary>
-        /// Alias compatibilité : réexpose l'ancien nom
-        /// <c>showbizz_new_releases</c> (prompts sauvegardés, tâche planifiée
-        /// d'utilisateurs existants) en transférant tout au nouvel outil.
-        /// </summary>
-        public sealed class AliasTool : ILlmTool
-        {
-            private readonly NewReleasesTool _inner;
-
-            public string Name => "showbizz_new_releases";
-
-            public string Description =>
-                "Alias obsolète de new_releases — même outil, préférez new_releases.";
-
-            public string ArgumentsSchema => _inner.ArgumentsSchema;
-
-            public AliasTool(NewReleasesTool inner) { _inner = inner; }
-
-            public Task<string> ExecuteAsync(JsonElement args, CancellationToken ct) =>
-                _inner.ExecuteAsync(args, ct);
-        }
     }
 }
