@@ -10,6 +10,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.9] — 2026-10-24
+
+### Fixed (FR)
+- **Liens profonds hallucinés : filet serveur + gabarit durci.** Vécu en
+  production (chat externe, 2026-10-24) : la réponse portait des liens
+  `https://emby.example.com/web/index.html#!/item?id=…&serverId=…` — le
+  modèle avait recopié correctement les id et le serverId, mais « absolutisé »
+  le gabarit RELATIF en préfixant un hôte inventé (le domaine placeholder de
+  son entraînement). Double conséquence : côté app compagnon, le bouton de
+  projection disparaissait (son parseur ne reconnaît que la forme relative)
+  et le lien cliquable menait à un domaine inexistant ; côté page chat, la
+  garde même-origine la rendait inerte. Correctif à deux étages, même
+  philosophie que le filet de formatage des rapports (le serveur fait
+  respecter, le modèle dérive) : (1) **normalisateur** dans le chemin de
+  réponse du chat — tout lien fiche Markdown est réécrit vers la forme
+  canonique relative `/web/index.html#!/item?id=…` avec le VRAI serverId
+  (rattrape au passage un serverId altéré, une casse déviante et les entités
+  `&amp;`), couvre les DEUX surfaces (page chat et app compagnon), avec une
+  ligne de log greppable quand il rattrape ; (2) le bloc de prompt
+  LIENS PROFONDS interdit désormais explicitement tout préfixe d'hôte —
+  « le lien est RELATIF, il commence exactement par `/web/` ». La validité
+  d'un id reste la responsabilité du modèle (règle « jamais d'id inventé ») ;
+  les gardes du clic (garde même origine de la page, PermissionGate de la
+  projection) restent l'autorité.
+
+### Fixed (EN)
+- **Hallucinated deep links: server-side normalizer + hardened template.**
+  Seen in production (external chat, 2026-10-24): the reply carried
+  `https://emby.example.com/web/index.html#!/item?id=…&serverId=…` links —
+  the model had copied the ids and serverId correctly, but "absolutized" the
+  RELATIVE template by prefixing an invented host (the placeholder domain
+  from its training data). Double consequence: in the companion app the
+  projection button disappeared (its parser only recognizes the relative
+  form) and the clickable link led to a nonexistent domain; on the chat page
+  the same-origin guard left it inert. Two-layer fix, same philosophy as the
+  report formatting safety net (the server enforces, the model drifts):
+  (1) a **normalizer** in the chat reply path — every Markdown item link is
+  rewritten to the canonical relative form `/web/index.html#!/item?id=…`
+  with the REAL serverId (also catching an altered serverId, deviant casing
+  and `&amp;` entities), covering BOTH surfaces (chat page and companion
+  app), with a greppable log line whenever it catches something; (2) the
+  DEEP LINKS prompt block now explicitly forbids any host prefix — "the
+  link is RELATIVE, it starts exactly with `/web/`". Id validity remains
+  the model's responsibility (the "never fabricate an id" rule); the
+  click-time guards (page same-origin guard, projection PermissionGate)
+  remain the authority.
+
 ## [2.6.8] — 2026-10-20
 
 ### Removed (FR)

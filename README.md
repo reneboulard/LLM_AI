@@ -2108,7 +2108,12 @@ le cas.
   (`&asSeries=true` pour la vue groupée des séries). Le `serverId` est obtenu une
   seule fois via `GetPublicSystemInfo` et mis en cache (bloc omis, fail-open, si
   indisponible). Règle explicite : sans id connu, le titre est cité **sans** lien —
-  jamais d'id inventé.
+  jamais d'id inventé. Depuis la v2.6.9, le gabarit interdit aussi explicitement tout
+  préfixe d'hôte (le lien est **relatif**) et un **filet serveur** (`NormalizeDeepLinks`)
+  réécrit dans la réponse finale tout lien fiche vers la forme canonique relative avec le
+  vrai `serverId` — les petits modèles « absolutisent » parfois le gabarit avec un hôte
+  inventé (vécu en production : `emby.example.com`), ce qui casse le lien et fait
+  disparaître le bouton de projection de l'app compagnon.
 - **Côté page** (`chat.js`, `inline()`) : rendu des liens Markdown avec deux
   garde-fous — **même origine uniquement** (l'URL doit commencer par `/` ; tout lien
   absolu proposé par le LLM reste du texte brut, pas de redirection contrôlée par le

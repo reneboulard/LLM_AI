@@ -2043,7 +2043,13 @@ page**, opened in a new tab — from there, favorite or record it as applicable.
   `[Title](/web/index.html#!/item?id=ID&serverId=…)` (`&asSeries=true` for the
   series grouped view). The `serverId` is fetched once via `GetPublicSystemInfo` and
   cached (block omitted, fail-open, if unavailable). Explicit rule: without a known
-  id, the title is cited **without** a link — never a fabricated id.
+  id, the title is cited **without** a link — never a fabricated id. Since v2.6.9 the
+  template also explicitly forbids any host prefix (the link is **relative**) and a
+  **server-side safety net** (`NormalizeDeepLinks`) rewrites any item link in the
+  final reply back to the canonical relative form with the real `serverId` — small
+  models sometimes "absolutize" the template with an invented host (seen in
+  production: `emby.example.com`), which breaks the link and makes the companion
+  app's projection button disappear.
 - **Page side** (`chat.js`, `inline()`): Markdown link rendering with two
   guardrails — **same-origin only** (the URL must start with `/`; any absolute link
   proposed by the LLM stays plain text, no model-controlled redirect) and

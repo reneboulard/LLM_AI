@@ -747,8 +747,18 @@ namespace LLM_AI
         /// Le serverId est résolu une fois via <c>GetPublicSystemInfo</c> (le
         /// chemin fiable — <c>GetSystemInfo</c> lève une NRE sur certains hôtes
         /// Windows) ; vide = bloc omis (fail-open, jamais de lien fabriqué).
+        /// v2.6.9 : le gabarit interdit EXPLICITEMENT tout préfixe d'hôte
+        /// (dérive prod 2026-10-24 : un petit modèle a « absolutisé » le lien
+        /// avec un domaine inventé — emby.example.com) et
+        /// <see cref="NormalizeDeepLinks"/> (filet serveur, même philosophie
+        /// que <see cref="SanitizeReport"/>) réécrit ce qui passe quand même.
         /// </summary>
         private string _deepLinkBlock;
+
+        /// <summary>ServerId réel résolu par <see cref="BuildDeepLinkBlockAsync"/>
+        /// (null tant que non résolu) — ancre du filet
+        /// <see cref="NormalizeDeepLinks"/>.</summary>
+        private string _deepLinkServerId;
 
         private async System.Threading.Tasks.Task<string> BuildDeepLinkBlockAsync()
         {
@@ -775,10 +785,59 @@ namespace LLM_AI
                 "Quand tu cites un item (film, série, épisode, enregistrement, programme EPG) dont un " +
                 "outil t'a fourni l'identifiant (champ id), rends le titre cliquable vers sa fiche Emby " +
                 "avec ce gabarit exact : [Titre](/web/index.html#!/item?id=ID&serverId=" + serverId +
-                ") — remplace Titre et ID, ne change rien d'autre. Pour une série (vue groupée par " +
+                ") — remplace Titre et ID, ne change rien d'autre. Le lien est RELATIF : il commence " +
+                "EXACTEMENT par « /web/ » — n'ajoute JAMAIS de préfixe d'hôte (https://, http://, un " +
+                "nom de domaine, une IP) : l'app qui affiche cette conversation ne reconnaît que la " +
+                "forme relative, et un hôte inventé casserait le lien. Pour une série (vue groupée par " +
                 "passages), ajoute &asSeries=true avant la parenthèse. Si l'id n'est pas connu, cite le " +
                 "titre SANS lien — ne fabrique JAMAIS un lien avec un id inventé.";
+            _deepLinkServerId = serverId;
             return _deepLinkBlock;
+        }
+
+        /// <summary>
+        /// Filet « liens profonds » du chat (v2.6.9) : le gabarit du bloc
+        /// LIENS PROFONDS est RELATIF, mais les petits modèles l'« absolutisent »
+        /// parfois (vécu prod 2026-10-24 : https://emby.example.com/… — un
+        /// domaine placeholder des données d'entraînement, avec serverId et id
+        /// pourtant correctement recopiés). Or la page chat (garde même origine)
+        /// et l'app compagnon (parseur SHOW_RE) ne reconnaissent QUE la forme
+        /// relative : un hôte inventé = lien mort et bouton de projection
+        /// absent. Ce filet réécrit tout lien fiche vers la forme canonique
+        /// relative AVEC le vrai serverId — rattrape au passage un serverId
+        /// altéré, une casse déviante et les entités &amp;. Purement
+        /// syntaxique : la validité d'un id reste la responsabilité du modèle
+        /// (règle « jamais d'id inventé » du prompt) — les gardes du clic
+        /// (garde même origine, PermissionGate) restent l'autorité. Ne compte
+        /// que ce qui diffère réellement, avec une ligne de log greppable.
+        /// Sans serverId résolu (bloc omis) : no-op, fail-open.
+        /// </summary>
+        internal string NormalizeDeepLinks(string text, string label)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(_deepLinkServerId))
+                return text;
+            int fixedCount = 0;
+            // Formes rattrapées (préfixe d'hôte optionnel — https://hôte/,
+            // hôte seul, vide = déjà relative) ; id, serverId et asSeries
+            // capturés pour reconstruire la forme canonique.
+            string result = Regex.Replace(text,
+                @"(?i)\[([^\]\n]+)\]\(([^)\s]*)?/web/index\.html#!/item\?id=([A-Za-z0-9\-]+)" +
+                @"(?:&(?:amp;)?serverId=[A-Za-z0-9\-]+)?(?:&(?:amp;)?asSeries=(true))?\)",
+                m =>
+                {
+                    string canonical = "[" + m.Groups[1].Value + "](/web/index.html#!/item?id=" +
+                        m.Groups[3].Value + "&serverId=" + _deepLinkServerId;
+                    if (m.Groups[4].Success)
+                        canonical += "&asSeries=true";
+                    canonical += ")";
+                    if (!string.Equals(m.Value, canonical, StringComparison.Ordinal))
+                        fixedCount++;
+                    return canonical;
+                });
+            if (fixedCount > 0)
+                _logger.Info("[LLM_AI] [{0}] {1} lien(s) profond(s) réécrit(s) vers la forme canonique relative (préfixe d'hôte ou serverId inventé par le modèle).",
+                    label, fixedCount);
+            return result;
         }
 
         /// <summary>
@@ -865,6 +924,9 @@ namespace LLM_AI
 
                 string reply = SanitizeReport(await agent.RunChatAsync(history, userMessage, tools, ct)
                     .ConfigureAwait(false));
+                // Filet liens profonds (v2.6.9) : après SanitizeReport pour que
+                // le texte final porté aux pages ET au log soit la forme canonique.
+                reply = NormalizeDeepLinks(reply, label);
 
                 _logger.Info("[LLM_AI] [{0}] Réponse chat :\n{1}", label, reply);
                 return reply;
