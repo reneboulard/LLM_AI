@@ -1004,7 +1004,13 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 2. `LlmRunner.ResolveBackends` choisit le serveur primaire.
 3. Prompt + outils → `LlmAgentService` boucle d'agent (le LLM appelle `get_emby_info`
    `epg_series`/`epg_movies`, `tmdb_lookup`, `web_search`/`web_fetch`, `new_releases…`).
-4. `EnrichRecommendations` → posters/notes/id/chaîne.
+4. `EnrichRecommendations` → posters/notes/id/chaîne. **Pool EPG strict (v2.6.10)** :
+   seules les entrées portant `channel_id` (programmes réels du guide, issus des actions
+   `epg_*`) alimentent le rapprochement — les résultats titrés des autres outils
+   (`new_releases`/Showbizz, `web_search`, `tmdb_lookup`) sont ignorés. Une reco
+   intracable au guide (vécu en production : 3 « séries » hors-guide dont les chaînes
+   avaient été inventées par le modèle) est écartée avec un Warn greppable — on ne
+   publie jamais une reco non enregistrable.
 5. `EnrichWithLibrary` → garde-fou « déjà possédé » déterministe (titre, puis
    id IMDb si le LLM l'a établi) : reco possédée → `library_id` (exclue du
    record bucket, bouton « Regarder (bibli.) »). Stockage dans `Recommendations`.

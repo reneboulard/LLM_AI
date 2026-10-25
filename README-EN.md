@@ -979,7 +979,13 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 2. `LlmRunner.ResolveBackends` picks the primary backend.
 3. Prompt + tools → `LlmAgentService` agent loop (the LLM calls `get_emby_info`
    `epg_series`/`epg_movies`, `tmdb_lookup`, `web_search`/`web_fetch`, `new_releases…`).
-4. `EnrichRecommendations` → posters/ratings/id/channel.
+4. `EnrichRecommendations` → posters/ratings/id/channel. **Strict EPG pool (v2.6.10)**:
+   only entries carrying `channel_id` (real guide programs, from the `epg_*` actions)
+   feed the matching — titled results from other tools (`new_releases`/Showbizz,
+   `web_search`, `tmdb_lookup`) are ignored. A recommendation untraceable to the
+   guide (seen in production: 3 off-guide "series" whose channels the model had
+   invented) is dropped with a greppable Warn — a non-recordable recommendation is
+   never published.
 5. `EnrichWithLibrary` → deterministic already-owned guard (title, then IMDb id
    when the LLM established one): owned reco → `library_id` (excluded from the
    record bucket, "Watch (library)" button). Stored in `Recommendations`.

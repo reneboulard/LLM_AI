@@ -10,6 +10,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.6.10] — 2026-10-25
+
+### Fixed (FR)
+- **Recos d'enregistrement « séries inexistantes » : le pool
+  d'enrichissement est restreint aux programmes du guide.** Vécu en
+  production (2026-10-25, run planifié de 03 h) : la tâche a recommandé 3
+  séries absentes de l'EPG — des titres issus de la liste Showbizz
+  (`new_releases`), dates recopiées de cette liste, chaînes (des services de
+  streaming premium hors abonnement) assignées par le modèle. La validation
+  anti-hallucination du pipeline (`EnrichRecommendations`, « écartée(s)
+  hors-pool EPG ») était censée n'accepter qu'une reco rattachable à un
+  programme que le plugin avait fourni au LLM, mais son pool admettait TOUT
+  résultat d'outil titré — y compris Showbizz, web et TMDB — donc un simple
+  match de titre a fait passer les 3 recos. Elles ont été persistées telles
+  quelles (sans id Emby ni affiche), écrites en cartes .strm, inscrites au
+  registre de badges et annoncées par cloche comme des recos actionnables ;
+  aucun timer n'a été créé (l'auto-programmation était désactivée). Fix à
+  deux étages, même philosophie que les liens profonds (le serveur fait
+  respecter, le modèle dérive) : (1) **pool EPG strict** — une entrée de
+  pool doit porter `channel_id` (seuls les résultats
+  epg_series/epg_movies/epg_tonight/epg_now en portent) ; une reco qui ne
+  matche QUE des sources hors-guide redevient intracable → écartée par le
+  chemin existant, avec le Warn greppable qui liste les titres ; le filtre
+  empêche aussi qu'une entrée hors-EPG occupe la clé de titre d'une vraie
+  entrée EPG homonyme et masque son id. Une ligne Info compte les entrées
+  ignorées. (2) **gabarit du prompt par défaut durci** (FR + EN) : règle
+  absolue — une reco ne cible qu'un programme présent dans les résultats
+  epg_series/epg_movies (title/channel/start recopiés tels quels), un titre
+  absent du guide n'est pas enregistrable et n'est jamais recommandé,
+  `new_releases` ne sert qu'à corroborer un candidat de l'EPG
+  (`showbizz_match=true`). Le filet serveur s'applique quel que soit le
+  prompt stocké (les installations existantes n'ont rien à réinitialiser).
+  Auto-remédiation : au premier run planifié après déploiement, la
+  sémantique « tout remplacer » des consommateurs purge les cartes fantômes
+  et remplace la payload.
+
+### Fixed (EN)
+- **"Nonexistent series" recording recommendations: the enrichment pool is
+  restricted to guide programs.** Seen in production (2026-10-25, 3 AM
+  scheduled run): the task recommended 3 series absent from the EPG — titles
+  taken from the Showbizz list (`new_releases`), dates copied from that
+  list, channels (premium streaming services outside the subscription)
+  assigned by the model. The pipeline's anti-hallucination validation
+  (`EnrichRecommendations`, "dropped outside the EPG pool") was supposed to
+  only accept a recommendation traceable to a program the plugin itself had
+  fed the LLM, but its pool admitted ANY titled tool result — including
+  Showbizz, web and TMDB — so a plain title match let the 3 recommendations
+  through. They were persisted as-is (without Emby id or poster), written as
+  .strm cards, added to the badge registry and announced by notification as
+  actionable recommendations; no timer was created (auto-programming was
+  disabled). Two-layer fix, same philosophy as the deep links (the server
+  enforces, the model drifts): (1) **strict EPG pool** — a pool entry must
+  carry `channel_id` (only epg_series/epg_movies/epg_tonight/epg_now results
+  do); a recommendation matching only off-guide sources becomes untraceable
+  again → dropped by the existing path, with the greppable Warn listing the
+  titles; the filter also prevents an off-EPG entry from occupying the title
+  key of a real homonym EPG entry and masking its id. An Info line counts
+  the ignored entries. (2) **hardened default prompt template** (FR + EN):
+  absolute rule — a recommendation only targets a program present in the
+  epg_series/epg_movies results (title/channel/start copied verbatim), a
+  title absent from the guide cannot be recorded and is never recommended,
+  `new_releases` only corroborates an EPG candidate (`showbizz_match=true`).
+  The server-side net applies regardless of the stored prompt (existing
+  installs need to reset nothing). Self-remediation: on the first scheduled
+  run after deployment, the consumers' "replace-all" semantics purges the
+  phantom cards and replaces the payload.
+
 ## [2.6.9] — 2026-10-24
 
 ### Fixed (FR)

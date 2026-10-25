@@ -1954,6 +1954,19 @@ namespace LLM_AI
         /// portent <c>id</c>/<c>channel_id</c>/<c>rating</c> ; on les injecte
         /// dans la recommandation + <c>image_url</c> (poster) construit depuis
         /// l'id Emby.
+        /// <para><b>Pool EPG STRICT (fix 2.6.10)</b> : une entrée de pool doit
+        /// porter <c>channel_id</c> — seul un programme du guide en porte un.
+        /// Les autres résultats titrés capturés pendant la boucle
+        /// (<c>new_releases</c>/Showbizz, <c>web_search</c>, <c>tmdb_lookup</c>)
+        /// sont IGNORÉS : ils ne sont pas enregistrables. Vécu prod 2026-10-25 :
+        /// le pool acceptait tout résultat titré, la liste Showbizz « automne »
+        /// y est entrée et 3 séries hors-guide (chaînes inventées par le LLM)
+        /// ont « passé » la validation anti-hallucination par simple match de
+        /// titre — puis cartographiées en .strm/badges/cloche comme des recos
+        /// actionnables. Un titre qui ne matche QUE ces sources est désormais
+        /// intracable → écarté (le filtre empêche aussi une entrée Showbizz de
+        /// occuper la clé de titre d'une vraie entrée EPG et d'en masquer l'id).
+        /// </para>
         /// <para>Portage C# du matching par titre du PHP : on construit une
         /// lookup <c>norm(title) → EpgMatch</c>, puis pour chaque reco on
         /// cherche <c>norm(reco.title)</c>. Si pas de match (titre rewordé ou
@@ -1986,6 +1999,10 @@ namespace LLM_AI
             // id programme → EpgMatch : 3e clé de traçage (id recopié du pool),
             // pour injecter year/rating même quand le titre a été reformulé.
             var epgById = new Dictionary<string, EpgMatch>(StringComparer.Ordinal);
+            // Entrées titrées écartées du pool faute de channel_id (fix 2.6.10) :
+            // new_releases/Showbizz, web_search, tmdb_lookup — comptées pour la
+            // ligne de log, jamais admises dans le pool.
+            int nonEpgSkipped = 0;
             foreach (var tr in toolResults)
             {
                 if (string.IsNullOrEmpty(tr.result)) continue;
@@ -2009,6 +2026,23 @@ namespace LLM_AI
                             ? idEl.GetString() : null;
                         string channelId = item.TryGetProperty("channel_id", out var cidEl) && cidEl.ValueKind == JsonValueKind.String
                             ? cidEl.GetString() : null;
+
+                        // POOL EPG STRICT (fix 2.6.10) : sans channel_id, ce
+                        // résultat titré n'est PAS un programme du guide
+                        // (new_releases/Showbizz, web_search, tmdb_lookup). Un
+                        // titre hors-guide n'est pas enregistrable : l'admettre
+                        // dans le pool ferait « passer » la validation à une
+                        // reco qui ne peut aboutir à aucun timer (vécu prod
+                        // 2026-10-25 : 3 séries Showbizz hors-guide,
+                        // chaînes inventées par le LLM, .strm/badges/cloche
+                        // posés pour du vide). On l'écarte AVANT toute clé —
+                        // y compris le lookup de titre, où une entrée hors-EPG
+                        // masquerait l'id d'une vraie entrée EPG homonyme.
+                        if (string.IsNullOrEmpty(channelId))
+                        {
+                            nonEpgSkipped++;
+                            continue;
+                        }
                         double? rating = null;
                         if (item.TryGetProperty("rating", out var rEl) && rEl.ValueKind == JsonValueKind.Number)
                             rating = rEl.GetDouble();
@@ -2034,6 +2068,12 @@ namespace LLM_AI
                         if (!string.IsNullOrEmpty(id) && epgById.TryAdd(id, lookup[key])) epgIds.Add(id);
                     }
                 }
+            }
+
+            if (nonEpgSkipped > 0)
+            {
+                _logger?.Info("[LLM_AI] Enrichissement : {0} entrée(s) titrée(s) hors-guide ignorée(s) dans le pool EPG (new_releases/Showbizz, web, tmdb — pas enregistrables).",
+                    nonEpgSkipped);
             }
 
             if (lookup.Count == 0)
