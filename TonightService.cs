@@ -14,6 +14,7 @@ using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.LiveTv;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
@@ -317,13 +318,7 @@ namespace LLM_AI
             if (string.IsNullOrEmpty(w))
                 return true; // gate inactive (défaut) : production 24 h
 
-            int dash = w.IndexOf('-');
-            if (dash <= 0 || dash >= w.Length - 1 ||
-                !TimeSpan.TryParseExact(w.Substring(0, dash).Trim(), @"hh\:mm",
-                    CultureInfo.InvariantCulture, out var start) ||
-                !TimeSpan.TryParseExact(w.Substring(dash + 1).Trim(), @"hh\:mm",
-                    CultureInfo.InvariantCulture, out var end) ||
-                start == end)
+            if (!TryParseProductionWindow(cfg, out var start, out var end))
             {
                 if (w != _prodWindowWarned)
                 {
@@ -337,6 +332,30 @@ namespace LLM_AI
             return end > start
                 ? (t >= start && t < end)   // fenêtre d'un même jour
                 : (t >= start || t < end); // fenêtre franchissant minuit
+        }
+
+        /// <summary>
+        /// Parse la fenêtre de grande écoute (« HH:mm-HH:mm ») en bornes
+        /// valides (fin ≠ début). Partagé entre
+        /// <see cref="IsInProductionWindow"/> et la tâche de production
+        /// anticipée (<see cref="TonightPreProduceTask"/>, qui calcule si le
+        /// TTL du cache couvre pré-run → fin de fenêtre).
+        /// </summary>
+        internal static bool TryParseProductionWindow(PluginConfiguration cfg, out TimeSpan start, out TimeSpan end)
+        {
+            start = end = default;
+            var w = cfg?.TonightProductionWindow?.Trim();
+            if (string.IsNullOrEmpty(w))
+                return false; // gate inactive : pas de bornes
+            int dash = w.IndexOf('-');
+            if (dash <= 0 || dash >= w.Length - 1
+                || !TimeSpan.TryParseExact(w.Substring(0, dash).Trim(), @"hh\:mm",
+                    CultureInfo.InvariantCulture, out start)
+                || !TimeSpan.TryParseExact(w.Substring(dash + 1).Trim(), @"hh\:mm",
+                    CultureInfo.InvariantCulture, out end)
+                || start == end)
+                return false;
+            return true;
         }
 
         // ------------------------------------------------------------------
@@ -423,6 +442,15 @@ namespace LLM_AI
             //     épisode » d'une série jamais commencée (vécu 2026-10-08, prod).
             string recs = BuildUnwatchedRecordings(user, cfg, ct, compact, watchedIdx, out var menuTitles);
 
+            // 2b') Enregistrements À VENIR ce soir (timers DVR déjà
+            //      programmés) : complète le menu ci-dessus pour les runs
+            //      ANTICIPÉS (tâche planifiée de production anticipée v2.7.0 :
+            //      à 17 h, les enregistrements du soir n'existent pas encore —
+            //      leurs timers, si, et la grille EPG est complète). Bloc
+            //      contextuel auto-descriptif ; vide si aucun timer ne tombe
+            //      dans la fenêtre « ce soir ».
+            string upcoming = BuildUpcomingRecordings(cfg, compact);
+
             // 2c) Réserve bibliothèque (items non visionnés) : utilisée par le
             //    LLM uniquement si EPG + enregistrements < TonightMinRecommendations.
             string reserve = BuildLibraryFallbackPool(user, compact, excludedStrmRoot, menuTitles);
@@ -452,7 +480,7 @@ namespace LLM_AI
             int minRec = Math.Max(0, cfg.TonightMinRecommendations);
             string prompt = (cfg.TonightPrompt ?? string.Empty).Trim()
                 + "\n\n" + BuildTonightTimeBlock()
-                + profile + recs + reserve + binge + feedback;
+                + profile + recs + upcoming + reserve + binge + feedback;
 
             // Directives de session (chat, tool run_tonight_run) : one-shot,
             // injectées dans LE prompt de ce run uniquement — jamais
@@ -1860,6 +1888,115 @@ namespace LLM_AI
                 sb.AppendLine("(Enregistrements récents indisponibles — base-toi sur l'EPG du soir et le profil.)");
             }
             return sb.ToString();
+        }
+
+        // ------------------------------------------------------------------
+        //  Enregistrements À VENIR ce soir (timers DVR déjà programmés)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Bloc « ENREGISTREMENTS À VENIR CE SOIR » : timers DVR planifiés
+        /// (ou en cours) dont la diffusion tombe dans la fenêtre « ce soir »
+        /// — les MÊMES bornes que <c>epg_tonight</c>
+        /// (<see cref="PluginConfiguration.TonightWindowStart"/> →
+        /// <see cref="PluginConfiguration.TonightWindowEnd"/>, défaut
+        /// maintenant → 23:59, franchissement de minuit géré). Complète le
+        /// menu des enregistrements complétés pour les runs ANTICIPÉS (tâche
+        /// de production anticipée, v2.7.0 : à 17 h, les enregistrements du
+        /// soir n'existent pas encore — leurs timers, si, et l'EPG est
+        /// complet ; la soirée vue par le LLM redevient équivalente à celle
+        /// d'un run au moment du login).
+        /// <para>Sémantique auto-portée par les lignes (patron v2.2.2/v2.6.10 :
+        /// le bloc reste compréhensible SANS changement du workflow stocké) :
+        /// « DÉJÀ programmé — ne pas re-programmer ». Le bloc est un CONTEXTE
+        /// de planification, PAS une source de champs — une reco
+        /// <c>source="live"</c> reste copiée depuis epg_tonight (seule source
+        /// validée pour title/channel/start ; un titre de timer est un titre
+        /// de SÉRIE, l'EPG porte le titre d'épisode — vécu v2.6.6).</para>
+        /// <para>Fail-open : toute erreur → bloc vide (run inchangé). Aucun
+        /// timer dans la fenêtre → bloc vide (pas de bruit).</para>
+        /// </summary>
+        private string BuildUpcomingRecordings(PluginConfiguration cfg, bool compact)
+        {
+            try
+            {
+                var timers = (_liveTv.GetTimers(new TimerQuery { IsScheduled = true })?.Items)
+                             ?? Array.Empty<TimerInfoDto>();
+                if (timers.Length == 0) return string.Empty;
+
+                // Fenêtre « ce soir » — mêmes bornes que GetEmbyInfoTool.EpgTonight.
+                var now = DateTimeOffset.Now;
+                var today = now.Date;
+                var minStart = TryParseHHmm(cfg?.TonightWindowStart, out var st)
+                    ? new DateTimeOffset(today.Add(st), now.Offset)
+                    : now;
+                var endStr = cfg?.TonightWindowEnd;
+                if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
+                DateTimeOffset maxStart;
+                if (TryParseHHmm(endStr, out var et))
+                {
+                    var endDt = today.Add(et);
+                    if (endDt < minStart) endDt = endDt.AddDays(1);
+                    maxStart = new DateTimeOffset(endDt, now.Offset);
+                }
+                else
+                {
+                    maxStart = new DateTimeOffset(today.AddHours(23).AddMinutes(59), now.Offset);
+                }
+
+                var lines = new List<string>();
+                foreach (var t in timers)
+                {
+                    if (t?.ProgramInfo == null) continue;
+
+                    // v2.6.6 (vécu « SEAL Team ») : un timer peut passer
+                    // Status=Cancelled silencieusement — un timer annulé
+                    // n'ira pas au bloc. Completed = déjà couvert par le menu
+                    // des enregistrements complétés (double représentation) ;
+                    // Aborted = annulé après démarrage.
+                    string status = t.Status.ToString();
+                    if (status == "Cancelled" || status == "Completed" || status == "Aborted") continue;
+
+                    var p = t.ProgramInfo;
+                    var start = p.StartDate ?? DateTimeOffset.MinValue;
+                    if (start < minStart || start >= maxStart) continue;
+
+                    string title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                    if (string.IsNullOrWhiteSpace(title)) continue;
+
+                    string kind = p.IsSeries == true ? "series" : "movie";
+                    var line = new StringBuilder($"- title={title} | channel={p.ChannelName} | " +
+                        $"start={start.ToString("HH:mm", CultureInfo.InvariantCulture)} | kind={kind}");
+                    if (!string.IsNullOrEmpty(p.SeriesName) && !string.IsNullOrEmpty(p.Name) && p.Name != p.SeriesName)
+                        line.Append($" | episode={p.Name}");
+                    if (status == "InProgress")
+                        line.Append(" | status=recording (en cours)");
+                    lines.Add(line.ToString());
+
+                    if (lines.Count >= (compact ? 8 : 20)) break;
+                }
+                if (lines.Count == 0) return string.Empty;
+
+                var sb = new StringBuilder();
+                sb.AppendLine();
+                sb.AppendLine("### ENREGISTREMENTS À VENIR CE SOIR (déjà programmés — timers DVR)");
+                sb.AppendLine($"{lines.Count} diffusion(s) de ce soir seront enregistrées automatiquement :");
+                foreach (var l in lines) sb.AppendLine(l);
+                sb.AppendLine("Ces diffusions sont DÉJÀ programmées : ne PAS les re-programmer (un timer " +
+                              "existe déjà, l'auto-programmation ne créera pas de doublon). Ce bloc est un " +
+                              "CONTEXTE, pas une source de champs : pour en recommander une en direct, " +
+                              "utilise epg_tonight (source=\"live\", title/channel/start recopiés de l'EPG — " +
+                              "JAMAIS de cette liste) et mentionne dans la raison qu'elle sera de toute façon " +
+                              "enregistrée ce soir ; pour la regarder après diffusion, aucune programmation " +
+                              "n'est nécessaire.");
+                _logger?.Info("[LLM_AI] Tonight à venir : {0} timer(s) dans la fenêtre « ce soir ».", lines.Count);
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] BuildUpcomingRecordings : {0}", ex.Message);
+                return string.Empty; // fail-open : pas de bloc, run inchangé
+            }
         }
 
         /// <summary>

@@ -92,8 +92,25 @@ namespace LLM_AI
         // Garde-fou anti-run-parallèle pour un même usager : si deux appareils
         // se connectent à la fois, seul le premier déclenche le run LLM ; le
         // second trouve le cache frais (ou est sauté) → pas de double run.
+        // v2.7.0 : internal et partagé avec <see cref="TonightPreProduceTask"/>
+        // — la production anticipée et un login simultané ne doublent pas non
+        // plus le run (la tâche tourne hors fenêtre en pratique, mais le
+        // partage rend la garantie indépendante de l'horaire choisi).
         private static readonly HashSet<string> _inFlight = new HashSet<string>(StringComparer.Ordinal);
         private static readonly object _inFlightLock = new object();
+
+        /// <summary>Débute un run Tonight pour l'usager : false si un run est
+        /// déjà en vol (autre appareil OU production anticipée).</summary>
+        internal static bool TryBeginUserRun(string userId)
+        {
+            lock (_inFlightLock) { return _inFlight.Add(userId); }
+        }
+
+        /// <summary>Libère le garde-fou de run (toujours en finally).</summary>
+        internal static void EndUserRun(string userId)
+        {
+            lock (_inFlightLock) { _inFlight.Remove(userId); }
+        }
 
         public void Run()
         {
@@ -174,16 +191,14 @@ namespace LLM_AI
                 }
 
                 // 2) Cache froid → run LLM. Garde-fou in-flight : si un run est
-                //    déjà en cours pour cet usager (autre appareil), on ne lance
-                //    pas un second run ; on saute ce login (le premier popup
-                //    arrivera, et la cloche persistante couvre le cas).
-                lock (_inFlightLock)
+                //    déjà en cours pour cet usager (autre appareil, production
+                //    anticipée), on ne lance pas un second run ; on saute ce
+                //    login (le premier popup arrivera, et la cloche persistante
+                //    couvre le cas).
+                if (!TryBeginUserRun(user.Id.ToString()))
                 {
-                    if (!_inFlight.Add(user.Id.ToString()))
-                    {
-                        _logger?.Info("[LLM_AI] Login « {0} » : run Tonight déjà en cours (autre appareil ?) → ignoré.", user.Name);
-                        return;
-                    }
+                    _logger?.Info("[LLM_AI] Login « {0} » : run Tonight déjà en cours (autre appareil ?) → ignoré.", user.Name);
+                    return;
                 }
 
                 try
@@ -221,7 +236,7 @@ namespace LLM_AI
                 }
                 finally
                 {
-                    lock (_inFlightLock) { _inFlight.Remove(user.Id.ToString()); }
+                    EndUserRun(user.Id.ToString());
                 }
             }
             catch (Exception ex)
@@ -593,8 +608,12 @@ namespace LLM_AI
         /// ligne), chaque suggestion a SES lignes : méta, puis la raison 🤖
         /// en retrait — le courriel est l'endroit où la raison LLM complète
         /// a sa place (jamais dans un toast).
+        /// <para>Internal (v2.7.0) : partagé avec
+        /// <see cref="TonightPreProduceTask"/> — la cloche de la production
+        /// anticipée part à l'heure du pré-run (le toast, lui, part au login
+        /// depuis le cache frais), même forme de texte pour l'usager.</para>
         /// </summary>
-        private static string BuildBellText(string payload, int programmed)
+        internal static string BuildBellText(string payload, int programmed)
         {
             var watch = ExtractWatchItems(payload);
             var sb = new System.Text.StringBuilder();

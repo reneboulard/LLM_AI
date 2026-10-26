@@ -89,7 +89,11 @@ namespace LLM_AI
                 "direct ou à enregistrer) ou source=\"recording\" (enregistrement disponible : à " +
                 "regarder maintenant). Reprends title/channel/start tels quels depuis epg_tonight pour " +
                 "le source=\"live\" ; pour source=\"recording\", reprends id tel quel depuis la liste " +
-                "des enregistrements. Tu peux enrichir via tmdb_lookup/web_search si utile, mais reste " +
+                "des enregistrements. Les ENREGISTREMENTS À VENIR CE SOIR (section dédiée du message, " +
+                "timers déjà programmés) seront enregistrés automatiquement : ne les re-programme pas ; " +
+                "si tu en recommandes un en direct (source=\"live\"), recopie ses champs depuis " +
+                "epg_tonight et mentionne dans la raison que l'enregistrement est déjà prévu. " +
+                "Tu peux enrichir via tmdb_lookup/web_search si utile, mais reste " +
                 "pratique et rapide : l'objectif est une courte sélection personnalisée pour ce soir, " +
                 "pas un audit exhaustif.",
             auditPrompt:
@@ -181,7 +185,11 @@ namespace LLM_AI
                 "kind=\"movie\" and priority high/medium/low, and source=\"live\" (tonight's EPG " +
                 "program: to watch live or to record) or source=\"recording\" (available recording: " +
                 "to watch now). Copy title/channel/start verbatim from epg_tonight for source=\"live\"; " +
-                "for source=\"recording\", copy id verbatim from the recordings list. You may enrich " +
+                "for source=\"recording\", copy id verbatim from the recordings list. The UPCOMING " +
+                "TONIGHT RECORDINGS (dedicated message section, timers already scheduled) will be " +
+                "recorded automatically: do not re-program them; if you recommend one live " +
+                "(source=\"live\"), copy its fields from epg_tonight and note in the reason that the " +
+                "recording is already scheduled. You may enrich " +
                 "via tmdb_lookup/web_search if useful, but stay practical and fast: the goal is a " +
                 "short personalized selection for tonight, not an exhaustive audit.",
             auditPrompt:

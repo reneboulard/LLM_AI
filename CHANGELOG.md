@@ -10,6 +10,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.7.0] — 2026-10-26
+
+### Added (FR)
+- **Production anticipée « AI Tonight »** : nouvelle tâche planifiée
+  (`TonightPreProduceTask`, quotidien défaut 17 h, réglable dans le
+  planificateur Emby) qui produit en avance les recommandations « À regarder
+  ce soir » de chaque usager non ignoré. Au login, le toast devient
+  **immédiat** (le cache du jour est servi par le chemin existant « cache
+  frais → toast immédiat ») : le run LLM, qui peut prendre plusieurs minutes
+  sur un backend lent, est absorbé en tâche de fond. L'impact visé : le popup
+  a le plus d'effet juste après le login, avant l'exploration de l'interface.
+- **Bloc « ENREGISTREMENTS À VENIR CE SOIR »** dans le prompt Tonight :
+  timers DVR déjà programmés dont la diffusion tombe dans la fenêtre « ce
+  soir » (bornes identiques à `epg_tonight`), lignes auto-descriptives
+  (« DÉJÀ programmé — ne pas re-programmer », patron v2.2.2/v2.6.10 : la
+  sémantique vit dans la ligne, pas dans le workflow stocké). Complète le
+  menu des enregistrements complétés pour les runs anticipés : à 17 h, la
+  grille EPG du soir est complète et les enregistrements du soir sont
+  représentés par leurs timers — la soirée vue par le LLM au pré-run est
+  équivalente à celle d'un run au login. Statuts filtrés : `Cancelled`
+  (vécu v2.6.6 — timers annulés silencieusement), `Completed` (déjà au menu
+  des complétés), `Aborted`.
+- **Lead-time d'auto-programmation** : la tâche crée les timers du record
+  bucket 2-3 h plus tôt qu'un run à 19 h 30 — les recos des diffusions
+  17 h 45-19 h 30 deviennent enregistrables. 4e surface `AutoProgrammer`
+  (après Activate/planifié/chat de la v2.6.6), même gating `AutoProgram`.
+- **Cloche persistante à l'heure du pré-run** (décision usager) : le digest
+  complet (une ligne par reco + raison) part AVANT la soirée via les
+  notifiers configurés ; le toast éphémère rappelle les titres au login —
+  chaque canal à son meilleur moment. Symétrie stricte avec le login
+  (piège vérifié : le chemin « cache frais au login » saute l'auto-
+  programmation ET la cloche par conception — si la tâche ne les exécutait
+  pas, personne ne le ferait).
+- **Garde-fous** : no-op si `TonightEnabled` décoché ; comptes ignorés sautés
+  (même liste que le login, v2.2.0) ; un cache du jour n'est jamais
+  re-produit (pas de double coût LLM) ; garde-fou in-flight PARTAGÉ avec le
+  login (`TonightLoginService.TryBeginUserRun`) ; hint TTL greppable si
+  `TonightCacheHours` ne couvre pas la fin de fenêtre de grande écoute
+  (défaut 4 h — suggéré ≥ 6 h pour un pré-run 17 h). La fenêtre de grande
+  écoute reste intacte : le pré-run est une demande explicite du serveur
+  (comme l'outil chat), login et page demeurent inertes hors fenêtre.
+- Gabarits `TonightPrompt` durcis (FR+EN) : vocabulaire « enregistrements à
+  venir — ne pas re-programmer, champs recopiés depuis epg_tonight » (source
+  du bouton Réinitialiser ; le bloc injecté reste auto-descriptif pour les
+  installs existantes).
+
+### Changed (FR)
+- **Budget par appel LLM adaptatif pour un backend local** : le délai de
+  120 s (inchangé pour le cloud — ollama_cloud, Gemini — et les appels
+  légers) devient, pour un backend Ollama **local**, un budget
+  proportionnel à la charge utile : 3 min + 1 s par 100 caractères,
+  plafonné à 9 min — **sans nouvelle option de configuration**. Terrain :
+  le mur d'un backend local est le pré-remplissage, proportionnel à la
+  taille du prompt (un final « AI Tonight » à ~27 000 car. exigeait
+  >240 s à froid) ; le budget suit désormais automatiquement ce que
+  l'appel demande au matériel — un usager à configuration modeste
+  reçoit 2-4x l'ancien délai sur les gros appels, le repli cloud restant
+  le filet de secours. Le budget appliqué est affiché au log
+  (« Appel Ollama : …, budget=N s »).
+
+### Added (EN)
+- **Early "AI Tonight" production**: new scheduled task
+  (`TonightPreProduceTask`, daily default 5 PM, adjustable in the Emby
+  scheduler) that produces every non-ignored user's "Watch tonight"
+  recommendations ahead of time. At login the toast becomes **instant**
+  (the same-day cache is served by the existing "fresh cache → immediate
+  toast" path): the LLM run, which can take minutes on a slow backend, is
+  absorbed as a background task. The intended impact: the popup matters
+  most right after login, before the user explores the UI.
+- **"UPCOMING TONIGHT RECORDINGS" block** in the Tonight prompt:
+  already-scheduled DVR timers airing within the "tonight" window (same
+  bounds as `epg_tonight`), self-describing lines ("ALREADY scheduled — do
+  not re-program", pattern v2.2.2/v2.6.10: semantics live in the line, not
+  in the stored workflow). Completes the completed-recordings menu for
+  early runs: at 5 PM the evening EPG grid is complete and the evening's
+  recordings are represented by their timers — the evening the LLM sees at
+  pre-run time is equivalent to a login-time run's. Filtered statuses:
+  `Cancelled` (v2.6.6 field note — silently cancelled timers), `Completed`
+  (already in the completed menu), `Aborted`.
+- **Auto-programming lead time**: the task creates record-bucket timers
+  2-3 h earlier than a 7:30 PM run — suggestions for 5:45-7:30 PM
+  broadcasts become recordable. Fourth `AutoProgrammer` surface (after the
+  v2.6.6 Activate/scheduled/chat), same `AutoProgram` gating.
+- **Persistent notification at pre-run time** (user decision): the full
+  digest (one line per suggestion + reason) goes out BEFORE the evening
+  through the configured notifiers; the ephemeral toast recalls the titles
+  at login — each channel at its best moment. Strict symmetry with the
+  login path (verified trap: the "fresh cache at login" path skips
+  auto-programming AND the bell by design — if the task didn't run them,
+  nobody would).
+- **Guards**: no-op when `TonightEnabled` is unchecked; ignored accounts
+  skipped (same list as the login trigger, v2.2.0); a same-day cache is
+  never re-produced (no double LLM cost); in-flight guard SHARED with the
+  login trigger (`TonightLoginService.TryBeginUserRun`); greppable TTL
+  hint when `TonightCacheHours` doesn't cover the end of the prime-time
+  window (default 4 h — ≥ 6 h suggested for a 5 PM pre-run). The prime-time
+  window is untouched: the pre-run is an explicit server-side demand (like
+  the chat tool), login and page stay inert outside the window.
+- Hardened `TonightPrompt` templates (FR+EN): "upcoming recordings — do not
+  re-program, copy fields from epg_tonight" vocabulary (Reset-button
+  source; the injected block stays self-describing for existing installs).
+
+### Changed (EN)
+- **Adaptive per-call LLM budget for local backends**: the 120 s timeout
+  (unchanged for cloud — ollama_cloud, Gemini — and lightweight calls)
+  becomes, for a **local** Ollama backend, a budget proportional to the
+  payload: 3 min + 1 s per 100 characters, capped at 9 min — **no new
+  configuration option**. Field data: a local backend's wall is the prompt
+  prefill, proportional to prompt size (an "AI Tonight" final at
+  ~27,000 chars needed >240 s cold); the budget now automatically
+  follows what the call asks of the hardware — a modest-hardware user
+  gets 2-4x the old timeout on large calls, the cloud fallback remaining
+  the safety net. The applied budget is logged
+  ("Appel Ollama : …, budget=N s").
+
+---
+
 ## [2.6.10] — 2026-10-25
 
 ### Fixed (FR)

@@ -23,19 +23,51 @@ namespace LLM_AI
         {
             // Plafond HAUT, jamais la muraille active : le timeout EFFICACE
             // par appel vient du linked CTS de SendWithTimeoutAsync (défaut
-            // 2 min = l'ancien Timeout ici ; le moteur I18nGenerator passe
-            // 5 min pour ses doses — les grosses doses de tête sur un
-            // modèle local lent dépassaient 2 min et mouraient
-            // TaskCanceledException sans ct annulé, terrain 2026-10-03,
-            // run « de » 26b : tout le run déclaré « timeout 25 min »).
+            // plat 2 min = l'ancien Timeout ici, ADAPTATIF en local ; le
+            // moteur I18nGenerator passe 10 min pour ses doses — les grosses
+            // doses de tête sur un modèle local lent dépassaient 2 min et
+            // mouraient TaskCanceledException sans ct annulé, terrain
+            // 2026-10-03, run « de » 26b : tout le run déclaré « timeout
+            // 25 min »).
             Timeout = TimeSpan.FromMinutes(10)
         };
 
         /// <summary>Timeout par défaut par appel quand l'appelant ne passe
         /// pas de <c>perCall</c> — le comportement historique (2 min via
-        /// HttpClient.Timeout) est réappliqué via CancelAfter, inchangé pour
-        /// chat / audit / tonight.</summary>
+        /// HttpClient.Timeout) réappliqué via CancelAfter. C'est la valeur
+        /// CLOUD (ollama_cloud, Gemini) et des appels légers (/api/ps) ; le
+        /// chemin LOCAL Ollama la remplace par le budget adaptatif
+        /// <see cref="ResolveCallTimeout"/>.</summary>
         private static readonly TimeSpan DefaultCallTimeout = TimeSpan.FromMinutes(2);
+
+        /// <summary>Plancher du budget adaptatif local : préfill +
+        /// génération d'un PETIT appel sur un matériel lent (CPU/petit GPU
+        /// — un petit chat 7B CPU ≈ 140 s, mort au mur historique de
+        /// 120 s).</summary>
+        private static readonly TimeSpan LocalCallTimeoutFloor = TimeSpan.FromSeconds(180);
+
+        /// <summary>Plafond du budget adaptatif local, volontairement SOUS
+        /// le plafond HttpClient (10 min) : le budget annoncé au log
+        /// (« budget=N s ») reste la muraille effective.</summary>
+        private static readonly TimeSpan LocalCallTimeoutCap = TimeSpan.FromMinutes(9);
+
+        /// <summary>Budget par appel ajusté SANS option de config : cloud =
+        /// défaut plat (2 min) ; LOCAL Ollama = plancher + 1 s par 100
+        /// caractères de charge utile, plafonné. Terrain 2026-10-26 : le mur
+        /// local est le PRÉFILL, proportionnel au payload (final Tonight
+        /// nemotron-3.5-bolt ~27k car. exigeait >240 s à froid, le banc
+        /// synthétique ~2-3k car. passait en 50-111 s — la taille de
+        /// l'appel dicte l'attente, pas le modèle seul). La charge est connue
+        /// au point d'envoi (BuildRequestBody) : le budget suit
+        /// automatiquement ce que l'appel demande au matériel de l'usager —
+        /// un usager à configuration limite reçoit 2-4x l'ancien délai sur
+        /// les gros appels, le repli cloud reste le filet.</summary>
+        private static TimeSpan ResolveCallTimeout(bool isLocal, int payloadChars)
+        {
+            if (!isLocal) return DefaultCallTimeout;
+            var t = LocalCallTimeoutFloor + TimeSpan.FromSeconds(payloadChars / 100);
+            return t > LocalCallTimeoutCap ? LocalCallTimeoutCap : t;
+        }
 
         /// <summary>SendAsync avec timeout PAR APPEL : linked CTS CancelAfter
         /// sur le token appelant — une vraie annulation se propage telle
@@ -257,7 +289,11 @@ namespace LLM_AI
         /// Appelle POST {url}/api/chat (Ollama local ou cloud) avec une liste
         /// de messages (boucle agent) et renvoie le contenu de la réponse.
         /// <paramref name="apiKey"/> non null → en-tête Authorization: Bearer
-        /// (ollama_cloud).
+        /// (ollama_cloud) et budget plat 2 min ; null → LOCAL : budget par
+        /// appel adaptatif proportionnel à la charge utile
+        /// (<see cref="ResolveCallTimeout"/> — même discriminant local/cloud
+        /// que num_ctx). Un <paramref name="perCall"/> explicite reste
+        /// prioritaire (I18nGenerator 10 min).
         /// </summary>
         private static async Task<string> ChatOllamaAsync(
             string url,
@@ -279,9 +315,13 @@ namespace LLM_AI
             // (zéro reload), sinon demander le seuil requis ; cloud : historique.
             var numCtx = await ResolveNumCtxAsync(url, model, apiKey, logger, ct).ConfigureAwait(false);
             var body = BuildRequestBody(model, numCtx, messages);
+            // Budget par appel : plat en cloud, adaptatif à la charge en
+            // local (apiKey null ⇔ local, même discriminant que num_ctx) ;
+            // l'override explicite de l'appelant (I18nGenerator) gagne.
+            var budget = perCall ?? ResolveCallTimeout(string.IsNullOrEmpty(apiKey), body.Length);
 
-            logger?.Info("[LLM_AI] Appel Ollama : {0} (modèle={1}, messages={2}, num_ctx={3}, auth={4})",
-                endpoint, model, messages.Count, numCtx, apiKey != null ? "Bearer" : "non");
+            logger?.Info("[LLM_AI] Appel Ollama : {0} (modèle={1}, messages={2}, num_ctx={3}, auth={4}, budget={5} s)",
+                endpoint, model, messages.Count, numCtx, apiKey != null ? "Bearer" : "non", (int)budget.TotalSeconds);
 
             using (var req = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
@@ -290,7 +330,7 @@ namespace LLM_AI
                 if (!string.IsNullOrEmpty(apiKey))
                     req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-                using (var resp = await SendWithTimeoutAsync(req, perCall, ct).ConfigureAwait(false))
+                using (var resp = await SendWithTimeoutAsync(req, budget, ct).ConfigureAwait(false))
                 {
                     var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
