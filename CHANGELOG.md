@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.7.1] — 2026-10-27
+
+### Fixed (FR)
+- **Toasts et cloches d'enregistrement : un épisode de série porte
+  désormais la série ET sa position.** Vécu en production (2026-10-26) : la
+  notification de début d'un épisode d'« Alertes: Pelletier » n'affichait
+  que « ▶ « Nelly » commence — il est dans vos recommandations de ce soir
+  (CFTM-DT · 21:00) » — le `Name` du programme EPG est le titre d'ÉPISODE
+  seul ; la série vit dans `SeriesName`, la numérotation dans
+  `ParentIndexNumber` (saison) / `IndexNumber` (épisode). Nouveau titre
+  d'affichage partagé (`GetEmbyInfoTool.ProgramDisplayTitle`) :
+  « Série — S02E05 « Titre d'épisode » » ; numérotation absente →
+  « Série — « Titre » » ; titre d'épisode égal à la série →
+  « Série — S02E05 » ; film/magazine (pas de série) → « Titre »,
+  rendu inchangé. Même correctif pour le toast « Enregistrement
+  programmé » de l'activation d'une carte (unification de
+  `ResolveProgramTitle` avec la convention `SeriesName ?: Name` de
+  `GetEmbyInfoTool`). Bonus d'appariement : le repli par titre des toasts
+  d'enregistrement essaie maintenant le nom de série en plus du titre
+  d'épisode (le payload d'une reco live de série porte la SÉRIE, pas
+  l'épisode — auparavant, seule l'appariement par id rattrapait les
+  épisodes).
+
+### Fixed (EN)
+- **Recording toasts and bells: a series episode now carries the series
+  AND its position.** Field report (2026-10-26, production): the start
+  notification for an "Alertes: Pelletier" episode only read "▶ « Nelly »
+  commence — …" — the EPG program's `Name` is the EPISODE title alone; the
+  series lives in `SeriesName`, the numbering in `ParentIndexNumber`
+  (season) / `IndexNumber` (episode). New shared display title
+  (`GetEmbyInfoTool.ProgramDisplayTitle`): "Series — S02E05 « Episode
+  title »"; no numbering → "Series — « Episode »"; episode title equal to
+  the series → "Series — S02E05"; movie/magazine (no series) → "Title",
+  rendering unchanged. Same fix for the "Recording scheduled" toast of
+  card activation (unifying `ResolveProgramTitle` with
+  `GetEmbyInfoTool`'s `SeriesName ?: Name` convention). Matching bonus:
+  the recording toasts' title fallback now also tries the series name
+  besides the episode title (a live recommendation's payload carries the
+  SERIES, not the episode — until now, only the id-based match caught
+  episodes).
+
+---
+
 ## [2.7.0] — 2026-10-26
 
 ### Added (FR)

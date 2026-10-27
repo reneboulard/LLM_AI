@@ -47,6 +47,15 @@ namespace LLM_AI
     /// reformulé/faux — vécu 2026-10-10) ; sans id, repli titre normalisé
     /// (<see cref="LlmRunner.NormTitle"/>) corroboré par l'heure de début
     /// du guide (±15 min).</para>
+    /// <para><b>Titre d'affichage</b> (v2.7.1) : le toast/cloche d'un
+    /// épisode de série porte la série ET sa position —
+    /// « Série — S02E05 « Titre d'épisode » » via
+    /// <see cref="GetEmbyInfoTool.ProgramDisplayTitle"/> — car le
+    /// <c>Name</c> du programme EPG est le titre d'ÉPISODE seul (vécu prod
+    /// 2026-10-26 : « ▶ « Nelly » commence » pour un épisode d'« Alertes:
+    /// Pelletier », aucune série ni numérotation). Le repli titre de
+    /// l'appariement essaie le nom de série ET le titre d'épisode (le
+    /// payload d'une reco live de série porte la série, pas l'épisode).</para>
     /// <para><b>Piège évité</b> : les recos <c>source="recording"</c>
     /// (« regarde l'épisode déjà enregistré ») ne sont JAMAIS appariées —
     /// sinon le timer quotidien d'une série consommée comme enregistrement
@@ -186,7 +195,16 @@ namespace LLM_AI
             string channel = rec.Channel?.Name;
             long? programId = rec.Program?.InternalId;
 
-            var matches = MatchAgainstTonight(cfg, title, start, programId);
+            // Titre d'affichage (v2.7.1) : le Name de l'entité programme est
+            // le titre d'ÉPISODE quand l'EPG en porte un (« Nelly ») — la
+            // série vit dans SeriesName, la numérotation dans
+            // ParentIndexNumber/IndexNumber. L'appariement, lui, reste sur
+            // les identités brutes (titre + SeriesName ci-dessous).
+            string display = GetEmbyInfoTool.ProgramDisplayTitle(title, rec.Program?.SeriesName,
+                rec.Program?.ParentIndexNumber, rec.Program?.IndexNumber);
+            if (string.IsNullOrWhiteSpace(display)) display = "« " + title + " »";
+
+            var matches = MatchAgainstTonight(cfg, title, rec.Program?.SeriesName, start, programId);
             if (matches.Count == 0)
             {
                 _logger?.Info("[LLM_AI] Enregistrement « {0} » {1} — absent des recommandations live (< 48 h), silence.",
@@ -197,7 +215,7 @@ namespace LLM_AI
             _logger?.Info("[LLM_AI] Enregistrement « {0} » {1} — reco live de {2} usager(s) : toast + cloche.",
                 title, started ? "démarré" : "complété", matches.Count);
             foreach (var (userId, reason) in matches)
-                await AnnounceAsync(userId, title, channel, start, reason, started).ConfigureAwait(false);
+                await AnnounceAsync(userId, display, channel, start, reason, started).ConfigureAwait(false);
         }
 
         // ------------------------------------------------------------------
@@ -215,16 +233,23 @@ namespace LLM_AI
         /// « Miss Scarlet, détective privée », id 774657 rattaché par
         /// chaîne+heure) ; un appariement par titre seul raterait
         /// l'enregistrement d'une reco enrichie. Sans id (ou sans match
-        /// d'id), repli titre normalisé + corroboration d'horaire.
+        /// d'id), repli titre normalisé + corroboration d'horaire : le
+        /// titre du payload de la reco live d'une SÉRIE est le nom de
+        /// série (convention <c>SeriesName ?: Name</c> de l'enrichissement)
+        /// alors que le programme EPG porte le titre d'ÉPISODE en
+        /// <c>Name</c> — le repli compare donc le payload aux DEUX (nom de
+        /// série et titre d'épisode, v2.7.1 : avant, seule l'id rattrapait
+        /// les épisodes).
         /// Retourne (userId, raison LLM de la reco appariée) — une reco
         /// appariée par usager suffit. Best-effort : payload illisible →
         /// usager sauté.
         /// </summary>
         private List<(string UserId, string Reason)> MatchAgainstTonight(
-            PluginConfiguration cfg, string title, DateTimeOffset? start, long? programId)
+            PluginConfiguration cfg, string title, string seriesName, DateTimeOffset? start, long? programId)
         {
             var matches = new List<(string, string)>();
             string norm = LlmRunner.NormTitle(title ?? string.Empty);
+            string seriesNorm = LlmRunner.NormTitle(seriesName ?? string.Empty);
             // NB : pas de retour anticipé sur norm vide (v2.4.1) — un titre
             // dégénéré (tout-punctuation) normaliserait vide alors que l'id
             // reste exploitable ; le chemin TITRE est neutralisé dans la
@@ -273,9 +298,16 @@ namespace LLM_AI
 
                         if (!idHit)
                         {
-                            if (string.IsNullOrEmpty(norm)) continue; // pas de titre exploitable → id seul
+                            // Pas de titre exploitable des DEUX côtés → id seul.
+                            if (norm.Length == 0 && seriesNorm.Length == 0) continue;
                             if (!el.TryGetProperty("title", out var t) || t.ValueKind != JsonValueKind.String) continue;
-                            if (!string.Equals(LlmRunner.NormTitle(t.GetString() ?? string.Empty), norm, StringComparison.Ordinal))
+                            string payloadNorm = LlmRunner.NormTitle(t.GetString() ?? string.Empty);
+                            if (payloadNorm.Length == 0) continue;
+                            // Le payload d'une reco live de série porte le
+                            // NOM DE SÉRIE, le programme EPG le titre
+                            // d'ÉPISODE — les deux clés sont essayées.
+                            if (!string.Equals(payloadNorm, norm, StringComparison.Ordinal) &&
+                                !string.Equals(payloadNorm, seriesNorm, StringComparison.Ordinal))
                                 continue;
 
                             // Corroboration d'horaire (±15 min) quand les DEUX
@@ -315,9 +347,9 @@ namespace LLM_AI
 
             string toast = started
                 ? string.Format(CultureInfo.InvariantCulture,
-                    "▶ « {0} » commence — il est dans vos recommandations de ce soir{1}", title, suffix)
+                    "▶ {0} commence — il est dans vos recommandations de ce soir{1}", title, suffix)
                 : string.Format(CultureInfo.InvariantCulture,
-                    "✅ « {0} » est enregistré — prêt à regarder{1}", title, suffix);
+                    "✅ {0} est enregistré — prêt à regarder{1}", title, suffix);
 
             User user = ResolveUser(userId);
 

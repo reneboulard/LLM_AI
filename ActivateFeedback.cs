@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Querying;
@@ -275,9 +276,17 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Résout le titre du programme EPG pointé par <paramref name="programId"/>
-        /// (une requête in-process par activation — même mécanique que
-        /// StrmLibraryGenerator.TryGetEpgProgram). Repli : programId brut.
+        /// Résout le titre d'affichage du programme EPG pointé par
+        /// <paramref name="programId"/> (une requête in-process par
+        /// activation — même mécanique que
+        /// StrmLibraryGenerator.TryGetEpgProgram). Un épisode de série
+        /// porte la série ET sa position (« Série — S02E05 « Titre » »,
+        /// <see cref="GetEmbyInfoTool.ProgramDisplayTitle"/>) — le
+        /// <c>Name</c> du programme EPG est le titre d'ÉPISODE seul (vécu
+        /// v2.6.6 : « Marathon interminable » au lieu de la série ;
+        /// unification v2.7.1 avec la convention
+        /// <c>SeriesName ?: Name</c> de <c>GetEmbyInfoTool</c>).
+        /// Repli : programId brut.
         /// </summary>
         public static string ResolveProgramTitle(ILibraryManager library, string programId)
         {
@@ -287,7 +296,10 @@ namespace LLM_AI
             {
                 var q = new InternalItemsQuery { ItemIds = new[] { id }, Limit = 1 };
                 var item = (library?.GetItemList(q) ?? Array.Empty<BaseItem>()).FirstOrDefault();
-                return string.IsNullOrWhiteSpace(item?.Name) ? programId : item.Name;
+                if (string.IsNullOrWhiteSpace(item?.Name)) return programId;
+                var p = item as LiveTvProgram;
+                return GetEmbyInfoTool.ProgramDisplayTitle(item.Name, p?.SeriesName,
+                    p?.ParentIndexNumber, p?.IndexNumber);
             }
             catch { return programId; }
         }

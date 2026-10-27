@@ -2216,6 +2216,54 @@ namespace LLM_AI
             @"^(?:le|la|les|un|une|des|du|de|the|a|an)\b\s+",
             RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+        /// <summary>
+        /// Titre d'affichage d'un programme EPG pour les annonces à l'usager
+        /// (toasts/cloches d'enregistrement <c>TonightRecordingService</c>,
+        /// feedback d'activation <c>ActivateFeedback</c>). Le
+        /// <see cref="MediaBrowser.Controller.Entities.BaseItem.Name"/> de
+        /// l'entité programme est le titre d'<b>ÉPISODE</b> quand l'EPG en
+        /// porte un — la série vit dans <c>SeriesName</c>, la numérotation
+        /// dans <see cref="MediaBrowser.Controller.Entities.BaseItem.ParentIndexNumber"/>
+        /// (saison) / <see cref="MediaBrowser.Controller.Entities.BaseItem.IndexNumber"/>
+        /// (épisode). Vécu prod 2026-10-26 : le toast d'un épisode
+        /// d'« Alertes: Pelletier » n'affichait que « Nelly ».
+        /// <para>Formes : épisode numéroté → « Série — S02E05 « Titre » » ;
+        /// titre d'épisode absent/égal à la série → « Série — S02E05 » ;
+        /// épisode sans numérotation → « Série — « Titre » » (ou
+        /// « Série » si le titre se réduit à elle) ; sans série (film,
+        /// magazine) → « Titre ». Jamais vide si <paramref name="name"/>
+        /// ou <paramref name="seriesName"/> est non vide.</para>
+        /// </summary>
+        internal static string ProgramDisplayTitle(string name, string seriesName,
+            int? seasonNumber, int? episodeNumber)
+        {
+            name = (name ?? string.Empty).Trim();
+            seriesName = (seriesName ?? string.Empty).Trim();
+            if (seriesName.Length == 0)
+                return name.Length > 0 ? "« " + name + " »" : string.Empty;
+            if (name.Length == 0)
+                return "« " + seriesName + " »";
+
+            // Titre d'épisode « égal » à la série (certaines grilles répètent
+            // le nom de série en titre d'épisode) : comparaison normalisée,
+            // pas de doublon « Série — S01E01 « Série » ». Un titre dégénéré
+            // (normalise vide) n'est pas « diffèrent » prouvé → forme courte.
+            bool differs = Norm(name).Length > 0
+                && !string.Equals(Norm(name), Norm(seriesName), StringComparison.Ordinal);
+
+            if (seasonNumber.HasValue && episodeNumber.HasValue)
+            {
+                // Convention « S00E00 » de la plugin (annotations de stock
+                // TonightService) — ToString("00") garde 3 chiffres intacts.
+                string se = "S" + seasonNumber.Value.ToString("00", CultureInfo.InvariantCulture)
+                         + "E" + episodeNumber.Value.ToString("00", CultureInfo.InvariantCulture);
+                return differs ? seriesName + " — " + se + " « " + name + " »"
+                               : seriesName + " — " + se;
+            }
+            return differs ? seriesName + " — « " + name + " »"
+                           : "« " + seriesName + " »";
+        }
+
         private static HashSet<string> NormGenreSet(string[] genres)
         {
             var set = new HashSet<string>();
