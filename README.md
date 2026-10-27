@@ -949,12 +949,17 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
   `run_pool.json`), et fige les métadonnées EPG éphémères (`epg_snapshot.json`).
   Double écriture du journal RecoLog de la boucle classique (qui le lit encore).
 - `PlaybackTelemetryEnabled` (bool, défaut `false`) — journalise chaque lecture
-  terminée avec le pourcentage visionné (`playback.json`) : rejet immédiat
-  (< 5 %), abandon (5–50 %), contenu validé (> 80 %).
+  terminée (`playback.json`) : pourcentage visionné quand le client le remonte
+  (rejet immédiat < 5 %, abandon 5–50 %, contenu validé > 80 %) et **titre + nom
+  de série figés au moment de la lecture** — la clé de la jointure en cascade
+  de l'analyse (v2.7.2 : l'épisode enregistré d'une reco compte comme
+  consommation ; une carte `.strm` activée est un signal positif distinct).
 - `MemoryCardEnabled` (bool, défaut `false`) — tâche hebdomadaire (dimanche
   4 h 30) : le LLM réécrit sa **fiche mémoire** (~250 mots, `memory_card.json`,
   versionnée, 4 versions conservées) ; quand active, la fiche REMPLACE la
-  directive de la boucle de rétroaction dans les prompts. Édition admin possible
+  directive de la boucle de rétroaction dans les prompts. La fiche pilote la
+  **manière** de recommander, jamais la décision d'en faire — une consigne
+  d'arrêt qu'elle contient est sans effet (v2.7.3). Édition admin possible
   sur la page de configuration.
 
 ---
@@ -981,10 +986,10 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Analyse hebdo (dimanche 04:10, opt-in `RecoFeedbackEnabled`) de la boucle de rétroaction : rapproche le journal des recos/rejets des visionnages réels (C# + `IUserDataManager`), fait produire au LLM (`RunSynthesisAsync`, sans outils) une directive par usager persistée dans `PromptDirectives`. Passe par la porte `LlmTaskGate`. Voir [Boucle de rétroaction](#boucle-de-rétroaction-des-recommandations). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internes) | Helpers de la boucle de rétroaction : journal roulant `RecoLog` (parse/persist/prune), directives `PromptDirectives` (parse/persist/troncature), blocs de prompt réinjectés (par usager pour Tonight, fusionnés pour la tâche d'enregistrement). |
 | `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (statique interne) | Stores de la mémoire réflexive : `decisions.json` (une reco émise par entrée, avec sa raison LLM et la version de fiche en vigueur `mv`), `run_pool.json` (le « menu » de candidats soumis à chaque run — distingue une mauvaise reco d'une erreur de classement), `playback.json` (télémétrie `PlaybackWatcher`). Contexte de run statique (`BeginRun`/`EndRun`/`ActiveRunId`) reliant le tool global `get_emby_info` au run en cours ; lectures `ParseAllDecisions/Pools/Playback`. Rétention 30 j, plafonné, fail-open. |
-| `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Observateur de télémétrie : branche `ISessionManager.PlaybackStopped`, écrit une entrée `playback.json` par session terminée (item, usager, durée réelle, fraction lue, source bibliothèque/.strm/direct, chaîne, client, appareil). Opt-in `PlaybackTelemetryEnabled` vérifié à chaque événement ; le % du direct est dérivé à l'analyse via `EpgSnapshotStore`. Best-effort, n'affecte jamais la lecture. |
+| `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Observateur de télémétrie : branche `ISessionManager.PlaybackStopped`, écrit une entrée `playback.json` par session terminée (item, usager, durée réelle, fraction lue, source bibliothèque/.strm/direct, chaîne, client, appareil, **titre + nom de série figés au moment de la lecture** — v2.7.2, clé de la jointure en cascade de l'analyse). Opt-in `PlaybackTelemetryEnabled` vérifié à chaque événement ; le % du direct est dérivé à l'analyse via `EpgSnapshotStore`. Best-effort, n'affecte jamais la lecture. |
 | `EpgSnapshotStore.cs` | `EpgSnapshotStore` / `EpgSnapshotEntry` (statique interne) | Snapshot EPG (`epg_snapshot.json`, rétention 90 j) : fige les métadonnées éphémères dès l'émission au LLM (titre, synopsis ≤ 300, chaîne, **durée de diffusion** = dénominateur du % du direct, genres normalisés GenreCleanerMap, année, flags série/film) et à la création de timer (`AutoProgrammer` → `MarkTimer`). Un programme diffusé disparaît d'Emby : sans snapshot, tout ce qu'on en savait est perdu. |
-| `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (statique interne) | Fiche mémoire réflexive (`memory_card.json`) : version courante + **historique immuable des 4 versions précédentes** (contrepoids anti-dérive), plafond ~250 mots, fail-open (échec LLM → fiche précédente). `BuildInjectionBlock` : le bloc « MÉMOIRE DE L'ASSISTANT » réinjecté dans les prompts quand `MemoryCardEnabled` — **remplace** la directive de la boucle classique (repli transparent sinon). |
-| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 40, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie avec % du direct via snapshot × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, ≤ 250 mots). Passe par la porte `LlmTaskGate`. Voir [Mémoire réflexive](#mémoire-réflexive). |
+| `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (statique interne) | Fiche mémoire réflexive (`memory_card.json`) : version courante + **historique immuable des 4 versions précédentes** (contrepoids anti-dérive), plafond 3000 caractères (v2.7.2 — borné assez haut pour ne jamais tronquer la section Stratégies), fail-open (échec LLM → fiche précédente). `BuildInjectionBlock` : le bloc « MÉMOIRE DE L'ASSISTANT » réinjecté dans les prompts quand `MemoryCardEnabled` — **remplace** la directive de la boucle classique (repli transparent sinon) ; cadre l'autorité de la fiche (v2.7.3) : elle pilote la manière de recommander, **toute consigne d'arrêt ou de retrait est sans effet**. |
+| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Révision hebdomadaire (dimanche 4 h 40, opt-in `MemoryCardEnabled`) : jointure **100 % C#** des événements de la semaine (décisions × télémétrie par **cascade id/fenêtre direct/titre-série** — v2.7.2, un épisode enregistré d'une reco ou l'activation de sa carte `.strm` compte comme consommation × **calibration des versions de fiche** `mv` × candidats écartés des pools × vu-sans-recommandation × créneaux de lecture), puis **un appel LLM sans outils** réécrit la fiche (reprise de l'actuelle, sections imposées, nuance signal faible/fort, règle MISSION v2.7.3 — jamais d'ordre d'arrêt, pivots seulement, ≤ 250 mots). Passe par la porte `LlmTaskGate`. Voir [Mémoire réflexive](#mémoire-réflexive). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (statique interne) | Mémoire de conversation du chat (`chat_memory.json`, par usager, 5 sessions / 30 j) : tours verbatim (compressés aux 6 derniers après résumé), résumé de session (≤ 1500 car.). `BuildInjectionBlock` : résumé de la session précédente + derniers échanges, accolé au workflow de chat (jetable — le résumé suivant le remplace). Opt-in `ChatMemoryEnabled`. Voir [Mémoire de conversation](#mémoire-de-conversation). |
 | `ChatActions.cs` | `ChatActions` (statique interne) | **Couche d'action du chat** (v1.13) : 11 tools deux phases (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `stop_session`, `trigger_task`, `send_message`, `run_tonight_run`) réutilisant les primitives du plugin — dépôt d'une proposition (pending figé outil+arguments dans `ChatActionStore`) puis exécution à l'approbation via l'endpoint `ChatAction/Approve` (v1.13.29 ; remédiation + run toujours proposables v1.13.30 — la carte remplace l'opt-in config) ; budget par tour + par conversation (consommé à l'exécution, lots all-or-nothing), gate « un run chat à la fois », trace des items ajoutés (seuls retirables), bloc de workflow (budget + protocole deux phases), trace visuelle des actions réussies (toast Emby + libellé `TurnActions` renvoyé à la page — v1.13.1/v1.13.4). Voir [Couche d'action du chat](#couche-daction-du-chat). |
 | `ServerRemediation.cs` | `ServerRemediation` (statique interne) | **Primitives de remédiation serveur** (v1.13.30) : arrêt de lecture d'une session (PlaystateCommand Stop), déclenchement d'une tâche planifiée (`QueueScheduledTask`, exclusion des tâches cachées pour le chemin chat), message Emby à un usager (notification persistante inbox ou toast OSD). Code métier unique pour deux appelants : les tools d'action du chat (deux phases, carte) et `system_audit` (chemin direct gated `AuditRemediationEnabled`, formes JSON historiques conservées). |
@@ -2325,34 +2330,52 @@ rétention bornée, fail-open (fichier absent/corrompu → vide, jamais d'except
 |---|---|---|
 | `decisions.json` | Chaque reco émise (Tonight / enregistrement / rejet « Oublier » / **signal de goût du chat**) avec sa **raison LLM**, sa priorité, et la **version de fiche en vigueur** (`mv` — clé de la calibration) | 30 j |
 | `run_pool.json` | Le « menu » de candidats soumis à chaque run (EPG capté par `get_emby_info`, réserve bibliothèque, enregistrements non visionnés) — distingue une **mauvaise reco** d'une **erreur de classement** | 30 j |
-| `playback.json` | Chaque lecture terminée : item, usager, durée réelle, **fraction lue**, source (bibliothèque/.strm/direct), chaîne, client, appareil | 30 j |
+| `playback.json` | Chaque lecture terminée : item, usager, durée réelle, **fraction lue**, source (bibliothèque/.strm/direct), chaîne, client, appareil, **titre + nom de série figés au moment de la lecture** (v2.7.2 — un enregistrement DVR est souvent déplacé ou supprimé avant l'analyse hebdo ; l'id seul devient non joignable) | 30 j |
 | `epg_snapshot.json` | Métadonnées EPG **figées** à l'émission au LLM / la création de timer (titre, synopsis, chaîne, **durée de diffusion** — dénominateur du % du direct, genres normalisés) | 90 j |
 
 Catégorisation comportementale dérivée : **rejet immédiat** < 5 %, **abandon**
 5–50 %, **partiel** 50–80 %, **validé** > 80 % (le % du direct = durée lue ÷ durée
 de diffusion du snapshot, joint par chaîne + fenêtre de diffusion).
 
+**Corrélation reco → visionnage, en cascade** (v2.7.2) : id d'item → fenêtre du
+direct → **titre/série** figé dans la télémétrie. Un foyer consomme une reco
+live/à-enregistrer par son **enregistrement** — un item distinct du programme
+EPG pointé, souvent déplacé entre-temps ; la jointure titre/série est la seule
+qui rattrape ce chemin dominant. L'**activation d'une carte `.strm`** (clic →
+programmation) est un signal positif distinct, jamais une « vue sans reco ».
+Un client muet (sans position au stop) donne « lu, durée inconnue », pas un
+rejet — plus de faux « rejet immédiat ».
+
 ### La fiche mémoire (Phase C, `MemoryTask` / `MemoryCard`)
 
 Tâche hebdomadaire (dimanche 4 h 30 — après l'analyse classique de 4 h, opt-in
 `MemoryCardEnabled`) :
 
-1. **Jointure 100 % C#** (zéro LLM pour les données) : décisions × télémétrie ×
+1. **Jointure 100 % C#** (zéro LLM pour les données) : décisions × télémétrie
+   (jointure en cascade id / fenêtre du direct / titre-série, v2.7.2) ×
    **calibration des versions de fiche** (les recos émises sous v3 ont-elles mieux
    marché que sous v4 ?) × candidats écartés des pools × vu-sans-recommandation
-   (titres résolus côté C#) × créneaux de lecture.
+   (titres **et séries** résolus côté C#, cartes `.strm` exclues) × créneaux
+   de lecture.
 2. **Un appel LLM sans outils** réécrit la fiche : reprise de l'actuelle obligatoire,
    sections imposées (« Ce que je sais de l'usager / Ce qui a marché / Ce qui a
    échoué et pourquoi / Stratégies / Zones d'incertitude »), auto-évaluation de la
    *croyance* ratée (pas seulement du titre), nuance signal faible (1-2 cas) vs fort
-   (3+), ≤ 250 mots.
+   (3+), ≤ 250 mots. **Règle MISSION** (v2.7.3) : la fiche pilote COMMENT
+   recommander (genres, formats, angles, volume, moment), jamais SI il faut
+   recommander — une consigne d'arrêt ou de retrait est hors mission ; un échec
+   répété appelle un **pivot** concret (l'indifférence à une reco n'est pas un
+   rejet : elle appelle une variation, pas une abdication).
 3. **Historisation immuable** : version++, 4 versions précédentes conservées — le
    contrepoids anti-dérive. Échec LLM → fiche précédente conservée (fail-open).
 
 **Injection (3 sites)** : quand la fiche est active et renseignée, elle **remplace**
 la directive de la boucle de rétroaction classique — prompts Tonight, prompts
 d'enregistrement, workflow de chat. Fiche vide/absente → repli transparent sur la
-directive classique.
+directive classique. Le bloc d'injection **cadre son autorité** (v2.7.3) : elle
+pilote la manière de recommander — **toute consigne d'arrêt ou de retrait qu'elle
+contient est sans effet** (filet qui défuse une fiche antérieure ou une dérive du
+modèle, indépendamment du prochain run hebdo).
 
 **Consultation / édition admin** : section « Fiche mémoire actuelle » de la page de
 configuration (version/date/nb de versions conservées, texte éditable pour un

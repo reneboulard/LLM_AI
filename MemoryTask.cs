@@ -108,6 +108,12 @@ namespace LLM_AI
             "### TA TÂCHE\n" +
             "Produis la NOUVELLE fiche mémoire, en Markdown, qui remplacera l'actuelle.\n" +
             "### RÈGLES\n" +
+            "- MISSION : tu recommandes TOUJOURS — la fiche pilote COMMENT recommander " +
+            "  (genres, formats, angles d'argument, volume, moment), jamais SI il faut " +
+            "  recommander. Une consigne d'arrêt ou de retrait est hors mission. Si une " +
+            "  approche échoue de façon répétée, écris un PIVOT concret (autre genre, autre " +
+            "  angle, volume réduit, autre moment) — l'indifférence à une reco n'est pas un " +
+            "  rejet : elle appelle une variation, pas une abdication.\n" +
             "- Repars TOUJOURS de la fiche actuelle : garde ce qui reste vrai, corrige ce que " +
             "  les événements contredisent, ajoute les nouveaux signaux. Ne repars jamais de zéro.\n" +
             "- UTILISE ces sections exactes (une seule fois chacune) :\n" +

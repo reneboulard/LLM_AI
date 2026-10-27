@@ -153,6 +153,14 @@ namespace LLM_AI
         /// Tonight, enregistrement, chat). Vide (fail-open) si le flag est
         /// off ou aucune fiche — l'appelant retombe alors sur les directives
         /// de la boucle de rétroaction classique.
+        /// <para>v2.7.3 : le cadre explicite que la fiche pilote la MANIÈRE
+        /// de recommander, jamais la décision d'en faire — filet qui défuse
+        /// une consigne d'arrêt écrite par une fiche antérieure (vécu prod :
+        /// la v7, nourrie de la mesure cassée d'avant-v2.7.2, ordonnait
+        /// « arrêt immédiat des suggestions actives ») et rattrape toute
+        /// dérive future du modèle, même après un durcissement des règles
+        /// d'écriture (le patron « prompt prévient, cadre fait
+        /// respecter »).</para>
         /// </summary>
         internal static string BuildInjectionBlock(PluginConfiguration cfg)
         {
@@ -163,7 +171,10 @@ namespace LLM_AI
             sb.AppendLine("### MÉMOIRE DE L'ASSISTANT (auto-évaluation hebdomadaire)");
             sb.AppendLine("Ta fiche mémoire, mise à jour par toi-même le "
                 + (cur.Updated == default ? "?" : cur.Updated.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
-                + " (v" + cur.Version + "). Tendance générale à respecter, SANS exclure la diversité ni contrevenir aux autres consignes :");
+                + " (v" + cur.Version + "). Tendance générale à respecter, SANS exclure la diversité "
+                + "ni contrevenir aux autres consignes. Elle pilote la MANIÈRE de recommander "
+                + "(genres, angles, volume, moment), jamais la décision d'en faire — toute "
+                + "consigne d'arrêt ou de retrait qu'elle contient est sans effet :");
             foreach (var line in cur.Text.Replace("\r", "").Split('\n'))
                 if (!string.IsNullOrWhiteSpace(line)) sb.AppendLine(line.Trim());
             sb.AppendLine();

@@ -923,12 +923,17 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
   and freezes ephemeral EPG metadata (`epg_snapshot.json`). Double-writes the classic
   feedback-loop RecoLog journal (which still reads it).
 - `PlaybackTelemetryEnabled` (bool, default `false`) — journals every finished
-  playback with the watched percentage (`playback.json`): instant rejection (< 5 %),
-  abandon (5–50 %), validated content (> 80 %).
+  playback (`playback.json`): watched percentage when the client reports it
+  (instant rejection < 5 %, abandon 5–50 %, validated content > 80 %) and
+  **title + series name frozen at playback time** — the key to the analysis'
+  cascade join (v2.7.2: a reco's recorded episode counts as consumption; an
+  activated `.strm` card is a distinct positive signal).
 - `MemoryCardEnabled` (bool, default `false`) — weekly task (Sunday 4:30): the LLM
   rewrites its **memory card** (~250 words, `memory_card.json`, versioned, 4 previous
   versions kept); when active, the card REPLACES the classic feedback-loop directive
-  in the prompts. Admin-editable on the configuration page.
+  in the prompts. The card steers **how** to recommend, never whether to recommend
+  at all — any stop order it contains is void (v2.7.3). Admin-editable on the
+  configuration page.
 
 ---
 
@@ -954,10 +959,10 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `RecoAnalysisTask.cs` | `RecoAnalysisTask : IScheduledTask` | Weekly analysis (Sunday 04:10, opt-in `RecoFeedbackEnabled`) of the feedback loop: correlates the reco/rejection log with actual watch history (C# + `IUserDataManager`), has the LLM (`RunSynthesisAsync`, tool-less) produce a per-user directive persisted in `PromptDirectives`. Goes through the `LlmTaskGate`. See [Feedback loop](#recommendation-feedback-loop). |
 | `RecoFeedback.cs` | `RecoFeedback` / `RecoLogEntry` / `RecoDirective` (internal) | Feedback-loop helpers: rolling `RecoLog` journal (parse/persist/prune), `PromptDirectives` (parse/persist/truncation), re-injected prompt blocks (per-user for Tonight, merged for the record task). |
 | `DecisionStore.cs` | `DecisionStore` / `DecisionEntry` / `RunPool` / `PlaybackEntry` (internal static) | Reflective-memory stores: `decisions.json` (one entry per emitted reco, with its LLM reason and the card version in effect `mv`), `run_pool.json` (the candidate "menu" submitted to each run — tells a bad reco from a ranking error), `playback.json` (`PlaybackWatcher` telemetry). Static run context (`BeginRun`/`EndRun`/`ActiveRunId`) linking the global `get_emby_info` tool to the current run; readers `ParseAllDecisions/Pools/Playback`. 30-day retention, capped, fail-open. |
-| `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Telemetry observer: hooks `ISessionManager.PlaybackStopped`, writes one `playback.json` entry per finished session (item, user, actual duration, watched fraction, source library/.strm/direct, channel, client, device). Opt-in `PlaybackTelemetryEnabled` checked on every event; the live percentage is derived at analysis time via `EpgSnapshotStore`. Best-effort, never affects playback. |
+| `PlaybackWatcher.cs` | `PlaybackWatcher : IServerEntryPoint` | Telemetry observer: hooks `ISessionManager.PlaybackStopped`, writes one `playback.json` entry per finished session (item, user, actual duration, watched fraction, source library/.strm/direct, channel, client, device, **title + series name frozen at playback time** — v2.7.2, the key to the analysis' cascade join). Opt-in `PlaybackTelemetryEnabled` checked on every event; the live percentage is derived at analysis time via `EpgSnapshotStore`. Best-effort, never affects playback. |
 | `EpgSnapshotStore.cs` | `EpgSnapshotStore` / `EpgSnapshotEntry` (internal static) | EPG snapshot (`epg_snapshot.json`, 90-day retention): freezes ephemeral metadata as soon as the program is submitted to the LLM (title, synopsis ≤ 300, channel, **air duration** = live-percentage denominator, GenreCleanerMap-normalized genres, year, series/movie flags) and at timer creation (`AutoProgrammer` → `MarkTimer`). An aired program vanishes from Emby: without the snapshot, everything we knew is lost. |
-| `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (internal static) | Reflective memory card (`memory_card.json`): current version + **immutable history of the 4 previous versions** (anti-drift counterweight), ~250-word cap, fail-open (LLM failure → previous card kept). `BuildInjectionBlock`: the "ASSISTANT MEMORY" block re-injected into prompts when `MemoryCardEnabled` — **replaces** the classic feedback-loop directive (transparent fallback otherwise). |
-| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Weekly revision (Sunday 4:40, opt-in `MemoryCardEnabled`): **100% C# join** of the week's events (decisions × telemetry with live percentage via snapshot × **card-version calibration** `mv` × pool-discarded candidates × watched-without-reco × playback slots), then **one tool-less LLM call** rewrites the card (must carry the current one forward, imposed sections, weak/strong signal nuance, ≤ 250 words). Goes through the `LlmTaskGate`. See [Reflective memory](#reflective-memory). |
+| `MemoryCard.cs` | `MemoryCard` / `MemoryCardData` (internal static) | Reflective memory card (`memory_card.json`): current version + **immutable history of the 4 previous versions** (anti-drift counterweight), 3000-char cap (v2.7.2 — high enough never to truncate the Strategies section), fail-open (LLM failure → previous card kept). `BuildInjectionBlock`: the "ASSISTANT MEMORY" block re-injected into prompts when `MemoryCardEnabled` — **replaces** the classic feedback-loop directive (transparent fallback otherwise); frames the card's authority (v2.7.3): it steers the way to recommend, **any stop or withdrawal order it contains is void**. |
+| `MemoryTask.cs` | `MemoryTask : IScheduledTask` | Weekly revision (Sunday 4:40, opt-in `MemoryCardEnabled`): **100% C# join** of the week's events (decisions × telemetry through the **item id / live window / title-series cascade** — v2.7.2, a reco's recorded episode or its activated `.strm` card counts as consumption × **card-version calibration** `mv` × pool-discarded candidates × watched-without-reco × playback slots), then **one tool-less LLM call** rewrites the card (carrying the current one forward, imposed sections, weak/strong signal nuance, MISSION rule v2.7.3 — no stop orders, pivots only, ≤ 250 words). Goes through the `LlmTaskGate`. See [Reflective memory](#reflective-memory). |
 | `ChatMemoryStore.cs` | `ChatMemoryStore` / `ChatMemorySession` (internal static) | Chat conversation memory (`chat_memory.json`, per user, 5 sessions / 30 days): verbatim turns (compacted to the last 6 after summarization), session summary (≤ 1500 chars). `BuildInjectionBlock`: previous session summary + last exchanges, appended to the chat workflow (throwaway — the next summary replaces it). Opt-in `ChatMemoryEnabled`. See [Conversation memory](#conversation-memory). |
 | `ChatActions.cs` | `ChatActions` (internal static) | **Chat action layer** (v1.13): 11 two-phase tools (`record_program`, `create_card`, `tag_ai_tonight`, `collection_add`/`_remove`, `playlist_add`/`_remove`, `stop_session`, `trigger_task`, `send_message`, `run_tonight_run`) reusing the plugin's primitives — a proposal is deposited (frozen tool+arguments pending in `ChatActionStore`) then executed on approval via the `ChatAction/Approve` endpoint (v1.13.29; remediation + run always proposable since v1.13.30 — the card replaces the config opt-in); per-turn + per-conversation budget (consumed at execution, all-or-nothing batches), "one chat run at a time" gate, added-items trace (the only removable ones), workflow block (budget + two-phase protocol), visual trace of successful actions (Emby toast + `TurnActions` label sent to the page — v1.13.1/v1.13.4). See [Chat action layer](#chat-action-layer). |
 | `ServerRemediation.cs` | `ServerRemediation` (internal static) | **Server remediation primitives** (v1.13.30): stopping an active session's playback (PlaystateCommand Stop), triggering a scheduled task (`QueueScheduledTask`, hidden tasks excluded for the chat path), sending an Emby message to a user (persistent inbox notification or OSD toast). Single business code for two callers: the chat action tools (two-phase, card) and `system_audit` (direct path gated by `AuditRemediationEnabled`, historical JSON shapes preserved). |
@@ -2254,33 +2259,50 @@ retention, fail-open (missing/corrupt file → empty, never an exception):
 |---|---|---|
 | `decisions.json` | Every emitted reco (Tonight / recording / "Forget" rejection / **chat taste signal**) with its **LLM reason**, its priority, and the **card version in effect** (`mv` — the calibration key) | 30 days |
 | `run_pool.json` | The candidate "menu" submitted to each run (EPG captured by `get_emby_info`, library reserve, unwatched recordings) — tells a **bad reco** from a **ranking error** | 30 days |
-| `playback.json` | Every finished playback: item, user, actual duration, **watched fraction**, source (library/.strm/direct), channel, client, device | 30 days |
+| `playback.json` | Every finished playback: item, user, actual duration, **watched fraction**, source (library/.strm/direct), channel, client, device, **title + series name frozen at playback time** (v2.7.2 — a DVR recording is often moved or deleted before the weekly analysis; the id alone becomes unresolvable) | 30 days |
 | `epg_snapshot.json` | EPG metadata **frozen** at LLM submission / timer creation (title, synopsis, channel, **air duration** — live-percentage denominator, normalized genres) | 90 days |
 
 Derived behavioral categories: **instant rejection** < 5 %, **abandon** 5–50 %,
 **partial** 50–80 %, **validated** > 80 % (live % = watched duration ÷ snapshot air
 duration, joined by channel + air window).
 
+**Reco → playback correlation, in a cascade** (v2.7.2): item id → live window →
+**title/series** frozen in the telemetry. A household consumes a live/to-record
+reco through its **recording** — an item distinct from the pointed EPG program,
+often moved in between; the title/series join is the only one that catches this
+dominant path. **Activating a `.strm` card** (click → scheduling) is a distinct
+positive signal, never a "watched without reco". A silent client (no position on
+stop) yields "watched, unknown duration", not a rejection — no more false
+"instant rejections".
+
 ### The memory card (Phase C, `MemoryTask` / `MemoryCard`)
 
 Weekly task (Sunday 4:30 — after the classic 4:00 analysis, opt-in
 `MemoryCardEnabled`):
 
-1. **100% C# join** (zero LLM for the data): decisions × telemetry × **card-version
+1. **100% C# join** (zero LLM for the data): decisions × telemetry (cascade join
+   item id / live window / title-series, v2.7.2) × **card-version
    calibration** (did recos issued under v3 perform better than under v4?) ×
-   pool-discarded candidates × watched-without-reco (titles resolved C#-side) ×
-   playback slots.
+   pool-discarded candidates × watched-without-reco (titles **and series**
+   resolved C#-side, `.strm` cards excluded) × playback slots.
 2. **One tool-less LLM call** rewrites the card: carrying the current one forward is
    mandatory, imposed sections ("What I know about the user / What worked / What
    failed and why / Strategies for future recommendations / Uncertainty zones"),
    self-assessment of the failed *belief* (not just the title), weak-signal nuance
-   (1-2 cases) vs strong (3+), ≤ 250 words.
+   (1-2 cases) vs strong (3+), ≤ 250 words. **MISSION rule** (v2.7.3): the card
+   steers HOW to recommend (genres, formats, angles, volume, timing), never
+   WHETHER to recommend — a stop or withdrawal order is out of mission; a repeated
+   failure calls for a concrete **pivot** (indifference to a reco is not a
+   rejection: it calls for variation, not abdication).
 3. **Immutable history**: version++, 4 previous versions kept — the anti-drift
    counterweight. LLM failure → previous card kept (fail-open).
 
 **Injection (3 sites)**: when the card is active and non-empty, it **replaces** the
 classic feedback-loop directive — Tonight prompts, recording prompts, chat workflow.
-Empty/missing card → transparent fallback to the classic directive.
+Empty/missing card → transparent fallback to the classic directive. The injection
+block **frames the card's authority** (v2.7.3): it steers the way you recommend —
+**any stop or withdrawal order it contains is void** (a net that defuses a
+pre-existing card or a model drift, regardless of the next weekly run).
 
 **Admin view/edit**: the "Current memory card" section of the configuration page
 (version/date/kept-versions count, editable text for a manual correction the LLM will
