@@ -44,9 +44,13 @@ namespace LLM_AI
     /// </summary>
     internal static class MemoryCard
     {
-        /// <summary>Plafond d'une fiche (caractères) — ≈ 300 mots ; borne le
-        /// contexte injecté (modèle local).</summary>
-        internal const int MaxChars = 2200;
+        /// <summary>Plafond d'une fiche (caractères) — borne le contexte
+        /// injecté (modèle local). 3000 (v2.7.2 : 2200 tronquait la fiche
+        /// v7 en plein milieu de la section Stratégies — la dernière ligne
+        /// injectée devenait une puce « arrêt des suggestions » sans son
+        /// développement, la pire dernière impression pour les runs
+        /// aval).</summary>
+        internal const int MaxChars = 3000;
 
         /// <summary>Versions précédentes conservées (immuables).</summary>
         internal const int HistoryMax = 4;

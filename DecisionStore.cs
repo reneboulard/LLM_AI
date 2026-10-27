@@ -104,6 +104,18 @@ namespace LLM_AI
         public string App;
         public string Device;
         public bool Completed;
+        /// <summary>Titre de l'item FIGÉ au moment de la lecture (v2.7.2).
+        /// L'id seul ne suffit pas à l'analyse : un enregistrement DVR est
+        /// souvent déplacé/supprimé avant le run hebdo (dossiers DVR
+        /// éphémères du foyer), et l'id de l'épisode regardé ne figure
+        /// JAMAIS dans les décisions (une reco live/record pointe le
+        /// programme EPG, pas l'enregistrement qui en découle).</summary>
+        public string Title;
+        /// <summary>Nom de SÉRIE figé au moment de la lecture (épisode /
+        /// programme EPG) ; vide pour un film. C'est la clé qui rattrape
+        /// « la série recommandée a bien été regardée, via son épisode
+        /// enregistré » (v2.7.2).</summary>
+        public string SeriesName;
     }
 
     /// <summary>
@@ -484,7 +496,9 @@ namespace LLM_AI
                             ["ch"] = e.Channel ?? "",
                             ["app"] = e.App ?? "",
                             ["dev"] = e.Device ?? "",
-                            ["comp"] = e.Completed
+                            ["comp"] = e.Completed,
+                            ["t"] = e.Title ?? "",
+                            ["sn"] = e.SeriesName ?? ""
                         };
                         if (e.Pct.HasValue) o["pct"] = Math.Round(e.Pct.Value, 3);
                         if (e.RtSec.HasValue) o["rt"] = Math.Max(0, e.RtSec.Value);
@@ -515,6 +529,8 @@ namespace LLM_AI
                     App = OStr(o, "app") ?? "",
                     Device = OStr(o, "dev") ?? "",
                     Completed = (OStr(o, "comp") ?? "") == "1" || (OStr(o, "comp") ?? "") == "true",
+                    Title = OStr(o, "t") ?? "",
+                    SeriesName = OStr(o, "sn") ?? "",
                     Pct = OStr(o, "pct") is var ps && double.TryParse(ps, NumberStyles.Float,
                         CultureInfo.InvariantCulture, out var p) ? p : (double?)null,
                     RtSec = OStr(o, "rt") is var rs && int.TryParse(rs, out var rt) ? rt : (int?)null

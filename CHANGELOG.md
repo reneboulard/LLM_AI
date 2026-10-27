@@ -10,6 +10,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.7.2] — 2026-10-27
+
+### Fixed (FR)
+- **Mémoire réflexive : la mesure « reco → visionnage » était aveugle sur le
+  chemin de consommation dominant (les enregistrements).** Vécu en production
+  (2026-10-27, rejeu de la jointure sur 30 jours de journaux réels : 356
+  décisions, 176 lectures) : une reco live/à-enregistrer ne pointe jamais
+  l'item que l'usager regarde — elle pointe le programme EPG. L'usager
+  consomme l'**enregistrement** (88 % des lectures du foyer sont des items de
+  bibliothèque), item distinct, souvent déplacé hors du dossier DVR avant
+  l'analyse hebdo → jointure par id impossible, fenêtre du direct jamais
+  touchée (0 match sur 30 jours) → taux de lecture apparent 0–2 % → la fiche
+  a « appris » que TOUTES les suggestions étaient ignorées (fiche v7 :
+  « arrêt immédiat des suggestions actives ») sur une leçon de mesure, pas de
+  comportement — puis a blacklisté les genres crime/suspense que l'usager
+  consommait effectivement via ses enregistrements. Correctifs :
+  - `PlaybackWatcher` fige désormais **titre + nom de série** dans chaque
+    entrée de télémétrie au moment de la lecture (l'id seul devient « non
+    joignable » dès que l'item est déplacé/supprimé) ;
+  - `MemoryTask.OutcomeOf` joint en **cascade** : id d'item → fenêtre du
+    direct → **titre/série** — l'épisode enregistré d'une série recommandée
+    compte enfin comme consommation de la reco ;
+  - l'activation d'une **carte .strm** (clic → programmation) devient un
+    signal positif distinct (« CARTE .strm activée ») au lieu d'une « vue
+    sans recommandation » ;
+  - télémétrie sans position (client qui ne remonte pas la position au
+    stop — 175/176 entrées en production) : « lu, durée inconnue » au lieu
+    de « ? (sans %) », et « direct touché » au lieu de « rejet immédiat
+    (0 %) » — plus de faux rejets issus de clients muets ;
+  - section « VU SANS RECOMMANDATION » : exclusion par titre ET par série,
+    cartes .strm exclues, filtre de substance tolérant (complétion OU
+    ≥ 5 min réellement lues) ;
+  - garde-fou de rédaction : plafond de fiche 2200 → 3000 caractères (la
+    fiche v7 a été tronquée EN PLEIN MILIEU de sa section Stratégies — la
+    dernière ligne injectée dans tous les prompts était la puce orpheline
+    « arrêt des suggestions »), consigne renforcée : la section STRATÉGIES
+    doit rester complète et actionnable ;
+  - la calibration des versions de fiche compte « lu/carte/direct touché »
+    comme consommation (plus comptés en « ignoré »).
+
+### Fixed (EN)
+- **Reflective memory: the reco → playback measurement was blind to the
+  household's dominant consumption path (recordings).** Field report
+  (2026-10-27, replaying the join over 30 days of real logs: 356 decisions,
+  176 plays): a live/to-record recommendation never points at the item the
+  user actually watches — it points at the EPG program. The user consumes the
+  **recording** (88 % of the household's plays are library items), a distinct
+  item often moved out of the DVR folder before the weekly analysis → id join
+  impossible, live window never hit (0 match over 30 days) → apparent play
+  rate 0–2 % → the memory card "learned" that ALL suggestions were ignored
+  (card v7: "immediate stop of active suggestions") from a measurement
+  artifact, not behavior — then blacklisted the crime/suspense genres the
+  user was in fact consuming through recordings. Fixes:
+  - `PlaybackWatcher` now freezes **title + series name** into each
+    telemetry entry at playback time (an id alone becomes "unresolvable"
+    as soon as the item is moved/deleted);
+  - `MemoryTask.OutcomeOf` joins in a **cascade**: item id → live window →
+    **title/series** — a recorded episode of a recommended series finally
+    counts as consumption of that reco;
+  - activating a **.strm card** (click → scheduling) becomes a distinct
+    positive signal ("CARTE .strm activée") instead of a "watched without
+    recommendation";
+  - position-less telemetry (client reporting no position on stop —
+    175/176 production entries): "lu, durée inconnue" instead of "? (sans
+    %)", and "direct touché" instead of "rejet immédiat (0 %)" — no more
+    false rejections from silent clients;
+  - "WATCHED WITHOUT RECOMMENDATION" section: excluded by title AND by
+    series, .strm cards excluded, lenient substance filter (completion OR
+    ≥ 5 min actually played);
+  - writing guardrail: card cap raised 2200 → 3000 chars (card v7 was
+    truncated IN THE MIDDLE of its Strategies section — the last line
+    injected into every prompt was the orphan bullet "stop suggestions"),
+    strengthened rule: the STRATEGIES section must stay complete and
+    actionable;
+  - card-version calibration counts "lu/card/direct touché" as consumption
+    (no longer tallied as "ignored").
+
+---
+
 ## [2.7.1] — 2026-10-27
 
 ### Fixed (FR)

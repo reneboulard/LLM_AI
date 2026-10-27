@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Logging;
@@ -31,8 +32,11 @@ namespace LLM_AI
     ///   <see cref="DecisionStore"/> (décisions avec leur RAISON et la version
     ///   de fiche en vigueur) × <see cref="DecisionStore"/> télémétrie
     ///   (fraction lue : rejet immédiat &lt; 5 %, abandon 5–50 %, validé
-    ///   &gt; 80 %) × pools de candidats (ce qui avait été écarté — distingue
-    ///   une mauvaise reco d'une erreur de classement) ×
+    ///   &gt; 80 % ; v2.7.2 : jointure consommation en CASCADE — id d'item,
+    ///   fenêtre du direct, puis TITRE/SÉRIE figé dans la télémétrie, qui
+    ///   rattrape l'épisode ENREGISTRÉ d'une reco live et l'activation de
+    ///   sa carte .strm) × pools de candidats (ce qui avait été écarté —
+    ///   distingue une mauvaise reco d'une erreur de classement) ×
     ///   <see cref="EpgSnapshotStore"/> (durée de diffusion → % du direct) ;</item>
     /// <item>fait produire au LLM (un seul appel sans outils,
     ///   <see cref="LlmRunner.RunSynthesisAsync"/>) la NOUVELLE fiche, en
@@ -121,7 +125,9 @@ namespace LLM_AI
             "- PRÉSERVE LA DIVERSITÉ : n'interdis jamais une catégorie entière sur une seule " +
             "  semaine ; garde des axes d'exploration dans « Zones d'incertitude ».\n" +
             "- N'invente rien : chaque affirmation doit découler des événements fournis.\n" +
-            "- Maximum ~250 mots. Puces courtes. Pas de JSON, pas de préambule.\n" +
+            "- Maximum ~250 mots STRICT. Puces courtes. Pas de JSON, pas de préambule. " +
+            "La section STRATÉGIES doit rester COMPLÈTE et actionnable même si tu dois " +
+            "raccourcir les autres — c'est elle qui pilote tes prochains runs.\n" +
             "- Réponds UNIQUEMENT par la fiche Markdown (commençant par « ## »), sans préambule.";
 
         // ------------------------------------------------------------------
@@ -276,13 +282,54 @@ namespace LLM_AI
                 .GroupBy(s => s.ProgramId, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
+            // v2.7.2 — backfill titre/série : les entrées écrites avant le
+            // figage (PlaybackWatcher) n'en portent pas ; résolution
+            // bibliothèque best-effort, une fois par id. Les items
+            // déplacés/supprimés depuis (routine DVR du foyer : dossiers
+            // éphémères, migration quotidienne vers la bibliothèque
+            // permanente) ne résolvent plus — c'est précisément ce que le
+            // figage au moment de la lecture élimine pour l'avenir.
+            var resolvedIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var p in playback)
+            {
+                if (p == null || string.IsNullOrEmpty(p.ItemId) || resolvedIds.Contains(p.ItemId)) continue;
+                if (string.IsNullOrWhiteSpace(p.Title) || string.IsNullOrWhiteSpace(p.SeriesName))
+                {
+                    resolvedIds.Add(p.ItemId);
+                    try
+                    {
+                        var it = ItemIdResolver.Resolve(_library, p.ItemId);
+                        if (string.IsNullOrWhiteSpace(p.Title))
+                            p.Title = it?.Name ?? "";
+                        if (string.IsNullOrWhiteSpace(p.SeriesName))
+                            p.SeriesName = (it as Episode)?.SeriesName
+                                ?? (it as LiveTvProgram)?.SeriesName ?? "";
+                    }
+                    catch { /* best-effort : id non résolvable */ }
+                }
+            }
+
+            // Index titre/série → lectures (v2.7.2, jointure de repli) :
+            // couvre TOUT le journal (30 j) — la consommation d'une reco
+            // live/record est souvent DIFFÉRÉE (enregistrement regardé des
+            // jours plus tard) et l'item regardé ne porte jamais l'id du
+            // programme EPG pointé par la décision.
+            var playByTitle = new Dictionary<string, List<PlaybackEntry>>(StringComparer.Ordinal);
+            foreach (var p in playback)
+            {
+                IndexPlay(playByTitle, p.Title, p);
+                IndexPlay(playByTitle, p.SeriesName, p);
+            }
+
             var decisionTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var d in decisions)
                 decisionTitles.Add(LlmRunner.NormTitle(d.Title));
 
             // 1) Décisions de la semaine × résultat de visionnage.
             sb.AppendLine("### DÉCISIONS DE LA SEMAINE (recommandations émises, avec leur raison)");
-            sb.AppendLine("(résultat : fraction lue par l'usager via la télémétrie ; IGNORÉ = aucune lecture rattachée)");
+            sb.AppendLine("(résultat : jointures en cascade — id d'item, fenêtre du direct, puis TITRE/SÉRIE ;");
+            sb.AppendLine(" un épisode ENREGISTRÉ d'une reco, ou l'activation de sa carte .strm, COMPTE comme consommation ;");
+            sb.AppendLine(" IGNORÉ = rien de rattaché ; « durée inconnue » = lecture dont le client n'a pas remonté la position)");
             sb.AppendLine("(créneau = heure locale de la lecture ; v = version de la fiche en vigueur à l'émission)");
             int shown = 0;
             const int DecisionCap = 40;
@@ -290,7 +337,7 @@ namespace LLM_AI
             {
                 if (d.Kind == "drop") continue; // signalés séparément
                 decisionTitles.Add(LlmRunner.NormTitle(d.Title));
-                var outcome = OutcomeOf(d, playback, snapByPid);
+                var outcome = OutcomeOf(d, playback, snapByPid, playByTitle);
                 var cr = d.Kind == "record" ? "(foyer)" : "";
                 sb.AppendLine("- [" + d.Kind + (d.Mv > 0 ? " v" + d.Mv.ToString(CultureInfo.InvariantCulture) : "") + "] « " + d.Title + " » " + cr
                     + (string.IsNullOrWhiteSpace(d.Reason) ? "" : " — raison: " + d.Reason)
@@ -313,13 +360,17 @@ namespace LLM_AI
                     int ok = 0, bad = 0, ignored = 0;
                     foreach (var d in g)
                     {
-                        var o = OutcomeOf(d, playback, snapByPid);
-                        if (o.StartsWith("validé") || o.StartsWith("partiel")) ok++;
+                        var o = OutcomeOf(d, playback, snapByPid, playByTitle);
+                        // v2.7.2 : « lu » (position non remontée), « CARTE
+                        // activée » et « direct touché » comptent comme
+                        // consommation — pas comme de l'ignoré.
+                        if (o.StartsWith("validé") || o.StartsWith("partiel") || o.StartsWith("lu")
+                            || o.StartsWith("CARTE") || o.StartsWith("direct touché")) ok++;
                         else if (o.StartsWith("rejet") || o.StartsWith("abandon")) bad++;
                         else ignored++;
                     }
                     sb.AppendLine("- recos émises sous la fiche v" + g.Key + " : " + g.Count()
-                        + " — validé/partiel " + ok + ", rejet/abandon " + bad + ", ignoré " + ignored);
+                        + " — consommées " + ok + " (validé/partiel/lu/carte), rejet/abandon " + bad + ", ignoré " + ignored);
                 }
                 sb.AppendLine("(si une version ancienne perforne nettement mieux que la courante, " +
                               "réexamine les changements que tu avais introduits)");
@@ -347,24 +398,39 @@ namespace LLM_AI
             }
             if (poolsShown == 0) sb.AppendLine("(aucun pool disponible cette semaine)");
 
-            // 4) Vu sans recommandation (opportunités manquées). Le titre de
-            // chaque item est résolu côté C# (ItemIdResolver) pour exclure
-            // proprement ce qui figure déjà dans une décision.
+            // 4) Vu sans recommandation (opportunités manquées). Le titre
+            // (et la série, v2.7.2) est figé dans l'entrée — repli
+            // résolution bibliothèque via le backfill ci-dessus — pour
+            // exclure proprement ce qui figure déjà dans une décision :
+            // PAR TITRE (film) OU PAR SÉRIE (l'épisode enregistré d'une
+            // série recommandée n'est PAS une opportunité manquée). Une
+            // carte .strm est l'activation d'une reco — jamais une
+            // « vue sans reco ». Le filtre de substance tolère la
+            // télémétrie sans position (vécu prod : 175/176 entrées à
+            // dur=0 — un client qui ne remonte pas la position n'est pas
+            // un zap).
             sb.AppendLine();
             sb.AppendLine("### VU SANS RECOMMANDATION (cette semaine — opportunités manquées)");
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
             int surprisesShown = 0;
             foreach (var p in weekPlayback
-                .Where(p => p != null && !string.IsNullOrEmpty(p.ItemId) && (p.Pct ?? 0) >= 0.5)
+                .Where(p => p != null && !string.IsNullOrEmpty(p.ItemId)
+                    && ((p.Pct ?? 0) >= 0.5 || p.Completed || p.DurSec >= 300))
                 .OrderByDescending(p => p.Date))
             {
                 if (!seenIds.Add(p.ItemId)) continue;
-                var title = ResolveTitle(p.ItemId);
+                if (string.Equals(p.Src, "strm", StringComparison.OrdinalIgnoreCase)) continue; // activation d'une reco
+                var title = p.Title;
+                var series = p.SeriesName;
                 if (!string.IsNullOrWhiteSpace(title)
                     && decisionTitles.Contains(LlmRunner.NormTitle(title)))
                     continue; // déjà recommandé (jointure titre)
+                if (!string.IsNullOrWhiteSpace(series)
+                    && decisionTitles.Contains(LlmRunner.NormTitle(series)))
+                    continue; // série recommandée (jointure série, v2.7.2)
                 var slot = p.Date.ToLocalTime();
                 sb.AppendLine("- « " + (string.IsNullOrWhiteSpace(title) ? "?" : title)
+                    + (string.IsNullOrWhiteSpace(series) ? "" : " [" + series + "]")
                     + " » (" + CategoryOf(p.Pct)
                     + ", " + slot.ToString("ddd HH\\hmm", CultureInfo.CurrentCulture)
                     + ", " + p.Src + ")");
@@ -405,30 +471,45 @@ namespace LLM_AI
             return sb.ToString();
         }
 
-        /// <summary>Résultat de visionnage d'une décision (texte court).</summary>
+        /// <summary>Résultat de visionnage d'une décision (texte court).
+        /// Trois jointures en cascade (v2.7.2) :
+        /// <list type="number">
+        /// <item><b>id d'item</b> — bibliothèque/enregistrement pointé
+        /// directement par la reco (jointure exacte) ;</item>
+        /// <item><b>fenêtre du direct</b> — programme EPG regardé à
+        /// l'antenne (chaîne + fenêtre de diffusion du snapshot) ;</item>
+        /// <item><b>titre/série</b> — rattrape la consommation dominante
+        /// du foyer : l'usager regarde l'<b>enregistrement</b> d'une reco
+        /// live/record (item distinct du programme EPG pointé, souvent
+        /// déplacé hors du DVR avant l'analyse) ou active sa carte
+        /// <c>.strm</c> (le titre de la carte est celui de la reco). Le
+        /// couple (titre, série) figé dans la télémétrie porte la
+        /// jointure.</item>
+        /// </list>
+        /// Vécu prod (fiche v7, 2026-10-25) : sans la 3e jointure, les
+        /// recos live/record sont mesurées uniquement sur le direct — le
+        /// foyer consomme 88 % de ses lectures en bibliothèque → taux
+        /// apparent 0-2 % → la fiche a conclu « l'usager ignore toutes
+        /// mes suggestions » et a ordonné l'arrêt des suggestions sur une
+        /// leçon de mesure, pas de comportement.</summary>
         private static string OutcomeOf(DecisionEntry d, List<PlaybackEntry> playback,
-            Dictionary<string, EpgSnapshotEntry> snapByPid)
+            Dictionary<string, EpgSnapshotEntry> snapByPid,
+            Dictionary<string, List<PlaybackEntry>> playByTitle)
         {
-            // Item bibliothèque/enregistrement : jointure directe par itemId.
+            // 1) Item bibliothèque/enregistrement : jointure directe par itemId.
             if (!string.IsNullOrEmpty(d.ItemId))
             {
                 var p = playback.Where(x => string.Equals(x.ItemId, d.ItemId, StringComparison.Ordinal))
                     .OrderByDescending(x => x.Date).FirstOrDefault();
                 if (p != null)
-                {
-                    // % lu : signal direct ; à défaut (durée d'œuvre inconnue
-                    // au moment de la lecture), complétion binaire.
-                    var effPct = p.Pct ?? (p.Completed ? 1.0 : (double?)null);
-                    var pctTxt = effPct.HasValue
-                        ? (effPct.Value * 100).ToString("0", CultureInfo.InvariantCulture) + " %"
-                        : "sans %";
-                    return CategoryOf(effPct) + " (" + pctTxt + ", "
-                        + p.DurSec / 60 + " min, " + SlotOf(p) + ")";
-                }
-                return "IGNORÉ (aucune lecture rattachée)";
+                    return PlayOutcome(p, "jointure id");
             }
-            // Programme EPG (direct) : jointure via le snapshot (chaîne +
+
+            // 2) Programme EPG (direct) : jointure via le snapshot (chaîne +
             // fenêtre de diffusion) → % = durée lue ÷ durée de diffusion.
+            // dur=0 (client sans position au stop) : lecture touchée, pas
+            // un « rejet immédiat » (v2.7.2 — un zap et un client muet ne
+            // se distinguent pas au log, l'honnêteté prime).
             if (!string.IsNullOrEmpty(d.ProgramId)
                 && snapByPid.TryGetValue(d.ProgramId, out var snap)
                 && snap.RuntimeMin.HasValue && snap.RuntimeMin.Value > 0)
@@ -442,14 +523,56 @@ namespace LLM_AI
                     .OrderByDescending(x => x.Date).FirstOrDefault();
                 if (p != null)
                 {
+                    if (p.DurSec <= 0)
+                        return "direct touché (durée inconnue, " + SlotOf(p) + ")";
                     var pct = (double)p.DurSec / (snap.RuntimeMin.Value * 60);
                     pct = Math.Max(0.0, Math.Min(1.0, pct));
                     return CategoryOf(pct) + " (direct " + snap.Channel + ", " + snap.RuntimeMin.Value + " min, "
-                        + (pct * 100).ToString("0", CultureInfo.InvariantCulture) + " %)";
+                        + (pct * 100).ToString("0", CultureInfo.InvariantCulture) + " %, " + SlotOf(p) + ")";
                 }
-                return "IGNORÉ (aucune lecture du direct rattachée)";
             }
-            return "? (non joignable — item sans id ou snapshot absent)";
+
+            // 3) Titre/série (v2.7.2) : repli quand id et direct n'ont
+            // rien joint. La carte .strm est un geste d'ACTION (clic →
+            // programmation), signal positif distinct d'un visionnage.
+            var key = LlmRunner.NormTitle(d.Title ?? "");
+            if (key.Length > 0 && playByTitle.TryGetValue(key, out var tps) && tps.Count > 0)
+            {
+                var p = tps.OrderByDescending(x => x.Date).First();
+                if (string.Equals(p.Src, "strm", StringComparison.OrdinalIgnoreCase))
+                    return "CARTE .strm activée (l'usager a agi sur cette reco, " + SlotOf(p) + ")";
+                return PlayOutcome(p, "jointure titre/série");
+            }
+
+            if (!string.IsNullOrEmpty(d.ItemId) || !string.IsNullOrEmpty(d.ProgramId))
+                return "IGNORÉ (aucune lecture rattachée)";
+            return "? (non joignable — item sans id ni titre exploitable)";
+        }
+
+        /// <summary>Libellé d'une lecture jointe par id ou par titre :
+        /// catégorie par % lu (ou complétion), texte de durée robuste au
+        /// client qui ne remonte pas la position au stop (vécu prod :
+        /// 175/176 entrées à dur=0 — la lecture a BIEN eu lieu).</summary>
+        private static string PlayOutcome(PlaybackEntry p, string via)
+        {
+            var effPct = p.Pct ?? (p.Completed ? 1.0 : (double?)null);
+            var cat = effPct.HasValue ? CategoryOf(effPct) : "lu";
+            string pctTxt = effPct.HasValue
+                ? (effPct.Value * 100).ToString("0", CultureInfo.InvariantCulture) + " %"
+                : (p.DurSec > 0 ? "~" + (p.DurSec / 60) + " min lues" : "durée inconnue");
+            return cat + " (" + pctTxt + ", " + (p.Src ?? "?") + ", " + via + ", " + SlotOf(p) + ")";
+        }
+
+        /// <summary>Indexe une lecture par un titre (ou nom de série)
+        /// normalisé — clé de la jointure de repli v2.7.2.</summary>
+        private static void IndexPlay(Dictionary<string, List<PlaybackEntry>> idx,
+            string title, PlaybackEntry p)
+        {
+            var k = LlmRunner.NormTitle(title ?? "");
+            if (k.Length == 0) return;
+            if (!idx.TryGetValue(k, out var l))
+                idx[k] = l = new List<PlaybackEntry>();
+            l.Add(p);
         }
 
         private static string SlotOf(PlaybackEntry p)
@@ -462,18 +585,6 @@ namespace LLM_AI
         {
             0 => "dim", 1 => "lun", 2 => "mar", 3 => "mer", 4 => "jeu", 5 => "ven", _ => "sam"
         };
-
-        /// <summary>Titre d'un item bibliothèque résolu (best-effort) — sert
-        /// à la jointure titre des « vu sans recommandation ».</summary>
-        private string ResolveTitle(string rawItemId)
-        {
-            if (string.IsNullOrWhiteSpace(rawItemId)) return "";
-            try
-            {
-                return ItemIdResolver.Resolve(_library, rawItemId)?.Name ?? "";
-            }
-            catch { return ""; }
-        }
 
         /// <summary>Nettoie la réponse LLM en fiche : retire les clôtures de
         /// code, borne au plafond. Vide si rien d'utilisable.</summary>

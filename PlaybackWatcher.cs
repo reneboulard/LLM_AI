@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
@@ -141,6 +142,16 @@ namespace LLM_AI
             try
             {
                 var cfg = Plugin.Instance?.Configuration;
+                // v2.7.2 : titre + série FIGÉS dans l'entrée. L'id seul ne
+                // peut pas rejoindre les décisions quand l'usager regarde
+                // l'ENREGISTREMENT d'une reco live/record (item distinct du
+                // programme EPG pointé, souvent déplacé hors du dossier DVR
+                // avant l'analyse hebdo) ; le couple (titre, série) porte la
+                // jointure de repli de MemoryTask. Une carte .strm porte le
+                // titre de la reco — son activation devient rattachable.
+                string frozenSeries = null;
+                if (item is Episode ep) frozenSeries = ep.SeriesName;
+                else if (item is LiveTvProgram ltp) frozenSeries = ltp.SeriesName;
                 DecisionStore.AppendPlayback(cfg, new PlaybackEntry
                 {
                     ItemId = item.InternalId.ToString(),
@@ -153,7 +164,9 @@ namespace LLM_AI
                     Channel = channel ?? "",
                     App = e.ClientName ?? e.Session?.Client ?? "",
                     Device = e.DeviceName ?? e.Session?.DeviceName ?? "",
-                    Completed = e.PlayedToCompletion
+                    Completed = e.PlayedToCompletion,
+                    Title = item.Name ?? "",
+                    SeriesName = frozenSeries ?? ""
                 }, _logger);
             }
             catch (Exception ex)
