@@ -1086,13 +1086,7 @@ namespace LLM_AI
         }
 
         private static bool SessionUserMatches(SessionInfo s, User user)
-        {
-            var sid = s.UserId;
-            if (string.IsNullOrWhiteSpace(sid)) return false;
-            return string.Equals(sid, user.Id.ToString("N"), StringComparison.OrdinalIgnoreCase)
-                || string.Equals(sid, user.Id.ToString(), StringComparison.OrdinalIgnoreCase)
-                || string.Equals(sid, user.InternalId.ToString(), StringComparison.OrdinalIgnoreCase);
-        }
+            => SessionUserMatch.Matches(s, user); // v2.7.4 : source de vérité partagée
 
         // ------------------------------------------------------------------
         //  Lectures tolérantes + sérialisation

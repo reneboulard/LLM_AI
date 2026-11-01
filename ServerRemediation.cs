@@ -300,8 +300,12 @@ namespace LLM_AI
                 var live = (sessions?.Sessions ?? Enumerable.Empty<SessionInfo>()).ToList();
                 foreach (var u in resolved)
                 {
-                    string uid = u.Id.ToString();
-                    foreach (var s in live.Where(x => string.Equals(x.UserId, uid, StringComparison.OrdinalIgnoreCase)))
+                    // Appariement tolérant (v2.7.4, SessionUserMatch) :
+                    // SessionInfo.UserId est en forme « N » sur 4.10.x —
+                    // la forme « D » seule ne matchait JAMAIS (le mode osd
+                    // rapportait « aucune session active » à un usager
+                    // pourtant connecté).
+                    foreach (var s in live.Where(x => SessionUserMatch.Matches(x, u)))
                     {
                         try
                         {

@@ -865,17 +865,12 @@ namespace LLM_AI
             catch { return null; }
         }
 
-        /// <summary>La session appartient-elle à cet usager ? Comparaison
-        /// tolérante sur les deux formes d'id (Guid « N » sans tirets, forme
-        /// canonique, InternalId) — cf. <see cref="ItemIdResolver"/>.</summary>
+        /// <summary>La session appartient-elle à cet usager ? Délègue à
+        /// <see cref="SessionUserMatch"/> (v2.7.4) — comparaison tolérante
+        /// sur les trois formes d'id (Guid « N » sans tirets, forme
+        /// canonique, InternalId), insensible à la casse.</summary>
         private static bool SessionUserMatches(SessionInfo s, User user)
-        {
-            var sid = s.UserId;
-            if (string.IsNullOrWhiteSpace(sid)) return false;
-            return string.Equals(sid, user.Id.ToString("N"), StringComparison.OrdinalIgnoreCase)
-                || string.Equals(sid, user.Id.ToString(), StringComparison.OrdinalIgnoreCase)
-                || string.Equals(sid, user.InternalId.ToString(), StringComparison.OrdinalIgnoreCase);
-        }
+            => SessionUserMatch.Matches(s, user);
 
         private string SafeRemoteAddress()
         {

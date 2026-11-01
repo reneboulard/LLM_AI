@@ -10,6 +10,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.7.4] — 2026-11-01
+
+### Fixed (FR)
+- **Toasts d'enregistrement : morts depuis la 2.4.0 — la forme de l'id de
+  session ne matchait jamais.** Vécu en production (2026-10-29→31) : chaque
+  annonce « début » et « complétion » d'enregistrement loguait
+  « 0 toast(s), cloche envoyée » alors que l'usager regardait Emby — la
+  notification persistante arrivait, le toast à l'écran jamais. Cause :
+  `SessionInfo.UserId` est stocké en forme « N » (Guid SANS tirets, vérifié
+  sur Emby 4.10.2.0) alors que la clé de cache Tonight est la forme « D »
+  (`User.Id.ToString()`, AVEC tirets) — la comparaison `Ordinal` du filtre
+  de sessions ne pouvait matcher AUCUNE session, sur aucun serveur, depuis
+  le premier jour de la fonctionnalité ; le toast du login, lui, cible par
+  id de session et fonctionnait, ce qui a masqué le défaut. Fix :
+  - **helper partagé `SessionUserMatch`** (source de vérité unique,
+    patron `ItemIdResolver`) : appariement session↔usager par les TROIS
+    formes d'id (Guid « N », forme canonique « D », InternalId),
+    insensible à la casse — `TonightRecordingService` (toasts
+    d'enregistrement), `ServerRemediation` (mode `osd` de `send_message`,
+    même piège : forme « D » seule) et les trois sites déjà tolérants
+    (`ClientCommandTool`, `ExternalChatApiService`, `RecordingChatTool`)
+    y délèguent désormais ;
+  - **diagnostic du zéro** : la ligne « Annonce … : 0 toast(s) » porte
+    désormais sa cause (« aucune session active » / « N session(s) sans
+    DisplayMessage » / « usager introuvable ») — c'est l'absence de cause
+    qui a laissé le défaut invisible des semaines.
+
+### Fixed (EN)
+- **Recording toasts: dead since 2.4.0 — the session id's shape never
+  matched.** Production field report (2026-10-29→31): every recording
+  "started"/"completed" announcement logged "0 toast(s), bell sent" while
+  the user was watching Emby — the persistent notification arrived, the
+  on-screen toast never did. Root cause: `SessionInfo.UserId` is stored in
+  "N" form (GUID without dashes, verified on Emby 4.10.2.0) while the
+  Tonight cache key is the "D" form (`User.Id.ToString()`, with dashes) —
+  the `Ordinal` comparison in the session filter could never match ANY
+  session, on any server, since the feature's first day; the login toast
+  targets by session id instead and worked, which kept the defect hidden.
+  Fix:
+  - **shared helper `SessionUserMatch`** (single source of truth,
+    `ItemIdResolver` pattern): session↔user matching through all THREE
+    id shapes ("N" GUID, canonical "D", InternalId), case-insensitive —
+    `TonightRecordingService` (recording toasts), `ServerRemediation`
+    (`send_message` osd mode, same trap: "D"-only) and the three already
+    tolerant sites (`ClientCommandTool`, `ExternalChatApiService`,
+    `RecordingChatTool`) now all delegate to it;
+  - **zero diagnostic**: the "Annonce … : 0 toast(s)" log line now
+    carries its cause ("no active session" / "N session(s) without
+    DisplayMessage" / "user not found") — the missing cause is what kept
+    the defect invisible for weeks.
+
+---
+
 ## [2.7.3] — 2026-10-27
 
 ### Fixed (FR)

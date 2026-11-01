@@ -61,6 +61,17 @@ namespace LLM_AI
     /// sinon le timer quotidien d'une série consommée comme enregistrement
     /// (ex. 14:57 chaque jour) toasterait « commence » pour une reco qui ne
     /// parle pas de l'épisode en cours d'enregistrement.</para>
+    /// <para><b>Ciblage des sessions</b> (v2.7.4) : l'appariement
+    /// usager↔session passe par <see cref="SessionUserMatch"/> —
+    /// <see cref="SessionInfo.UserId"/> est en forme « N » sur 4.10.x
+    /// alors que la clé de cache Tonight est la forme « D » : la
+    /// comparaison Ordinal directe de la v2.4.0→v2.7.3 ne matchait
+    /// JAMAIS (« 0 toast(s) » sur chaque annonce, cloche seule, vécu
+    /// prod 2026-10-29→31 alors que l'usager regardait Emby — le toast
+    /// du login, lui, cible par id de session et fonctionnait). La
+    /// ligne « Annonce … N toast(s) » porte désormais la cause du
+    /// zéro (aucune session / sessions sans DisplayMessage / usager
+    /// introuvable).</para>
     /// <para><b>Anti-brisage</b> : résultat de plus de 48 h ignoré (une
     /// série quotidienne ne toasterait pas des jours sur une sélection
     /// périmée) ; comptes ignorés
@@ -357,13 +368,19 @@ namespace LLM_AI
             //    DisplayMessage. Contrairement au login, pas de sonde
             //    d'attente : à l'heure d'un enregistrement les sessions sont
             //    établies depuis longtemps (capacités déjà déclarées).
+            //    Ciblage tolérant (v2.7.4, SessionUserMatch) : UserId de
+            //    session est en forme « N » sur 4.10.x, la clé de cache en
+            //    forme « D » — l'ancienne comparaison Ordinal contre la clé
+            //    ne matchait JAMAIS (toasts morts depuis la v2.4.0).
             int sent = 0;
+            int owned = 0; // diagnostic : sessions de l'usager SANS filtre de capacité
             try
             {
-                var targets = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
-                    .Where(s => s != null && string.Equals(s.UserId, userId, StringComparison.Ordinal) && SupportsDisplay(s))
+                var candidates = (_sessions.Sessions ?? Enumerable.Empty<SessionInfo>())
+                    .Where(s => SessionUserMatch.Matches(s, user))
                     .ToList();
-                foreach (var s in targets)
+                owned = candidates.Count;
+                foreach (var s in candidates.Where(SupportsDisplay))
                 {
                     try
                     {
@@ -385,9 +402,21 @@ namespace LLM_AI
             //    survit à la fermeture (notifiers ex. SMTP).
             SendBell(user, toast, reason);
 
-            _logger?.Info("[LLM_AI] Annonce {0} « {1} » à « {2} » : {3} toast(s){4}.",
+            // Diagnostic du zéro (v2.7.4) : « 0 toast(s) » sans cause a
+            // masqué le défaut de ciblage pendant des semaines — la ligne
+            // distingue désormais « aucune session », « sessions sans
+            // DisplayMessage » et « usager introuvable ».
+            string zeroNote = string.Empty;
+            if (sent == 0)
+            {
+                if (user == null) zeroNote = " (usager introuvable)";
+                else if (owned > 0) zeroNote = " (" + owned + " session(s) sans DisplayMessage)";
+                else zeroNote = " (aucune session active)";
+            }
+
+            _logger?.Info("[LLM_AI] Annonce {0} « {1} » à « {2} » : {3} toast(s){4}{5}.",
                 started ? "début" : "complétion", title, user?.Name ?? userId, sent,
-                user == null ? "" : ", cloche envoyée");
+                user == null ? "" : ", cloche envoyée", zeroNote);
         }
 
         /// <summary>La session déclare <c>DisplayMessage</c> (capacités
