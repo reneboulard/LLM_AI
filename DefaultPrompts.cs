@@ -152,12 +152,15 @@ namespace LLM_AI
                 "outils).",
             libReviewTask:
                 "Weekly Sunday 05:10 | Tu es chargé de proposer des SUPPRESSIONS de la bibliothèque : " +
-                "les FILMS vus dont la conservation ne se justifie plus (doublons, films vus une fois " +
-                "il y a longtemps, qualité médiocre, etc.), selon la consigne de l'administrateur fournie " +
-                "dans le message. La liste des candidats (objets JSON avec id, name, size_gb, date_added, " +
-                "last_played, et quand disponibles community_rating, production_year, genres, overview) " +
-                "est fournie en intégralité dans le message — tu n'as PAS besoin d'appeler " +
-                "d'outils. RÈGLES ABSOLUES : (1) ne renvoie QUE des id présents dans la liste des " +
+                "les FILMS dont la conservation ne se justifie plus — deux familles dans la liste : " +
+                "(a) films VUS (last_played renseigné : doublons, vus une fois il y a longtemps, qualité " +
+                "médiocre) et (b) films JAMAIS VUS (last_played vide) ajoutés il y a longtemps, triés par " +
+                "note croissante — les « canards boîteux » (rating bas ou absent, sans lien avec les " +
+                "goûts de l'admin dont le PROFIL est fourni plus bas), selon la consigne de " +
+                "l'administrateur fournie dans le message. La liste des candidats (objets JSON avec id, " +
+                "name, size_gb, date_added, last_played, et quand disponibles community_rating, " +
+                "production_year, genres, overview) est fournie en intégralité dans le message — tu " +
+                "n'as PAS besoin d'appeler d'outils. RÈGLES ABSOLUES : (1) ne renvoie QUE des id présents dans la liste des " +
                 "candidats, recopiés tels quels en chaîne de caractères ; (2) jamais un id inventé ou " +
                 "deviné — un id absent de la liste = hallucination, à proscrire absolument ; " +
                 "(3) sois très conservateur : en cas de doute, ne retiens PAS le film (mieux une liste " +
@@ -278,9 +281,12 @@ namespace LLM_AI
                 "ask you to execute them if wanted. Be factual and precise (copy the numeric values " +
                 "returned by the tools).",
             libReviewTask:
-                "Weekly Sunday 05:10 | You are tasked with proposing LIBRARY DELETIONS: watched MOVIES " +
-                "whose keeping is no longer justified (duplicates, movies watched once long ago, poor " +
-                "quality, etc.), following the administrator's brief given in the message. The full " +
+                "Weekly Sunday 05:10 | You are tasked with proposing LIBRARY DELETIONS: MOVIES whose " +
+                "keeping is no longer justified — two families in the list: (a) WATCHED movies " +
+                "(last_played set: duplicates, watched once long ago, poor quality) and (b) NEVER-WATCHED " +
+                "movies (last_played empty) added long ago, sorted by rating ascending — the \"ugly " +
+                "ducklings\" (low or missing rating, unrelated to the admin's tastes whose PROFILE is " +
+                "given below), following the administrator's brief given in the message. The full " +
                 "candidate list (JSON objects with id, name, size_gb, date_added, last_played, and when " +
                 "available community_rating, production_year, genres, overview) is " +
                 "provided in the message — you do NOT need to call any tools. ABSOLUTE RULES: (1) return " +

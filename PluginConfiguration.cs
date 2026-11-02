@@ -1168,6 +1168,23 @@ namespace LLM_AI
         /// </summary>
         public int LibReviewMaxBatch { get; set; } = 60;
 
+        /// <summary>
+        /// Âge minimum (en jours) d'un film JAMAIS VU pour entrer dans le
+        /// pool « canards boîteux » du run films (v2.11.0, critère repris de
+        /// emby-delete.sh : DateCreated &lt; il y a 1 an). 0 = désactivé
+        /// (comportement antérieur : seuls les films vus étaient candidats).
+        /// Défaut 365.
+        /// </summary>
+        public int LibReviewUnplayedMinDays { get; set; } = 365;
+
+        /// <summary>
+        /// Injecte dans le prompt du run films un profil de goûts de
+        /// l'administrateur (historique de visionnage + favoris, repris de
+        /// emby-delete.sh — permet au LLM de justifier « sans lien avec les
+        /// goûts constatés »). v2.11.0. Défaut true.
+        /// </summary>
+        public bool LibReviewTasteProfile { get; set; } = true;
+
         // ------------------------------------------------------------------
         //  Atelier de langues (v1.17.0) : génération/entretien des langues
         //  d'interface par le LLM du plugin (gabarit du run détaché d'audit ;

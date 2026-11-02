@@ -2044,6 +2044,25 @@
                             contexte du modèle. Défaut 60.
                         </div>
 
+                        <div class="inputContainer" style="display:flex;gap:1em;align-items:flex-end;flex-wrap:wrap;">
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numLibReviewUnplayedMinDays"
+                                       label="Âge min. film jamais vu (jours)"
+                                       data-i18n-label="cfg.libreview.unplayedmindays"
+                                       min="0" max="3650" />
+                            </div>
+                            <label class="checkboxContainer" style="flex:0 0 auto;">
+                                <input is="emby-checkbox" type="checkbox" id="chkLibReviewTasteProfile" />
+                                <span class="checkboxLabel" data-i18n="cfg.libreview.tasteprofile">Profil de goûts de l'admin injecté au prompt</span>
+                            </label>
+                        </div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.unplayedmindays.desc">
+                            Le run films considère AUSSI les films jamais vus par personne et ajoutés il y a plus de
+                            ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord, comme
+                            emby-delete.sh). 0 = désactivé (seuls les films vus sont candidats). Le profil de goûts
+                            = historique + favoris du premier admin, pour des justifications motivées.
+                        </div>
+
                         <div style="margin:0.8em 0;">
                             <button is="emby-button" type="button" class="raised block" id="btnRunLibReview" data-i18n="cfg.libreview.run">
                                 Lancer l'évaluation

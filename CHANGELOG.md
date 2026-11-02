@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.11.0] — 2026-11-02
+
+### Added (FR)
+- Module « Gestion bibliothèque » — le run **films** reprend les critères de
+  `emby-delete.sh` en plus de ceux déjà là : les **films JAMAIS vus par
+  personne et ajoutés il y a plus de N jours** entrent dans le pool (intersection
+  des `IsUnplayed` de tous les usagers, triés par **note croissante** — les
+  canards boîteux en tête). N = nouveau champ configurable **« Âge min. film
+  jamais vu (jours) »** (défaut 365, 0 = désactivé). Moitié du plafond par
+  famille. Nouveau champ **« Profil de goûts de l'admin »** (défaut oui) :
+  historique de visionnage + favoris du premier admin injectés dans le prompt
+  films, pour des justifications motivées (« sans lien avec les goûts
+  constatés »). Le prompt films par défaut (FR/EN) explique les deux familles.
+
+### Added (EN)
+- "Library management" module — the **movies** run now also uses
+  `emby-delete.sh` criteria: **NEVER-WATCHED movies added more than N days ago**
+  enter the pool (intersection of every user's `IsUnplayed`, sorted by
+  **ascending rating** — ugly ducklings first). N = new configurable field
+  **"Min age of never-watched movie (days)"** (default 365, 0 = disabled). Half
+  the cap per family. New **"Admin taste profile"** checkbox (default on):
+  first admin's watch history + favorites injected into the movies prompt, for
+  motivated justifications ("unrelated to observed tastes"). The default
+  movies prompt (FR/EN) explains both families.
+
+---
+
 ## [2.10.6] — 2026-11-02
 
 ### Added (FR)

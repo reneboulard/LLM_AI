@@ -14,6 +14,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Model.LiveTv;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
@@ -106,9 +107,14 @@ namespace LLM_AI
 
             progress(I18n.SDisplay("librev.progress.collect", host) ?? "Rassemblement des candidats…");
 
-            // ---- Pool FILMS : movies vus par au moins un usager, hors kept,
-            //      triés du plus ancien au plus récent, capés.
-            var moviePool = CollectMovies(library, users, userData, kept, cap, logger, ct);
+            // ---- Pool FILMS : deux familles (v2.11.0, critères repris de
+            //      emby-delete.sh) — (a) movies VUS par au moins un usager, du
+            //      plus ancien visionnage d'abord ; (b) movies JAMAIS VUS par
+            //      personne ET ajoutés il y a plus de LibReviewUnplayedMinDays,
+            //      triés par note croissante (les « canards boîteux » d'abord).
+            //      Hors kept dans les deux cas, capés au total.
+            var moviePool = CollectMovies(library, users, userData, kept, cap,
+                cfg.LibReviewUnplayedMinDays, logger, ct);
             // ---- Pool SÉRIES : séries partiellement vues, hors kept, hors
             //      séries à enregistrer (SeriesTimers + timers programmés —
             //      même règle que emby-delete-series.sh : exclusion stricte par
@@ -145,8 +151,13 @@ namespace LLM_AI
                 progress(string.Format(CultureInfo.InvariantCulture,
                     I18n.SDisplay("librev.progress.movies", host) ?? "Évaluation des films ({0} candidats)…",
                     moviePool.Count));
+                // v2.11.0 — profil de goûts du premier admin (historique +
+                // favoris, repris d'emby-delete.sh) : permet au LLM de
+                // justifier « sans lien avec les goûts constatés ».
+                string taste = cfg.LibReviewTasteProfile ? BuildTasteProfile(library, users, userData, logger) : null;
                 var entries = await RunOneAsync(runner, cfg, proseLang, "LibReview-FILMS", moviesPrompt,
-                    SerializePool(moviePool), "movie", knownIds: null, library, json, logger, progress, ct)
+                    SerializePool(moviePool), "movie", knownIds: null, library, json, logger, progress, ct,
+                    tasteProfile: taste)
                     .ConfigureAwait(false);
                 ValidateAndAdd(report, entries, moviePool, "movie", logger);
             }
@@ -196,7 +207,7 @@ namespace LLM_AI
             LlmRunner runner, PluginConfiguration cfg, string proseLang, string label, string userPrompt,
             string poolJson, string kind, HashSet<string> knownIds,
             ILibraryManager library, IJsonSerializer json, ILogger logger,
-            Action<string> progress, CancellationToken ct)
+            Action<string> progress, CancellationToken ct, string tasteProfile = null)
         {
             var backends = runner.ResolveBackends(cfg);
             if (backends.Count == 0)
@@ -220,6 +231,8 @@ namespace LLM_AI
 
             string fullUser = userPrompt.Trim() + "\n\n### CANDIDATS (" + kind.ToUpperInvariant() + ")\n" +
                 "Liste fournie par l'extension — ne recommande QUE des id de cette liste :\n" + poolJson;
+            if (!string.IsNullOrWhiteSpace(tasteProfile))
+                fullUser += "\n\n### PROFIL DE GOÛTS DE L'ADMINISTRATEUR (référence pour tes justifications)\n" + tasteProfile;
 
             var (reply, _toolResults) = await agent.RunAsync(fullUser, tools, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [{0}] Réponse brute (tronquée) :\n{1}", label, Truncate(reply, 1500));
@@ -373,33 +386,128 @@ namespace LLM_AI
             return sb.ToString();
         }
 
-        /// <summary>Films vus (union des usagers), hors kept, du plus ancien au plus récent, capés.</summary>
+        /// <summary>
+        /// Films candidats, hors kept, capés au total (v2.11.0) : moitié du
+        /// plafond pour les films VUS (union des usagers, du plus ancien
+        /// visionnage d'abord), moitié pour les films JAMAIS VUS par personne
+        /// et ajoutés il y a plus de <paramref name="unplayedMinDays"/> jours
+        /// (triés par note croissante — « canards boîteux » en tête, repris de
+        /// emby-delete.sh). Si unplayedMinDays &lt;= 0 : pool vus seul
+        /// (comportement < v2.11.0).
+        /// </summary>
         private static List<PoolItem> CollectMovies(ILibraryManager library, IUserManager users,
-            IUserDataManager userData, HashSet<string> kept, int cap, ILogger logger, CancellationToken ct)
+            IUserDataManager userData, HashSet<string> kept, int cap, int unplayedMinDays,
+            ILogger logger, CancellationToken ct)
         {
-            var played = CollectPlayedPerUser(library, users, userData, new[] { "Movie" }, logger, ct);
+            int napCap = unplayedMinDays > 0 ? cap / 2 : cap;
             var list = new List<PoolItem>();
+
+            // (a) Films vus (union des usagers), du plus ancien visionnage d'abord.
+            var played = CollectPlayedPerUser(library, users, userData, new[] { "Movie" }, logger, ct);
             foreach (var kv in played.OrderBy(p => p.Value.LastPlayedUtc ?? DateTime.MinValue))
             {
+                if (list.Count >= napCap) break;
                 var item = kv.Key;
                 string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
-                list.Add(new PoolItem
+                list.Add(ToPoolItem(item, id, kv.Value.LastPlayedUtc, logger));
+            }
+
+            // (b) Films JAMAIS vus (intersection des IsUnplayed de tous les
+            // usagers — même règle qu'emby-delete.sh : « IsUnplayed » exige un
+            // UserId, on boucle sur les usagers), ajoutés avant la coupure.
+            if (unplayedMinDays > 0 && list.Count < cap)
+            {
+                var cutoff = DateTimeOffset.UtcNow.AddDays(-unplayedMinDays);
+                var neverSeen = CollectNeverSeenPerUser(library, users, new[] { "Movie" },
+                    cutoff, logger, ct);
+                int unplayedAdded = 0;
+                foreach (var item in neverSeen.OrderBy(i => i.CommunityRating ?? 99.0))
                 {
-                    Id = id,
-                    Name = item.Name ?? "",
-                    SizeGb = FileSizeGb(item.Path, logger),
-                    DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                    LastPlayed = kv.Value.LastPlayedUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "",
-                    CommunityRating = item.CommunityRating,
-                    ProductionYear = item.ProductionYear,
-                    Status = null, // les films n'ont pas de statut de diffusion
-                    Genres = item.Genres,
-                    Overview = TruncateOverview(item.Overview)
-                });
-                if (list.Count >= cap) break;
+                    if (list.Count >= cap) break;
+                    string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
+                    if (kept.Contains(id)) continue;
+                    list.Add(ToPoolItem(item, id, null, logger));
+                    unplayedAdded++;
+                }
+                if (unplayedAdded > 0)
+                    logger?.Info("[LLM_AI] [LibReview] {0} film(s) jamais vus (+{1} j) ajoutés au pool (tri note croissante).",
+                        unplayedAdded, unplayedMinDays);
             }
             return list;
+        }
+
+        private static PoolItem ToPoolItem(BaseItem item, string id, DateTimeOffset? lastPlayed,
+            ILogger logger) => new PoolItem
+        {
+            Id = id,
+            Name = item.Name ?? "",
+            SizeGb = FileSizeGb(item.Path, logger),
+            DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            LastPlayed = lastPlayed?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "",
+            CommunityRating = item.CommunityRating,
+            ProductionYear = item.ProductionYear,
+            Status = null, // les films n'ont pas de statut de diffusion
+            Genres = item.Genres,
+            Overview = TruncateOverview(item.Overview)
+        };
+
+        /// <summary>
+        /// Items d'un type donné JAMAIS vus par AUCUN usager (intersection des
+        /// listes « IsUnplayed » par usager — la requête exige un User) et
+        /// créés avant <paramref name="cutoff"/>. Retourne les BaseItem.
+        /// </summary>
+        private static List<BaseItem> CollectNeverSeenPerUser(ILibraryManager library, IUserManager users,
+            string[] types, DateTimeOffset cutoff, ILogger logger, CancellationToken ct)
+        {
+            HashSet<long> intersection = null;
+            List<User> userList;
+            try { userList = users?.GetUserList(new UserQuery()).ToList() ?? new List<User>(); }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Lecture des usagers échouée : {0}", ex.Message);
+                return new List<BaseItem>();
+            }
+            foreach (var u in userList)
+            {
+                if (u == null) continue;
+                ct.ThrowIfCancellationRequested();
+                HashSet<long> unplayed;
+                try
+                {
+                    var q = new InternalItemsQuery
+                    {
+                        User = u,
+                        IsPlayed = false,
+                        IncludeItemTypes = types,
+                        Recursive = true,
+                        EnableTotalRecordCount = false
+                        // NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
+                    };
+                    unplayed = new HashSet<long>(
+                        (library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                            .Where(it => it != null && it.Id != Guid.Empty)
+                            .Select(it => it.InternalId));
+                }
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] [LibReview] Requête non-vus (usager {0}) échouée : {1}", u.Name, ex.Message);
+                    return new List<BaseItem>(); // fail-closed : pas d'intersection fiable
+                }
+                intersection = intersection == null ? unplayed : new HashSet<long>(intersection.Where(unplayed.Contains));
+            }
+            if (intersection == null) return new List<BaseItem>();
+            var final = new List<BaseItem>();
+            foreach (var id in intersection)
+            {
+                ct.ThrowIfCancellationRequested();
+                // InternalId (long) → BaseItem via ItemIdResolver (devise canonique).
+                var item = ItemIdResolver.Resolve(library, id.ToString(CultureInfo.InvariantCulture));
+                if (item == null) continue;
+                if (item.DateCreated >= cutoff) continue; // trop récent
+                final.Add(item);
+            }
+            return final;
         }
 
         /// <summary>
@@ -610,6 +718,67 @@ namespace LLM_AI
             }
             catch { /* best-effort */ }
             return false;
+        }
+
+        /// <summary>
+        /// Profil de goûts du premier administrateur (v2.11.0, repris
+        /// d'emby-delete.sh avec René) : films vus récemment (nom, année,
+        /// genres, 60 max) + favoris. Injecté dans le prompt du run films
+        /// pour permettre des justifications « sans lien avec les goûts ».
+        /// Best-effort : jamais d'exception.
+        /// </summary>
+        private static string BuildTasteProfile(ILibraryManager library, IUserManager users,
+            IUserDataManager userData, ILogger logger)
+        {
+            try
+            {
+                var admin = users?.GetUserList(new UserQuery())
+                    ?.FirstOrDefault(u => u != null && u.Policy != null && u.Policy.IsAdministrator);
+                if (admin == null) return null;
+
+                var sb = new StringBuilder();
+                sb.Append("Films vus récemment par ").Append(admin.Name).Append(" (nom (année) [genres]) :");
+                var q = new InternalItemsQuery
+                {
+                    User = admin,
+                    IsPlayed = true,
+                    IncludeItemTypes = new[] { "Movie" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    Limit = 60,
+                    OrderBy = new[] { ("DatePlayed", SortOrder.Descending) }
+                    // NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
+                };
+                foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                {
+                    string genres = (it.Genres != null && it.Genres.Length > 0) ? " [" + string.Join(", ", it.Genres) + "]" : "";
+                    sb.Append("\n- ").Append(it.Name ?? "?")
+                      .Append(" (").Append(it.ProductionYear?.ToString(CultureInfo.InvariantCulture) ?? "n/a").Append(")")
+                      .Append(genres);
+                }
+
+                sb.Append("\n\nFavoris de ").Append(admin.Name).Append(" (films/séries) :");
+                var fq = new InternalItemsQuery
+                {
+                    User = admin,
+                    IsFavorite = true,
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    Limit = 30,
+                    OrderBy = new[] { ("DateCreated", SortOrder.Descending) }
+                };
+                foreach (var it in library.GetItemList(fq) ?? Array.Empty<BaseItem>())
+                    sb.Append("\n- ").Append(it.Name ?? "?")
+                      .Append(" (").Append(it.ProductionYear?.ToString(CultureInfo.InvariantCulture) ?? "n/a").Append(")");
+
+                var s = sb.ToString();
+                return s.Length > 6000 ? s.Substring(0, 6000) + "\n…" : s;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Profil de goûts illisible : {0}", ex.Message);
+                return null;
+            }
         }
 
         // ------------------------------------------------------------------

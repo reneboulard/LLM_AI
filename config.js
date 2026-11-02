@@ -1085,6 +1085,9 @@ define(["loading"], function (loading) {
         view.querySelector("#txtLibReviewRunBrief").value = "";
         var lrb = parseInt(cfg.LibReviewMaxBatch, 10);
         view.querySelector("#numLibReviewMaxBatch").value = isNaN(lrb) ? 60 : lrb;
+        var lud = parseInt(cfg.LibReviewUnplayedMinDays, 10);
+        view.querySelector("#numLibReviewUnplayedMinDays").value = isNaN(lud) ? 365 : lud;
+        view.querySelector("#chkLibReviewTasteProfile").checked = cfg.LibReviewTasteProfile !== false;
         // Chat interactif : plus de flag d'activation (v2.9.0 — l'onglet
         // « Chat en direct » de cette page, admin-only comme la page).
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
@@ -1236,6 +1239,8 @@ define(["loading"], function (loading) {
             LibReviewTaskSeries: view.querySelector("#txtLibReviewTaskSeries").value,
             LibReviewBrief: (view.querySelector("#txtLibReviewBrief").value || "").trim(),
             LibReviewMaxBatch: Math.max(10, parseInt(view.querySelector("#numLibReviewMaxBatch").value, 10) || 60),
+            LibReviewUnplayedMinDays: Math.max(0, parseInt(view.querySelector("#numLibReviewUnplayedMinDays").value, 10) || 0),
+            LibReviewTasteProfile: view.querySelector("#chkLibReviewTasteProfile").checked,
             LibReviewKeptIds: (loadedCfg && loadedCfg.LibReviewKeptIds) || "",
             // Atelier de langues — dernier code de langue utilisé (confort :
             // le panneau rouvre sur le même code).
