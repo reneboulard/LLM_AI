@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.7.5] — 2026-11-02
+
+### Fixed (FR)
+- **« À regarder ce soir » : une reco ne s'auto-exclut plus dans sa propre
+  justification.** Vécu en production (run du 2026-11-01 17:00) : sous la
+  pression de la contrainte « AU MOINS 3 recommandations » avec un pool EPG
+  curaté de 3 titres, le LLM a émis « Hunger Games: L'embrasement » MAIS avec
+  la raison « Action et aventure, mais **exclu** selon ta mémoire
+  d'assistant (rejet des films) » — une reco affichée comme non recommandée.
+  La reco reste légitime (c'est un remplissage du minimum), seule la
+  justification était incohérente. Deux couches (prompt prévient, cadre fait
+  respecter) :
+  - **règle explicite** dans le workflow Tonight : une reco émise ne écrit
+    jamais « exclu »/« non recommandé »/« à éviter » dans sa propre raison ;
+    un remplissage du minimum se formule comme un repli honnête ;
+  - **filet serveur** (`TonightService.ValidateAndFilter` +
+    `IsSelfExcludingReason`) : si une raison émise contient un marqueur
+    d'auto-exclusion, la reco est GARDÉE (le minimum reste garanti) mais sa
+    raison est réécrite en formulation de repli localisée (i18n FR/EN,
+    `tonight.reason.fallback`), avec une ligne de log greppable et un
+    compteur dans le bilan de validation.
+
+### Fixed (EN)
+- **"Watch tonight": a recommendation no longer excludes itself in its own
+  justification.** Production field report (run of 2026-11-01 17:00): under
+  the "AT LEAST 3 recommendations" constraint with a curated EPG pool of 3
+  titles, the LLM emitted "Hunger Games: Catching Fire" BUT with the reason
+  "Action and adventure, but **excluded** per your assistant memory (movie
+  rejection)" — a reco displayed as not recommended. The reco itself is
+  legitimate (it fills the minimum), only the justification was
+  incoherent. Two layers (the prompt prevents, the frame enforces):
+  - **explicit rule** in the Tonight workflow: an emitted reco never writes
+    "excluded"/"not recommended"/"avoid" in its own reason; a minimum-filler
+    is phrased as an honest fallback;
+  - **server-side net** (`TonightService.ValidateAndFilter` +
+    `IsSelfExcludingReason`): if an emitted reason contains a self-exclusion
+    marker, the reco is KEPT (the minimum stays guaranteed) but its reason
+    is rewritten as a localized fallback phrasing (i18n FR/EN,
+    `tonight.reason.fallback`), with a greppable log line and a counter in
+    the validation summary.
+
+---
+
 ## [2.7.4] — 2026-11-01
 
 ### Fixed (FR)

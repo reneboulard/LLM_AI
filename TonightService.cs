@@ -113,7 +113,13 @@ namespace LLM_AI
             "La position réelle de l'usager dans une série (start=/unwatched=/user_started= des " +
             "lignes d'enregistrements) et son profil de goût PRIMENT sur toute tendance générale " +
             "de ta fiche mémoire : ses « rejets constants » ne s'appliquent ni aux séries en " +
-            "cours de l'usager, ni aux genres que l'historique de visionnage confirme.";
+            "cours de l'usager, ni aux genres que l'historique de visionnage confirme.\n" +
+            "Une recommandation QUE TU ÉMETS ne s'auto-exclut JAMAIS dans sa raison : n'écris " +
+            "jamais « exclu », « non recommandé », « déconseillé » ou « à éviter » dans la " +
+            "reason d'un titre présent dans TON propre tableau. Si tu complètes la sélection " +
+            "pour atteindre le minimum demandé (réserve bibliothèque ou titre moins aligné), " +
+            "formule la raison comme un repli honnête (« complément pour atteindre le minimum " +
+            "demandé », « à voir ce soir si le reste ne convient pas »), jamais comme une exclusion.";
 
         // ------------------------------------------------------------------
         //  Résultat de génération
@@ -1115,12 +1121,30 @@ namespace LLM_AI
                 bool parentalActive = PermissionGate.HasParentalRestrictions(user);
 
                 int kept = 0, dropped = 0, epgExpired = 0, libMissing = 0, watchedMarked = 0, liveNotPermitted = 0,
-                    parentalDropped = 0, epgUnrecognized = 0;
+                    parentalDropped = 0, epgUnrecognized = 0, selfExcluded = 0;
                 for (int i = arr.Count - 1; i >= 0; i--)
                 {
                     if (!(arr[i] is JsonObject obj)) { kept++; continue; }
                     string src = ObjStr(obj, "source");
                     string id = ObjStr(obj, "id");
+
+                    // Filet v2.7.5 — reco auto-contradictoire : le LLM émet un
+                    // titre MAIS sa raison déclare l'exclusion (« exclu selon
+                    // ta mémoire… », vécu prod 2026-11-01 : « Hunger Games:
+                    // L'embrasement »émis avec « mais **exclu** selon ta mémoire
+                    // d'assistant (rejet des films) » — sous pression de la
+                    // contrainte « AU MOINS N »). La reco est GARDÉE (le minimum
+                    // reste garanti) mais la raison est réécrite en repli honnête
+                    // : jamais d'auto-exclusion affichée sur une reco émise.
+                    string reason = ObjStr(obj, "reason");
+                    if (!string.IsNullOrEmpty(reason) && IsSelfExcludingReason(reason))
+                    {
+                        obj["reason"] = I18n.SDisplay("tonight.reason.fallback", _host)
+                            ?? "Complément pour atteindre le minimum demandé.";
+                        selfExcluded++;
+                        _logger?.Info("[LLM_AI] Tonight validation : reco « {0} » auto-exclue dans sa raison — raison réécrite en repli (filet v2.7.5).",
+                            ObjStr(obj, "title"));
+                    }
 
                     if (string.Equals(src, "live", StringComparison.OrdinalIgnoreCase))
                     {
@@ -1207,8 +1231,8 @@ namespace LLM_AI
                     }
                 }
 
-                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}, live sans droit TV : {4}, contrôle parental : {5}), rediffusions déjà visionnées marquées : {6}, cotes EPG non reconnues conservées : {7}.",
-                    kept, dropped, epgExpired, libMissing, liveNotPermitted, parentalDropped, watchedMarked, epgUnrecognized);
+                _logger?.Info("[LLM_AI] Tonight validation : {0} gardée(s), {1} supprimée(s) (EPG expirés/hors-snapshot : {2}, items bibli. introuvables : {3}, live sans droit TV : {4}, contrôle parental : {5}), rediffusions déjà visionnées marquées : {6}, cotes EPG non reconnues conservées : {7}, raisons auto-exclues réécrites : {8}.",
+                    kept, dropped, epgExpired, libMissing, liveNotPermitted, parentalDropped, watchedMarked, epgUnrecognized, selfExcluded);
 
                 return arr.ToJsonString();
             }
@@ -1585,6 +1609,45 @@ namespace LLM_AI
                 && jv.TryGetValue<string>(out var s))
                 return s;
             return null;
+        }
+
+        /// <summary>
+        /// Filet v2.7.5 : détecte une raison de recommandation
+        /// <b>auto-contradictoire</b> — le LLM émet le titre mais déclare
+        /// l'exclure dans la raison (vécu prod 2026-11-01 : « mais **exclu**
+        /// selon ta mémoire d'assistant (rejet des films) » sur un titre émis,
+        /// sous pression de la contrainte « AU MOINS N »). Marqueurs tolérants
+        /// (casse/accents/postonction), insensible à la casse. Faux positifs
+        /// acceptables : le filet ne réécrit la raison que pour la rendre
+        /// honnête, jamais pour dropper la reco.
+        /// </summary>
+        internal static bool IsSelfExcludingReason(string reason)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return false;
+            string r = reason.ToLowerInvariant();
+            // « exclu »/« avoid » en MOT ENTIER (évite « d'exclusion fiscale »,
+            // « avoidance »…) ; les formes longues à espaces sont des expressions
+            // entières par construction.
+            return ContainsWord(r, "exclu") || ContainsWord(r, "excluded") || ContainsWord(r, "exclude")
+                || ContainsWord(r, "avoid")
+                || r.Contains("non recommandé") || r.Contains("non recommande")
+                || r.Contains("déconseillé") || r.Contains("deconseille") || r.Contains("à éviter")
+                || r.Contains("a eviter") || r.Contains("ne recommande pas") || r.Contains("ne pas regarder")
+                || r.Contains("not recommended") || r.Contains("do not watch");
+        }
+
+        private static bool ContainsWord(string text, string word)
+        {
+            int i = text.IndexOf(word, StringComparison.Ordinal);
+            while (i >= 0)
+            {
+                bool leftOk = i == 0 || !char.IsLetter(text[i - 1]);
+                int end = i + word.Length;
+                bool rightOk = end >= text.Length || !char.IsLetter(text[end]);
+                if (leftOk && rightOk) return true;
+                i = text.IndexOf(word, i + 1, StringComparison.Ordinal);
+            }
+            return false;
         }
 
         /// <summary>

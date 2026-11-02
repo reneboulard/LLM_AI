@@ -651,6 +651,9 @@ namespace LLM_AI
                     ["tonight.err.nouser"] = "Utilisateur non résolu.",
                     ["tonight.err.noreco"] = "L'analyse LLM n'a pas produit de recommandation.",
                     ["tonight.err.noitems"] = "Toutes les recommandations pointaient vers des items introuvables (programme disparu du guide ou items supprimés).",
+                    // --- v2.7.5 : raison de repli pour reco auto-contradictoire
+                    // (filet serveur, la reco est gardée, seule la raison change) ---
+                    ["tonight.reason.fallback"] = "Complément pour atteindre le nombre minimum demandé — à voir ce soir si le reste de la sélection ne convient pas.",
                     // --- Atelier de langues (v1.17.0 T1b) : jalons + rapport
                     // de génération — en langue d'AFFICHAGE, jamais la cible.
                     ["i18n.gen.progress.collect"] = "Collecte de la base native et du glossaire…",
@@ -877,6 +880,9 @@ namespace LLM_AI
                     ["tonight.err.nouser"] = "Could not resolve the user.",
                     ["tonight.err.noreco"] = "The LLM run produced no recommendation.",
                     ["tonight.err.noitems"] = "All recommendations pointed to items that could not be found (expired guide or deleted items).",
+                    // --- v2.7.5: fallback reason for a self-contradictory reco
+                    // (server-side net, the reco is kept, only the reason changes) ---
+                    ["tonight.reason.fallback"] = "Filler to reach the requested minimum — watch tonight if the rest of the selection doesn't suit you.",
                     // --- Language workshop (v1.17.0 T1b): milestones + report
                     // — in the DISPLAY language, never the target language ---
                     ["i18n.gen.progress.collect"] = "Gathering the native base and glossary…",
