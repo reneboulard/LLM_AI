@@ -37,17 +37,21 @@
                 color: #1f1f1f;
             }
             /* Panneau de contenu : carte claire avec bordure subtile, sur
-               TOUTE la largeur disponible (le thème du dashboard limite
-               .content-primary à ~1100px — on force ici pour une config
-               en onglets, plus aérée en largeur). */
+               TOUTE la largeur disponible. Le dashboard 4.10 applique
+               « form, .readOnlyContent { max-width: 80ch } » (layout.css) :
+               notre <form class="LLMAIConfigForm"> hérite donc de 80ch —
+               on force la pleine largeur ici pour une config en onglets,
+               plus aérée en largeur. */
             .LLMAIConfigPage .content-primary {
                 background-color: #fafafa !important;
                 padding: 1.5em !important;
                 border-radius: 6px !important;
                 border: 1px solid #e0e0e0;
+                box-sizing: border-box;
+            }
+            .LLMAIConfigPage form.LLMAIConfigForm {
                 max-width: none !important;
                 width: 100%;
-                box-sizing: border-box;
             }
             /* Lisibilité des descriptions sur fond clair. */
             .LLMAIConfigPage .fieldDescription {
