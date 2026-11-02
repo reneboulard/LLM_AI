@@ -821,7 +821,15 @@ define(["loading"], function (loading) {
             badge.className = "tab-badge";
             badge.textContent = "●";
             b.appendChild(badge);
-            b.addEventListener("click", function () { activate(g.id); });
+            b.addEventListener("click", function () {
+                activate(g.id);
+                // Onglet outil : on remonte le panneau sous la nav sticky
+                // (scroll-margin-top en CSS) pour libérer toute la hauteur.
+                if (g.tool && paneByGroup[g.id]) {
+                    try { paneByGroup[g.id].scrollIntoView({ block: "start" }); }
+                    catch (e) { paneByGroup[g.id].scrollIntoView(); }
+                }
+            });
             b.addEventListener("keydown", function (e) {
                 var idx = null;
                 if (e.key === "ArrowRight") idx = (gi + 1) % TAB_GROUPS.length;
@@ -849,10 +857,41 @@ define(["loading"], function (loading) {
         // Pied sticky « Enregistrer » : masqué sur les onglets outil (hors
         // form — rien à soumettre). La pastille « non enregistré » n'y a
         // pas de sens non plus (aucun champ du form dans le panneau).
+        // v2.9.0 : sur un onglet outil, le chrome de la page (titre h2, lien
+        // doc, bandeau de mise à jour) est aussi replié (classe
+        // .tool-active sur .content-primary, CSS dans config.html) et la
+        // hauteur du panneau est affinée pour remplir le viewport sous la
+        // barre d'onglets.
         function syncFooter(id) {
             var isTool = !!TOOL_TABS[id];
             if (saveDiv) saveDiv.style.display = isTool ? "none" : "";
+            // .content-primary = form > .verticalSection → 2 niveaux au-dessus.
+            var cp = container.parentNode && container.parentNode.parentNode;
+            if (cp && cp.classList && cp.classList.contains("content-primary")) {
+                cp.classList.toggle("tool-active", isTool);
+            }
+            if (isTool) {
+                var pane = paneByGroup[id];
+                if (pane) {
+                    // Mesure APRÈS application de .active (display:flex) et
+                    // du masquage du chrome : top = bas de la nav sticky.
+                    var top = pane.getBoundingClientRect().top;
+                    var h = Math.max(320, (window.innerHeight || 800) - top - 8);
+                    pane.style.height = h + "px";
+                }
+            } else {
+                TAB_GROUPS.forEach(function (g) {
+                    if (g.tool && paneByGroup[g.id]) paneByGroup[g.id].style.height = "";
+                });
+            }
         }
+        // Recalcul de la hauteur du panneau outil actif au resize.
+        once(window, "resize", function () {
+            var active = buttons.filter(function (x) {
+                return x.btn.getAttribute("aria-selected") === "true";
+            })[0];
+            if (active && active.tool) syncFooter(active.pane.id);
+        });
 
         // Chargement lazy du chat embarqué (v2.9.0) : le module AMD
         // LLMAIChatPageJS n'est require() qu'au premier affichage de

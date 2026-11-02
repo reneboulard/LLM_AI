@@ -299,10 +299,27 @@
                pas la page. Les ids (#chatLog, #txtChatInput…) sont scopés
                par chat.js sur le panneau (init(pane)). */
             .LLMAIConfigPage .chatPane {
-                height: calc(100vh - 300px);
+                /* Hauteur affinée en JS (fitToolPanes dans config.js) à
+                   l'affichage de l'onglet : le panneau remplit l'espace sous
+                   la barre d'onglets jusqu'au bas du viewport. Valeur CSS de
+                   repli si le JS ne tourne pas. */
+                height: calc(100vh - 220px);
                 min-height: 420px;
+                /* scrollIntoView au clic sur l'onglet : laisse la place à la
+                   nav sticky (top:0) au-dessus du panneau. */
+                scroll-margin-top: 84px;
                 display: none; /* .tab-pane.active reprend le dessus */
                 flex-direction: column;
+            }
+            /* Onglet outil actif (v2.9.0) : le chrome de la page (titre, lien
+               doc, bandeau de mise à jour) est replié pour que le panneau
+               outil (chat) occupe TOUTE la hauteur visible. La nav des
+               onglets reste (sticky) et le pied « Enregistrer » est masqué
+               par syncChrome (config.js). */
+            .LLMAIConfigPage .content-primary.tool-active .verticalSection > h2.sectionTitle,
+            .LLMAIConfigPage .content-primary.tool-active .verticalSection > .docsLinkRow,
+            .LLMAIConfigPage .content-primary.tool-active .verticalSection > #updateBanner {
+                display: none;
             }
             .LLMAIConfigPage .chatPane.active {
                 display: flex;
@@ -491,7 +508,7 @@
                 <form class="LLMAIConfigForm">
                     <div class="verticalSection">
                         <h2 class="sectionTitle" data-i18n="cfg.title">LLM AI — Configuration</h2>
-                        <div style="margin:0.3em 0 1em;">
+                        <div class="docsLinkRow" style="margin:0.3em 0 1em;">
                             <a href="https://github.com/reneboulard/LLM_AI#llm_ai--plugin-emby-de-recommandations-par-llm" target="_blank" rel="noopener noreferrer"
                                data-i18n="cfg.docs.link">📖 Documentation complète (GitHub — nouvel onglet)</a>
                         </div>
