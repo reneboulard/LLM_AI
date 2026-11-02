@@ -715,9 +715,18 @@ define(["loading"], function (loading) {
         { id: "tab-media",   i18n: "cfg.tab.media",   heads: ["cfg.notifs.h", "cfg.strmlib.h", "cfg.orphan.h", "cfg.crosskind.h"] },
         { id: "tab-memory",  i18n: "cfg.tab.memory",  heads: ["cfg.memory.h", "cfg.i18n.h"] },
         { id: "tab-chat",    i18n: "cfg.tab.chat",    heads: ["cfg.chat.h"] },
+        // Onglet OUTIL (v2.9.0) : panneau préexistant HORS du <form>
+        // (pas un réglage). `tool: true` = makeTabs ne le déplace pas, il
+        // le référencie tel quel ; au premier affichage, config.js charge
+        // le module AMD LLMAIChatPageJS (lazy) et appelle init(panneau) ;
+        // le pied sticky « Enregistrer » est masqué sur cet onglet.
+        { id: "tab-chatlive", i18n: "cfg.tab.chatlive", tool: true },
         { id: "tab-audit",   i18n: "cfg.tab.audit",   heads: ["cfg.audit.h"] }
     ];
     var TAB_KEY = "llmai.cfg.tab"; // onglet actif persisté (préférence navigateur admin)
+    // Onglets outils : le pied « Enregistrer » n'a pas de sens (pas de
+    // champ de formulaire dans le panneau) — masqué quand l'un est actif.
+    var TOOL_TABS = { "tab-chatlive": true };
 
     // Assemble la navigation par onglets : une <nav class="tab-nav"> est
     // placée à #tabNavAnchor, chaque groupe de h3+champs est déplacé dans un
@@ -737,6 +746,9 @@ define(["loading"], function (loading) {
         function groupOf(h) {
             var key = h.getAttribute("data-i18n") || "";
             for (var i = 0; i < TAB_GROUPS.length; i++) {
+                // Entrées "tool" (v2.9.0) : pas de heads — le panneau
+                // existe déjà hors du form, aucun h3 ne les vise.
+                if (!TAB_GROUPS[i].heads) continue;
                 if (TAB_GROUPS[i].heads.indexOf(key) !== -1) return TAB_GROUPS[i];
             }
             return null; // sous-section : rattachée au groupe courant
@@ -776,6 +788,17 @@ define(["loading"], function (loading) {
         flush();
 
         // Barre d'onglets + boutons (roving tabindex, flèches clavier).
+        // Onglets outils (tool: true) : le panneau existe déjà hors du
+        // .verticalSection (hors du <form>, dans .content-primary) — on le
+        // référencie depuis la vue, on ne le déplace PAS (sinon il
+        // retomberait dans le form et ses champs seraient soumis).
+        TAB_GROUPS.forEach(function (g) {
+            if (g.tool && !paneByGroup[g.id]) {
+                var existing = view.querySelector("#" + g.id);
+                if (existing) paneByGroup[g.id] = existing;
+            }
+        });
+
         var nav = document.createElement("nav");
         nav.className = "tab-nav";
         nav.setAttribute("role", "tablist");
@@ -812,15 +835,42 @@ define(["loading"], function (loading) {
                 }
             });
             nav.appendChild(b);
-            buttons.push({ btn: b, pane: pane });
+            buttons.push({ btn: b, pane: pane, tool: !!g.tool });
         });
         if (anchor && anchor.parentNode) anchor.parentNode.replaceChild(nav, anchor);
         else container.insertBefore(nav, container.firstChild);
-        // Panneaux insérés avant le footer, dans l'ordre de TAB_GROUPS.
+        // Panneaux "form" insérés avant le footer, dans l'ordre de
+        // TAB_GROUPS ; les panneaux outils restent à leur place (hors form).
         TAB_GROUPS.forEach(function (g) {
             var pane = paneByGroup[g.id];
-            if (pane) container.insertBefore(pane, saveDiv || null);
+            if (pane && !g.tool) container.insertBefore(pane, saveDiv || null);
         });
+
+        // Pied sticky « Enregistrer » : masqué sur les onglets outil (hors
+        // form — rien à soumettre). La pastille « non enregistré » n'y a
+        // pas de sens non plus (aucun champ du form dans le panneau).
+        function syncFooter(id) {
+            var isTool = !!TOOL_TABS[id];
+            if (saveDiv) saveDiv.style.display = isTool ? "none" : "";
+        }
+
+        // Chargement lazy du chat embarqué (v2.9.0) : le module AMD
+        // LLMAIChatPageJS n'est require() qu'au premier affichage de
+        // l'onglet outil (pas au chargement de la page de config).
+        var chatModulePromise = null;
+        function lazyInitChat(pane) {
+            if (!pane) return;
+            if (!chatModulePromise) {
+                chatModulePromise = new Promise(function (resolve, reject) {
+                    try {
+                        require([resourceUrl("LLMAIChatPageJS")], resolve, reject);
+                    } catch (e) { reject(e); }
+                });
+            }
+            chatModulePromise.then(function (mod) {
+                if (mod && typeof mod.init === "function") mod.init(pane);
+            }, function () { /* module indisponible : onglet reste inerte */ });
+        }
 
         function activate(id, opts) {
             opts = opts || {};
@@ -831,14 +881,18 @@ define(["loading"], function (loading) {
                 x.pane.classList.toggle("active", on);
                 if (on) x.pane.removeAttribute("hidden"); else x.pane.setAttribute("hidden", "");
             });
+            syncFooter(id);
             if (!opts.silent) {
                 lsSet(TAB_KEY, id);
                 try { history.replaceState(null, "", "#" + id); } catch (e) { /* silencieux */ }
             }
             var cur = null;
             buttons.forEach(function (x) { if (x.pane.id === id) cur = x; });
-            if (cur && !opts.noFocus) {
-                try { cur.btn.focus({ preventScroll: true }); } catch (e) { cur.btn.focus(); }
+            if (cur) {
+                if (cur.tool) lazyInitChat(cur.pane);
+                if (!opts.noFocus) {
+                    try { cur.btn.focus({ preventScroll: true }); } catch (e) { cur.btn.focus(); }
+                }
             }
         }
         view._llmaiActivateTab = activate;
@@ -983,8 +1037,8 @@ define(["loading"], function (loading) {
         // Atelier de langues — dernier code saisi (confort de reprise).
         view.querySelector("#txtI18nLang").value = cfg.I18nGenerateLang || "";
         view.querySelector("#txtAuditFocus").value = "";
-        // Chat interactif — default true (opt-out), chargé à l'ouverture de la page.
-        view.querySelector("#chkChatEnabled").checked = cfg.ChatEnabled !== false;
+        // Chat interactif : plus de flag d'activation (v2.9.0 — l'onglet
+        // « Chat en direct » de cette page, admin-only comme la page).
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
         // Couche d'action du chat (v1.13) : budget par tour (0 = lecture
         // seule), plafond par conversation. run_tonight_run : toujours
@@ -1130,8 +1184,8 @@ define(["loading"], function (loading) {
             // Atelier de langues — dernier code de langue utilisé (confort :
             // le panneau rouvre sur le même code).
             I18nGenerateLang: (view.querySelector("#txtI18nLang").value || "").trim().toLowerCase(),
-            // Chat interactif — simple booléen, pas de carry-forward spécial.
-            ChatEnabled: view.querySelector("#chkChatEnabled").checked,
+            // Chat interactif : plus de flag ChatEnabled (v2.9.0, onglet
+            // embarqué dans cette page — admin-only comme la page).
             // Mémoire de conversation (opt-in) — les sessions vivent dans
             // chat_memory.json côté serveur, comme les autres stores JSON.
             ChatMemoryEnabled: view.querySelector("#chkChatMemoryEnabled").checked,
@@ -2264,9 +2318,9 @@ define(["loading"], function (loading) {
                 });
             }
 
-            // (Le chat interactif vit désormais sur sa propre page
-            //  « Chat LLM AI » — menu Serveur — servie par chat.js. Cette
-            //  page ne conserve que le flag d'activation chkChatEnabled.)
+            // (Le chat interactif vit dans l'onglet outil « 💬 Chat en
+            //  direct » de cette page — panneau #tab-chatlive hors du form,
+            //  module AMD LLMAIChatPageJS chargé en lazy par makeTabs.)
 
             // Soumission du formulaire = sauvegarde. Branché UNE fois (once) :
             // la vue est cachée par le dashboard et viewshow re-tire à chaque

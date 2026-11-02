@@ -1,16 +1,20 @@
-// Page « Chat LLM AI » — module AMD chargé par le dashboard via
-// data-controller="__plugin/LLMAIChatPageJS". Conversation interactive
-// multi-tours avec l'agent LLM : POST /Plugins/LLMAI/Chat avec le message
+// Chat interactif avec l'agent LLM — module AMD « LLMAIChatPageJS ».
+// v2.9.0 : plus de page autonome (chat.html + menu Serveur supprimés) — le
+// chat vit dans l'onglet outil « 💬 Chat en direct » de la page de config :
+// config.js charge ce module via require() au premier affichage du panneau
+// (lazy) et appelle init(pane). `pane` tient le rôle de l'ancienne page :
+// querySelector sur les ids du chat + i18n.translateView(pane).
+//
+// Conversation multi-tours : POST /Plugins/LLMAI/Chat avec le message
 // courant + l'historique complet de la conversation.
 //
-// Le serveur est stateless — l'historique vit dans cette closure (page) et
-// n'est jamais persisté ; seuls les tours user/assistant (textes finaux)
+// Le serveur est stateless — l'historique vit dans cette closure (panneau)
+// et n'est jamais persisté ; seuls les tours user/assistant (textes finaux)
 // sont stockés, pas les appels d'outils intermédiaires. Le system prompt
 // (doc outils + directives) est construit serveur-side, une seule fois par
 // conversation — le client ne le stocke ni ne le renvoie.
 //
-// Porté depuis la section chat de config.js (v1) ; les clés i18n cfg.chat.*
-// sont partagées par le module LLMAII18n.
+// Les clés i18n chat.* / cfg.chat.* sont partagées par le module LLMAII18n.
 define([], function () {
     "use strict";
 
@@ -194,28 +198,35 @@ define([], function () {
         el.addEventListener(ev, fn);
     }
 
-    return function (view) {
-        view.addEventListener("viewshow", function () {
-            i18nReady().then(function () {
-                return i18n.init();
-            }).then(function () {
-                // Traduit le DOM statique (titre, description, indice, libellés).
-                i18n.translateView(view);
+    // Point d'entrée appelé par config.js (onglet « Chat en direct »).
+    // `pane` = le div.tab-pane qui contient le bloc chat ; tout le câblage
+    // est borné par ce panneau (querySelector scoped, `once` sur ses
+    // éléments) : aucune dépendance à la page hôte, aucun viewshow requis.
+    // Idempotent : on ne branche qu'une fois par panneau (WeakMap).
+    var initMap = new WeakMap();
+    function init(pane) {
+        if (!pane || initMap.get(pane)) return;
+        initMap.set(pane, true);
+        i18nReady().then(function () {
+            return i18n.init();
+        }).then(function () {
+            // Traduit le DOM statique du panneau (indice, libellés).
+            i18n.translateView(pane);
 
-                // Historique de la conversation (stateless serveur) : tours
-                // user/assistant uniquement, bornés côté page ET côté serveur.
-                var chatHistory = [];
-                var chatBusy = false;
-                // Mémoire de conversation : identifiant de session retourné
-                // par la première réponse du serveur puis rejoué à chaque
-                // tour (chaîne vide = nouvelle conversation).
-                var chatSessionId = "";
+            // Historique de la conversation (stateless serveur) : tours
+            // user/assistant uniquement, bornés côté page ET côté serveur.
+            var chatHistory = [];
+            var chatBusy = false;
+            // Mémoire de conversation : identifiant de session retourné
+            // par la première réponse du serveur puis rejoué à chaque
+            // tour (chaîne vide = nouvelle conversation).
+            var chatSessionId = "";
 
-                var chatLog = view.querySelector("#chatLog");
-                var chatInput = view.querySelector("#txtChatInput");
-                var chatSendBtn = view.querySelector("#btnSendChat");
-                var chatClearBtn = view.querySelector("#btnClearChat");
-                var chatContextSel = view.querySelector("#selChatContext");
+            var chatLog = pane.querySelector("#chatLog");
+            var chatInput = pane.querySelector("#txtChatInput");
+            var chatSendBtn = pane.querySelector("#btnSendChat");
+            var chatClearBtn = pane.querySelector("#btnClearChat");
+            var chatContextSel = pane.querySelector("#selChatContext");
 
                 // ----------------------------------------------------------------
                 //  Blocs de code des réponses (v1.13.9.5) : Copier (repli
@@ -922,7 +933,7 @@ define([], function () {
                 // la reprendre ; les derniers échanges verbatim sont rejoués
                 // dans le log, le résumé (si prêt) est injecté serveur-side.
                 function loadChatMemory() {
-                    var banner = view.querySelector("#chatResume");
+                    var banner = pane.querySelector("#chatResume");
                     if (!banner) return;
                     ApiClient.ajax({
                         url: ApiClient.getUrl("Plugins/LLMAI/ChatMemory"),
@@ -934,7 +945,7 @@ define([], function () {
                         var info = data.Current;
                         if (!info.Id || !(info.Turns > 0)) return;
 
-                        var textEl = view.querySelector("#chatResumeText");
+                        var textEl = pane.querySelector("#chatResumeText");
                         if (textEl) {
                             textEl.textContent = i18n.t("chat.resume.banner",
                                 info.Date || "?", info.Turns || 0);
@@ -944,7 +955,7 @@ define([], function () {
                         // Branché UNE fois (once) — remplace la garde ad-hoc
                         // _llmaiWired qui protégeait déjà ce bouton contre le
                         // viewshow multiple.
-                        var resumeBtn = view.querySelector("#btnResumeChat");
+                        var resumeBtn = pane.querySelector("#btnResumeChat");
                         once(resumeBtn, "click", function () {
                                 if (chatBusy) return;
                                 chatSessionId = info.Id;
@@ -967,8 +978,9 @@ define([], function () {
                         });
                     }, function () { /* indisponible : chat sans mémoire (fail-open) */ });
                 }
-                loadChatMemory();
-            }); // fin i18nReady().then(...).then(...)
-        });
-    };
+            loadChatMemory();
+        }); // fin i18nReady().then(...).then(...)
+    }
+
+    return { init: init };
 });

@@ -10,6 +10,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.8.0] — 2026-11-02
+
+### Changed (FR)
+- **Page de configuration en onglets.** La page passe de sections repliables à
+  une navigation par **7 onglets** (barre sticky en haut : LLM & API / Guide TV &
+  reco / Ce soir / Médias & alertes / Mémoire & langues / Chat / Audit & santé),
+  avec pastille « ● modifications non enregistrées » par onglet et pied
+  « Enregistrer » sticky. La page utilise toute la largeur de l'écran et
+  l'onglet actif a un fond plein accent (#1c5a8a) + texte blanc. Le lien
+  profond `&section=crosskind` ouvre désormais l'onglet « Médias & alertes ».
+
+### Changed (EN)
+- **Config page in tabs.** The page switches from collapsible sections to a
+  **7-tab** navigation (sticky bar at the top: LLM & API / TV guide & recos /
+  Tonight / Media & alerts / Memory & languages / Chat / Audit & health), with a
+  "● unsaved changes" badge per tab and a sticky "Save" footer. The page uses the
+  full screen width and the active tab gets a solid accent background (#1c5a8a)
+  + white text. The `&section=crosskind` deep link now opens the
+  "Media & alerts" tab.
+
+---
+
+## [2.9.0] — 2026-11-02
+
+### Changed (FR)
+- **Page de config en onglets (lot 1) + chat embarqué (lot 2).** La page de
+  configuration passe en navigation par **8 onglets** (barre sticky en haut :
+  LLM & API / Guide TV & reco / Ce soir / Médias & alertes / Mémoire & langues /
+  Chat / 💬 Chat en direct / Audit & santé), avec pastille « ● modifications non
+  enregistrées » par onglet et pied « Enregistrer » sticky. La page utilise
+  désormais **toute la largeur** de l'écran (le dashboard 4.10 applique
+  `form { max-width: 80ch }` — surchargé sur `form.LLMAIConfigForm`), et
+  l'onglet actif a un fond plein accent (#1c5a8a) + texte blanc.
+- **Chat interactif = onglet outil « 💬 Chat en direct » de la page de config.**
+  La page autonome « LLM_AI Chat » (menu Serveur) est supprimée, ainsi que le
+  flag `ChatEnabled` (la page de config est admin-only comme la page elle-même,
+  et l'endpoint `POST /Plugins/LLMAI/Chat` re-vérifie toujours
+  `Policy.IsAdministrator`). Le panneau chat vit **hors du `<form>`** : ce
+  n'est pas un réglage, aucun champ n'est soumis, et le pied « Enregistrer »
+  est masqué sur cet onglet. Le module `chat.js` est refactorisé en module
+  exporté (`init(pane)`) et chargé en **lazy** via `require()` au premier
+  affichage de l'onglet. Toute la logique existante est conservée : contextes
+  d'édition, cartes d'approbation (prompts/actions/i18n), mémoire de
+  conversation, rendu Markdown, liens profonds.
+
+### Changed (EN)
+- **Config page in tabs (lot 1) + embedded chat (lot 2).** The configuration
+  page now uses **8 tabs** (sticky bar at the top: LLM & API / TV guide & recos /
+  Tonight / Media & alerts / Memory & languages / Chat / 💬 Live chat /
+  Audit & health), with a "● unsaved changes" badge per tab and a sticky
+  "Save" footer. The page now uses the **full screen width** (the 4.10 dashboard
+  applies `form { max-width: 80ch }` — overridden on `form.LLMAIConfigForm`), and
+  the active tab gets a solid accent background (#1c5a8a) + white text.
+- **Interactive chat = "💬 Live chat" tool tab of the config page.** The
+  standalone "LLM_AI Chat" page (Server menu) is removed, along with the
+  `ChatEnabled` flag (the config page is admin-only like the page itself, and
+  the `POST /Plugins/LLMAI/Chat` endpoint still re-checks
+  `Policy.IsAdministrator`). The chat pane lives **outside the `<form>`**: it is
+  not a setting, no field is submitted, and the "Save" footer is hidden on that
+  tab. The `chat.js` module is refactored as an exported module (`init(pane)`)
+  and **lazy-loaded** via `require()` on the tab's first display. All existing
+  behavior is preserved: editing contexts, approval cards (prompts/actions/i18n),
+  conversation memory, Markdown rendering, deep links.
+
+---
+
 ## [2.7.5] — 2026-11-02
 
 ### Fixed (FR)

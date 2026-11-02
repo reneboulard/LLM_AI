@@ -12,9 +12,9 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <!-- Version du plugin : BasePlugin.Version est sealed et renseignée par
          l'hôte Emby depuis la version de l'assembly au chargement. -->
-    <Version>2.8.0</Version>
-    <AssemblyVersion>2.8.0</AssemblyVersion>
-    <FileVersion>2.8.0</FileVersion>
+    <Version>2.9.0</Version>
+    <AssemblyVersion>2.9.0</AssemblyVersion>
+    <FileVersion>2.9.0</FileVersion>
   </PropertyGroup>
 
   <!-- Kit de tradution local (gitignored i18n-kit/) : ses .cs sont des
@@ -58,7 +58,9 @@
     <EmbeddedResource Include="config.js" />
     <EmbeddedResource Include="recommendations.html" />
     <EmbeddedResource Include="recommendations.js" />
-    <EmbeddedResource Include="chat.html" />
+    <!-- v2.9.0 : plus de chat.html (page autonome supprimée) — seul le
+         module chat.js reste, servi comme ressource et chargé en lazy par
+         config.js dans l'onglet « Chat en direct ». -->
     <EmbeddedResource Include="chat.js" />
     <!-- Module i18n (FR/EN) : dictionnaires + walker DOM, dépendance
          __plugin/LLMAII18n des pages config et recommandations. -->

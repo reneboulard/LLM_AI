@@ -832,9 +832,8 @@ modify another plugin's config). Full details:
 
 ### LLM chat (admin)
 
-- `ChatEnabled` (bool, default `true` — opt-out) — enables the **LLM_AI Chat** page
-  (admin menu, "Server" section) and the `POST /Plugins/LLMAI/Chat` endpoint.
-  See [LLM chat (admin)](#llm-chat-admin).
+- (v2.9.0: no more `ChatEnabled` — the chat lives in the **💬 Live chat** tab of the
+  config page, which is admin-only like the page itself.)
 - `ChatMemoryEnabled` (bool, default `false` — opt-in) — chat conversation memory:
   persisted sessions, lazy summarization, "Resume" button. See
   [Conversation memory](#conversation-memory).
@@ -1008,7 +1007,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Specialized LLM tools (see [LLM tools](#llm-tools)). `TmdbLookupTool` additionally exposes `LookupMetaAsync`/`LookupMetaMultiLangAsync` (search, S1), `FindByExternalIdAsync` (`/find`, validates a proposed id), `LookupMetaByIdAsync` (detail by id), `CleanEpgTitle` — reused by `StrmLibraryGenerator` and `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Configuration page (entry of the fields above). |
 | `recommendations.html` / `recommendations.js` | — | Recommendations page (renders the 3 sections, cards, buttons). |
-| `chat.html` / `chat.js` | — | "LLM AI Chat" page (admin menu, Server section): full-frame conversation with the LLM agent — the multi-turn logic moved from the config page to its own page, per-visit history, shared Markdown rendering, "Resume" banner (conversation memory, opt-in `ChatMemoryEnabled`). Editing contexts (v1.13.8): modes dropdown, automatic `[Admin]` announcement on mode change, fenced-block rendering as a container with Copy / Save buttons (self-contained message), per-turn fallback button when the reply arrives as prose. Deep links (v1.13.9.12): rendering of `[text](url)` Markdown links to Emby item pages, same-origin only, new tab — see [Deep links to Emby item pages](#deep-links-to-emby-item-pages-v113912). |
+| `chat.js` | — | Interactive chat module (v2.9.0: no more standalone `chat.html` page — the **💬 Live chat** tab of the config page embeds the conversation, lazy-loaded by `config.js`): multi-turn logic, per-visit history, shared Markdown rendering, "Resume" banner (conversation memory, opt-in `ChatMemoryEnabled`). Editing contexts (v1.13.8): modes dropdown, automatic `[Admin]` announcement on mode change, fenced-block rendering as a container with Copy / Save buttons (self-contained message), per-turn fallback button when the reply arrives as prose. Deep links (v1.13.9.12): rendering of `[text](url)` Markdown links to Emby item pages, same-origin only, new tab — see [Deep links to Emby item pages](#deep-links-to-emby-item-pages-v113912). |
 | `i18n.js` | — | Localized FR/EN strings + `web/ConfigurationPage?name=LLMAII18n` endpoint. |
 | `deploy.sh` | — | Build + deploy + restart (see [Installation](#installation)). |
 
@@ -2061,10 +2060,13 @@ never a write.
 
 ## LLM chat (admin)
 
-The **"LLM_AI Chat"** page (admin menu, "Server" section, `chat.html`/`chat.js`): a
-**full-frame** multi-turn conversation with the LLM agent — the same tools as the
-scheduled task (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
-**not** the audit remediation actions), the plugin's backends/priorities.
+The **"💬 Live chat"** tab of the configuration page (v2.9.0 — the standalone
+"LLM_AI Chat" page in the Server menu was removed; the chat is now embedded in the
+config page, outside the form): a **full-frame** multi-turn conversation with the LLM
+agent — the same tools as the scheduled task (`get_emby_info`, `tmdb_lookup`,
+`web_search`, `new_releases`…, **not** the audit remediation actions), the plugin's
+backends/priorities. The JS module (`chat.js`) is lazy-loaded on the tab's first
+display.
 
 - **Endpoint:** `POST /Plugins/LLMAI/Chat`, body
   `{Message, History:[{role,content}], Session}` — the page keeps the history (scoped
@@ -2072,9 +2074,9 @@ scheduled task (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
   prompt (tool docs + directives) is built server-side. `Session`: the
   conversation-memory id (returned by the first response then replayed; empty = new
   conversation).
-- **Gating:** `ChatEnabled` (default `true`, opt-out). **Admin only** — the page is
-  not published in the user menu (no `EnableInUserMenu`): it exposes library and EPG
-  introspection.
+- **Gating:** v2.9.0, no more `ChatEnabled` flag. **Admin only** — the config page
+  itself is admin-only (Emby dashboard), and the endpoint re-checks
+  `Policy.IsAdministrator`: it exposes library and EPG introspection.
 - Usage: explore the library in natural language, prepare/evaluate an evening, ask
   the agent what it could recommend — without spending a full run.
 

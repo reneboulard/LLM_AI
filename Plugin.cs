@@ -142,26 +142,12 @@ namespace LLM_AI
             },
             new PluginPageInfo
             {
-                Name = "LLMAIChatPage",
-                EmbeddedResourcePath = "LLM_AI.chat.html",
-                // Menu admin (dashboard) : section « Serveur ». Chat = outil
-                // admin (tous les outils, dont system_audit) : PAS de
-                // EnableInUserMenu — la sécurité est celle d'Emby, seuls les
-                // admins voient la section Serveur (l'endpoint re-vérifie
-                // de toute façon Policy.IsAdministrator).
-                // NB DisplayName : le serveur trie TOUTES les pages de plugins
-                // par DisplayName (ordre alphabétique) et le dashboard lie le
-                // plugin de la liste à sa PREMIÈRE page triée de type
-                // PluginConfiguration — « Chat LLM AI » triait AVANT
-                // «LLM_AI» (la page de config) et volait le clic du plugin.
-                // « LLM_AI Chat » trie juste après (règle du préfixe), la
-                // page de config reste la page liée au plugin.
-                EnableInMainMenu = true,
-                MenuSection = "server",
-                DisplayName = "LLM_AI Chat"
-            },
-            new PluginPageInfo
-            {
+                // v2.9.0 : plus de page autonome « LLM_AI Chat » dans le menu
+                // Serveur — le chat vit dans l'onglet « 💬 Chat en direct »
+                // de la page de config (admin-only comme la page). Seul le
+                // module JS reste servi comme ressource (chargé en lazy via
+                // require("web/ConfigurationPage?name=LLMAIChatPageJS") par
+                // config.js au premier affichage du panneau).
                 Name = "LLMAIChatPageJS",
                 EmbeddedResourcePath = "LLM_AI.chat.js"
             },

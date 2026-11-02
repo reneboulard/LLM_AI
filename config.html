@@ -289,6 +289,201 @@
             .LLMAIConfigPage .btnResetPrompt {
                 margin-top: 0.35em;
             }
+
+            /* ------------------------------------------------------------
+               Onglet outil « 💬 Chat en direct » (v2.9.0) : le panneau
+               .tab-pane.chatPane vit HORS du <form> (ce n'est pas un
+               réglage). Palette claire de la page de config (comme le reste
+               de la page : fonds #fafafa, bordures #e0e0e0, accent #1c5a8a).
+               Le panneau a une hauteur fixe : le log défile à l'intérieur,
+               pas la page. Les ids (#chatLog, #txtChatInput…) sont scopés
+               par chat.js sur le panneau (init(pane)). */
+            .LLMAIConfigPage .chatPane {
+                height: calc(100vh - 300px);
+                min-height: 420px;
+                display: none; /* .tab-pane.active reprend le dessus */
+                flex-direction: column;
+            }
+            .LLMAIConfigPage .chatPane.active {
+                display: flex;
+            }
+            .LLMAIConfigPage .chatPane .chatDesc {
+                color: #666;
+                font-size: 0.9em;
+                margin: 0 0 1em 0;
+            }
+            .LLMAIConfigPage .chatPane .chatLog {
+                flex: 1 1 auto;
+                overflow-y: auto;
+                padding: 0.6em 0.8em;
+                background: #f4f4f4;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                font-size: 14px;
+                line-height: 1.55;
+                white-space: normal;
+            }
+            .LLMAIConfigPage .chatPane .chatResume {
+                display: flex;
+                align-items: center;
+                gap: 0.8em;
+                margin: 0 0 0.8em 0;
+                padding: 0.6em 0.8em;
+                background: #e8f0fe;
+                border: 1px solid #b8c9e8;
+                border-radius: 6px;
+            }
+            .LLMAIConfigPage .chatPane .chatResume[hidden] { display: none; }
+            .LLMAIConfigPage .chatPane .chatResumeText {
+                color: #1c5a8a;
+                font-size: 0.88em;
+                flex: 1 1 auto;
+            }
+            .LLMAIConfigPage .chatPane .chatTurn { margin: 0.8em 0; }
+            .LLMAIConfigPage .chatPane .chatTurn + .chatTurn {
+                border-top: 1px solid rgba(0,0,0,0.08);
+                padding-top: 0.8em;
+            }
+            .LLMAIConfigPage .chatPane .chatWho {
+                color: #1c5a8a;
+                font-size: 11px;
+                font-weight: bold;
+                margin-bottom: 0.25em;
+            }
+            .LLMAIConfigPage .chatPane .chatTurn.user .chatWho { color: #2e7d32; }
+            .LLMAIConfigPage .chatPane .chatUser { color: #1f1f1f; }
+            .LLMAIConfigPage .chatPane .chatHint { color: #888; font-size: 12px; }
+            .LLMAIConfigPage .chatPane .chatActions {
+                margin: 0.5em 0 0.2em;
+                font-size: 12px;
+                color: #666;
+            }
+            .LLMAIConfigPage .chatPane .chatActions div { margin: 0.15em 0; }
+            .LLMAIConfigPage .chatPane .chatMarkdown h1,
+            .LLMAIConfigPage .chatPane .chatMarkdown h2,
+            .LLMAIConfigPage .chatPane .chatMarkdown h3 { margin: 0.6em 0 0.3em; color: #1f1f1f; }
+            .LLMAIConfigPage .chatPane .chatMarkdown h2 { font-size: 1.15em; }
+            .LLMAIConfigPage .chatPane .chatMarkdown h3 { font-size: 1.05em; }
+            .LLMAIConfigPage .chatPane .chatMarkdown ul { margin: 0.3em 0; padding-left: 1.4em; color: #333; }
+            .LLMAIConfigPage .chatPane .chatMarkdown li { margin: 0.2em 0; }
+            .LLMAIConfigPage .chatPane .chatMarkdown p { margin: 0.4em 0; color: #333; }
+            .LLMAIConfigPage .chatPane .chatMarkdown code {
+                background: rgba(0,0,0,0.06); padding: 0 0.3em; border-radius: 3px;
+                font-family: monospace; color: #1f1f1f;
+            }
+            .LLMAIConfigPage .chatPane .chatInputRow {
+                display: flex;
+                gap: 0.5em;
+                margin-top: 0.8em;
+                align-items: stretch;
+            }
+            .LLMAIConfigPage .chatPane .chatInputRow input { flex: 1 1 auto; min-width: 0; }
+            .LLMAIConfigPage .chatPane .chatContextRow {
+                display: flex;
+                align-items: center;
+                gap: 0.6em;
+                margin: 0 0 0.8em 0;
+            }
+            .LLMAIConfigPage .chatPane .chatContextRow select { max-width: 320px; }
+            .LLMAIConfigPage .chatPane .chatPending {
+                margin: 0.6em 0 0.2em;
+                padding: 0.7em 0.8em;
+                background: #fff8e1;
+                border: 1px solid #e5c74f;
+                border-radius: 6px;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingTitle {
+                color: #8a6d00;
+                font-weight: bold;
+                font-size: 0.92em;
+                margin-bottom: 0.4em;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingText {
+                color: #444;
+                font-size: 12px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: #fff;
+                border: 1px solid #e8d89a;
+                border-radius: 4px;
+                padding: 0.5em;
+                margin: 0.3em 0;
+                max-height: 180px;
+                overflow-y: auto;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingWarn {
+                color: #a0620a;
+                font-size: 0.88em;
+                margin: 0.4em 0;
+                padding: 0.4em 0.6em;
+                background: #fff3e0;
+                border: 1px solid #e5a53a;
+                border-radius: 4px;
+            }
+            .LLMAIConfigPage .chatPane .chatCode {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                margin: 0.6em 0;
+                overflow: hidden;
+                background: #fff;
+            }
+            .LLMAIConfigPage .chatPane .chatCodeHead {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 0.35em 0.7em;
+                background: #f0f0f0;
+                border-bottom: 1px solid #ddd;
+            }
+            .LLMAIConfigPage .chatPane .chatCodeName {
+                font-family: monospace;
+                font-size: 0.85em;
+                color: #1c5a8a;
+            }
+            .LLMAIConfigPage .chatPane .chatCodeBtns { display: flex; gap: 0.4em; }
+            .LLMAIConfigPage .chatPane .chatSaveTurnRow { margin: 0.4em 0 0.2em; }
+            .LLMAIConfigPage .chatPane .chatCodeBtn {
+                cursor: pointer;
+                padding: 0.15em 0.5em;
+                font-size: 0.9em;
+                background: #fff;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                color: #333;
+            }
+            .LLMAIConfigPage .chatPane .chatCodePre {
+                margin: 0;
+                padding: 0.7em;
+                overflow-x: auto;
+                background: #f7f7f7;
+            }
+            .LLMAIConfigPage .chatPane .chatCodePre code {
+                font-family: monospace;
+                font-size: 12px;
+                white-space: pre-wrap;
+                word-break: break-word;
+                color: #1f1f1f;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingLabel {
+                color: #1c5a8a;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingButtons {
+                display: flex;
+                gap: 0.6em;
+                margin-top: 0.5em;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingResult {
+                color: #2e7d32;
+                font-size: 0.88em;
+                margin-top: 0.5em;
+            }
+            .LLMAIConfigPage .chatPane .chatPendingHint {
+                color: #1c5a8a;
+                font-size: 0.95em;
+                margin-top: 0.4em;
+            }
         </style>
 
         <div data-role="content">
@@ -1575,18 +1770,18 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.chat.h">Chat avec l'assistant IA</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.desc">
-                            Conversation multi-tours avec l'agent LLM, sur sa propre page
-                            (menu Serveur → Chat LLM AI). Il dispose de tous les outils de l'extension (guide TV, bibliothèque, TMDB/TVDB, recherche web, nouveautés
+                            Conversation multi-tours avec l'agent LLM, dans l'onglet
+                            « 💬 Chat en direct » de cette page. Il dispose de tous les outils de l'extension (guide TV, bibliothèque, TMDB/TVDB, recherche web, nouveautés
                             web, audit système) et suit les priorités de serveurs LLM configurées
                             ci-dessus. L'historique est maintenu par la page ; la directive et la
                             documentation des outils sont envoyées au LLM une seule fois, au début
-                            de la conversation. Réservé aux administrateurs.
+                            de la conversation. Réservé aux administrateurs (cette page l'est).
                         </div>
 
-                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
-                            <input type="checkbox" is="emby-checkbox" id="chkChatEnabled" />
-                            <span class="checkboxLabel" data-i18n="cfg.chat.enabled">Activer le chat interactif</span>
-                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.chat.live.desc">
+                            L'onglet « 💬 Chat en direct » (à droite de celui-ci) embarque la
+                            conversation interactive : chaque question déclenche un tour LLM.
+                        </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
                             <input type="checkbox" is="emby-checkbox" id="chkChatMemoryEnabled" />
@@ -1758,6 +1953,47 @@
                         </div>
                     </div>
                 </form>
+
+                <!-- Onglet outil « 💬 Chat en direct » (v2.9.0) : le panneau
+                     #tab-chatlive ci-dessous vit HORS du <form> (ce n'est pas
+                     un réglage, aucun de ses champs n'est soumis) mais DANS
+                     .content-primary (même carte visuel). makeTabs (config.js)
+                     l'ajoute à la barre via l'entrée { tool: true } de
+                     TAB_GROUPS (le panneau existant n'est pas déplacé). Le
+                     module AMD LLMAIChatPageJS est chargé par require() au
+                     premier affichage du panneau (lazy) — config.js appelle
+                     chatModule.init(panneau). -->
+                <div class="tab-pane chatPane" id="tab-chatlive" role="tabpanel" hidden>
+                    <div class="chatDesc" data-i18n-html="cfg.chat.desc"></div>
+                    <div id="chatResume" class="chatResume" hidden>
+                        <span id="chatResumeText" class="chatResumeText"></span>
+                        <button is="emby-button" type="button" class="raised" id="btnResumeChat"
+                                data-i18n="chat.resume.button">Reprendre</button>
+                    </div>
+                    <div id="chatLog" class="chatLog">
+                        <div class="chatHint" data-i18n="cfg.chat.hint">
+                            Posez une question à l'assistant — il interrogera vos données Emby
+                            (guide TV, bibliothèque, santé du serveur) pour répondre.
+                        </div>
+                    </div>
+                    <div class="chatContextRow">
+                        <select is="emby-select" id="selChatContext" data-i18n-label="chat.context" aria-label="Mode de conversation">
+                            <option value="" data-i18n="chat.context.none">Aucun (assistant général)</option>
+                        </select>
+                    </div>
+                    <div class="chatInputRow">
+                        <input is="emby-input" type="text" id="txtChatInput"
+                               data-i18n-label="cfg.chat.input"
+                               data-i18n-ph="cfg.chat.placeholder"
+                               placeholder="ex. que peux-tu me dire sur ce qui passe ce soir ?" />
+                        <button is="emby-button" type="button" class="raised" id="btnSendChat" data-i18n="cfg.chat.send">
+                            Envoyer
+                        </button>
+                        <button is="emby-button" type="button" class="raised" id="btnClearChat" data-i18n="cfg.chat.clear">
+                            Effacer la conversation
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

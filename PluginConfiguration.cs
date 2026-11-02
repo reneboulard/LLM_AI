@@ -1128,24 +1128,14 @@ namespace LLM_AI
         public string I18nGenerateLang { get; set; } = "";
 
         // ------------------------------------------------------------------
-        //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat, section de la
-        //  page de config). Réutilise les backends LLM (priorités usager) et
-        //  TOUS les outils existants (recommandation + system_audit) : zéro
-        //  nouvel outil. Historique maintenu côté page (stateless serveur) ;
-        //  le system prompt (doc outils + directives RAG) est construit
-        //  serveur-side une seule fois par conversation.
+        //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat, onglet
+        //  « Chat en direct » de la page de config). Réutilise les backends
+        //  LLM (priorités usager) et TOUS les outils existants
+        //  (recommandation + system_audit) : zéro nouvel outil. Historique
+        //  maintenu côté page (stateless serveur) ; le system prompt (doc
+        //  outils + directives RAG) est construit serveur-side une seule
+        //  fois par conversation.
         // ------------------------------------------------------------------
-
-        /// <summary>
-        /// Active l'endpoint de chat <c>POST /Plugins/LLMAI/Chat</c> et la
-        /// section « Chat » de la page de config. <c>false</c> = l'endpoint
-        /// renvoie une réponse désactivée (pas de run LLM). Défaut
-        /// <c>true</c> (feature non destructive, opt-out). Le chat reste
-        /// réservé aux administrateurs (vérifié côté endpoint) : il expose
-        /// l'état du serveur via <c>system_audit</c> — la remédiation y reste
-        /// gated par <see cref="AuditRemediationEnabled"/>.
-        /// </summary>
-        public bool ChatEnabled { get; set; } = true;
 
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : mémoire de

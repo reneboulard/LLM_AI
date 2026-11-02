@@ -215,8 +215,9 @@ namespace LLM_AI
             if (cfg == null)
                 return new ChatResponse { Enabled = false, Error = I18n.S("err.noconfig", lang) };
 
-            if (!cfg.ChatEnabled)
-                return new ChatResponse { Enabled = false };
+            // v2.9.0 : plus de flag ChatEnabled — le chat vit dans l'onglet
+            // « Chat en direct » de la page de config (admin-only comme la
+            // page). Seule la gate admin reste.
 
             // Réservé aux administrateurs : le chat expose l'état du serveur
             // (system_audit : sessions, chemins, disques, journaux) et
@@ -660,7 +661,7 @@ namespace LLM_AI
         public object Get(ChatContextsRequest req)
         {
             var cfg = Plugin.Instance?.Configuration;
-            if (cfg == null || !cfg.ChatEnabled)
+            if (cfg == null)
                 return new ChatContextsResponse { Enabled = false };
 
             var admin = ResolveAdmin();

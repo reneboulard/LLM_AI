@@ -857,9 +857,8 @@ plugin). Détail complet : [Traduction IA des genres EPG (GenreCleaner)](#traduc
 
 ### Chat LLM (admin)
 
-- `ChatEnabled` (bool, défaut `true` — opt-out) — active la page **LLM_AI Chat**
-  (menu admin, section « Serveur ») et l'endpoint `POST /Plugins/LLMAI/Chat`.
-  Voir [Chat LLM (admin)](#chat-llm-admin).
+- (v2.9.0 : plus de `ChatEnabled` — le chat vit dans l'onglet **💬 Chat en direct**
+  de la page de config, qui est admin-only comme la page elle-même.)
 - `ChatMemoryEnabled` (bool, défaut `false` — opt-in) — mémoire de conversation du
   chat : sessions persistées, résumé paresseux, bouton « Reprendre ». Voir
   [Mémoire de conversation](#mémoire-de-conversation).
@@ -1035,7 +1034,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |
 | `recommendations.html` / `recommendations.js` | — | Page Recommandations (rendu des 3 sections, cartes, boutons). |
-| `chat.html` / `chat.js` | — | Page « Chat LLM AI » (menu admin, section Serveur) : conversation plein cadre avec l'agent LLM — logique multi-tours portée de la config vers sa propre page, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). Contextes d'édition (v1.13.8) : liste déroulante des modes, annonce `[Admin]` automatique au changement, rendu des blocs clôturés en conteneur avec boutons Copier / Sauvegarder (message autoporteur), bouton de secours au niveau du tour si la réponse arrive en prose. Liens profonds (v1.13.9.12) : rendu des liens Markdown `[texte](url)` vers les fiches Emby, même origine uniquement, nouvel onglet — voir [Liens profonds vers les fiches Emby](#liens-profonds-vers-les-fiches-emby-v113912). |
+| `chat.js` | — | Module du chat interactif (v2.9.0 : plus de page autonome `chat.html` — l'onglet **💬 Chat en direct** de la page de config embarque la conversation, chargée en lazy par `config.js`) : logique multi-tours, historique par visite, rendu Markdown partagé, bannière « Reprendre » (mémoire de conversation, opt-in `ChatMemoryEnabled`). Contextes d'édition (v1.13.8) : liste déroulante des modes, annonce `[Admin]` automatique au changement, rendu des blocs clôturés en conteneur avec boutons Copier / Sauvegarder (message autoporteur), bouton de secours au niveau du tour si la réponse arrive en prose. Liens profonds (v1.13.9.12) : rendu des liens Markdown `[texte](url)` vers les fiches Emby, même origine uniquement, nouvel onglet — voir [Liens profonds vers les fiches Emby](#liens-profonds-vers-les-fiches-emby-v113912). |
 | `i18n.js` | — | Chaînes localisées FR/EN + endpoint `web/ConfigurationPage?name=LLMAII18n`. |
 | `deploy.sh` | — | Build + déploiement + redémarrage (voir [Installation](#installation)). |
 
@@ -2127,10 +2126,13 @@ seule de la config de l'autre plugin, jamais une écriture.
 
 ## Chat LLM (admin)
 
-Page **« LLM_AI Chat »** (menu admin, section « Serveur », `chat.html`/`chat.js`) :
-conversation multi-tours **plein cadre** avec l'agent LLM — les mêmes outils que la
-tâche planifiée (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`…,
-**pas** les actions de remédiation d'audit), les serveurs/priorités du plugin.
+Onglet **« 💬 Chat en direct »** de la page de configuration (v2.9.0 — la page
+autonome « LLM_AI Chat » du menu Serveur a été supprimée ; le chat est embarqué dans
+la config, hors du formulaire) : conversation multi-tours **plein cadre** avec
+l'agent LLM — les mêmes outils que la tâche planifiée (`get_emby_info`,
+`tmdb_lookup`, `web_search`, `new_releases`…, **pas** les actions de remédiation
+d'audit), les serveurs/priorités du plugin. Le module JS (`chat.js`) est chargé en
+lazy au premier affichage de l'onglet.
 
 - **Endpoint :** `POST /Plugins/LLMAI/Chat`, corps
   `{Message, History:[{role,content}], Session}` — la page garde l'historique
@@ -2138,9 +2140,9 @@ tâche planifiée (`get_emby_info`, `tmdb_lookup`, `web_search`, `new_releases`�
   user/assistant sont filtrés, le system prompt (doc outils + directives) est construit
   serveur-side. `Session` : identifiant de la mémoire de conversation (retourné par la
   première réponse puis rejoué ; vide = nouvelle conversation).
-- **Gating :** `ChatEnabled` (défaut `true`, opt-out). **Admin uniquement** —
-  l'outil n'est pas publié dans le menu utilisateur (`EnableInUserMenu` absent) : il
-  expose l'introspection de la bibliothèque et de l'EPG.
+- **Gating :** v2.9.0, plus de flag `ChatEnabled`. **Admin uniquement** — la page de
+  config elle-même est admin-only (dashboard Emby), et l'endpoint re-vérifie
+  `Policy.IsAdministrator` : il expose l'introspection de la bibliothèque et de l'EPG.
 - Usage : explorer la bibliothèque en langage naturel, préparer/évaluer une soirée,
   questionner l'agent sur ce qu'il peut recommander — sans consommer un run complet.
 

@@ -40,7 +40,9 @@ define([], function () {
     var PAGE_NAMES = [
         "LLMAIConfigPage", "LLMAIConfigPageJS", "LLMAII18n",
         "LLMAIRecommendationsPage", "LLMAIRecommendationsPageJS",
-        "LLMAIChatPage", "LLMAIChatPageJS", "LLMAIBg", "LLMAIAssetVersion"
+        // v2.9.0 : "LLMAIChatPage" (page autonome) supprimée — seul le
+        // module chat.js reste servi (chargé en lazy par config.js).
+        "LLMAIChatPageJS", "LLMAIBg", "LLMAIAssetVersion"
     ];
 
     // Garde anti-boucle : une seule passe d'auto-correction par version
