@@ -36,12 +36,18 @@
                 min-height: 100%;
                 color: #1f1f1f;
             }
-            /* Panneau de contenu : carte claire avec bordure subtile. */
+            /* Panneau de contenu : carte claire avec bordure subtile, sur
+               TOUTE la largeur disponible (le thème du dashboard limite
+               .content-primary à ~1100px — on force ici pour une config
+               en onglets, plus aérée en largeur). */
             .LLMAIConfigPage .content-primary {
                 background-color: #fafafa !important;
                 padding: 1.5em !important;
                 border-radius: 6px !important;
                 border: 1px solid #e0e0e0;
+                max-width: none !important;
+                width: 100%;
+                box-sizing: border-box;
             }
             /* Lisibilité des descriptions sur fond clair. */
             .LLMAIConfigPage .fieldDescription {
@@ -211,9 +217,12 @@
                 outline: 2px solid #1c5a8a;
                 outline-offset: -2px;
             }
-            .LLMAIConfigPage .tab-button[aria-selected="true"] {
-                color: #1c5a8a;
-                background: #fafafa;
+            /* Onglet ACTIF : fond plein accent + texte blanc — bien
+               distinct des onglets inactifs (gris sur transparent). */
+            .LLMAIConfigPage .tab-button[aria-selected="true"],
+            .LLMAIConfigPage .tab-button[aria-selected="true"]:hover {
+                color: #ffffff;
+                background: #1c5a8a;
             }
             .LLMAIConfigPage .tab-button[aria-selected="true"]::after {
                 content: "";
