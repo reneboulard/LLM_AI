@@ -88,6 +88,9 @@ namespace LLM_AI
             public int EpisodeCount { get; set; }   // > 0 pour une série
             public string ImageUrl { get; set; }
             public string Reason { get; set; }
+            // v2.11.2 — « jamais vu » (pool canards boîteux) + dernier visionnage.
+            public bool Unwatched { get; set; }
+            public string LastPlayed { get; set; }
             // v2.10.6 — mêmes motifs que emby-delete-series.sh (affichage carte).
             public double? CommunityRating { get; set; }
             public int? ProductionYear { get; set; }
@@ -363,6 +366,10 @@ namespace LLM_AI
 
         private LibReviewCard ToCard(BaseItem item, LibReviewEntry e)
         {
+            // v2.11.2 — « jamais vu par personne » : aucun usager n'a de
+            // UserData.Played sur l'item (même sémantique robuste que le pool).
+            bool unwatched = !LibReviewEngine.IsPlayedByAny(item, UserManager, _userData);
+            string lastPlayed = LibReviewEngine.LastPlayedDateByAny(item, UserManager, _userData);
             var card = new LibReviewCard
             {
                 Id = item.InternalId.ToString(CultureInfo.InvariantCulture),
@@ -372,6 +379,8 @@ namespace LLM_AI
                 SizeGb = LibReviewEngine.FileSizeGb(item.Path, Logger),
                 DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 Reason = e.Reason ?? "",
+                Unwatched = unwatched,
+                LastPlayed = lastPlayed ?? "",
                 CommunityRating = item.CommunityRating,
                 ProductionYear = item.ProductionYear,
                 Status = (item as Series)?.Status?.ToString(),

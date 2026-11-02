@@ -1631,6 +1631,11 @@ define(["loading"], function (loading) {
                     var meta2 = (it.Kind === "series")
                         ? i18n.t("cfg.libreview.card.seriesMeta", it.EpisodeCount || 0, (it.SizeGb || 0).toFixed(1))
                         : ((it.SizeGb || 0).toFixed(1) + " Go · " + (it.DateAdded || ""));
+                    // v2.11.2 — badge « jamais vu » / « vu le … » sur les films.
+                    if (it.Kind === "movie") {
+                        if (it.Unwatched) meta2 += " · " + i18n.t("cfg.libreview.card.unwatched");
+                        else if (it.LastPlayed) meta2 += " · " + i18n.t("cfg.libreview.card.playedOn", it.LastPlayed);
+                    }
                     if (it.Series) meta2 = it.Series + " · " + meta2;
                     // v2.10.6 — motifs façon emby-delete-series.sh (rating, année,
                     // statut, genres) sous la ligne méta.

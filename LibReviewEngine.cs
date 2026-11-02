@@ -797,7 +797,7 @@ namespace LLM_AI
             return map;
         }
 
-        private static bool IsPlayedByAny(BaseItem item, IUserManager users, IUserDataManager userData)
+        internal static bool IsPlayedByAny(BaseItem item, IUserManager users, IUserDataManager userData)
         {
             try
             {
@@ -809,6 +809,28 @@ namespace LLM_AI
             }
             catch { /* best-effort */ }
             return false;
+        }
+
+        /// <summary>
+        /// Date du dernier visionnage de l'item par N'IMPORTE QUEL usager
+        /// (max des UserData.LastPlayedDate), format yyyy-MM-dd — null si
+        /// jamais vu. Utilisé pour l'affichage des cartes (v2.11.2).
+        /// </summary>
+        internal static string LastPlayedDateByAny(BaseItem item, IUserManager users, IUserDataManager userData)
+        {
+            DateTime utc = DateTime.MinValue;
+            try
+            {
+                foreach (var u in users?.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                {
+                    var ud = userData?.GetUserData(u, item);
+                    if (ud != null && ud.Played && ud.LastPlayedDate.HasValue && ud.LastPlayedDate.Value > utc)
+                        utc = ud.LastPlayedDate.Value;
+                }
+            }
+            catch { /* best-effort */ }
+            return utc == DateTime.MinValue ? null
+                : utc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
         /// <summary>
