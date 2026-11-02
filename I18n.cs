@@ -488,7 +488,7 @@ namespace LLM_AI
                     // --- Gestion bibliothèque (v2.10.0) ---
                     ["librev.running"] = "Évaluation de la bibliothèque en cours en arrière-plan…",
                     ["librev.cancelled"] = "Évaluation annulée.",
-                    ["librev.disabled"] = "« Gestion bibliothèque » est désactivée dans la configuration.",
+                    ["librev.disabled"] = "« Gestion bibliothèque » est désactivée : cochez « Activer la tâche planifiée » ci-dessus puis cliquez « Enregistrer » en bas de page.",
                     ["librev.progress.collect"] = "Rassemblement des candidats (films vus, séries vues)…",
                     ["librev.progress.movies"] = "Évaluation des films ({0} candidats)…",
                     ["librev.progress.series"] = "Évaluation des séries ({0} candidats)…",
@@ -729,7 +729,7 @@ namespace LLM_AI
                     // --- Library management (v2.10.0) ---
                     ["librev.running"] = "Library evaluation running in the background…",
                     ["librev.cancelled"] = "Evaluation cancelled.",
-                    ["librev.disabled"] = "\"Library management\" is disabled in the configuration.",
+                    ["librev.disabled"] = "\"Library management\" is disabled: tick \"Enable the scheduled task\" above, then click \"Save\" at the bottom of the page.",
                     ["librev.progress.collect"] = "Collecting candidates (watched movies, watched series)…",
                     ["librev.progress.movies"] = "Evaluating movies ({0} candidates)…",
                     ["librev.progress.series"] = "Evaluating series ({0} candidates)…",

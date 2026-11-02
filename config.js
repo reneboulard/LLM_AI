@@ -1763,6 +1763,14 @@ define(["loading"], function (loading) {
             };
 
             var runLrvBtn = view.querySelector("#btnRunLibReview");
+            // Le bouton n'est actif que si la fonction est activée (et
+            // enregistrée — on relit la config chargée, pas la case courante,
+            // tant que « Enregistrer » n'a pas été cliqué).
+            var lrvEnabledNow = !!(loadedCfg && loadedCfg.LibReviewEnabled);
+            if (runLrvBtn && !lrvEnabledNow) {
+                runLrvBtn.disabled = true;
+                runLrvBtn.title = i18n.t("cfg.libreview.disabled");
+            }
             if (runLrvBtn) {
                 once(runLrvBtn, "click", function () {
                     var brief = (view.querySelector("#txtLibReviewRunBrief").value || "").trim();

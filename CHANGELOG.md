@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.1] — 2026-11-02
+
+### Fixed (FR)
+- Onglet « Gestion bibliothèque » : le bouton « Lancer l'évaluation » est
+  désormais **désactivé tant que la case d'activation n'est pas enregistrée**, et
+  le message « désactivée » dit explicitement quoi faire (cocher + Enregistrer).
+
+### Fixed (EN)
+- "Library management" tab: the "Run evaluation" button is now **disabled until
+  the enable checkbox is saved**, and the "disabled" message says explicitly
+  what to do (tick + Save).
+
+---
+
 ## [2.10.0] — 2026-11-02
 
 ### Added (FR)
