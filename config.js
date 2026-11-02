@@ -689,12 +689,10 @@ define(["loading"], function (loading) {
     }
 
     // ----------------------------------------------------------------
-    //  Sections repliables
+    //  État localStorage (préférence du navigateur admin). Peut jeter selon
+    //  le contexte — tout accès est gardé.
     // ----------------------------------------------------------------
 
-    // État par section dans localStorage (préférence du navigateur admin ;
-    // "1" = repliée). Peut jeter selon le contexte — tout accès est gardé.
-    var SECTION_KEY_PREFIX = "llmai.cfg.section.";
     function lsGet(key) {
         try { return window.localStorage.getItem(key); } catch (e) { return null; }
     }
@@ -702,142 +700,192 @@ define(["loading"], function (loading) {
         try { window.localStorage.setItem(key, value); } catch (e) { /* silencieux */ }
     }
 
-    // Assemble les sections repliables : chaque h3.sectionTitle devient
-    // l'interrupteur d'une section dont le contenu (siblings jusqu'au
-    // prochain h3.sectionTitle) est déplacé dans un div.llmaiSectionBody.
-    // Le div du bouton « Enregistrer » (fin de la dernière section) reste
-    // hors des sections : toujours visible. Idempotent (viewshow multiple).
-    function makeSectionsCollapsible(view) {
+    // ----------------------------------------------------------------
+    //  Onglets de navigation
+    // ----------------------------------------------------------------
+
+    // Regroupement fixe des h3.sectionTitle en onglets. Chaque entrée :
+    // id du panneau, clé i18n du libellé de l'onglet, clés data-i18n des h3
+    // du groupe. Un h3 hors de tout groupe (ex. la sous-section « fiche
+    // mémoire » cfg.memory.cardview.h) reste rattaché au groupe courant.
+    var TAB_GROUPS = [
+        { id: "tab-llm",     i18n: "cfg.tab.llm",     heads: ["cfg.backends.h", "cfg.apikeys.h"] },
+        { id: "tab-guide",   i18n: "cfg.tab.guide",   heads: ["cfg.filters.h", "cfg.gtx.h", "cfg.feedback.h", "cfg.autoprog.h"] },
+        { id: "tab-tonight", i18n: "cfg.tab.tonight", heads: ["cfg.tonight.h"] },
+        { id: "tab-media",   i18n: "cfg.tab.media",   heads: ["cfg.notifs.h", "cfg.strmlib.h", "cfg.orphan.h", "cfg.crosskind.h"] },
+        { id: "tab-memory",  i18n: "cfg.tab.memory",  heads: ["cfg.memory.h", "cfg.i18n.h"] },
+        { id: "tab-chat",    i18n: "cfg.tab.chat",    heads: ["cfg.chat.h"] },
+        { id: "tab-audit",   i18n: "cfg.tab.audit",   heads: ["cfg.audit.h"] }
+    ];
+    var TAB_KEY = "llmai.cfg.tab"; // onglet actif persisté (préférence navigateur admin)
+
+    // Assemble la navigation par onglets : une <nav class="tab-nav"> est
+    // placée à #tabNavAnchor, chaque groupe de h3+champs est déplacé dans un
+    // div.tab-pane. Le .footer-actions (bouton « Enregistrer ») reste hors
+    // des panneaux : toujours visible (sticky). UN SEUL <form> : les
+    // panneaux inactifs restent dans le DOM (display:none), leurs champs
+    // sont tous soumis et tous les querySelector("#id") existants continuent
+    // de fonctionner. Idempotent (viewshow multiple).
+    function makeTabs(view) {
         var container = view.querySelector(".verticalSection");
         if (!container) return;
-        var heads = container.querySelectorAll("h3.sectionTitle");
-        if (!heads.length) return;
-        if (heads[0].classList.contains("llmaiToggle")) return; // déjà assemblé
+        if (view._llmaiTabs) return; // déjà assemblé
 
-        // Le conteneur du bouton « Enregistrer » reste toujours hors des
-        // sections repliables.
-        var saveBtn = container.querySelector("button[type=submit]");
-        var saveDiv = saveBtn ? saveBtn.parentNode : null;
+        var saveDiv = container.querySelector(".footer-actions");
+        var anchor = view.querySelector("#tabNavAnchor");
 
-        var sections = [];
-        heads.forEach(function (h, idx) {
-            // Contenu = siblings éléments jusqu'au prochain h3.sectionTitle
-            // ou le div Enregistrer.
-            var nodes = [];
-            var n = h.nextSibling;
-            while (n) {
-                if (n.nodeType === 1) {
-                    if (n === saveDiv) break;
-                    if (n.tagName === "H3" && n.classList.contains("sectionTitle")) break;
-                    nodes.push(n);
-                }
-                n = n.nextSibling;
+        function groupOf(h) {
+            var key = h.getAttribute("data-i18n") || "";
+            for (var i = 0; i < TAB_GROUPS.length; i++) {
+                if (TAB_GROUPS[i].heads.indexOf(key) !== -1) return TAB_GROUPS[i];
             }
-            var body = document.createElement("div");
-            body.className = "llmaiSectionBody";
-            h.parentNode.insertBefore(body, nodes.length ? nodes[0] : h.nextSibling);
-            nodes.forEach(function (node) { body.appendChild(node); });
-
-            // Titre = interrupteur : chevron ▾ (pivote à -90° replié),
-            // focusable au clavier (rôle button + Enter/Espace).
-            h.classList.add("llmaiToggle");
-            h.setAttribute("tabindex", "0");
-            h.setAttribute("role", "button");
-            h.setAttribute("aria-expanded", "true");
-            var chev = document.createElement("span");
-            chev.className = "llmaiChevron";
-            chev.textContent = "▾";
-            h.appendChild(chev);
-
-            var section = {
-                head: h,
-                body: body,
-                key: SECTION_KEY_PREFIX + idx,
-                apply: function () {
-                    var collapsed = lsGet(this.key) === "1";
-                    this.body.classList.toggle("llmaiHidden", collapsed);
-                    this.head.classList.toggle("llmaiToggleCollapsed", collapsed);
-                    this.head.setAttribute("aria-expanded", collapsed ? "false" : "true");
-                },
-                toggle: function () {
-                    lsSet(this.key, this.body.classList.contains("llmaiHidden") ? "0" : "1");
-                    this.apply();
-                    refreshLabel();
-                },
-                // Dépliage SANS toucher à l'état persisté (localStorage) :
-                // réservé au lien profond de notification
-                // (&section=crosskind) — l'état de repliage choisi par
-                // l'usager reste ce qui s'affichera à sa prochaine visite
-                // hors lien.
-                expand: function () {
-                    this.body.classList.remove("llmaiHidden");
-                    this.head.classList.remove("llmaiToggleCollapsed");
-                    this.head.setAttribute("aria-expanded", "true");
-                    refreshLabel();
-                }
-            };
-            h.addEventListener("click", function () { section.toggle(); });
-            h.addEventListener("keydown", function (e) {
-                if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    section.toggle();
-                }
-            });
-            section.apply();
-            sections.push(section);
-        });
-        view._llmaiSections = sections;
-
-        // Libellé du bouton global : « Replier tout » s'il reste une section
-        // dépliée, sinon « Déplier tout ». Conservé sur la vue pour le
-        // branchement du bouton (wireToggleAllButton) et les toggles locaux.
-        function refreshLabel() {
-            var btn = view.querySelector("#btnToggleSections");
-            if (!btn) return;
-            var anyExpanded = sections.some(function (s) {
-                return !s.body.classList.contains("llmaiHidden");
-            });
-            btn.textContent = i18n.t(anyExpanded ? "cfg.sections.collapse" : "cfg.sections.expand");
+            return null; // sous-section : rattachée au groupe courant
         }
-        view._llmaiRefreshLabel = refreshLabel;
-        refreshLabel();
 
-        // Lien profond de notification « fiche croisée » : la cloche pointe
-        // sur …&section=crosskind — la section ciblée est dépliée puis la
-        // vue y défile. Ne s'exécute qu'au premier assemblage de la vue
-        // (les viewshow suivants repartent avant, sections déjà
-        // assemblées) ; silencieux si le paramètre est absent.
-        try {
-            var m = (location.hash || "").match(/[?&]section=crosskind(&|$)/);
-            if (m) {
-                var target = sections.filter(function (s) {
-                    return s.head.id === "secCrossKind";
-                })[0];
-                if (target) {
-                    target.expand();
-                    setTimeout(function () {
-                        try { target.head.scrollIntoView({ behavior: "smooth", block: "start" }); }
-                        catch (e) { /* silencieux — commodité */ }
-                    }, 150);
+        // Découpe le contenu plat de .verticalSection en panneaux, un par
+        // groupe rencontré (le h3 du groupe reste en tête de son panneau).
+        var paneByGroup = {};
+        var current = null;
+        var nodes = [];
+        function flush() {
+            if (current && nodes.length) {
+                var pane = paneByGroup[current.id];
+                if (!pane) {
+                    pane = document.createElement("div");
+                    pane.className = "tab-pane";
+                    pane.id = current.id;
+                    pane.setAttribute("role", "tabpanel");
+                    paneByGroup[current.id] = pane;
                 }
+                nodes.forEach(function (n) { pane.appendChild(n); });
             }
-        } catch (e) { /* silencieux — le lien reste une commodité */ }
+            nodes = [];
+        }
+        var child = container.firstChild;
+        while (child) {
+            var next = child.nextSibling;
+            if (child === saveDiv || child === anchor) { child = next; continue; } // hors des panneaux
+            if (child.nodeType === 1 && child.tagName === "H3" && child.classList.contains("sectionTitle")) {
+                var g = groupOf(child);
+                if (g) { flush(); current = g; }
+                // h3 sans groupe connu : reste dans le groupe courant
+            }
+            nodes.push(child);
+            child = next;
+        }
+        flush();
+
+        // Barre d'onglets + boutons (roving tabindex, flèches clavier).
+        var nav = document.createElement("nav");
+        nav.className = "tab-nav";
+        nav.setAttribute("role", "tablist");
+        nav.setAttribute("aria-label", i18n.t("cfg.tab.nav.aria"));
+        var buttons = [];
+        TAB_GROUPS.forEach(function (g, gi) {
+            var pane = paneByGroup[g.id];
+            if (!pane) return;
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "tab-button";
+            b.id = "tabbtn-" + g.id;
+            b.setAttribute("role", "tab");
+            b.setAttribute("data-tab", g.id);
+            b.setAttribute("aria-controls", g.id);
+            b.setAttribute("aria-selected", "false");
+            b.tabIndex = -1;
+            b.textContent = i18n.t(g.i18n);
+            var badge = document.createElement("span");
+            badge.className = "tab-badge";
+            badge.textContent = "●";
+            b.appendChild(badge);
+            b.addEventListener("click", function () { activate(g.id); });
+            b.addEventListener("keydown", function (e) {
+                var idx = null;
+                if (e.key === "ArrowRight") idx = (gi + 1) % TAB_GROUPS.length;
+                else if (e.key === "ArrowLeft") idx = (gi - 1 + TAB_GROUPS.length) % TAB_GROUPS.length;
+                else if (e.key === "Home") idx = 0;
+                else if (e.key === "End") idx = TAB_GROUPS.length - 1;
+                if (idx !== null) {
+                    e.preventDefault();
+                    var tgt = TAB_GROUPS[idx].id;
+                    if (paneByGroup[tgt]) activate(tgt);
+                }
+            });
+            nav.appendChild(b);
+            buttons.push({ btn: b, pane: pane });
+        });
+        if (anchor && anchor.parentNode) anchor.parentNode.replaceChild(nav, anchor);
+        else container.insertBefore(nav, container.firstChild);
+        // Panneaux insérés avant le footer, dans l'ordre de TAB_GROUPS.
+        TAB_GROUPS.forEach(function (g) {
+            var pane = paneByGroup[g.id];
+            if (pane) container.insertBefore(pane, saveDiv || null);
+        });
+
+        function activate(id, opts) {
+            opts = opts || {};
+            buttons.forEach(function (x) {
+                var on = x.pane.id === id;
+                x.btn.setAttribute("aria-selected", on ? "true" : "false");
+                x.btn.tabIndex = on ? 0 : -1;
+                x.pane.classList.toggle("active", on);
+                if (on) x.pane.removeAttribute("hidden"); else x.pane.setAttribute("hidden", "");
+            });
+            if (!opts.silent) {
+                lsSet(TAB_KEY, id);
+                try { history.replaceState(null, "", "#" + id); } catch (e) { /* silencieux */ }
+            }
+            var cur = null;
+            buttons.forEach(function (x) { if (x.pane.id === id) cur = x; });
+            if (cur && !opts.noFocus) {
+                try { cur.btn.focus({ preventScroll: true }); } catch (e) { cur.btn.focus(); }
+            }
+        }
+        view._llmaiActivateTab = activate;
+        view._llmaiTabs = buttons;
+
+        // Onglet initial : hash (#tab-…), ?tab=…, deep-link historique
+        // « &section=crosskind » (cloche « fiche croisée » → onglet médias),
+        // puis localStorage, défaut = premier onglet.
+        var initial = TAB_GROUPS[0].id;
+        try {
+            var hash = (location.hash || "").replace(/^#/, "");
+            var q = null;
+            try { q = new URLSearchParams(location.search).get("tab"); } catch (e2) { /* silencieux */ }
+            if (/[?&]section=crosskind(&|$)/.test(location.hash + location.search)) {
+                initial = "tab-media";
+            } else if (hash && paneByGroup[hash]) {
+                initial = hash;
+            } else if (q && paneByGroup["tab-" + q]) {
+                initial = "tab-" + q;
+            } else {
+                var saved = lsGet(TAB_KEY);
+                if (saved && paneByGroup[saved]) initial = saved;
+            }
+        } catch (e) { /* silencieux */ }
+        activate(initial, { silent: true, noFocus: true });
+
+        // Pastille « non enregistré » par onglet + bandeau du pied sticky.
+        var dirtyHint = view.querySelector("#dirtyHint");
+        var form = view.querySelector("form.LLMAIConfigForm");
+        if (form) {
+            once(form, "input", function (e) {
+                var pane = e.target && e.target.closest ? e.target.closest(".tab-pane") : null;
+                if (!pane) return;
+                buttons.forEach(function (x) { if (x.pane === pane) x.btn.classList.add("dirty"); });
+                if (dirtyHint) dirtyHint.classList.add("show");
+            });
+        }
+        view._llmaiClearDirty = function () {
+            buttons.forEach(function (x) { x.btn.classList.remove("dirty"); });
+            if (dirtyHint) dirtyHint.classList.remove("show");
+        };
     }
 
-    function wireToggleAllButton(view) {
-        var btn = view.querySelector("#btnToggleSections");
-        if (!btn) return;
-        once(btn, "click", function () {
-            var sections = view._llmaiSections || [];
-            if (!sections.length) return;
-            // Action : replier s'il reste une section dépliée, sinon déplier.
-            var anyExpanded = sections.some(function (s) {
-                return !s.body.classList.contains("llmaiHidden");
-            });
-            sections.forEach(function (s) { lsSet(s.key, anyExpanded ? "1" : "0"); s.apply(); });
-            if (typeof view._llmaiRefreshLabel === "function") view._llmaiRefreshLabel();
-        });
-    }
+    // ANCIEN mécanisme (sections repliables h3 cliquables) SUPPRIMÉ au
+    // passage aux onglets : makeSectionsCollapsible / wireToggleAllButton /
+    // SECTION_KEY_PREFIX ont été retirés ; le lien profond
+    // « &section=crosskind » est repris par makeTabs (→ onglet tab-media).
 
     function fill(cfg, view) {
         view.querySelector("#txtEmbyPublicUrl").value = cfg.EmbyPublicUrl || "";
@@ -1213,11 +1261,11 @@ define(["loading"], function (loading) {
                 });
             });
 
-            // Sections repliables + bouton global « Replier tout » + boutons
-            // « Réinitialiser » des prompts. Indépendants de la config
-            // chargée — branchés dès le viewshow (idempotents).
-            makeSectionsCollapsible(view);
-            wireToggleAllButton(view);
+            // Navigation par onglets (remplace les anciennes sections
+            // repliables) + boutons « Réinitialiser » des prompts.
+            // Indépendants de la config chargée — branchés dès le viewshow
+            // (idempotents).
+            makeTabs(view);
             wireResetPromptButtons(view);
             wireSaveMemoryCardButton(view);
 
@@ -2236,6 +2284,9 @@ define(["loading"], function (loading) {
                     if (typeof Dashboard !== "undefined" && Dashboard.processPluginConfigurationUpdateResult) {
                         Dashboard.processPluginConfigurationUpdateResult(cfg);
                     }
+                    // Sauvegarde réussie : efface les pastilles « non
+                    // enregistré » des onglets + le bandeau du pied sticky.
+                    if (typeof view._llmaiClearDirty === "function") view._llmaiClearDirty();
                 }, function (err) {
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {
                         Dashboard.alert(i18n.t("cfg.alert.saveError", (err && err.statusText ? err.statusText : err)));

@@ -169,34 +169,107 @@
                 display: flex;
                 gap: 0.4em;
             }
-            /* Sections repliables : le titre h3 devient l'interrupteur (un
-               chevron ▾ pivote à -90° quand replié), le contenu de la
-               section vit dans .llmaiSectionBody. Structure assemblée par
-               config.js au viewshow (makeSectionsCollapsible) — le HTML
-               reste une suite plate h3 + champs. */
-            .LLMAIConfigPage h3.sectionTitle.llmaiToggle {
+            /* Onglets de navigation : la barre est assemblée par config.js au
+               viewshow (makeTabs) à partir des h3.sectionTitle plate du HTML
+               (regroupement fixe, voir TAB_GROUPS dans config.js) — ils
+               deviennent des boutons .tab-button et chaque groupe de champs un
+               panneau .tab-pane. Un seul <form> : les panneaux inactifs restent
+               dans le DOM en display:none, leurs valeurs sont toujours
+               soumises et tous les querySelector("#id") de config.js continuent
+               de fonctionner. */
+            .LLMAIConfigPage .tab-nav {
+                position: sticky;
+                top: 0;
+                z-index: 20;
+                display: flex;
+                gap: 4px;
+                border-bottom: 2px solid #e0e0e0;
+                overflow-x: auto;
+                white-space: nowrap;
+                scrollbar-width: thin;
+                padding: 6px 0 0;
+                margin: 0.6em 0 1.2em;
+                background: #ffffff;
+            }
+            .LLMAIConfigPage .tab-button {
+                background: transparent;
+                border: none;
                 cursor: pointer;
-                user-select: none;
-                -webkit-user-select: none;
-                padding-bottom: 0.25em;
-                border-bottom: 1px solid #e0e0e0;
+                color: #666;
+                padding: 9px 14px;
+                font-size: 13px;
+                font-weight: 600;
+                border-radius: 6px 6px 0 0;
+                position: relative;
+                font-family: inherit;
             }
-            .LLMAIConfigPage h3.sectionTitle.llmaiToggle:focus {
+            .LLMAIConfigPage .tab-button:hover {
+                color: #1f1f1f;
+                background: #f0f0f0;
+            }
+            .LLMAIConfigPage .tab-button:focus-visible {
                 outline: 2px solid #1c5a8a;
-                outline-offset: 2px;
+                outline-offset: -2px;
             }
-            .LLMAIConfigPage .llmaiChevron {
-                display: inline-block;
-                margin-left: 0.35em;
-                transition: transform 0.15s ease;
-                font-size: 0.8em;
-                color: #888;
+            .LLMAIConfigPage .tab-button[aria-selected="true"] {
+                color: #1c5a8a;
+                background: #fafafa;
             }
-            .LLMAIConfigPage h3.sectionTitle.llmaiToggle.llmaiToggleCollapsed .llmaiChevron {
-                transform: rotate(-90deg);
+            .LLMAIConfigPage .tab-button[aria-selected="true"]::after {
+                content: "";
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: -2px;
+                height: 2px;
+                background: #1c5a8a;
             }
-            .LLMAIConfigPage .llmaiSectionBody.llmaiHidden {
+            /* Pastille « modifications non enregistrées » sur l'onglet
+               concerné (posée par config.js à chaque input du formulaire). */
+            .LLMAIConfigPage .tab-badge {
                 display: none;
+                margin-left: 6px;
+                font-size: 10px;
+                line-height: 1;
+                background: #c43c3c;
+                color: #fff;
+                border-radius: 8px;
+                padding: 2px 6px;
+                vertical-align: middle;
+            }
+            .LLMAIConfigPage .tab-button.dirty .tab-badge {
+                display: inline-block;
+            }
+            .LLMAIConfigPage .tab-pane {
+                display: none;
+                animation: llmaiFadeIn 0.18s ease-in-out;
+            }
+            .LLMAIConfigPage .tab-pane.active {
+                display: block;
+            }
+            @keyframes llmaiFadeIn {
+                from { opacity: 0; transform: translateY(4px); }
+                to { opacity: 1; transform: none; }
+            }
+            /* Pied sticky : le bouton « Enregistrer » reste visible quel que
+               soit l'onglet actif (le formulaire est global). */
+            .LLMAIConfigPage .footer-actions {
+                position: sticky;
+                bottom: 0;
+                z-index: 20;
+                margin-top: 1.5em;
+                padding: 12px 0;
+                background: #ffffff;
+                border-top: 1px solid #e0e0e0;
+            }
+            .LLMAIConfigPage .dirtyHint {
+                color: #c43c3c;
+                font-size: 12px;
+                margin-right: 1em;
+                visibility: hidden;
+            }
+            .LLMAIConfigPage .dirtyHint.show {
+                visibility: visible;
             }
             /* Bouton « Réinitialiser » sous les textareas de directives :
                discret pour ne pas concurrencer les boutons d'action. */
@@ -221,15 +294,12 @@
                              récente ou erreur réseau = rien affiché. -->
                         <div id="updateBanner" class="updateBanner" style="display:none;"></div>
 
-                        <!-- Replier/déplier toutes les sections (les titres h3
-                             de section sont eux-mêmes cliquables ; config.js
-                             assemble les sections repliables au viewshow). -->
-                        <div style="margin:0.6em 0 0;">
-                            <button is="emby-button" type="button" id="btnToggleSections"
-                                    class="raised" data-i18n="cfg.sections.collapse">
-                                Replier tout
-                            </button>
-                        </div>
+                        <!-- Barre d'onglets : générée par config.js au viewshow
+                             (makeTabs) à partir des h3.sectionTitle ci-dessous —
+                             regroupement fixe TAB_GROUPS. Chaque onglet active un
+                             panneau .tab-pane contenant les champs du groupe ;
+                             un seul <form> couvre tous les panneaux. -->
+                        <div id="tabNavAnchor"></div>
 
                         <h3 class="sectionTitle" style="margin-top:1.2em;" data-i18n="cfg.backends.h">Serveurs LLM (repli par priorité)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.backends.desc">
@@ -1664,7 +1734,11 @@
                             </div>
                         </div>
 
-                        <div>
+                        <!-- Pied sticky : « Enregistrer » reste visible quel que
+                             soit l'onglet actif (le formulaire est global). Le
+                             bandeau « non enregistré » est rempli par config.js. -->
+                        <div class="footer-actions">
+                            <span class="dirtyHint" id="dirtyHint" data-i18n="cfg.tab.dirty">● modifications non enregistrées</span>
                             <button is="emby-button" type="submit" class="raised button-submit block" data-i18n="cfg.save">
                                 Enregistrer
                             </button>
