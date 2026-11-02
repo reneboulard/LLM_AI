@@ -519,14 +519,20 @@ namespace LLM_AI
         };
 
         /// <summary>
-        /// Items d'un type donné JAMAIS vus par AUCUN usager (intersection des
-        /// listes « IsUnplayed » par usager — la requête exige un User) et
-        /// créés avant <paramref name="cutoff"/>. Retourne les BaseItem.
+        /// Items d'un type donné JAMAIS vus par AUCUN usager — sémantique robuste
+        /// (v2.11.2) : union des listes « IsPlayed=true » de tous les usagers
+        /// (set des « vus »), puis complément dans la bibliothèque complète.
+        /// PAS une intersection des « IsUnplayed » : un film invisible pour un
+        /// usager à accès restreint n'apparaît pas dans sa liste non-vus et
+        /// disparaîtrait faussement de l'intersection (constaté au banc :
+        /// 4 usagers restreints → intersection = 2 films au lieu de ~3300).
+        /// Filtre ensuite DateCreated &lt; <paramref name="cutoff"/>.
         /// </summary>
         private static List<BaseItem> CollectNeverSeenPerUser(ILibraryManager library, IUserManager users,
             string[] types, DateTimeOffset cutoff, ILogger logger, CancellationToken ct)
         {
-            HashSet<long> intersection = null;
+            // (1) union des « vus » sur tous les usagers.
+            var seen = new HashSet<long>();
             List<User> userList;
             try { userList = users?.GetUserList(new UserQuery()).ToList() ?? new List<User>(); }
             catch (Exception ex)
@@ -538,41 +544,52 @@ namespace LLM_AI
             {
                 if (u == null) continue;
                 ct.ThrowIfCancellationRequested();
-                HashSet<long> unplayed;
                 try
                 {
                     var q = new InternalItemsQuery
                     {
                         User = u,
-                        IsPlayed = false,
+                        IsPlayed = true,
                         IncludeItemTypes = types,
                         Recursive = true,
                         EnableTotalRecordCount = false
                         // NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
                     };
-                    unplayed = new HashSet<long>(
-                        (library.GetItemList(q) ?? Array.Empty<BaseItem>())
-                            .Where(it => it != null && it.Id != Guid.Empty)
-                            .Select(it => it.InternalId));
+                    foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                        if (it != null && it.Id != Guid.Empty) seen.Add(it.InternalId);
                 }
                 catch (Exception ex)
                 {
-                    logger?.Warn("[LLM_AI] [LibReview] Requête non-vus (usager {0}) échouée : {1}", u.Name, ex.Message);
-                    return new List<BaseItem>(); // fail-closed : pas d'intersection fiable
+                    logger?.Warn("[LLM_AI] [LibReview] Requête vus (usager {0}) échouée : {1}", u.Name, ex.Message);
                 }
-                intersection = intersection == null ? unplayed : new HashSet<long>(intersection.Where(unplayed.Contains));
             }
-            if (intersection == null) return new List<BaseItem>();
+            // (2) complément : tous les items du type, hors vus, créés avant cutoff.
             var final = new List<BaseItem>();
-            foreach (var id in intersection)
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                // InternalId (long) → BaseItem via ItemIdResolver (devise canonique).
-                var item = ItemIdResolver.Resolve(library, id.ToString(CultureInfo.InvariantCulture));
-                if (item == null) continue;
-                if (item.DateCreated >= cutoff) continue; // trop récent
-                final.Add(item);
+                var q = new InternalItemsQuery
+                {
+                    IncludeItemTypes = types,
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                    // NB : AUCUN filtre Tags/Genres/User assigné (piège InternalItemsQuery).
+                };
+                foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (it == null || it.Id == Guid.Empty) continue;
+                    if (seen.Contains(it.InternalId)) continue;
+                    if (it.DateCreated >= cutoff) continue; // trop récent
+                    final.Add(it);
+                }
             }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Requête bibliothèque (jamais vus) échouée : {0}", ex.Message);
+                return new List<BaseItem>();
+            }
+            logger?.Info("[LLM_AI] [LibReview] Jamais vus par personne et +{0} j : {1} film(s) (vus par au moins un usager : {2}).",
+                (int)(DateTimeOffset.UtcNow - cutoff).TotalDays, final.Count, seen.Count);
             return final;
         }
 

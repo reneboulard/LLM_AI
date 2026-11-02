@@ -10,6 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.11.2] — 2026-11-02
+
+### Fixed (FR)
+- Module « Gestion bibliothèque », pool films « jamais vus » : l'intersection
+  des listes `IsUnplayed` par usager était faussée par les accès restreints
+  (un film invisible pour un usager n'apparaît pas dans sa liste non-vus →
+  intersection quasi vide au banc : 2 films au lieu de ~3 300). Remplacé par
+  la sémantique robuste : **union des « vus » de tous les usagers, puis
+  complément dans la bibliothèque complète** filtré par date d'ajout.
+  Ligne de log ajoutée : « Jamais vus par personne et +N j : X film(s) ».
+
+### Fixed (EN)
+- "Library management" module, "never watched" movie pool: the per-user
+  `IsUnplayed` intersection was skewed by restricted access (a movie invisible
+  to a user is absent from their unplayed list → near-empty intersection on the
+  bench: 2 movies instead of ~3,300). Replaced with the robust semantics:
+  **union of "watched" across all users, then complement over the full
+  library** filtered by date added. Log line added: "Never watched by anyone
+  and +N d: X movie(s)".
+
+---
+
 ## [2.11.1] — 2026-11-02
 
 ### Fixed (FR)
