@@ -1763,14 +1763,17 @@ define(["loading"], function (loading) {
             };
 
             var runLrvBtn = view.querySelector("#btnRunLibReview");
-            // Le bouton n'est actif que si la fonction est activée (et
-            // enregistrée — on relit la config chargée, pas la case courante,
-            // tant que « Enregistrer » n'a pas été cliqué).
-            var lrvEnabledNow = !!(loadedCfg && loadedCfg.LibReviewEnabled);
-            if (runLrvBtn && !lrvEnabledNow) {
-                runLrvBtn.disabled = true;
-                runLrvBtn.title = i18n.t("cfg.libreview.disabled");
-            }
+            // Le bouton n'est actif que si la fonction est activée ET
+            // enregistrée (on lit loadedCfg — resynchronisé à chaque
+            // sauvegarde réussie, voir le handler submit plus bas — pas la
+            // case courante du formulaire).
+            view._llmaiSyncLrvBtn = function () {
+                if (!runLrvBtn) return;
+                var on = !!(loadedCfg && loadedCfg.LibReviewEnabled);
+                runLrvBtn.disabled = !on;
+                runLrvBtn.title = on ? "" : i18n.t("cfg.libreview.disabled");
+            };
+            view._llmaiSyncLrvBtn();
             if (runLrvBtn) {
                 once(runLrvBtn, "click", function () {
                     var brief = (view.querySelector("#txtLibReviewRunBrief").value || "").trim();
@@ -2631,6 +2634,12 @@ define(["loading"], function (loading) {
                     // Sauvegarde réussie : efface les pastilles « non
                     // enregistré » des onglets + le bandeau du pied sticky.
                     if (typeof view._llmaiClearDirty === "function") view._llmaiClearDirty();
+                    // v2.10.3 : la config enregistrée devient la référence —
+                    // resynchronise le bouton « Lancer l'évaluation » (cocher
+                    // « Activer » + Enregistrer active le bouton sans quitter
+                    // la page).
+                    loadedCfg = cfg;
+                    if (typeof view._llmaiSyncLrvBtn === "function") view._llmaiSyncLrvBtn();
                 }, function (err) {
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {
                         Dashboard.alert(i18n.t("cfg.alert.saveError", (err && err.statusText ? err.statusText : err)));

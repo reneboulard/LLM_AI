@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.3] — 2026-11-02
+
+### Fixed (FR)
+- Onglet « Gestion bibliothèque » : après **« Enregistrer »**, le bouton
+  « Lancer l'évaluation » s'active maintenant **immédiatement** quand on vient
+  de cocher « Activer la tâche planifiée » — plus besoin de quitter la config
+  du plugin et d'y revenir. (La config enregistrée est resynchronisée comme
+  référence à chaque sauvegarde réussie.)
+
+### Fixed (EN)
+- "Library management" tab: after **"Save"**, the "Run evaluation" button now
+  becomes active **immediately** when the enable checkbox was just ticked — no
+  need to leave the plugin config and come back. (The saved config is
+  re-synced as the reference on every successful save.)
+
+---
+
 ## [2.10.2] — 2026-11-02
 
 ### Fixed (FR)
