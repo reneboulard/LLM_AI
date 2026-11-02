@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.5] — 2026-11-02
+
+### Fixed (FR)
+- Module « Gestion bibliothèque » : un run qui produisait **0 proposition**
+  sur DellXPS (ministral-3:14b répondait « - » / « Aucun. » au lieu de `[]`)
+  est maintenant traité proprement côté serveur : **toute réponse finale sans
+  tableau JSON est interprétée comme liste vide `[]`** (côté sûr — aucune
+  suppression proposée, jamais d'invention), avec une ligne de log
+  diagnostique. Le bloc FORMAT serveur interdit en plus explicitement la prose
+  / le tiret à la place du tableau.
+- Confirmé au passage : l'exclusion timers fonctionne en prod (38 séries
+  retirées du pool, « Découverte » comprise — log « exclue du pool : timer
+  d'enregistrement actif »).
+
+### Fixed (EN)
+- "Library management" module: a run producing **0 proposals** on DellXPS
+  (ministral-3:14b answered "-" / "None." instead of `[]`) is now handled
+  properly server-side: **any final reply without a JSON array is interpreted
+  as an empty list `[]`** (safe side — no deletion proposed, never invented),
+  with a diagnostic log line. The server FORMAT block also explicitly forbids
+  prose / a dash instead of the array.
+- Confirmed along the way: the timer exclusion works in prod (38 series removed
+  from the pool, "Découverte" included — log "exclue du pool : timer
+  d'enregistrement actif").
+
+---
+
 ## [2.10.4] — 2026-11-02
 
 ### Added (FR)

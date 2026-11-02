@@ -71,9 +71,10 @@ namespace LLM_AI
             "(une phrase concrète justifiant la suppression). Exemple :\n" +
             "[{\"id\":\"147321\",\"reason\":\"Vu une seule fois le 2024-03-12, copie présente aussi en bibliothèque.\"}]\n" +
             "Règles : premier caractère = [, dernier = ] (sans texte autour, sans " +
-            "balises ```) ; jamais un id absent de la liste des candidats ; tableau " +
-            "vide [] accepté si rien ne se justifie. Échappe les guillemets doubles " +
-            "internes (\\\") dans reason.";
+            "balises ```) ; JAMAIS de prose, de tiret (« - »), de « Aucun » ou de " +
+            "commentaire à la place du tableau — si rien ne se justifie, la réponse " +
+            "est exactement [] et RIEN d'autre ; jamais un id absent de la liste des " +
+            "candidats ; échappe les guillemets doubles internes (\\\") dans reason.";
 
         private const int MaxProposalsPerRun = 20;
 
@@ -223,7 +224,19 @@ namespace LLM_AI
             var (reply, _toolResults) = await agent.RunAsync(fullUser, tools, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [{0}] Réponse brute (tronquée) :\n{1}", label, Truncate(reply, 1500));
 
+            // v2.10.5 : tolérance « réponse courte » — un petit modèle local
+            // peut répondre « - » ou « Aucun. » au lieu de [] (vu en prod
+            // 2026-11-02, ministral-3:14b, run FILMS/SÉRIES → 0 proposition).
+            // Toute réponse SANS tableau JSON = liste vide valide (côté sûr :
+            // aucune suppression proposée), et on ne logue que le début pour
+            // diagnostiquer. Jamais d'invention de propositions ici.
             string payload = LlmRunner.ExtractJsonPayload(reply);
+            if (!payload.StartsWith("[", StringComparison.Ordinal))
+            {
+                logger.Info("[LLM_AI] [{0}] Réponse sans tableau JSON (« {1} ») — interprétée comme liste vide [].",
+                    label, Truncate(payload, 80));
+                payload = "[]";
+            }
             return ParseProposals(payload, kind, knownIds, library, logger);
         }
 
