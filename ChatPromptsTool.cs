@@ -42,7 +42,12 @@ namespace LLM_AI
             ("schedule_task", "Tâche séries"),
             ("schedule_task_movies", "Tâche films"),
             ("tonight_prompt", "Run « ce soir »"),
-            ("audit_prompt", "Prompt d'audit")
+            ("audit_prompt", "Prompt d'audit"),
+            // v2.10.4 — module « Gestion bibliothèque » (LibReview) : les deux
+            // prompts (films / séries), gardés ENTIERS (préfixe de planification
+            // « Weekly Sunday 05:10 | » compris, comme les tâches d'enregistrement).
+            ("libreview_task", "Gestion bibliothèque — films"),
+            ("libreview_task_series", "Gestion bibliothèque — séries")
         };
 
         /// <summary>Plafond de longueur d'un texte de prompt soumis au
@@ -76,7 +81,7 @@ namespace LLM_AI
 
         public string Description =>
             "Lit et (sur approbation) modifie les prompts/directives de la configuration du plugin " +
-            "(5 champs). actions : \"list\" (champs disponibles), \"get\" (texte courant d'un champ), " +
+            "(7 champs). actions : \"list\" (champs disponibles), \"get\" (texte courant d'un champ), " +
             "\"set\" (PROPOSE une modification — elle n'est écrite qu'après le clic « Approuver » de " +
             "l'admin sur la carte de diff ; n'annonce jamais une application avant). En mode d'édition, " +
             "le champ du set DOIT être celui du mode actif (un autre champ est refusé) : modifiez le " +
@@ -89,7 +94,8 @@ namespace LLM_AI
             "{\"type\":\"object\",\"properties\":{" +
             "\"action\":{\"type\":\"string\",\"enum\":[\"list\",\"get\",\"set\"]}," +
             "\"field\":{\"type\":\"string\",\"enum\":[\"rag_directives\",\"schedule_task\"," +
-            "\"schedule_task_movies\",\"tonight_prompt\",\"audit_prompt\"]," +
+            "\"schedule_task_movies\",\"tonight_prompt\",\"audit_prompt\"," +
+            "\"libreview_task\",\"libreview_task_series\"]," +
             "\"description\":\"Champ visé (get/set)\"}," +
             "\"text\":{\"type\":\"string\",\"description\":\"Texte complet final (set, max " +
             MaxPromptChars + " caractères)\"}}," +
@@ -265,6 +271,8 @@ namespace LLM_AI
                 case "schedule_task_movies": return cfg.ScheduleTaskMovies;
                 case "tonight_prompt": return cfg.TonightPrompt;
                 case "audit_prompt": return cfg.AuditPrompt;
+                case "libreview_task": return cfg.LibReviewTask;
+                case "libreview_task_series": return cfg.LibReviewTaskSeries;
                 default: return null;
             }
         }
@@ -335,6 +343,8 @@ namespace LLM_AI
                 case "schedule_task_movies": cfg.ScheduleTaskMovies = text; break;
                 case "tonight_prompt": cfg.TonightPrompt = text; break;
                 case "audit_prompt": cfg.AuditPrompt = text; break;
+                case "libreview_task": cfg.LibReviewTask = text; break;
+                case "libreview_task_series": cfg.LibReviewTaskSeries = text; break;
                 default: throw new ArgumentException("champ inconnu : " + field);
             }
         }

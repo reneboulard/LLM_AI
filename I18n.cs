@@ -589,12 +589,16 @@ namespace LLM_AI
                     ["chat.field.schedule_task_movies"] = "Tâche films",
                     ["chat.field.tonight_prompt"] = "Analyse « ce soir »",
                     ["chat.field.audit_prompt"] = "Prompt d'audit",
+                    ["chat.field.libreview_task"] = "Gestion bibliothèque — films",
+                    ["chat.field.libreview_task_series"] = "Gestion bibliothèque — séries",
                     ["chat.warn.divergence"] = "⚠ Ce texte diffère fortement du texte actuel du champ (recouvrement {0}%) — vérifiez qu'il s'agit bien d'une révision de « {1} » et non d'un autre prompt.",
                     ["chat.hint.tonight_prompt"] = "Test réel : demandez dans cette conversation « lance l'analyse ce soir » (case « déclenchement par le chat » en config) : il exécute le vrai module « À regarder ce soir » avec la nouvelle directive ; le résultat apparaît sur la page Recommandations (badge « générée via chat »).",
                     ["chat.hint.schedule_task"] = "Test : (a) simulation conversationnelle — demandez « applique la directive aux données epg_series et montre le tableau JSON » (vérifie le format et les champs) ; (b) exécution réelle — déclenchez la tâche « Enregistrements séries » (tableau de bord Emby, ou system_audit action=trigger_task si la remédiation est activée) et vérifiez les recommandations produites.",
                     ["chat.hint.schedule_task_movies"] = "Test : (a) simulation conversationnelle — demandez « applique la directive aux données epg_movies et montre le tableau JSON » ; (b) exécution réelle — déclenchez la tâche « Enregistrements films » et vérifiez les recommandations.",
                     ["chat.hint.audit_prompt"] = "Test réel : le bouton « Lancer l'audit santé » de la page de configuration (le chat, lui, exécute system_audit avec son workflow interne, pas ce prompt).",
                     ["chat.hint.rag_directives"] = "Test : le « Prompt système » s'applique à toutes les exécutions — le meilleur indicateur est une analyse « ce soir » (ou la simulation conversationnelle d'une directive de tâche) : les garde-fous (jamais un titre possédé, jamais une donnée devinée) doivent y être visibles.",
+                    ["chat.hint.libreview_task"] = "Test réel : bouton « Lancer l'évaluation » de l'onglet « Gestion bibliothèque » (page de configuration), ou déclenchez la tâche planifiée « Gestion bibliothèque » (tableau de bord Emby) — vérifiez les propositions de films produites (contrat [{id, reason}], max 20).",
+                    ["chat.hint.libreview_task_series"] = "Test réel : bouton « Lancer l'évaluation » de l'onglet « Gestion bibliothèque », ou tâche planifiée « Gestion bibliothèque » — vérifiez les séries proposées (max 10, ids de SÉRIE, et aucune série à enregistrer : exclusion timers côté serveur).",
                     // --- Chat admin : actions Emby (libellés des cartes de
                     // proposition, toasts « Actions du tour », détails
                     // d'exécution affichés sur la carte + poussés au LLM) ---
@@ -830,12 +834,16 @@ namespace LLM_AI
                     ["chat.field.schedule_task_movies"] = "Movies task",
                     ["chat.field.tonight_prompt"] = "\"Watch tonight\" analysis",
                     ["chat.field.audit_prompt"] = "Audit prompt",
+                    ["chat.field.libreview_task"] = "Library management — movies",
+                    ["chat.field.libreview_task_series"] = "Library management — series",
                     ["chat.warn.divergence"] = "⚠ This text differs strongly from the field's current text ({0}% overlap) — make sure it really is a revision of \"{1}\" and not another prompt.",
                     ["chat.hint.tonight_prompt"] = "Real test: ask in this conversation \"run tonight's analysis\" (the \"chat triggering\" option in config): it executes the real \"Watch tonight\" module with the new directive; the result appears on the Recommendations page (\"generated via chat\" badge).",
                     ["chat.hint.schedule_task"] = "Test: (a) conversational simulation — ask \"apply the directive to the epg_series data and show the JSON table\" (checks the format and fields); (b) real run — trigger the series-recordings task (Emby dashboard, or system_audit action=trigger_task if remediation is enabled) and check the recommendations produced.",
                     ["chat.hint.schedule_task_movies"] = "Test: (a) conversational simulation — ask \"apply the directive to the epg_movies data and show the JSON table\"; (b) real run — trigger the movies-recordings task and check the recommendations.",
                     ["chat.hint.audit_prompt"] = "Real test: the \"Run health audit\" button on the configuration page (the chat itself runs system_audit with its own internal workflow, not this prompt).",
                     ["chat.hint.rag_directives"] = "Test: the \"System prompt\" applies to every run — the best indicator is a \"tonight\" run (or the conversational simulation of a task directive): the guardrails (never an owned title, never a guessed fact) must be visible there.",
+                    ["chat.hint.libreview_task"] = "Real test: the \"Run evaluation\" button on the \"Library management\" tab (config page), or trigger the scheduled \"Library management\" task (Emby dashboard) — check the movie proposals produced ([{id, reason}] contract, max 20).",
+                    ["chat.hint.libreview_task_series"] = "Real test: the \"Run evaluation\" button on the \"Library management\" tab, or the scheduled \"Library management\" task — check the series proposals (max 10, SERIES ids, and no to-be-recorded series: server-side timer exclusion).",
                     // --- Admin chat: Emby actions (proposal card labels,
                     // "Actions this turn" toasts, execution details shown
                     // on the card + pushed to the LLM) ---

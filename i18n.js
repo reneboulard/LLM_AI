@@ -414,6 +414,8 @@ define([], function () {
             "chat.ctx.edit_schedule_movies": "Éditer — Tâche films (enregistrements)",
             "chat.ctx.edit_tonight": "Éditer — Run « À regarder ce soir »",
             "chat.ctx.edit_audit": "Éditer — Prompt d'audit santé",
+            "chat.ctx.edit_libreview_movies": "Éditer — Gestion bibliothèque (films)",
+            "chat.ctx.edit_libreview_series": "Éditer — Gestion bibliothèque (séries)",
             // Mode atelier (v1.17.0.2) : le seul mode sans prompt éditable —
             // absent des débuts, il retombait sur le libellé serveur FR dans
             // toute interface (corrigé v1.17.1.2, renommé « Éditer — Atelier
@@ -941,6 +943,8 @@ define([], function () {
             "chat.ctx.edit_schedule_movies": "Edit — Movies task (recordings)",
             "chat.ctx.edit_tonight": "Edit — \"Watch tonight\" run",
             "chat.ctx.edit_audit": "Edit — Health audit prompt",
+            "chat.ctx.edit_libreview_movies": "Edit — Library management (movies)",
+            "chat.ctx.edit_libreview_series": "Edit — Library management (series)",
             // Workshop mode (v1.17.0.2): the only mode without an editable
             // prompt — missing at first, it fell back to the FR server label
             // on any interface (fixed v1.17.1.2, renamed "Edit — Language

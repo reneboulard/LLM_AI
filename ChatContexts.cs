@@ -193,6 +193,41 @@ namespace LLM_AI
                 "remédiation autonome en prose différente, laissez le code la porter.\n",
                 cfg => cfg.AuditPrompt, "audit_prompt"),
 
+            // v2.10.4 — module « Gestion bibliothèque » (LibReview) : deux
+            // modes d'édition, un par prompt (films / séries). Comme les
+            // tâches d'enregistrement, le champ entier est édité :
+            // le préfixe « Weekly Sunday 05:10 | » (planification) est
+            // préservé dans le texte — le guide l'explique.
+            new ChatContextDef("edit_libreview_movies",
+                "Éditer — Gestion bibliothèque (films)",
+                "### RÔLE DE CE PROMPT\n" +
+                "Directive du run « Gestion bibliothèque » — branche FILMS (v2.10.0). Contrat de " +
+                "sortie : tableau JSON brut [{id, reason}] (max 20 entrées, [] accepté) — id = " +
+                "InternalId recopié tel quel depuis la liste des candidats fournie dans le message " +
+                "user, reason = une phrase concrète. Le moteur valide chaque id côté serveur (hors " +
+                "pool = écarté) : toute révision doit préserver ce contrat tel quel. Le préfixe " +
+                "« Weekly Sunday 05:10 | » est l'horaire de planification lu par la config (partie " +
+                "gauche du '|') : ne l'altérez que sur demande explicite et sans ambiguïté. " +
+                "Rappel du module : le plugin ne supprime JAMAIS — seules les suppressions " +
+                "explicites de l'admin via l'endpoint dédié (délégation à Emby). Les séries à " +
+                "enregistrer (timers actifs) sont exclues du pool côté serveur depuis v2.10.2 : ne " +
+                "les réintroduisez pas dans le prompt.\n",
+                cfg => cfg.LibReviewTask, "libreview_task"),
+
+            new ChatContextDef("edit_libreview_series",
+                "Éditer — Gestion bibliothèque (séries)",
+                "### RÔLE DE CE PROMPT\n" +
+                "Directive du run « Gestion bibliothèque » — branche SÉRIES (v2.10.0). Contrat de " +
+                "sortie : tableau JSON brut [{id, reason}] (max 10 entrées, [] accepté) — id = " +
+                "InternalId de la SÉRIE (la suppression efface TOUS ses épisodes), reason = une " +
+                "phrase concrète. Le moteur valide chaque id côté serveur (hors pool = écarté). " +
+                "Le champ entier est édité, préfixe de planification « Weekly … | » compris " +
+                "(partie gauche du '|') : ne l'altérez que sur demande explicite. Rappel du module " +
+                ": le plugin ne supprime JAMAIS — la suppression est déléguée à Emby via " +
+                "l'endpoint admin. Les séries à enregistrer (timers actifs) sont exclues du pool " +
+                "côté serveur depuis v2.10.2 (ex. « Découverte ») : ne demandez pas de les réintégrer.\n",
+                cfg => cfg.LibReviewTaskSeries, "libreview_task_series"),
+
             // Mode ATELIER DE LANGUES (v1.17.0.2, décision usager) : sans
             // prompt éditable — la modification des chaînes i18n
             // (i18n_set_key, dépôt deux phases) n'est déposable QUE dans ce

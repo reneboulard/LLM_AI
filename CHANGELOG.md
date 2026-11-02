@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.4] — 2026-11-02
+
+### Added (FR)
+- Chat admin : deux nouveaux modes de conversation dans la liste déroulante
+  — **« Éditer — Gestion bibliothèque (films) »** et **« Éditer — Gestion
+  bibliothèque (séries) »** — pour réviser les deux prompts du module
+  « Gestion bibliothèque » (champs `libreview_task` / `libreview_task_series`,
+  préfixe de planification « Weekly … | » préservé comme pour les tâches
+  d'enregistrement). Lecture/écriture via `plugin_prompts` (liste blanche à
+  7 champs maintenant), approbation deux phases inchangée, validation croisée
+  champ ↔ mode actif, libellés de carte et indices de test FR/EN.
+
+### Added (EN)
+- Admin chat: two new conversation modes in the dropdown — **"Edit — Library
+  management (movies)"** and **"Edit — Library management (series)"** — to
+  revise the two prompts of the "Library management" module
+  (`libreview_task` / `libreview_task_series` fields, the "Weekly … |"
+  schedule prefix preserved like for the recording tasks). Read/write via
+  `plugin_prompts` (whitelist now 7 fields), two-phase approval unchanged,
+  field ↔ active-mode cross-validation, card labels and test hints FR/EN.
+
+---
+
 ## [2.10.3] — 2026-11-02
 
 ### Fixed (FR)
