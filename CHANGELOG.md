@@ -10,6 +10,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.0] — 2026-11-02
+
+### Added (FR)
+- **Gestion bibliothèque — évaluation IA des suppressions** (nouvel onglet
+  « Gestion bibliothèque » de la page de config, admin-only). Un run évalue
+  la bibliothèque avec le LLM en **deux runs indépendants** (films vus, puis
+  séries partiellement vues — deux contextes séparés, deux prompts éditables
+  `LibReviewTask` / `LibReviewTaskSeries` avec bouton « Réinitialiser ») et
+  produit des **cartes « 🗑️ Effacer / ✔️ Conserver »**. Le contrat du LLM est
+  un tableau `[{id, reason}]` (id = InternalId) ; le serveur valide chaque id
+  contre le pool (hors pool = hallucination écartée + log) puis persiste le
+  rapport (`libreview_report.json`).
+- **Validation à l'affichage** : `GET ?Last=true` re-résout chaque id au
+  moment de la lecture — un média déjà supprimé (via Emby, la routine
+  matinale, ou le bouton) ou marqué « Conserver » (`LibReviewKeptIds`, liste
+  persistante exclue aussi des prochains runs LLM) **ne réapparaît jamais**.
+- **Lancement détaché** (bouton « Lancer l'évaluation », consigne libre) :
+  single-flight + polling `?Status=true`, identique au gabarit de l'audit —
+  quitter la page ne tue pas le run.
+- **Tâche planifiée** « Gestion bibliothèque » (désactivée par défaut,
+  planification lue en tête de `LibReviewTask`, ex. « Weekly Sunday 05:10 »),
+  notifie les administrateurs à la fin de chaque run.
+- **Invariant respecté** : le plugin ne supprime JAMAIS lui-même. « Effacer »
+  appelle `POST /Plugins/LLMAI/LibReviewDelete` (admin, re-vérifie l'id au
+  POST) qui délègue à Emby (`DeleteItem(DeleteFileLocation=true)` — pour une
+  série, Emby emporte tous les épisodes). L'étiquette « AI Delete » reste
+  réservée à la passe disque (pression disque des enregistrements).
+
+### Added (EN)
+- **Library management — AI deletion review** (new "Library management" tab
+  on the config page, admin-only). A run evaluates the library with the LLM
+  in **two independent runs** (watched movies, then partially watched series —
+  separate contexts, two editable prompts `LibReviewTask` /
+  `LibReviewTaskSeries` with a "Reset" button) and produces
+  **"🗑️ Delete / ✔️ Keep" cards**. The LLM contract is a `[{id, reason}]`
+  array (id = InternalId); the server validates every id against the pool
+  (out-of-pool = hallucination, dropped + logged) then persists the report
+  (`libreview_report.json`).
+- **Display-time validation**: `GET ?Last=true` re-resolves every id at read
+  time — a media already deleted (via Emby, the morning routine, or the
+  button) or marked "Keep" (`LibReviewKeptIds`, a persistent list also
+  excluded from the next LLM runs) **never reappears**.
+- **Detached launch** ("Run evaluation" button, free-form brief):
+  single-flight + `?Status=true` polling, same pattern as the audit —
+  leaving the page does not kill the run.
+- **Scheduled task** "Library management" (off by default, schedule read
+  from the head of `LibReviewTask`, e.g. "Weekly Sunday 05:10"), notifies
+  administrators at the end of each run.
+- **Invariant respected**: the plugin NEVER deletes anything by itself.
+  "Delete" calls `POST /Plugins/LLMAI/LibReviewDelete` (admin, re-checks
+  the id at POST time) which delegates to Emby
+  (`DeleteItem(DeleteFileLocation=true)` — for a series, Emby takes all its
+  episodes). The "AI Delete" tag stays reserved for the disk-pressure pass on
+  recordings.
+
+---
+
 ## [2.8.0] — 2026-11-02
 
 ### Changed (FR)

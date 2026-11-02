@@ -1111,6 +1111,64 @@ namespace LLM_AI
         public string AuditMode { get; set; } = "single";
 
         // ------------------------------------------------------------------
+        //  « Gestion bibliothèque » (v2.10.0) : évaluation LLM de la
+        //  bibliothèque pour SUGGÉRER des suppressions. À la demande
+        //  (bouton de la page de config) ou en tâche planifiée ; résultat
+        //  éphémère persisté en mémoire (libreview_report.json), affiché
+        //  sous forme de cartes « 🗑️ Effacer / ✔️ Conserver ». Le plugin ne
+        //  supprime JAMAIS lui-même : « Effacer » délègue à Emby
+        //  (DeleteItem via endpoint admin), « Conserver » inscrit l'id dans
+        //  LibReviewKeptIds (exclu des prochains runs et de l'affichage).
+        //  Le tag « AI Delete » reste réservé à la passe disque.
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Active la tâche planifiée « Gestion bibliothèque » (évaluation LLM
+        /// des suppressions, deux runs films/séries) et l'onglet/outils de la
+        /// page de config. Défaut <c>false</c> (opt-in — consomme du LLM).
+        /// </summary>
+        public bool LibReviewEnabled { get; set; } = false;
+
+        /// <summary>
+        /// Champ « planification | prompt » de la tâche : la partie GAUCHE
+        /// devant '|' alimente <c>GetDefaultTriggers</c> (ex.
+        /// « Weekly Sunday 05:10 »), la partie DROITE est le prompt du run
+        /// FILMS. Même convention que <see cref="ScheduleTask"/>.
+        /// </summary>
+        public string LibReviewTask { get; set; } = DefaultPrompts.Fr.LibReviewTask;
+
+        /// <summary>
+        /// Prompt du run SÉRIES de la même tâche (sans planification —
+        /// celle-ci ne vient que de <see cref="LibReviewTask"/>), même
+        /// convention que <see cref="ScheduleTaskMovies"/>.
+        /// </summary>
+        public string LibReviewTaskSeries { get; set; } = DefaultPrompts.Fr.LibReviewTaskSeries;
+
+        /// <summary>
+        /// Consigne par défaut du run planifié (texte libre passé au LLM en
+        /// complément des prompts, ex. « focus sur les doublons DVR cette
+        /// semaine »). Le lancement manuel depuis la page de config peut
+        /// passer sa propre consigne. Vide = aucune consigne.
+        /// </summary>
+        public string LibReviewBrief { get; set; } = "";
+
+        /// <summary>
+        /// Liste « Conserver » persistante : tableau JSON d'ids InternalId
+        /// (en chaînes, ex. <c>["147321","147322"]</c>) que l'admin a choisi
+        /// de conserver. Ces ids sont EXCLUS du pool envoyé au LLM lors des
+        /// prochains runs ET exclus de l'affichage des cartes (chaque item
+        /// affiché est revalidé côté serveur au GET : id existant et non
+        /// conservé). Alimenté par le bouton « ✔️ Conserver ».
+        /// </summary>
+        public string LibReviewKeptIds { get; set; } = "";
+
+        /// <summary>
+        /// Plafond de candidats envoyés au LLM par run (films, puis séries
+        /// séparément). Défaut 60.
+        /// </summary>
+        public int LibReviewMaxBatch { get; set; } = 60;
+
+        // ------------------------------------------------------------------
         //  Atelier de langues (v1.17.0) : génération/entretien des langues
         //  d'interface par le LLM du plugin (gabarit du run détaché d'audit ;
         //  doses validées → fichier LLM_AI_i18n.json, à côté duquel vit

@@ -190,8 +190,9 @@ goût). Voir [Mémoire réflexive](#mémoire-réflexive).
 16. [API HTTP](#api-http)
 17. [i18n (FR / EN)](#i18n-fr--en)
 18. [Langues d'interface communautaires](#langues-dinterface-communautaires)
-19. [Dépannage](#dépannage)
-20. [Changelog](#changelog)
+19. [Gestion bibliothèque](#gestion-bibliothèque-évaluation-ia-des-suppressions)
+20. [Dépannage](#dépannage)
+21. [Changelog](#changelog)
 
 Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -2802,6 +2803,40 @@ ligne de log du chargement liste les clés en cause.
 (wrap `window.LLMAI_EXT_I18N`, `no-store`, micro-cache 30 s côté app) ;
 plugin injoignable ou langue absente → repli français par clé, l'app reste
 utilisable.
+
+---
+
+## Gestion bibliothèque (évaluation IA des suppressions)
+
+Nouvel onglet **« Gestion bibliothèque »** de la page de configuration
+(admin-only). Le LLM évalue la bibliothèque et propose des **suppressions**,
+affichées sous forme de cartes **« 🗑️ Effacer / ✔️ Conserver »**.
+
+- **Deux runs indépendants** (mêmes prompts séparés que la tâche EPG :
+  `LibReviewTask` = « planification | prompt FILMS », `LibReviewTaskSeries` =
+  prompt SÉRIES) : films vus d'un côté, séries partiellement vues de l'autre —
+  deux contextes LLM séparés. Le contrat du LLM est un tableau
+  `[{id, reason}]` (id = InternalId) ; le serveur valide chaque id contre le
+  pool envoyé (hors pool = hallucination écartée et loguée).
+- **Lancement** : bouton « Lancer l'évaluation » (consigne libre facultative)
+  ou tâche planifiée « Gestion bibliothèque » (désactivée par défaut ;
+  planification en tête du champ `LibReviewTask`, ex. « Weekly Sunday 05:10 »).
+  Le run est **détaché** (quitter la page ne l'annule pas), résultat persisté
+  dans `libreview_report.json`.
+- **Validation à l'affichage** : à chaque lecture, le serveur re-résout chaque
+  id — un média déjà supprimé (via Emby, votre routine matinale, ou le bouton)
+  ou marqué « Conserver » (`LibReviewKeptIds`, exclu aussi des prochains runs)
+  **ne réapparaît jamais** dans la liste.
+- **Le plugin ne supprime JAMAIS lui-même.** « 🗑️ Effacer » appelle
+  `POST /Plugins/LLMAI/LibReviewDelete` (admin, re-vérifie l'id au moment du
+  POST) qui délègue à Emby (`DeleteItem(DeleteFileLocation=true)` — pour une
+  série, Emby emporte tous ses épisodes, comme votre script
+  `emby-delete-series.sh`). « ✔️ Conserver » appelle
+  `POST /Plugins/LLMAI/LibReviewKeep` et inscrit l'id dans la liste
+  « à ne plus proposer ».
+- L'étiquette **« AI Delete » reste réservée à la passe disque** (pression
+  disque des enregistrements, `RecordingTaggingEnabled`) — aucune interférence
+  entre les deux mécanismes.
 
 ---
 

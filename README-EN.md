@@ -183,8 +183,9 @@ button, taste signals feeding the same journal, see
 16. [HTTP API](#http-api)
 17. [i18n (FR / EN)](#i18n-fr--en)
 18. [Community interface languages](#community-interface-languages)
-19. [Troubleshooting](#troubleshooting)
-20. [Changelog](#changelog)
+19. [Library management (AI deletion review)](#library-management-ai-deletion-review)
+20. [Troubleshooting](#troubleshooting)
+21. [Changelog](#changelog)
 
 See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
 
@@ -2715,6 +2716,39 @@ log line lists the keys involved.
 (wrapped as `window.LLMAI_EXT_I18N`, `no-store`, 30 s app-side micro-cache);
 unreachable plugin or missing language → per-key French fallback, the app
 stays usable.
+
+---
+
+## Library management (AI deletion review)
+
+New **"Library management"** tab on the configuration page (admin-only). The
+LLM evaluates the library and proposes **deletions**, shown as
+**"🗑️ Delete / ✔️ Keep" cards**.
+
+- **Two independent runs** (same split prompts as the EPG task:
+  `LibReviewTask` = "schedule | MOVIES prompt", `LibReviewTaskSeries` = SERIES
+  prompt): watched movies on one side, partially watched series on the other —
+  two separate LLM contexts. The LLM contract is a `[{id, reason}]` array
+  (id = InternalId); the server validates every id against the pool sent
+  (out-of-pool = hallucination, dropped + logged).
+- **Launch**: "Run evaluation" button (optional free-form brief) or the
+  "Library management" **scheduled task** (off by default; schedule read from
+  the head of `LibReviewTask`, e.g. "Weekly Sunday 05:10"). The run is
+  **detached** (leaving the page does not cancel it), result persisted to
+  `libreview_report.json`.
+- **Display-time validation**: on every read, the server re-resolves each id —
+  a media already deleted (via Emby, your morning routine, or the button) or
+  marked "Keep" (`LibReviewKeptIds`, also excluded from the next runs)
+  **never reappears** in the list.
+- **The plugin NEVER deletes anything by itself.** "🗑️ Delete" calls
+  `POST /Plugins/LLMAI/LibReviewDelete` (admin, re-checks the id at POST time)
+  which delegates to Emby (`DeleteItem(DeleteFileLocation=true)` — for a
+  series, Emby removes all its episodes, like your `emby-delete-series.sh`
+  script). "✔️ Keep" calls `POST /Plugins/LLMAI/LibReviewKeep` and adds the id
+  to the do-not-propose list.
+- The **"AI Delete" tag stays reserved for the disk-pressure pass** on
+  recordings (`RecordingTaggingEnabled`) — no interference between the two
+  mechanisms.
 
 ---
 

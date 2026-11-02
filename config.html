@@ -1959,6 +1959,141 @@
                             </div>
                         </div>
 
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.libreview.h">Gestion bibliothèque (évaluation IA des suppressions)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.desc">
+                            Le LLM évalue la bibliothèque (films vus, séries partiellement vues) et propose
+                            des suppressions, affichées ci-dessous sous forme de cartes « 🗑️ Effacer / ✔️ Conserver ».
+                            <b>Le plugin ne supprime jamais lui-même</b> : « Effacer » délègue la suppression à Emby
+                            sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer. Chaque
+                            carte est revalidée à l'affichage : un média déjà supprimé n'apparaît plus. L'étiquette
+                            « AI Delete » reste réservée à la passe disque (pression disque des enregistrements).
+                            Réservé aux administrateurs (cette page l'est).
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkLibReviewEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.libreview.enabled">Activer la tâche planifiée « Gestion bibliothèque »</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.enabled.desc">
+                            Active la tâche planifiée (planification en tête du premier prompt ci-dessous, ex.
+                            « Weekly Sunday 05:10 ») et le bouton « Lancer l'évaluation » de cette page. Désactivée
+                            par défaut (consomme des appels LLM).
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtLibReviewTask" rows="5"
+                                      label="Tâche (planification | prompt FILMS)"
+                                      data-i18n-label="cfg.libreview.task"
+                                      spellcheck="false"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtLibReviewTask" data-default-key="LibReviewTask"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
+                            <div class="fieldDescription" data-i18n-html="cfg.libreview.task.desc">
+                                Partie gauche de « | » = planification de la tâche (Daily 03:00, Weekly Sunday 05:10…),
+                                partie droite = prompt du run FILMS. Le run SÉRIES a son propre prompt ci-dessous.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <textarea is="emby-textarea" id="txtLibReviewTaskSeries" rows="5"
+                                      label="Prompt SÉRIES"
+                                      data-i18n-label="cfg.libreview.task.series"
+                                      spellcheck="false"></textarea>
+                            <button is="emby-button" type="button" class="raised btnResetPrompt"
+                                    data-reset-target="txtLibReviewTaskSeries" data-default-key="LibReviewTaskSeries"
+                                    data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
+                                Réinitialiser
+                            </button>
+                            <div class="fieldDescription" data-i18n-html="cfg.libreview.task.series.desc">
+                                Prompt du run SÉRIES (sans planification — celle-ci ne vient que du champ ci-dessus).
+                                Pour une série, l'id proposé est celui de la série entière : la suppression emporte tous ses épisodes.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer" style="max-width:520px;">
+                            <input is="emby-input" type="text" id="txtLibReviewBrief"
+                                   label="Consigne par défaut du run planifié"
+                                   data-i18n-label="cfg.libreview.brief"
+                                   data-i18n-ph="cfg.libreview.brief.ph"
+                                   placeholder="ex. focus sur les doublons cette semaine" />
+                            <div class="fieldDescription" data-i18n-html="cfg.libreview.brief.desc">
+                                Consigne libre passée au LLM à chaque run planifié (vide = aucune). Le lancement manuel
+                                ci-dessous peut passer sa propre consigne.
+                            </div>
+                        </div>
+
+                        <div class="inputContainer" style="display:flex;gap:1em;align-items:flex-end;flex-wrap:wrap;">
+                            <div style="flex:1 1 320px;">
+                                <input is="emby-input" type="text" id="txtLibReviewRunBrief"
+                                       label="Consigne de ce lancement (optionnel)"
+                                       data-i18n-label="cfg.libreview.runbrief"
+                                       data-i18n-ph="cfg.libreview.runbrief.ph"
+                                       placeholder="ex. seulement les films vus il y a plus d'un an" />
+                            </div>
+                            <div style="flex:0 0 auto;">
+                                <input is="emby-input" type="number" id="numLibReviewMaxBatch"
+                                       label="Candidats max par run"
+                                       data-i18n-label="cfg.libreview.maxbatch"
+                                       min="10" max="200" />
+                            </div>
+                        </div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.maxbatch.desc">
+                            Plafond de candidats (films, puis séries séparément) envoyés au LLM par run — protège le
+                            contexte du modèle. Défaut 60.
+                        </div>
+
+                        <div style="margin:0.8em 0;">
+                            <button is="emby-button" type="button" class="raised block" id="btnRunLibReview" data-i18n="cfg.libreview.run">
+                                Lancer l'évaluation
+                            </button>
+                            <div class="fieldDescription" style="margin-top:0.5em;" data-i18n-html="cfg.libreview.running.desc">
+                                L'évaluation démarre en arrière-plan (deux runs : films, puis séries). Vous pouvez quitter
+                                cette page ; le résultat sera sauvegardé automatiquement à la fin. Cliquer à nouveau pendant
+                                un run ne le relance pas : cela permet simplement de suivre son avancement.
+                            </div>
+                        </div>
+
+                        <style>
+                            .LLMAIConfigPage .libreviewMeta {
+                                color: #888; font-size: 11px; margin: 0.4em 0 0.8em;
+                            }
+                            .LLMAIConfigPage .librevGrid {
+                                display: grid;
+                                grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+                                gap: 0.8em;
+                                margin: 0.6em 0 1em;
+                            }
+                            .LLMAIConfigPage .librevCard {
+                                background: rgba(0,0,0,0.18);
+                                border-radius: 8px;
+                                padding: 0.7em 0.8em;
+                                display: flex;
+                                flex-direction: column;
+                                gap: 0.4em;
+                                transition: opacity 0.4s;
+                            }
+                            .LLMAIConfigPage .librevCard.fading { opacity: 0; }
+                            .LLMAIConfigPage .librevCard .librevTop {
+                                display: flex; gap: 0.6em; align-items: flex-start;
+                            }
+                            .LLMAIConfigPage .librevCard img {
+                                width: 56px; height: 80px; object-fit: cover;
+                                border-radius: 4px; background: rgba(0,0,0,0.3); flex: 0 0 auto;
+                            }
+                            .LLMAIConfigPage .librevCard .librevTitle { font-weight: 600; font-size: 13px; line-height: 1.25; }
+                            .LLMAIConfigPage .librevCard .librevMeta2 { color: #999; font-size: 11px; }
+                            .LLMAIConfigPage .librevCard .librevReason { font-size: 12px; line-height: 1.4; }
+                            .LLMAIConfigPage .librevCard .librevActions { display: flex; gap: 0.5em; margin-top: auto; }
+                            .LLMAIConfigPage .librevEmpty { color: #888; font-size: 13px; margin: 0.6em 0; }
+                        </style>
+                        <div id="libreviewStatus" class="libreviewMeta" style="display:none;"></div>
+                        <div id="librevGrid" class="librevGrid"></div>
+                        <div id="librevEmpty" class="librevEmpty" style="display:none;" data-i18n="cfg.libreview.empty">
+                            Aucune proposition pour le moment — lancez une évaluation ou attendez la prochaine exécution planifiée.
+                        </div>
+
                         <!-- Pied sticky : « Enregistrer » reste visible quel que
                              soit l'onglet actif (le formulaire est global). Le
                              bandeau « non enregistré » est rempli par config.js. -->

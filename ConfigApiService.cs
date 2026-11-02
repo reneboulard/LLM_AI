@@ -536,6 +536,8 @@ namespace LLM_AI
             public string ScheduleTaskMovies { get; set; }
             public string TonightPrompt { get; set; }
             public string AuditPrompt { get; set; }
+            public string LibReviewTask { get; set; }
+            public string LibReviewTaskSeries { get; set; }
             public string Error { get; set; }
         }
 
@@ -567,7 +569,9 @@ namespace LLM_AI
                 ScheduleTask = d.ScheduleTask,
                 ScheduleTaskMovies = d.ScheduleTaskMovies,
                 TonightPrompt = d.TonightPrompt,
-                AuditPrompt = d.AuditPrompt
+                AuditPrompt = d.AuditPrompt,
+                LibReviewTask = d.LibReviewTask,
+                LibReviewTaskSeries = d.LibReviewTaskSeries
             };
         }
 

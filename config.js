@@ -721,7 +721,8 @@ define(["loading"], function (loading) {
         // le module AMD LLMAIChatPageJS (lazy) et appelle init(panneau) ;
         // le pied sticky « Enregistrer » est masqué sur cet onglet.
         { id: "tab-chatlive", i18n: "cfg.tab.chatlive", tool: true },
-        { id: "tab-audit",   i18n: "cfg.tab.audit",   heads: ["cfg.audit.h"] }
+        { id: "tab-audit",   i18n: "cfg.tab.audit",   heads: ["cfg.audit.h"] },
+        { id: "tab-libreview", i18n: "cfg.tab.libreview", heads: ["cfg.libreview.h"] }
     ];
     var TAB_KEY = "llmai.cfg.tab"; // onglet actif persisté (préférence navigateur admin)
     // Onglets outils : le pied « Enregistrer » n'a pas de sens (pas de
@@ -1076,6 +1077,14 @@ define(["loading"], function (loading) {
         // Atelier de langues — dernier code saisi (confort de reprise).
         view.querySelector("#txtI18nLang").value = cfg.I18nGenerateLang || "";
         view.querySelector("#txtAuditFocus").value = "";
+        // Gestion bibliothèque (v2.10.0)
+        view.querySelector("#chkLibReviewEnabled").checked = !!cfg.LibReviewEnabled;
+        view.querySelector("#txtLibReviewTask").value = cfg.LibReviewTask || "";
+        view.querySelector("#txtLibReviewTaskSeries").value = cfg.LibReviewTaskSeries || "";
+        view.querySelector("#txtLibReviewBrief").value = cfg.LibReviewBrief || "";
+        view.querySelector("#txtLibReviewRunBrief").value = "";
+        var lrb = parseInt(cfg.LibReviewMaxBatch, 10);
+        view.querySelector("#numLibReviewMaxBatch").value = isNaN(lrb) ? 60 : lrb;
         // Chat interactif : plus de flag d'activation (v2.9.0 — l'onglet
         // « Chat en direct » de cette page, admin-only comme la page).
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
@@ -1220,6 +1229,14 @@ define(["loading"], function (loading) {
             AuditRemediationEnabled: view.querySelector("#chkAuditRemediationEnabled").checked,
             AuditMode: (view.querySelector("#selAuditMode").value === "deterministic") ? "deterministic" : "single",
             AuditPrompt: view.querySelector("#txtAuditPrompt").value,
+            // Gestion bibliothèque (v2.10.0) — LibReviewKeptIds est maintenu
+            // côté serveur (bouton « Conserver ») : carry-forward obligatoire.
+            LibReviewEnabled: view.querySelector("#chkLibReviewEnabled").checked,
+            LibReviewTask: view.querySelector("#txtLibReviewTask").value,
+            LibReviewTaskSeries: view.querySelector("#txtLibReviewTaskSeries").value,
+            LibReviewBrief: (view.querySelector("#txtLibReviewBrief").value || "").trim(),
+            LibReviewMaxBatch: Math.max(10, parseInt(view.querySelector("#numLibReviewMaxBatch").value, 10) || 60),
+            LibReviewKeptIds: (loadedCfg && loadedCfg.LibReviewKeptIds) || "",
             // Atelier de langues — dernier code de langue utilisé (confort :
             // le panneau rouvre sur le même code).
             I18nGenerateLang: (view.querySelector("#txtI18nLang").value || "").trim().toLowerCase(),
@@ -1566,6 +1583,232 @@ define(["loading"], function (loading) {
                             '</div>' + renderMarkdown(data.LastReport);
                     }, function () { /* pas de rapport : état d'origine */ });
                 }
+            }
+
+            // Gestion bibliothèque (v2.10.0) : évaluation LLM des suppressions.
+            // Même gabarit que l'audit : run DÉTACHÉ (single-flight serveur),
+            // polling ?Status=true toutes les 5 s, quitter la page coupe le
+            // polling pas le run. Les cartes sont revalidées côté serveur au
+            // GET ?Last=true (chaque id re-résolu ; effacé/conservé = exclu).
+            var lrvStopPolling = function () {
+                if (view._llmaiLrvTimer) { clearInterval(view._llmaiLrvTimer); view._llmaiLrvTimer = null; }
+            };
+            once(view, "viewbeforehide", lrvStopPolling);
+            var lrvSetBusy = function (busy) {
+                var b = view.querySelector("#btnRunLibReview");
+                if (!b) return;
+                b.disabled = busy;
+                b.textContent = busy ? i18n.t("cfg.libreview.running") : i18n.t("cfg.libreview.run");
+            };
+            var lrvShowStatus = function (text) {
+                var el = view.querySelector("#libreviewStatus");
+                if (!el) return;
+                el.style.display = text ? "block" : "none";
+                el.textContent = text || "";
+            };
+            var lrvFmtDate = function (iso) {
+                if (!iso) return "";
+                try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+            };
+            // Rend les cartes à partir de la réponse (Items = DTO validés serveur).
+            var lrvRenderCards = function (data) {
+                var grid = view.querySelector("#librevGrid");
+                var empty = view.querySelector("#librevEmpty");
+                if (!grid) return;
+                grid.innerHTML = "";
+                var items = (data && data.Items) || [];
+                if (empty) empty.style.display = items.length ? "none" : "block";
+                items.forEach(function (it) {
+                    var card = document.createElement("div");
+                    card.className = "librevCard";
+                    card.setAttribute("data-id", it.Id || "");
+                    var kindBadge = it.Kind === "series" ? "📺" : (it.Kind === "movie" ? "🎬" : "🎞️");
+                    var meta2 = (it.Kind === "series")
+                        ? i18n.t("cfg.libreview.card.seriesMeta", it.EpisodeCount || 0, (it.SizeGb || 0).toFixed(1))
+                        : ((it.SizeGb || 0).toFixed(1) + " Go · " + (it.DateAdded || ""));
+                    if (it.Series) meta2 = it.Series + " · " + meta2;
+                    var top = document.createElement("div");
+                    top.className = "librevTop";
+                    if (it.ImageUrl) {
+                        var img = document.createElement("img");
+                        img.src = it.ImageUrl; img.alt = ""; img.loading = "lazy";
+                        top.appendChild(img);
+                    }
+                    var head = document.createElement("div");
+                    var t = document.createElement("div");
+                    t.className = "librevTitle";
+                    t.textContent = kindBadge + " " + (it.Name || "");
+                    var m = document.createElement("div");
+                    m.className = "librevMeta2";
+                    m.textContent = meta2;
+                    head.appendChild(t); head.appendChild(m);
+                    top.appendChild(head);
+                    card.appendChild(top);
+                    var r = document.createElement("div");
+                    r.className = "librevReason";
+                    r.textContent = "🤖 " + (it.Reason || "");
+                    card.appendChild(r);
+                    var actions = document.createElement("div");
+                    actions.className = "librevActions";
+                    var bDel = document.createElement("button");
+                    bDel.type = "button";
+                    bDel.className = "raised emby-button";
+                    bDel.setAttribute("is", "emby-button");
+                    bDel.textContent = i18n.t("cfg.libreview.card.delete");
+                    var bKeep = document.createElement("button");
+                    bKeep.type = "button";
+                    bKeep.className = "raised emby-button";
+                    bKeep.setAttribute("is", "emby-button");
+                    bKeep.textContent = i18n.t("cfg.libreview.card.keep");
+                    actions.appendChild(bDel); actions.appendChild(bKeep);
+                    card.appendChild(actions);
+                    grid.appendChild(card);
+
+                    var fadeOut = function () {
+                        card.classList.add("fading");
+                        setTimeout(function () {
+                            if (card.parentNode) card.parentNode.removeChild(card);
+                            if (!grid.querySelector(".librevCard") && empty) empty.style.display = "block";
+                        }, 420);
+                    };
+                    once(bDel, "click", function () {
+                        bDel.disabled = true; bKeep.disabled = true;
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl("Plugins/LLMAI/LibReviewDelete"),
+                            type: "POST",
+                            data: JSON.stringify({ ItemId: it.Id }),
+                            contentType: "application/json"
+                        }).then(function (resp) { return resp.json(); }).then(function (res) {
+                            if (res && res.Status === "ok") { fadeOut(); lrvToast(i18n.t("cfg.libreview.deleted", it.Name || "")); }
+                            else { bDel.disabled = false; bKeep.disabled = false; lrvToast((res && res.Error) || i18n.t("cfg.libreview.deleteFailed")); }
+                        }, function () {
+                            bDel.disabled = false; bKeep.disabled = false;
+                            lrvToast(i18n.t("cfg.libreview.deleteFailed"));
+                        });
+                    });
+                    once(bKeep, "click", function () {
+                        bDel.disabled = true; bKeep.disabled = true;
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl("Plugins/LLMAI/LibReviewKeep"),
+                            type: "POST",
+                            data: JSON.stringify({ ItemId: it.Id }),
+                            contentType: "application/json"
+                        }).then(function (resp) { return resp.json(); }).then(function (res) {
+                            if (res && (res.Added || res.Added === false) && !res.Error) { fadeOut(); lrvToast(i18n.t("cfg.libreview.kept", it.Name || "")); }
+                            else { bDel.disabled = false; bKeep.disabled = false; lrvToast((res && res.Error) || i18n.t("cfg.libreview.keepFailed")); }
+                        }, function () {
+                            bDel.disabled = false; bKeep.disabled = false;
+                            lrvToast(i18n.t("cfg.libreview.keepFailed"));
+                        });
+                    });
+                });
+                if (data && data.GeneratedAt) {
+                    lrvShowStatus(i18n.t("cfg.libreview.last",
+                        lrvFmtDate(data.GeneratedAt),
+                        items.length,
+                        data.Candidates || 0,
+                        data.KeptCount || 0));
+                }
+            };
+            var lrvToast = function (msg) {
+                // Toast éphémère minimal (Dashboard.showToast si dispo, sinon status line).
+                try {
+                    if (window.Dashboard && typeof window.Dashboard.showToast === "function") {
+                        window.Dashboard.showToast(msg);
+                        return;
+                    }
+                } catch (e) { /* repli ci-dessous */ }
+                lrvShowStatus(msg);
+            };
+            var lrvApplyStatus = function (st) {
+                if (!st) return;
+                if (st.Running) {
+                    lrvSetBusy(true);
+                    lrvShowStatus(st.Progress ? (i18n.t("cfg.libreview.running") + " — " + st.Progress) : i18n.t("cfg.libreview.running"));
+                    return;
+                }
+                lrvStopPolling();
+                lrvSetBusy(false);
+                if (st.Outcome === "ok") {
+                    if (st.Items && st.Items.length !== undefined) {
+                        lrvRenderCards(st);
+                    } else {
+                        // Le Status porte le rapport via FillLast côté serveur :
+                        // s'il est vide, relire ?Last=true.
+                        ApiClient.ajax({
+                            url: ApiClient.getUrl("Plugins/LLMAI/LibReview", { Last: "true" }),
+                            type: "GET"
+                        }).then(function (resp) { return resp.json(); }).then(function (d) {
+                            if (d && d.Items) lrvRenderCards(d);
+                        }, function () { /* silencieux */ });
+                    }
+                } else if (st.Outcome === "error") {
+                    lrvShowStatus(i18n.t("cfg.libreview.failed") + (st.Error ? " — " + st.Error : ""));
+                }
+            };
+            var lrvStartPolling = function () {
+                view._llmaiLrvFails = 0;
+                lrvStopPolling();
+                view._llmaiLrvTimer = setInterval(function () {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/LibReview", { Status: "true" }),
+                        type: "GET"
+                    }).then(function (resp) { return resp.json(); }).then(function (st) {
+                        view._llmaiLrvFails = 0;
+                        lrvApplyStatus(st);
+                    }, function () {
+                        if (++view._llmaiLrvFails >= 5) lrvStopPolling();
+                    });
+                }, 5000);
+            };
+
+            var runLrvBtn = view.querySelector("#btnRunLibReview");
+            if (runLrvBtn) {
+                once(runLrvBtn, "click", function () {
+                    var brief = (view.querySelector("#txtLibReviewRunBrief").value || "").trim();
+                    var url = ApiClient.getUrl("Plugins/LLMAI/LibReview", brief ? { Brief: brief } : {});
+                    lrvSetBusy(true);
+                    lrvShowStatus(i18n.t("cfg.libreview.running"));
+                    ApiClient.ajax({ url: url, type: "GET" }).then(function (resp) {
+                        return resp.json();
+                    }).then(function (data) {
+                        if (!data) { lrvSetBusy(false); return; }
+                        if (data.Enabled === false) {
+                            lrvSetBusy(false);
+                            lrvShowStatus(data.Error || i18n.t("cfg.libreview.disabled"));
+                            return;
+                        }
+                        if (data.Error && !data.Running) {
+                            lrvSetBusy(false);
+                            lrvShowStatus(data.Error);
+                            return;
+                        }
+                        if (data.Running) {
+                            lrvApplyStatus(data);
+                            lrvStartPolling();
+                            return;
+                        }
+                        lrvSetBusy(false);
+                    }, function (err) {
+                        lrvSetBusy(false);
+                        lrvShowStatus(i18n.t("cfg.alert.saveError", (err && err.statusText ? err.statusText : err)));
+                    });
+                });
+
+                // Dernier rapport filtré au chargement de la page (zéro LLM) ;
+                // reprend aussi le fil si un run détaché tourne déjà.
+                ApiClient.ajax({
+                    url: ApiClient.getUrl("Plugins/LLMAI/LibReview", { Last: "true" }),
+                    type: "GET"
+                }).then(function (resp) { return resp.json(); }).then(function (data) {
+                    if (!data) return;
+                    if (data.Running) {
+                        lrvApplyStatus(data);
+                        lrvStartPolling();
+                        return;
+                    }
+                    if (data.Items) lrvRenderCards(data);
+                }, function () { /* pas de rapport : état d'origine */ });
             }
 
             // Atelier de langues (v1.17.0) : couverture d'un code de langue +

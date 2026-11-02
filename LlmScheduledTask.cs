@@ -480,7 +480,8 @@ namespace LLM_AI
                 yield return t;
         }
 
-        private static IEnumerable<TaskTriggerInfo> ParseTriggers(string schedule)
+        /// <summary>Parseur de planification partagé (aussi utilisé par LibReviewTask — v2.10.0).</summary>
+        internal static IEnumerable<TaskTriggerInfo> ParseTriggers(string schedule)
         {
             if (string.IsNullOrWhiteSpace(schedule))
             {
