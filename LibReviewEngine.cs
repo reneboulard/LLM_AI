@@ -824,8 +824,9 @@ namespace LLM_AI
                 foreach (var u in users?.GetUserList(new UserQuery()) ?? Array.Empty<User>())
                 {
                     var ud = userData?.GetUserData(u, item);
-                    if (ud != null && ud.Played && ud.LastPlayedDate.HasValue && ud.LastPlayedDate.Value > utc)
-                        utc = ud.LastPlayedDate.Value;
+                    if (ud != null && ud.Played && ud.LastPlayedDate.HasValue
+                        && ud.LastPlayedDate.Value.UtcDateTime > utc)
+                        utc = ud.LastPlayedDate.Value.UtcDateTime;
                 }
             }
             catch { /* best-effort */ }
