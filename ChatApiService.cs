@@ -300,10 +300,24 @@ namespace LLM_AI
             // budget et étiquette de confirmation. 0 = lecture seule
             // (strictement le comportement pré-v1.13).
             // Le tour (un message = un tour) ouvre le compteur de budget.
+            // v2.9.1 : en mode « Éditer — … » (contexte d'édition résolu),
+            // la couche d'action est COUPÉE : aucun outil d'action n'est
+            // enregistré et le bloc « ACTIONS EMBY DISPONIBLES » n'est pas
+            // injecté. La révision d'un prompt ne se valide PAS par une
+            // action Emby — le dépôt est deux phases (carte Approuver/
+            // Refuser, écriture en C# déterministe) et le test du prompt
+            // modifié se fait HORS mode édition (chat normal, ex.
+            // run_tonight_run). Vécu 2026-11-02 07:00 (mode edit_rag,
+            // ministral-3:14b) : voyant record_program & cie., le modèle a
+            // déposé un enregistrement EPG au lieu de livrer le prompt
+            // révisé — les outils d'action visibles en mode édition sont
+            // une invitation à la dérive. La consultation reste : get_emby_info
+            // et l'audit sont fournis par la base du runner (lecture seule).
+            bool editMode = ChatContexts.Find(contextId) != null;
             ChatActions.BeginTurn(sessionId, Logger);
             List<ILlmTool> actionTools = null;
             string actionsWorkflow = null;
-            if (cfg.ChatActionBudget > 0)
+            if (cfg.ChatActionBudget > 0 && !editMode)
             {
                 actionTools = ChatActions.BuildTools(cfg, sessionId, admin,
                     LibraryManager, _liveTv, _collections, _playlists,
@@ -312,6 +326,11 @@ namespace LLM_AI
                 actionsWorkflow = ChatActions.BuildWorkflowBlock(cfg);
                 Logger.Info("[LLM_AI] [CHAT] Couche d'action active : {0} outil(s), budget {1}/tour.",
                     actionTools.Count, cfg.ChatActionBudget);
+            }
+            else if (editMode)
+            {
+                Logger.Info("[LLM_AI] [CHAT] Mode édition « {0} » : couche d'action Emby coupée " +
+                    "(édition = dépôt deux phases, aucune action Emby dans ce mode).", contextId);
             }
 
             // Édition de prompts par le chat (v1.13.8, opt-in) : le tool
