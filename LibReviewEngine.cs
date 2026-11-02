@@ -13,6 +13,7 @@ using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Notifications;
+using MediaBrowser.Model.LiveTv;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Querying;
 using MediaBrowser.Model.Serialization;
@@ -107,12 +108,16 @@ namespace LLM_AI
             // ---- Pool FILMS : movies vus par au moins un usager, hors kept,
             //      triés du plus ancien au plus récent, capés.
             var moviePool = CollectMovies(library, users, userData, kept, cap, logger, ct);
-            // ---- Pool SÉRIES : séries partiellement vues, hors kept, capées.
-            var seriesPool = CollectSeries(library, users, userData, kept, cap, logger, ct);
+            // ---- Pool SÉRIES : séries partiellement vues, hors kept, hors
+            //      séries à enregistrer (SeriesTimers + timers programmés —
+            //      même règle que emby-delete-series.sh : exclusion stricte par
+            //      titre normalisé EXACT), capées.
+            int timerExcluded = 0;
+            var seriesPool = CollectSeries(library, users, userData, liveTv, kept, cap, ref timerExcluded, logger, ct);
 
             int totalCandidates = moviePool.Count + seriesPool.Count;
-            logger.Info("[LLM_AI] [LibReview] Candidats : {0} film(s), {1} série(s) (hors {2} conservé(s)).",
-                moviePool.Count, seriesPool.Count, kept.Count);
+            logger.Info("[LLM_AI] [LibReview] Candidats : {0} film(s), {1} série(s) (hors {2} conservé(s), {3} série(s) en enregistrement).",
+                moviePool.Count, seriesPool.Count, kept.Count, timerExcluded);
 
             var report = new LastLibReviewReport
             {
@@ -365,13 +370,60 @@ namespace LLM_AI
         }
 
         /// <summary>
+        /// Noms normalisés (FoldAscii + minuscules + non-alnum retiré, via
+        /// <see cref="GetEmbyInfoTool.Norm"/>) des séries « à enregistrer » :
+        /// SeriesTimers (récurrents) + Timers programmés (SeriesName sinon Name).
+        /// Même règle qu'emby-delete-series.sh : exclusion STRICTE par titre
+        /// normalisé exact (les correspondances partielles préfixe/contenu ne
+        /// sont qu'un drapeau « limite timer » dans le script, JAMAIS une
+        /// exclusion).
+        /// </summary>
+        private static HashSet<string> TimerSeriesNames(ILiveTvManager liveTv)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                var st = liveTv.GetSeriesTimers(new SeriesTimerQuery())?.Items;
+                if (st != null)
+                    foreach (var s in st)
+                        if (!string.IsNullOrEmpty(s.Name)) set.Add(GetEmbyInfoTool.Norm(s.Name));
+                var tt = liveTv.GetTimers(new TimerQuery { IsScheduled = true })?.Items;
+                if (tt != null)
+                    foreach (var t in tt)
+                    {
+                        var nm = t.ProgramInfo != null
+                            ? (!string.IsNullOrEmpty(t.ProgramInfo.SeriesName) ? t.ProgramInfo.SeriesName : t.ProgramInfo.Name)
+                            : null;
+                        if (!string.IsNullOrEmpty(nm)) set.Add(GetEmbyInfoTool.Norm(nm));
+                    }
+            }
+            catch (Exception)
+            {
+                // Fail-open documenté : sans liste de timers on ne peut exclure
+                // proprement — on logue dans l'appelant (le set reste vide).
+                return set;
+            }
+            return set;
+        }
+
+        /// <summary>
         /// Séries partiellement vues (au moins un épisode vu par un usager),
-        /// hors kept, capées. Pour chaque série : nombre d'épisodes, non vus,
-        /// taille totale, dernier visionnage.
+        /// hors kept, HORS séries à enregistrer (titres des timers, exclusion
+        /// exacte par <see cref="GetEmbyInfoTool.Norm"/> — v2.10.2, même règle
+        /// qu'emby-delete-series.sh : « Découverte » ou toute série en cours
+        /// d'enregistrement ne doit JAMAIS être proposée), capées. Pour chaque
+        /// série : nombre d'épisodes, non vus, taille totale, dernier visionnage.
+        /// <paramref name="timerExcluded"/> reçoit le nombre de séries retirées
+        /// par cette exclusion (loggé).
         /// </summary>
         private static List<PoolItem> CollectSeries(ILibraryManager library, IUserManager users,
-            IUserDataManager userData, HashSet<string> kept, int cap, ILogger logger, CancellationToken ct)
+            IUserDataManager userData, ILiveTvManager liveTv, HashSet<string> kept, int cap,
+            ref int timerExcluded, ILogger logger, CancellationToken ct)
         {
+            var timerNames = TimerSeriesNames(liveTv);
+            if (timerNames.Count > 0)
+                logger?.Info("[LLM_AI] [LibReview] {0} titre(s) de timer actif(s) à exclure du pool séries.", timerNames.Count);
+
             var playedEpisodes = CollectPlayedPerUser(library, users, userData, new[] { "Episode" }, logger, ct);
             var seriesIds = new HashSet<Guid>();
             var lastPlayedBySeries = new Dictionary<Guid, DateTimeOffset?>();
@@ -388,6 +440,7 @@ namespace LLM_AI
                     lastPlayedBySeries[series.Id] = lp;
             }
 
+            timerExcluded = 0;
             var list = new List<PoolItem>();
             foreach (var sid in seriesIds)
             {
@@ -396,6 +449,14 @@ namespace LLM_AI
                 if (series == null) continue;
                 string id = series.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
+                // Exclusion « série à enregistrer » (titre normalisé exact).
+                if (timerNames.Count > 0 && !string.IsNullOrEmpty(series.Name)
+                    && timerNames.Contains(GetEmbyInfoTool.Norm(series.Name)))
+                {
+                    timerExcluded++;
+                    logger?.Info("[LLM_AI] [LibReview] Série « {0} » exclue du pool : timer d'enregistrement actif.", series.Name);
+                    continue;
+                }
 
                 int epCount = 0, unwatched = 0;
                 long totalBytes = 0;

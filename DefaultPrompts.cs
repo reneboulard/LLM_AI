@@ -170,8 +170,9 @@ namespace LLM_AI
                 "déjà possédée ailleurs, etc.), selon la consigne de l'administrateur fournie dans le " +
                 "message. La liste des candidats (objets JSON avec id, name, episode_count, unwatched_count, " +
                 "last_played, size_gb) est fournie en intégralité dans le message — tu n'as PAS besoin " +
-                "d'appeler d'outils. ATTENTION : pour une série, l'id proposé est celui de la SÉRIE et la " +
-                "suppression effacera TOUS ses épisodes. RÈGLES ABSOLUES : (1) ne renvoie QUE des id " +
+                "d'appeler d'outils. Les séries EN COURS D'ENREGISTREMENT (timers actifs) ont déjà été " +
+                "retirées de la liste côté serveur — ne les mentionne pas. ATTENTION : pour une série, " +
+                "l'id proposé est celui de la SÉRIE et la suppression effacera TOUS ses épisodes. RÈGLES ABSOLUES : (1) ne renvoie QUE des id " +
                 "présents dans la liste des candidats, recopiés tels quels en chaîne ; (2) jamais un id " +
                 "inventé ; (3) sois TRÈS conservateur : ne retiens une série que si elle est manifestement " +
                 "abandonnée (dernier épisode vu il y a très longtemps ET épisodes non vus majoritaires) ou " +
@@ -287,7 +288,8 @@ namespace LLM_AI
                 "justified (series abandoned after a few episodes, rerun already owned elsewhere, etc.), " +
                 "following the administrator's brief given in the message. The full candidate list (JSON " +
                 "objects with id, name, episode_count, unwatched_count, last_played, size_gb) is provided " +
-                "in the message — you do NOT need to call any tools. WARNING: for a series, the proposed id " +
+                "in the message — you do NOT need to call any tools. SERIES CURRENTLY BEING RECORDED (active " +
+                "timers) have already been removed from the list server-side — do not mention them. WARNING: for a series, the proposed id " +
                 "is the SERIES' id and deleting it removes ALL its episodes. ABSOLUTE RULES: (1) return ONLY " +
                 "ids present in the candidate list, copied verbatim as strings; (2) never an invented id; " +
                 "(3) be VERY conservative: only pick a series if it is clearly abandoned (last episode " +

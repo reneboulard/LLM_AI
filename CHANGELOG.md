@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.2] — 2026-11-02
+
+### Fixed (FR)
+- Onglet « Gestion bibliothèque » : les **séries en cours d'enregistrement**
+  (SeriesTimers + timers programmés) sont désormais **exclues du pool envoyé
+  au LLM**, par titre normalisé exact — même règle stricte que
+  `emby-delete-series.sh` (les matchs partiels préfixe/contenu ne sont jamais
+  des exclusions). « Découverte » et toute série à enregistrer ne peuvent plus
+  être proposées. Le nombre d'exclusions est loggé
+  (« Série « … » exclue du pool : timer d'enregistrement actif »), et le
+  prompt séries par défaut (FR/EN) le rappelle. Filet serveur : couvre aussi les
+  installs dont le prompt stocké n'est pas réinitialisé.
+
+### Fixed (EN)
+- "Library management" tab: **series currently being recorded** (SeriesTimers
+  + scheduled timers) are now **excluded from the pool sent to the LLM**, by
+  exact normalized title — same strict rule as `emby-delete-series.sh` (partial
+  prefix/substring matches are never exclusions). "Découverte" and any
+  to-be-recorded series can no longer be proposed. The exclusion count is
+  logged, and the default series prompt (FR/EN) mentions it. Server-side
+  filter: also covers installs whose stored prompt is not reset.
+
+---
+
 ## [2.10.1] — 2026-11-02
 
 ### Fixed (FR)
