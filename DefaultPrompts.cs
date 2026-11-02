@@ -155,13 +155,16 @@ namespace LLM_AI
                 "les FILMS vus dont la conservation ne se justifie plus (doublons, films vus une fois " +
                 "il y a longtemps, qualité médiocre, etc.), selon la consigne de l'administrateur fournie " +
                 "dans le message. La liste des candidats (objets JSON avec id, name, size_gb, date_added, " +
-                "last_played) est fournie en intégralité dans le message — tu n'as PAS besoin d'appeler " +
+                "last_played, et quand disponibles community_rating, production_year, genres, overview) " +
+                "est fournie en intégralité dans le message — tu n'as PAS besoin d'appeler " +
                 "d'outils. RÈGLES ABSOLUES : (1) ne renvoie QUE des id présents dans la liste des " +
                 "candidats, recopiés tels quels en chaîne de caractères ; (2) jamais un id inventé ou " +
                 "deviné — un id absent de la liste = hallucination, à proscrire absolument ; " +
                 "(3) sois très conservateur : en cas de doute, ne retiens PAS le film (mieux une liste " +
                 "courte et sûre qu'une suppression mal avisée) ; (4) chaque proposition porte une reason " +
-                "d'une phrase concrète (ex. « vu une seule fois le 2024-03-12, 2e copie en bibliothèque »). " +
+                "d'une phrase concrète qui CITE les motifs du candidat (ex. « vu une seule fois le " +
+                "2024-03-12, 2e copie en bibliothèque », « documentaire d'actualité (genre) non " +
+                "regardé, sans lien avec les goûts constatés ») — jamais de reason générique. " +
                 "Réponds UNIQUEMENT par un tableau JSON [{id, reason}] — maximum 20 entrées, vide [] si " +
                 "aucune suppression ne se justifie.",
             libReviewTaskSeries:
@@ -169,7 +172,8 @@ namespace LLM_AI
                 "la conservation ne se justifie plus (série abandonnée après quelques épisodes, rediffusion " +
                 "déjà possédée ailleurs, etc.), selon la consigne de l'administrateur fournie dans le " +
                 "message. La liste des candidats (objets JSON avec id, name, episode_count, unwatched_count, " +
-                "last_played, size_gb) est fournie en intégralité dans le message — tu n'as PAS besoin " +
+                "last_played, size_gb, et quand disponibles community_rating, production_year, status, " +
+                "genres, overview) est fournie en intégralité dans le message — tu n'as PAS besoin " +
                 "d'appeler d'outils. Les séries EN COURS D'ENREGISTREMENT (timers actifs) ont déjà été " +
                 "retirées de la liste côté serveur — ne les mentionne pas. ATTENTION : pour une série, " +
                 "l'id proposé est celui de la SÉRIE et la suppression effacera TOUS ses épisodes. RÈGLES ABSOLUES : (1) ne renvoie QUE des id " +
@@ -177,7 +181,9 @@ namespace LLM_AI
                 "inventé ; (3) sois TRÈS conservateur : ne retiens une série que si elle est manifestement " +
                 "abandonnée (dernier épisode vu il y a très longtemps ET épisodes non vus majoritaires) ou " +
                 "clairement redondante ; en cas de doute, ne retiens PAS ; (4) chaque proposition porte une " +
-                "reason d'une phrase concrète. Réponds UNIQUEMENT par un tableau JSON [{id, reason}] — " +
+                "reason d'une phrase concrète qui CITE les motifs du candidat (nombre d'épisodes non vus, " +
+                "dernier visionnage, genre/synopsis, statut « terminée », note) — jamais de reason " +
+                "générique. Réponds UNIQUEMENT par un tableau JSON [{id, reason}] — " +
                 "maximum 10 entrées, vide [] si aucune suppression ne se justifie.");
 
         /// <summary>
@@ -275,26 +281,32 @@ namespace LLM_AI
                 "Weekly Sunday 05:10 | You are tasked with proposing LIBRARY DELETIONS: watched MOVIES " +
                 "whose keeping is no longer justified (duplicates, movies watched once long ago, poor " +
                 "quality, etc.), following the administrator's brief given in the message. The full " +
-                "candidate list (JSON objects with id, name, size_gb, date_added, last_played) is " +
+                "candidate list (JSON objects with id, name, size_gb, date_added, last_played, and when " +
+                "available community_rating, production_year, genres, overview) is " +
                 "provided in the message — you do NOT need to call any tools. ABSOLUTE RULES: (1) return " +
                 "ONLY ids present in the candidate list, copied verbatim as strings; (2) never an invented " +
                 "or guessed id — an id absent from the list is a hallucination, strictly forbidden; " +
                 "(3) be very conservative: when in doubt, do NOT pick the movie (better a short safe list " +
-                "than a wrong deletion); (4) each proposal carries a one-sentence concrete reason (e.g. " +
-                "« watched once on 2024-03-12, second copy in the library »). Reply with ONLY a JSON array " +
+                "than a wrong deletion); (4) each proposal carries a one-sentence concrete reason that " +
+                "CITES the candidate's own details (e.g. « watched once on 2024-03-12, second copy in " +
+                "the library », « news documentary, unwatched, unrelated to observed tastes ») — never a " +
+                "generic reason. Reply with ONLY a JSON array " +
                 "[{id, reason}] — at most 20 entries, empty [] if no deletion is justified.",
             libReviewTaskSeries:
                 "You are tasked with proposing LIBRARY DELETIONS: whole SERIES whose keeping is no longer " +
                 "justified (series abandoned after a few episodes, rerun already owned elsewhere, etc.), " +
                 "following the administrator's brief given in the message. The full candidate list (JSON " +
-                "objects with id, name, episode_count, unwatched_count, last_played, size_gb) is provided " +
+                "objects with id, name, episode_count, unwatched_count, last_played, size_gb, and when " +
+                "available community_rating, production_year, status, genres, overview) is provided " +
                 "in the message — you do NOT need to call any tools. SERIES CURRENTLY BEING RECORDED (active " +
                 "timers) have already been removed from the list server-side — do not mention them. WARNING: for a series, the proposed id " +
                 "is the SERIES' id and deleting it removes ALL its episodes. ABSOLUTE RULES: (1) return ONLY " +
                 "ids present in the candidate list, copied verbatim as strings; (2) never an invented id; " +
                 "(3) be VERY conservative: only pick a series if it is clearly abandoned (last episode " +
                 "watched long ago AND mostly unwatched episodes) or clearly redundant; when in doubt, do NOT " +
-                "pick it; (4) each proposal carries a one-sentence concrete reason. Reply with ONLY a JSON " +
+                "pick it; (4) each proposal carries a one-sentence concrete reason that CITES the " +
+                "candidate's own details (unwatched episode count, last watched date, genre/synopsis, " +
+                "\\\"ended\\\" status, rating) — never a generic reason. Reply with ONLY a JSON " +
                 "array [{id, reason}] — at most 10 entries, empty [] if no deletion is justified.");
     }
 }

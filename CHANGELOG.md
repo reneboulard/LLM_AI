@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.10.6] — 2026-11-02
+
+### Added (FR)
+- Module « Gestion bibliothèque » — **mêmes motifs que `emby-delete-series.sh`**
+  dans le pool envoyé au LLM et sur les cartes : `community_rating`,
+  `production_year`, `status` (séries), `genres`, `overview` (synopsis tronqué
+  à 400 car.). Les prompts par défaut (FR/EN) demandent désormais une `reason`
+  qui CITE ces motifs (ex. « documentaire d'actualité non regardé, sans lien
+  avec les goûts constatés ») — plus de « ancien contenu » générique. Les
+  cartes affichent une ligne de motifs (⭐ note · année · statut · genres)
+  sous le titre.
+
+### Added (EN)
+- "Library management" module — **same fields as `emby-delete-series.sh`** in
+  the pool sent to the LLM and on the cards: `community_rating`,
+  `production_year`, `status` (series), `genres`, `overview` (synopsis
+  truncated to 400 chars). Default prompts (FR/EN) now require a `reason` that
+  CITES those details (e.g. « unwatched news documentary, unrelated to observed
+  tastes ») — no more generic "old content". Cards show a details line
+  (⭐ rating · year · status · genres) under the title.
+
+---
+
 ## [2.10.5] — 2026-11-02
 
 ### Fixed (FR)

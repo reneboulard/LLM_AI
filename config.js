@@ -1627,6 +1627,13 @@ define(["loading"], function (loading) {
                         ? i18n.t("cfg.libreview.card.seriesMeta", it.EpisodeCount || 0, (it.SizeGb || 0).toFixed(1))
                         : ((it.SizeGb || 0).toFixed(1) + " Go · " + (it.DateAdded || ""));
                     if (it.Series) meta2 = it.Series + " · " + meta2;
+                    // v2.10.6 — motifs façon emby-delete-series.sh (rating, année,
+                    // statut, genres) sous la ligne méta.
+                    var motifs = [];
+                    if (it.CommunityRating != null) motifs.push("⭐ " + Number(it.CommunityRating).toFixed(1));
+                    if (it.ProductionYear) motifs.push(String(it.ProductionYear));
+                    if (it.Status) motifs.push(it.Status === "Ended" ? i18n.t("cfg.libreview.card.ended") : it.Status);
+                    if (it.Genres && it.Genres.length) motifs.push(it.Genres.slice(0, 3).join(", "));
                     var top = document.createElement("div");
                     top.className = "librevTop";
                     if (it.ImageUrl) {
@@ -1642,6 +1649,12 @@ define(["loading"], function (loading) {
                     m.className = "librevMeta2";
                     m.textContent = meta2;
                     head.appendChild(t); head.appendChild(m);
+                    if (motifs.length) {
+                        var mo = document.createElement("div");
+                        mo.className = "librevMotifs";
+                        mo.textContent = motifs.join(" · ");
+                        head.appendChild(mo);
+                    }
                     top.appendChild(head);
                     card.appendChild(top);
                     var r = document.createElement("div");

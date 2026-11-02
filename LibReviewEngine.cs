@@ -333,7 +333,17 @@ namespace LLM_AI
             public string LastPlayed { get; set; }
             public int EpisodeCount { get; set; }
             public int UnwatchedCount { get; set; }
+            // v2.10.6 — mêmes motifs que emby-delete-series.sh : le LLM justifie
+            // mieux quand il voit rating/année/statut/genres/synopsis.
+            public double? CommunityRating { get; set; }
+            public int? ProductionYear { get; set; }
+            public string Status { get; set; }        // séries : "Ended"/"Continuing"…
+            public string[] Genres { get; set; }
+            public string Overview { get; set; }      // tronqué à MaxOverviewChars
         }
+
+        /// <summary>Synopsis tronqué envoyé au LLM (budget contexte).</summary>
+        internal const int MaxOverviewChars = 400;
 
         private static string SerializePool(List<PoolItem> pool)
         {
@@ -351,6 +361,11 @@ namespace LLM_AI
                 if (!string.IsNullOrEmpty(p.LastPlayed)) sb.Append("\"last_played\":").Append(JsonSerializer.Serialize(p.LastPlayed)).Append(',');
                 if (p.EpisodeCount > 0) sb.Append("\"episode_count\":").Append(p.EpisodeCount).Append(',');
                 if (p.UnwatchedCount > 0) sb.Append("\"unwatched_count\":").Append(p.UnwatchedCount).Append(',');
+                if (p.CommunityRating.HasValue) sb.Append("\"community_rating\":").Append(p.CommunityRating.Value.ToString("0.0#", CultureInfo.InvariantCulture)).Append(',');
+                if (p.ProductionYear.HasValue) sb.Append("\"production_year\":").Append(p.ProductionYear.Value).Append(',');
+                if (!string.IsNullOrEmpty(p.Status)) sb.Append("\"status\":").Append(JsonSerializer.Serialize(p.Status)).Append(',');
+                if (p.Genres != null && p.Genres.Length > 0) sb.Append("\"genres\":").Append(JsonSerializer.Serialize(p.Genres)).Append(',');
+                if (!string.IsNullOrEmpty(p.Overview)) sb.Append("\"overview\":").Append(JsonSerializer.Serialize(p.Overview)).Append(',');
                 sb.Length--; // virgule terminale
                 sb.Append('}');
             }
@@ -375,7 +390,12 @@ namespace LLM_AI
                     Name = item.Name ?? "",
                     SizeGb = FileSizeGb(item.Path, logger),
                     DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                    LastPlayed = kv.Value.LastPlayedUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? ""
+                    LastPlayed = kv.Value.LastPlayedUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "",
+                    CommunityRating = item.CommunityRating,
+                    ProductionYear = item.ProductionYear,
+                    Status = null, // les films n'ont pas de statut de diffusion
+                    Genres = item.Genres,
+                    Overview = TruncateOverview(item.Overview)
                 });
                 if (list.Count >= cap) break;
             }
@@ -458,7 +478,8 @@ namespace LLM_AI
             foreach (var sid in seriesIds)
             {
                 ct.ThrowIfCancellationRequested();
-                var series = library.GetItemById(sid);
+                var seriesBase = library.GetItemById(sid);
+                var series = seriesBase as Series;
                 if (series == null) continue;
                 string id = series.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
@@ -503,7 +524,12 @@ namespace LLM_AI
                     LastPlayed = lastPlayedBySeries.TryGetValue(sid, out var lp) && lp != null
                         ? lp.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "",
                     EpisodeCount = epCount,
-                    UnwatchedCount = unwatched
+                    UnwatchedCount = unwatched,
+                    CommunityRating = series.CommunityRating,
+                    ProductionYear = series.ProductionYear,
+                    Status = series.Status?.ToString(),
+                    Genres = series.Genres,
+                    Overview = TruncateOverview(series.Overview)
                 });
                 if (list.Count >= cap) break;
             }
@@ -629,6 +655,14 @@ namespace LLM_AI
 
         internal static double FileSizeGb(string path, ILogger logger) =>
             FileSizeOrNull(path, logger) / (double)(1024L * 1024 * 1024);
+
+        /// <summary>Synopsis aplati + tronqué pour le pool LLM.</summary>
+        internal static string TruncateOverview(string overview)
+        {
+            if (string.IsNullOrWhiteSpace(overview)) return null;
+            var s = System.Text.RegularExpressions.Regex.Replace(overview.Trim(), @"\s+", " ");
+            return s.Length <= MaxOverviewChars ? s : s.Substring(0, MaxOverviewChars) + "…";
+        }
 
         internal static long FileSizeOrNull(string path, ILogger logger)
         {

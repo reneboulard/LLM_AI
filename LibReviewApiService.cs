@@ -88,6 +88,12 @@ namespace LLM_AI
             public int EpisodeCount { get; set; }   // > 0 pour une série
             public string ImageUrl { get; set; }
             public string Reason { get; set; }
+            // v2.10.6 — mêmes motifs que emby-delete-series.sh (affichage carte).
+            public double? CommunityRating { get; set; }
+            public int? ProductionYear { get; set; }
+            public string Status { get; set; }
+            public string[] Genres { get; set; }
+            public string Overview { get; set; }
         }
 
         public class LibReviewResponse
@@ -365,7 +371,12 @@ namespace LLM_AI
                 Series = (item as Episode)?.SeriesName,
                 SizeGb = LibReviewEngine.FileSizeGb(item.Path, Logger),
                 DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Reason = e.Reason ?? ""
+                Reason = e.Reason ?? "",
+                CommunityRating = item.CommunityRating,
+                ProductionYear = item.ProductionYear,
+                Status = (item as Series)?.Status?.ToString(),
+                Genres = item.Genres,
+                Overview = LibReviewEngine.TruncateOverview(item.Overview)
             };
             // Pour une série : taille totale + nombre d'épisodes (affichage « 18 épisodes, ~42 Go »).
             if (item is Series series)
