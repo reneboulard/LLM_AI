@@ -107,24 +107,35 @@ namespace LLM_AI
 
             progress(I18n.SDisplay("librev.progress.collect", host) ?? "Rassemblement des candidats…");
 
+            // ---- Exclusion FAVORIS (v2.11.1) : un item en favori par QUELQU'UN
+            //      n'est JAMAIS candidat — règle absolue, avant même le LLM.
+            //      Un favori sur un épisode protège aussi la série parente.
+            var favIds = CollectFavoriteIds(library, users, userData, logger, ct);
+            if (favIds.Count > 0)
+                logger.Info("[LLM_AI] [LibReview] {0} favori(s) protégé(s) — exclus des pools.", favIds.Count);
+            int favExcluded = 0;
+
             // ---- Pool FILMS : deux familles (v2.11.0, critères repris de
             //      emby-delete.sh) — (a) movies VUS par au moins un usager, du
             //      plus ancien visionnage d'abord ; (b) movies JAMAIS VUS par
             //      personne ET ajoutés il y a plus de LibReviewUnplayedMinDays,
             //      triés par note croissante (les « canards boîteux » d'abord).
-            //      Hors kept dans les deux cas, capés au total.
-            var moviePool = CollectMovies(library, users, userData, kept, cap,
-                cfg.LibReviewUnplayedMinDays, logger, ct);
+            //      Hors kept ET hors favoris, capés au total.
+            var moviePool = CollectMovies(library, users, userData, kept, favIds, cap,
+                cfg.LibReviewUnplayedMinDays, ref favExcluded, logger, ct);
             // ---- Pool SÉRIES : séries partiellement vues, hors kept, hors
-            //      séries à enregistrer (SeriesTimers + timers programmés —
-            //      même règle que emby-delete-series.sh : exclusion stricte par
-            //      titre normalisé EXACT), capées.
+            //      favoris, hors séries à enregistrer (SeriesTimers + timers
+            //      programmés — même règle que emby-delete-series.sh :
+            //      exclusion stricte par titre normalisé EXACT), capées.
             int timerExcluded = 0;
-            var seriesPool = CollectSeries(library, users, userData, liveTv, kept, cap, ref timerExcluded, logger, ct);
+            var seriesPool = CollectSeries(library, users, userData, liveTv, kept, favIds, cap,
+                ref timerExcluded, ref favExcluded, logger, ct);
+
+            logger.Info("[LLM_AI] [LibReview] {0} favori(s) exclu(s) des pools.", favExcluded);
 
             int totalCandidates = moviePool.Count + seriesPool.Count;
-            logger.Info("[LLM_AI] [LibReview] Candidats : {0} film(s), {1} série(s) (hors {2} conservé(s), {3} série(s) en enregistrement).",
-                moviePool.Count, seriesPool.Count, kept.Count, timerExcluded);
+            logger.Info("[LLM_AI] [LibReview] Candidats : {0} film(s), {1} série(s) (hors {2} conservé(s), {3} favori(s), {4} série(s) en enregistrement).",
+                moviePool.Count, seriesPool.Count, kept.Count, favExcluded, timerExcluded);
 
             var report = new LastLibReviewReport
             {
@@ -387,17 +398,70 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Films candidats, hors kept, capés au total (v2.11.0) : moitié du
-        /// plafond pour les films VUS (union des usagers, du plus ancien
-        /// visionnage d'abord), moitié pour les films JAMAIS VUS par personne
-        /// et ajoutés il y a plus de <paramref name="unplayedMinDays"/> jours
-        /// (triés par note croissante — « canards boîteux » en tête, repris de
-        /// emby-delete.sh). Si unplayedMinDays &lt;= 0 : pool vus seul
+        /// InternalId (chaîne) des items en favori par AU MOINS un usager
+        /// (v2.11.1 — règle absolue : jamais de candidat favori). Union des
+        /// UserData.IsFavorite sur tous les usagers.
+        /// </summary>
+        private static HashSet<string> CollectFavoriteIds(ILibraryManager library, IUserManager users,
+            IUserDataManager userData, ILogger logger, CancellationToken ct)
+        {
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var u in users?.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                {
+                    if (u == null) continue;
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var q = new InternalItemsQuery
+                        {
+                            User = u,
+                            IsFavorite = true,
+                            Recursive = true,
+                            EnableTotalRecordCount = false
+                            // NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
+                        };
+                        foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                        {
+                            if (it == null || it.Id == Guid.Empty) continue;
+                            set.Add(it.InternalId.ToString(CultureInfo.InvariantCulture));
+                            // Un favori posé sur un ÉPISODE protège aussi sa
+                            // série parente (la suppression d'une série efface
+                            // tous ses épisodes).
+                            if (it is Episode ep && ep.SeriesId != 0)
+                            {
+                                var parent = library.GetItemById(ep.SeriesId) as Series;
+                                if (parent != null)
+                                    set.Add(parent.InternalId.ToString(CultureInfo.InvariantCulture));
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Warn("[LLM_AI] [LibReview] Requête favoris (usager {0}) échouée : {1}", u.Name, ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Lecture des favoris échouée : {0}", ex.Message);
+            }
+            return set;
+        }
+
+        /// <summary>
+        /// Films candidats, hors kept ET hors favoris, capés au total (v2.11.0) :
+        /// moitié du plafond pour les films VUS (union des usagers, du plus
+        /// ancien visionnage d'abord), moitié pour les films JAMAIS VUS par
+        /// personne et ajoutés il y a plus de <paramref name="unplayedMinDays"/>
+        /// jours (triés par note croissante — « canards boîteux » en tête, repris
+        /// de emby-delete.sh). Si unplayedMinDays &lt;= 0 : pool vus seul
         /// (comportement < v2.11.0).
         /// </summary>
         private static List<PoolItem> CollectMovies(ILibraryManager library, IUserManager users,
-            IUserDataManager userData, HashSet<string> kept, int cap, int unplayedMinDays,
-            ILogger logger, CancellationToken ct)
+            IUserDataManager userData, HashSet<string> kept, HashSet<string> favIds, int cap,
+            int unplayedMinDays, ref int favExcluded, ILogger logger, CancellationToken ct)
         {
             int napCap = unplayedMinDays > 0 ? cap / 2 : cap;
             var list = new List<PoolItem>();
@@ -410,6 +474,7 @@ namespace LLM_AI
                 var item = kv.Key;
                 string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
+                if (favIds.Contains(id)) { favExcluded++; continue; }   // v2.11.1 — jamais de favori
                 list.Add(ToPoolItem(item, id, kv.Value.LastPlayedUtc, logger));
             }
 
@@ -427,6 +492,7 @@ namespace LLM_AI
                     if (list.Count >= cap) break;
                     string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
                     if (kept.Contains(id)) continue;
+                    if (favIds.Contains(id)) { favExcluded++; continue; }   // v2.11.1
                     list.Add(ToPoolItem(item, id, null, logger));
                     unplayedAdded++;
                 }
@@ -558,8 +624,8 @@ namespace LLM_AI
         /// par cette exclusion (loggé).
         /// </summary>
         private static List<PoolItem> CollectSeries(ILibraryManager library, IUserManager users,
-            IUserDataManager userData, ILiveTvManager liveTv, HashSet<string> kept, int cap,
-            ref int timerExcluded, ILogger logger, CancellationToken ct)
+            IUserDataManager userData, ILiveTvManager liveTv, HashSet<string> kept, HashSet<string> favIds,
+            int cap, ref int timerExcluded, ref int favExcluded, ILogger logger, CancellationToken ct)
         {
             var timerNames = TimerSeriesNames(liveTv);
             if (timerNames.Count > 0)
@@ -591,6 +657,14 @@ namespace LLM_AI
                 if (series == null) continue;
                 string id = series.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
+                // v2.11.1 — règle absolue : une série en favori (par quiconque)
+                // n'est JAMAIS candidate.
+                if (favIds.Contains(id))
+                {
+                    favExcluded++;
+                    logger?.Info("[LLM_AI] [LibReview] Série « {0} » exclue du pool : en favori.", series.Name);
+                    continue;
+                }
                 // Exclusion « série à enregistrer » (titre normalisé exact).
                 if (timerNames.Count > 0 && !string.IsNullOrEmpty(series.Name)
                     && timerNames.Contains(GetEmbyInfoTool.Norm(series.Name)))

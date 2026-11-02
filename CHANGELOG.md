@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.11.1] — 2026-11-02
+
+### Fixed (FR)
+- Module « Gestion bibliothèque » : **les items en favori (par n'importe quel
+  usager) sont désormais exclus des pools films ET séries** — règle absolue
+  appliquée côté serveur avant l'envoi au LLM (« Série « … » exclue du pool :
+  en favori » dans le log, compte dédié dans la ligne « Candidats : … »).
+  Un favori posé sur un **épisode** protège aussi sa **série parente** (la
+  suppression d'une série efface tous ses épisodes). Les prompts par défaut
+  FR/EN le rappellent.
+
+### Fixed (EN)
+- "Library management" module: **favorite items (by any user) are now excluded
+  from the movies AND series pools** — absolute rule applied server-side before
+  sending to the LLM ("Series '…' excluded from pool: favorite" in the log,
+  dedicated count in the "Candidates: …" line). A favorite set on an **episode**
+  also protects its **parent series** (deleting a series removes all its
+  episodes). Default prompts FR/EN mention it.
+
+---
+
 ## [2.11.0] — 2026-11-02
 
 ### Added (FR)

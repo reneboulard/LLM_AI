@@ -177,8 +177,8 @@ namespace LLM_AI
                 "message. La liste des candidats (objets JSON avec id, name, episode_count, unwatched_count, " +
                 "last_played, size_gb, et quand disponibles community_rating, production_year, status, " +
                 "genres, overview) est fournie en intégralité dans le message — tu n'as PAS besoin " +
-                "d'appeler d'outils. Les séries EN COURS D'ENREGISTREMENT (timers actifs) ont déjà été " +
-                "retirées de la liste côté serveur — ne les mentionne pas. ATTENTION : pour une série, " +
+                "d'appeler d'outils. Les séries EN COURS D'ENREGISTREMENT (timers actifs) et les items EN " +
+                "FAVORI ont déjà été retirés de la liste côté serveur — ne les mentionne pas. ATTENTION : pour une série, " +
                 "l'id proposé est celui de la SÉRIE et la suppression effacera TOUS ses épisodes. RÈGLES ABSOLUES : (1) ne renvoie QUE des id " +
                 "présents dans la liste des candidats, recopiés tels quels en chaîne ; (2) jamais un id " +
                 "inventé ; (3) sois TRÈS conservateur : ne retiens une série que si elle est manifestement " +
@@ -289,7 +289,8 @@ namespace LLM_AI
                 "given below), following the administrator's brief given in the message. The full " +
                 "candidate list (JSON objects with id, name, size_gb, date_added, last_played, and when " +
                 "available community_rating, production_year, genres, overview) is " +
-                "provided in the message — you do NOT need to call any tools. ABSOLUTE RULES: (1) return " +
+                "provided in the message — you do NOT need to call any tools. FAVORITE items have already " +
+                "been removed from the list server-side — do not mention them. ABSOLUTE RULES: (1) return " +
                 "ONLY ids present in the candidate list, copied verbatim as strings; (2) never an invented " +
                 "or guessed id — an id absent from the list is a hallucination, strictly forbidden; " +
                 "(3) be very conservative: when in doubt, do NOT pick the movie (better a short safe list " +
