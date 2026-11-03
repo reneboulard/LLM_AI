@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.2] — 2026-11-03
+
+### Fixed (FR)
+- Page « Notifications » — l'énumération des cloches persistantes admin avait
+  une version de retard : le **rapport « Gestion bibliothèque » prêt**
+  (ajouté en v2.12.0) manquait de la liste — ajouté (FR+EN).
+
+### Fixed (EN)
+- "Notifications" page — the admin persistent-bells enumeration was one
+  version behind: the **"Library management" report ready** bell (added in
+  v2.12.0) was missing from the list — added (FR+EN).
+
+---
+
 ## [2.13.1] — 2026-11-03
 
 ### Changed (FR)
