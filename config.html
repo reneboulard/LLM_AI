@@ -2102,6 +2102,15 @@
                                 border-radius: 4px; background: rgba(0,0,0,0.3); flex: 0 0 auto;
                             }
                             .LLMAIConfigPage .librevCard .librevTitle { font-weight: 600; font-size: 13px; line-height: 1.25; }
+                            /* v2.12.0 — pastille du verdict de classement (delete/can_delete/keep) */
+                            .LLMAIConfigPage .librevChip {
+                                display: inline-block; margin-left: 6px; padding: 1px 7px;
+                                border-radius: 10px; font-size: 10px; font-weight: 600;
+                                vertical-align: middle; white-space: nowrap;
+                            }
+                            .LLMAIConfigPage .librevChip-delete { background: rgba(220,60,60,0.25); color: #ff9a9a; }
+                            .LLMAIConfigPage .librevChip-can_delete { background: rgba(230,150,30,0.25); color: #ffc36b; }
+                            .LLMAIConfigPage .librevChip-keep { background: rgba(70,130,220,0.25); color: #8ab4f8; }
                             .LLMAIConfigPage .librevCard .librevMeta2 { color: #999; font-size: 11px; }
                             .LLMAIConfigPage .librevCard .librevMotifs { color: #8ab4f8; font-size: 10.5px; line-height: 1.35; }
                             .LLMAIConfigPage .librevCard .librevReason { font-size: 12px; line-height: 1.4; }

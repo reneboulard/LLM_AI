@@ -83,6 +83,9 @@ namespace LLM_AI
             public string Name { get; set; }
             public string Kind { get; set; }        // movie | episode | series | …
             public string Series { get; set; }      // nom de la série (épisode)
+            // v2.12.0 — verdict du classement : delete | can_delete | keep
+            // (absent = rapport < 2.12.0 → delete, proposition de suppression).
+            public string Section { get; set; }
             public double SizeGb { get; set; }
             public string DateAdded { get; set; }
             public int EpisodeCount { get; set; }   // > 0 pour une série
@@ -376,6 +379,7 @@ namespace LLM_AI
                 Name = item.Name ?? "",
                 Kind = item.GetType().Name.ToLowerInvariant(),
                 Series = (item as Episode)?.SeriesName,
+                Section = string.IsNullOrEmpty(e.Section) ? "delete" : e.Section,
                 SizeGb = LibReviewEngine.FileSizeGb(item.Path, Logger),
                 DateAdded = item.DateCreated.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 Reason = e.Reason ?? "",

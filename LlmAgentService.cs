@@ -40,6 +40,15 @@ namespace LLM_AI
         private readonly string _formatSection;     // bloc format de sortie à la place du « FORMAT DES RECOMMANDATIONS » ; null = bloc recos par défaut ; "" = supprimé
         private readonly string _responseLang;     // langue de sortie imposée au LLM (ex. « English ») ; vide = pas de directive (comportement historique)
 
+        // v2.12.0 (P2) — la machinerie de réparation « réponse finale sans
+        // tableau JSON » (v2.6.7) était réservée au mode reco
+        // (_formatSection == null) ; elle s'étend aux formats CUSTOM non
+        // vides (LibReview) — mêmes béquilles, même renvoi borné, mais la
+        // clé qui identifie un item valide (« title » en reco, « id » pour
+        // LibReview) et le gabarit du renvoi deviennent paramétrables.
+        private readonly string _finalArrayKey;    // clé présente dans un item valide du tableau final ; null/vide = "title"
+        private readonly string _finalRepairHint;  // gabarit embarqué dans la demande de renvoi (mode custom) ; requis si formatSection custom non vide
+
         // Index du backend actif dans _backends, résolu paresseusement au 1er
         // appel réussi. -1 = aucun verrouillé (première tentative). Si le backend
         // actif échoue en cours de boucle, on re-scanne toute la liste et on
@@ -53,7 +62,9 @@ namespace LLM_AI
                                bool verbose = false,
                                string roleIntro = null,
                                string formatSection = null,
-                               string responseLanguage = "")
+                               string responseLanguage = "",
+                               string finalArrayKey = null,
+                               string finalRepairHint = null)
         {
             _backends = backends != null
                 ? new List<LlmBackend>(backends)
@@ -68,6 +79,8 @@ namespace LLM_AI
             _roleIntro = roleIntro;
             _formatSection = formatSection;
             _responseLang = responseLanguage ?? string.Empty;
+            _finalArrayKey = string.IsNullOrWhiteSpace(finalArrayKey) ? "title" : finalArrayKey.Trim();
+            _finalRepairHint = finalRepairHint ?? string.Empty;
         }
 
         /// <summary>
@@ -254,10 +267,19 @@ namespace LLM_AI
                         // réclame le tableau JSON de recos historique ; en mode sans
                         // format (audit, chat — _formatSection == "") on réclame du
                         // Markdown, cohérent avec le system prompt correspondant.
+                        // v2.12.0 — trois modes, pas deux : formatSection
+                        // null = reco (tableau JSON de recos) ; custom non
+                        // vide = LibReview (tableau JSON [{id,…}]) ; vide =
+                        // audit/chat (Markdown). L'ancienne forme binaire
+                        // envoyait LibReview vers « Markdown SANS tableau » —
+                        // l'inverse exact de son contrat.
                         string finalFormatHint = _formatSection == null
                             ? "Si tu as terminé, réponds avec le tableau JSON des recommandations, " +
                               "conforme au schéma exigé par la tâche (sections WORKFLOW/FORMAT du prompt système)."
-                            : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.";
+                            : (_formatSection.Length > 0
+                                ? "Si tu as terminé, réponds UNIQUEMENT avec le tableau JSON exigé par la " +
+                                  "section FORMAT DE SORTIE — sans texte autour, sans balise de code."
+                                : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.");
                         messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                             "Ton tableau d'appels d'outils est malformé (JSON invalide). " +
                             "Renvoie UNIQUEMENT un tableau JSON d'appels d'outils bien formé, " +
@@ -304,16 +326,37 @@ namespace LLM_AI
                         }
                     }
 
-                    // Mode recommandation : la réponse finale DOIT être un tableau
-                    // JSON exploitable. Vécu 2026-09-01 (glm-5.3:cloud) : prose
-                    // autour du tableau, guillemets internes non échappés
-                    // (S07E06 "The Truck Stops Here"), ou écho du format demandé
-                    // — le parse aval échoue silencieusement (enrichissement +
-                    // validation ignorés, markdown brut affiché). Réparation
-                    // bornée, même mécanisme que le renvoi d'appels d'outils :
-                    // on signale et on continue la boucle.
-                    if (_formatSection == null)
+                    // Mode recommandation OU format custom (v2.12.0) : la réponse
+                    // finale DOIT être un tableau JSON exploitable. Vécu
+                    // 2026-09-01 (glm-5.3:cloud) : prose autour du tableau,
+                    // guillemets internes non échappés (S07E06 "The Truck Stops
+                    // This"), ou écho du format demandé — le parse aval échoue
+                    // silencieusement. Vécu 2026-11-02 (prod, ministral-3:14b,
+                    // LibReview) : « - » / « Aucun. » au lieu du tableau — le run
+                    // partait à 0 proposition SANS qu'aucune réparation ne tire :
+                    // la machinerie v2.6.7 ci-dessous était gated au seul mode reco
+                    // (_formatSection == null) alors que LibReview passe un
+                    // formatSection CUSTOM. Dé-gatée : tout mode à tableau final
+                    // (reco null OU custom non vide) probe/répare/renvoie. Seul
+                    // le mode « rapport Markdown » (formatSection == "" :
+                    // audit/chat) reste hors probe.
+                    if (_formatSection == null || _formatSection.Length > 0)
                     {
+                        // v2.12.0 — gabarit embarqué dans la demande de renvoi :
+                        // reco = gabarit historique inline ; format custom =
+                        // gabarit fourni par l'appelant (_finalRepairHint). Le
+                        // schéma doit être dans le message USER (quirk documenté :
+                        // le modèle suit le schéma du user prompt, pas du system).
+                        bool recoMode = _formatSection == null;
+                        string renvoiCible = recoMode ? "des recommandations" : "exigé par la tâche";
+                        string gabarit = recoMode
+                            ? "[{\"title\":\"Titre exact repris des résultats get_emby_info\"," +
+                              "\"kind\":\"series ou movie\"," +
+                              "\"reason\":\"1-2 phrases\"," +
+                              "\"priority\":\"high ou medium ou low\"," +
+                              "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
+                              "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}]"
+                            : _finalRepairHint;
                         // v2.6.7 (live 2026-10-19, run page ministral-3:14b) : la
                         // validation et la réparation par béquilles s'appliquent AUSSI à
                         // la dernière réponse (budget renvois épuisé) — vécu : itération 3
@@ -322,7 +365,7 @@ namespace LLM_AI
                         // que la béquille existante (vécu 2026-09-09) l'eût réparée.
                         // Seul le RENVOI au modèle reste borné par MaxReplyRepairs.
                         var probe = LlmRunner.ExtractJsonPayload(reply);
-                        bool validArray = ValidateFinalArrayProbe(probe, out var anyTitle, out var itemCount);
+                        bool validArray = ValidateFinalArrayProbe(probe, out var anyKey, out var itemCount, _finalArrayKey);
                         if (!validArray)
                         {
                             // v2.6.7 (ministral-3:14b, live 2026-10-19) : le tableau
@@ -334,7 +377,7 @@ namespace LLM_AI
                             // zéro reco alors que le gabarit était bon à 95 %).
                             var repaired = TryRepairFinalArray(reply);
                             if (repaired != null &&
-                                ValidateFinalArrayProbe(repaired, out anyTitle, out itemCount))
+                                ValidateFinalArrayProbe(repaired, out anyKey, out itemCount, _finalArrayKey))
                             {
                                 _logger?.Info("[LLM_AI] Itération {0} — réponse finale réparée par béquilles (contrôles/guillemets) sans renvoi : {1} item(s).",
                                     iter, itemCount);
@@ -352,16 +395,11 @@ namespace LLM_AI
                             messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                                 "Ta réponse finale n'est pas un tableau JSON exploitable " +
                                 "(texte autour du tableau, guillemets non échappés, ou format non respecté). " +
-                                "Renvoie UNIQUEMENT le tableau JSON des recommandations — le PREMIER caractère " +
+                                "Renvoie UNIQUEMENT le tableau JSON " + renvoiCible + " — le PREMIER caractère " +
                                 "est [ et le DERNIER est ], sans texte avant/après ni balises ```. " +
                                 "Gabarit d'item attendu (quirk documenté : le schéma doit être dans le " +
                                 "prompt user, pas seulement dans le system prompt) :\n" +
-                                "[{\"title\":\"Titre exact repris des résultats get_emby_info\"," +
-                                "\"kind\":\"series ou movie\"," +
-                                "\"reason\":\"1-2 phrases\"," +
-                                "\"priority\":\"high ou medium ou low\"," +
-                                "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
-                                "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}] " +
+                                gabarit + " " +
                                 "Échappe tous les guillemets doubles internes (\\\") dans les valeurs " +
                                 "de type chaîne. Ne renvoie JAMAIS un appel d'outil : la boucle est terminée." });
                             continue;
@@ -374,29 +412,36 @@ namespace LLM_AI
                         // passée), puis la validation aval écarte l'item sans title →
                         // run « réussi » à ZÉRO reco (et la tâche effaçait les recos
                         // de la veille). Un tableau NON VIDE dont aucun item ne porte
-                        // « title » (champ obligatoire du format reco) n'est ni un
-                        // tableau de recos ni un appel d'outil bien formé → renvoi.
-                        // Un tableau VIDE ([] = « rien à recommander ») reste accepté.
-                        if (itemCount > 0 && !anyTitle && replyRepairs < MaxReplyRepairs)
+                        // la clé obligatoire du format (v2.12.0 : paramétrée —
+                        // « title » en reco, « id » pour LibReview) n'est ni un
+                        // tableau du format ni un appel d'outil bien formé → renvoi.
+                        // Un tableau VIDE ([] = « rien ») reste accepté.
+                        if (itemCount > 0 && !anyKey && replyRepairs < MaxReplyRepairs)
                         {
                             replyRepairs++;
-                            _logger?.Warn("[LLM_AI] Itération {0} — réponse finale : tableau de {1} item(s) SANS aucun « title » (appel d'outil malformé ?). Demande de renvoi ({2}/{3}).",
-                                iter, itemCount, replyRepairs, MaxReplyRepairs);
+                            _logger?.Warn("[LLM_AI] Itération {0} — réponse finale : tableau de {1} item(s) SANS aucun « {2} » (appel d'outil malformé ?). Demande de renvoi ({3}/{4}).",
+                                iter, itemCount, _finalArrayKey, replyRepairs, MaxReplyRepairs);
                             messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
-                            messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
-                                "Ta réponse est un tableau JSON dont AUCUN item n'est une " +
-                                "recommandation (champ « title » absent partout) : elle ressemble " +
-                                "à un appel d'outil malformé. Renvoie soit un tableau d'appels " +
-                                "d'outils BIEN FORMÉ [{\"tool\":\"...\",\"arguments\":{...}}], " +
-                                "soit, si tu as terminé, le tableau JSON des recommandations " +
-                                "conforme au gabarit suivant (mêmes champs que la section FORMAT) :\n" +
-                                "[{\"title\":\"Titre exact repris des résultats get_emby_info\"," +
-                                "\"kind\":\"series ou movie\"," +
-                                "\"reason\":\"1-2 phrases\"," +
-                                "\"priority\":\"high ou medium ou low\"," +
-                                "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
-                                "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}] " +
-                                "sans texte autour ni balises ```." });
+                            if (recoMode)
+                            {
+                                messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                                    "Ta réponse est un tableau JSON dont AUCUN item n'est une " +
+                                    "recommandation (champ « title » absent partout) : elle ressemble " +
+                                    "à un appel d'outil malformé. Renvoie soit un tableau d'appels " +
+                                    "d'outils BIEN FORMÉ [{\"tool\":\"...\",\"arguments\":{...}}], " +
+                                    "soit, si tu as terminé, le tableau JSON des recommandations " +
+                                    "conforme au gabarit suivant (mêmes champs que la section FORMAT) :\n" +
+                                    gabarit + " sans texte autour ni balises ```." });
+                            }
+                            else
+                            {
+                                messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                                    "Ta réponse est un tableau JSON dont AUCUN item n'est valide " +
+                                    "(champ « " + _finalArrayKey + " » absent partout). Renvoie UNIQUEMENT " +
+                                    "le tableau JSON " + renvoiCible + ", conforme au gabarit suivant " +
+                                    "(mêmes champs que la section FORMAT DE SORTIE) :\n" +
+                                    gabarit + " sans texte autour ni balises ```." });
+                            }
                             continue;
                         }
                     }
@@ -782,6 +827,20 @@ namespace LLM_AI
                 sb.AppendLine("qui interrogent directement le serveur Emby (en lecture seule).");
             }
             sb.AppendLine();
+            // v2.12.0 (P3) — mode « liste fermée » : AUCUN outil = AUCUN bloc
+            // AVAILABLE TOOLS ni PROTOCOLE DE TOOL-CALLING. Motivation terrain
+            // (prod 2026-11-02, LibReview + ministral-3:14b) : le même modèle
+            // classe correctement les candidats via les scripts emby-delete*.sh
+            // (un appel plat, zéro outil) mais répond « - » / « Aucun. » dans le
+            // plugin — le manifest complet + le protocole (où « un tableau JSON
+            // commençant par [ = appel d'outils » contredit « ta réponse finale
+            // EST un tableau JSON ») déroutent les petits modèles locaux. Sans
+            // outil, il ne reste qu'UN seul contrat de sortie : celui du bloc
+            // FORMAT. Les chemins outillés reco/chat/audit ne passent jamais
+            // une liste vide — comportement inchangé pour eux.
+            bool hasTools = tools != null && tools.Count > 0;
+            if (hasTools)
+            {
             sb.AppendLine("### AVAILABLE TOOLS");
             foreach (var t in tools)
             {
@@ -825,6 +884,7 @@ namespace LLM_AI
             sb.AppendLine("autour ni balise de code.");
             sb.AppendLine("Ne retourne que l'information demandée, rien de plus. Sois concis.");
             sb.AppendLine();
+            }
             if (!string.IsNullOrWhiteSpace(workflow))
             {
                 sb.AppendLine("### WORKFLOW DE RECOMMANDATION");
@@ -1041,12 +1101,14 @@ namespace LLM_AI
 
         /// <summary>
         /// v2.6.7 (ministral-3:14b) : probe du tableau final — valide (array JSON),
-        /// remplit anyTitle/itemCount ; sinon false. Mêmes critères que la
+        /// remplit anyKey/itemCount ; sinon false. Mêmes critères que la
         /// validation historique inline (array + présence de « title »).
+        /// v2.12.0 : la clé attendue est paramétrée (« title » en mode reco,
+        /// « id » pour les formats custom type LibReview).
         /// </summary>
-        private static bool ValidateFinalArrayProbe(string payloadText, out bool anyTitle, out int itemCount)
+        private static bool ValidateFinalArrayProbe(string payloadText, out bool anyKey, out int itemCount, string key)
         {
-            anyTitle = false;
+            anyKey = false;
             itemCount = 0;
             try
             {
@@ -1058,8 +1120,8 @@ namespace LLM_AI
                     {
                         itemCount++;
                         if (el.ValueKind == JsonValueKind.Object &&
-                            el.TryGetProperty("title", out _))
-                            anyTitle = true;
+                            el.TryGetProperty(string.IsNullOrEmpty(key) ? "title" : key, out _))
+                            anyKey = true;
                     }
                     return true;
                 }

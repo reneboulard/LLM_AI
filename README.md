@@ -2809,15 +2809,21 @@ utilisable.
 ## Gestion bibliothèque (évaluation IA des suppressions)
 
 Nouvel onglet **« Gestion bibliothèque »** de la page de configuration
-(admin-only). Le LLM évalue la bibliothèque et propose des **suppressions**,
-affichées sous forme de cartes **« 🗑️ Effacer / ✔️ Conserver »**.
+(admin-only). Le LLM évalue la bibliothèque et **classe chaque candidat en
+trois sections** — 🗑 à supprimer, 🟠 à discuter, 🔵 à garder — affichées sous
+forme de cartes triées par section (pastille colorée), avec **« 🗑️ Effacer /
+✔️ Conserver »**.
 
 - **Deux runs indépendants** (mêmes prompts séparés que la tâche EPG :
   `LibReviewTask` = « planification | prompt FILMS », `LibReviewTaskSeries` =
-  prompt SÉRIES) : films vus d'un côté, séries partiellement vues de l'autre —
-  deux contextes LLM séparés. Le contrat du LLM est un tableau
-  `[{id, reason}]` (id = InternalId) ; le serveur valide chaque id contre le
-  pool envoyé (hors pool = hallucination écartée et loguée).
+  prompt SÉRIES) : films (vus + jamais vus anciens) d'un côté, séries
+  partiellement vues de l'autre — deux contextes LLM séparés. Le contrat du
+  LLM est un tableau `[{id, section, reason}]` (id = InternalId, une entrée
+  PAR candidat — pas d'échappatoire « vide si rien ne se justifie », c'est ce
+  qui fiabilise les petits modèles locaux) ; le serveur valide chaque id
+  contre le pool envoyé (hors pool = hallucination écartée et loguée). Le run
+  est **sans aucun outil** : la liste des candidats est complète dans le
+  message, un seul format de sortie à respecter.
 - **Lancement** : bouton « Lancer l'évaluation » (consigne libre facultative)
   ou tâche planifiée « Gestion bibliothèque » (désactivée par défaut ;
   planification en tête du champ `LibReviewTask`, ex. « Weekly Sunday 05:10 »).

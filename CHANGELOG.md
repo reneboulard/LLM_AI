@@ -10,6 +10,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.12.0] — 2026-11-03
+
+### Changed (FR)
+- Module « Gestion bibliothèque » — **contrat de classement 3 sections, repris
+  d'`emby-delete.sh`** : le LLM ne « propose plus des suppressions » (sélection
+  conservatrice où « vide `[]` si rien ne se justifie » offrait au petit modèle
+  local une échappatoire triviale — vécu prod 2026-11-02 : ministral-3:14b
+  répondait « - » / « Aucun. », run à 0 proposition, alors que le MÊME modèle
+  classe correctement via les scripts qui n'ont pas cette échappatoire). Il
+  classe désormais CHAQUE candidat, exactement une entrée
+  `{id, section: delete|can_delete|keep, reason}` — cartes triées par section
+  avec pastille colorée (🗑 / 🟠 / 🔵) et ventilation dans la ligne d'état.
+  Rétro-compat : une réponse sans champ `section` (prompt stocké d'une install
+  existante) reste comprise comme l'ancien contrat de propositions ; les
+  rapports antérieurs s'affichent comme propositions (section « delete »).
+- Run « liste fermée » : **plus AUCUN outil injecté** au run Gestion
+  bibliothèque (la liste des candidats est complète dans le message — le
+  manifest + le protocole tool-calling, où « un tableau JSON commençant par
+  `[` = appel d'outils » contredit « ta réponse finale EST un tableau JSON »,
+  déroutaient les petits modèles) ni les directives RAG de recommandation
+  (« vérifie avec les outils avant d'affirmer »), hors-sujet pour un
+  classement. Le system prompt se réduit au rôle + au contrat de sortie : un
+  seul format à respecter, comme l'appel plat des scripts.
+### Fixed (FR)
+- Réparation « réponse finale sans tableau JSON » (v2.6.7) **étendue aux runs à
+  format personnalisé** : elle était réservée au mode recommandation
+  (`_formatSection == null`) et le run Gestion bibliothèque, qui passe un
+  formatSection custom, n'en bénéficiait pas — « - » / « Aucun. » partaient
+  comme réponse finale sans qu'aucune relance ne tire. Désormais tout mode à
+  tableau final probe/répare par béquilles/renvoie (borné), avec clé attendue
+  paramétrée (« id » ici) et gabarit embarqué dans le message user (quirk
+  documenté : les petits modèles suivent le schéma du user prompt).
+- Correctif latent du même type : la relance après appel d'outil malformé
+  disait « réponds en Markdown SANS tableau JSON » à tout run à formatSection
+  non vide — l'inverse exact du contrat Gestion bibliothèque.
+
+### Changed (EN)
+- "Library management" module — **3-section classification contract, taken
+  from `emby-delete.sh`**: the LLM no longer "proposes deletions" (a
+  conservative selection where "empty `[]` if nothing justifies" offered the
+  small local model a trivial escape hatch — lived prod 2026-11-02:
+  ministral-3:14b answered "-" / "None.", a 0-proposal run, while the SAME
+  model classifies correctly through the scripts, which have no such hatch).
+  It now classifies EVERY candidate, exactly one entry
+  `{id, section: delete|can_delete|keep, reason}` — cards sorted by section
+  with a colored chip (🗑 / 🟠 / 🔵) and a breakdown in the status line.
+  Backward compatibility: a reply with no `section` field (stored prompt of
+  an existing install) is still understood as the old proposal contract;
+  earlier reports display as proposals ("delete" section).
+- Closed-list run: **NO tools injected anymore** in the Library-management
+  run (the candidate list is complete in the message — the manifest + the
+  tool-calling protocol, where "a JSON array starting with `[` = tool call"
+  contradicts "your final answer IS a JSON array", confused the small
+  models) nor the recommendation RAG directives ("verify with the tools
+  before asserting"), off-topic for a classification. The system prompt
+  shrinks to the role + the output contract: a single format to comply with,
+  like the scripts' flat call.
+### Fixed (EN)
+- "Final reply without JSON array" repair (v2.6.7) **extended to custom-format
+  runs**: it was reserved for recommendation mode (`_formatSection == null`),
+  and the Library-management run, which passes a custom formatSection, did
+  not benefit from it — "-" / "None." went out as a final reply without any
+  re-ask firing. Now every final-array mode probes/repairs via
+  crutches/re-asks (bounded), with a parameterized expected key ("id" here)
+  and the template embedded in the user message (documented quirk: small
+  models follow the user-prompt schema).
+- Latent fix of the same class: the re-ask after a malformed tool call told
+  any run with a non-empty formatSection to "reply in Markdown WITHOUT a
+  JSON array" — the exact opposite of the Library-management contract.
+
+---
+
 ## [2.11.2] — 2026-11-02
 
 ### Fixed (FR)

@@ -2722,15 +2722,20 @@ stays usable.
 ## Library management (AI deletion review)
 
 New **"Library management"** tab on the configuration page (admin-only). The
-LLM evaluates the library and proposes **deletions**, shown as
-**"🗑️ Delete / ✔️ Keep" cards**.
+LLM evaluates the library and **classifies every candidate into three
+sections** — 🗑 to delete, 🟠 to discuss, 🔵 to keep — shown as cards sorted by
+section (colored chip), with **"🗑️ Delete / ✔️ Keep"** buttons.
 
 - **Two independent runs** (same split prompts as the EPG task:
   `LibReviewTask` = "schedule | MOVIES prompt", `LibReviewTaskSeries` = SERIES
-  prompt): watched movies on one side, partially watched series on the other —
-  two separate LLM contexts. The LLM contract is a `[{id, reason}]` array
-  (id = InternalId); the server validates every id against the pool sent
-  (out-of-pool = hallucination, dropped + logged).
+  prompt): movies (watched + old never-watched) on one side, partially watched
+  series on the other — two separate LLM contexts. The LLM contract is a
+  `[{id, section, reason}]` array (id = InternalId, ONE entry PER candidate —
+  no "empty if nothing justifies" escape hatch, which is what makes small
+  local models reliable); the server validates every id against the pool sent
+  (out-of-pool = hallucination, dropped + logged). The run is **entirely
+  tool-less**: the candidate list is complete in the message, a single output
+  format to comply with.
 - **Launch**: "Run evaluation" button (optional free-form brief) or the
   "Library management" **scheduled task** (off by default; schedule read from
   the head of `LibReviewTask`, e.g. "Weekly Sunday 05:10"). The run is

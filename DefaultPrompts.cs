@@ -151,43 +151,59 @@ namespace LLM_AI
                 "exécutes. Sois factuel et précis (reprends les valeurs chiffrées retournées par les " +
                 "outils).",
             libReviewTask:
-                "Weekly Sunday 05:10 | Tu es chargé de proposer des SUPPRESSIONS de la bibliothèque : " +
-                "les FILMS dont la conservation ne se justifie plus — deux familles dans la liste : " +
-                "(a) films VUS (last_played renseigné : doublons, vus une fois il y a longtemps, qualité " +
-                "médiocre) et (b) films JAMAIS VUS (last_played vide) ajoutés il y a longtemps, triés par " +
-                "note croissante — les « canards boîteux » (rating bas ou absent, sans lien avec les " +
-                "goûts de l'admin dont le PROFIL est fourni plus bas), selon la consigne de " +
-                "l'administrateur fournie dans le message. La liste des candidats (objets JSON avec id, " +
-                "name, size_gb, date_added, last_played, et quand disponibles community_rating, " +
-                "production_year, genres, overview) est fournie en intégralité dans le message — tu " +
-                "n'as PAS besoin d'appeler d'outils. RÈGLES ABSOLUES : (1) ne renvoie QUE des id présents dans la liste des " +
-                "candidats, recopiés tels quels en chaîne de caractères ; (2) jamais un id inventé ou " +
-                "deviné — un id absent de la liste = hallucination, à proscrire absolument ; " +
-                "(3) sois très conservateur : en cas de doute, ne retiens PAS le film (mieux une liste " +
-                "courte et sûre qu'une suppression mal avisée) ; (4) chaque proposition porte une reason " +
-                "d'une phrase concrète qui CITE les motifs du candidat (ex. « vu une seule fois le " +
-                "2024-03-12, 2e copie en bibliothèque », « documentaire d'actualité (genre) non " +
-                "regardé, sans lien avec les goûts constatés ») — jamais de reason générique. " +
-                "Réponds UNIQUEMENT par un tableau JSON [{id, reason}] — maximum 20 entrées, vide [] si " +
-                "aucune suppression ne se justifie.",
+                "Weekly Sunday 05:10 | Tu es chargé d'évaluer la bibliothèque pour proposer des " +
+                "suppressions : classe CHAQUE film candidat de la liste en trois sections. Deux " +
+                "familles dans la liste : (a) films VUS (last_played renseigné : doublons, vus " +
+                "une seule fois il y a longtemps, qualité médiocre) et (b) films JAMAIS VUS " +
+                "(last_played vide) ajoutés il y a longtemps, triés par note croissante — les " +
+                "« canards boîteux ». La consigne de l'administrateur fournie dans le message, " +
+                "s'il y en a une, AFFINE ces règles sans jamais remplacer le classement complet. " +
+                "RÈGLES DE CLASSEMENT : section \"delete\" = quasi certain que ça ne sera jamais " +
+                "regardé — documentaires/enregistrements TV jamais vus, films sans note et sans " +
+                "réputation, produits télé médiocres (note < 6), tout candidat sans lien avec le " +
+                "profil de goûts fourni ; section \"can_delete\" = doute raisonnable — films " +
+                "sans note qui évoquent un genre que l'admin regarde, films jeunesse (la famille " +
+                "a des petits), films anciens avec une petite notoriété, doublons possibles à " +
+                "vérifier ; section \"keep\" = à conserver — films cultes ou acclamés " +
+                "(note >= 7.5), classiques reconnus, franchises connues, films dont le " +
+                "genre/époque correspond clairement au profil. Utilise le profil de goûts fourni " +
+                "pour évaluer l'affinité de chaque candidat, et le champ overview (synopsis) " +
+                "pour juger le ton, l'audience visée et la notoriété quand la note est absente " +
+                "ou ambiguë. RÈGLES ABSOLUES : (1) classe TOUS les candidats — exactement UNE " +
+                "entrée par candidat, chacun classé UNE fois ; (2) ne renvoie QUE des id présents " +
+                "dans la liste, recopiés tels quels en chaîne de caractères — jamais un id " +
+                "inventé ou deviné ; (3) chaque entrée porte une reason d'une phrase concrète qui " +
+                "CITE les motifs du candidat (note, date, genre, affinité avec le profil) — " +
+                "jamais de reason générique. Réponds UNIQUEMENT par un tableau JSON " +
+                "[{\"id\":\"…\",\"section\":\"delete ou can_delete ou keep\",\"reason\":\"…\"}] — " +
+                "un élément par candidat.",
             libReviewTaskSeries:
-                "Tu es chargé de proposer des SUPPRESSIONS de la bibliothèque : les SÉRIES entières dont " +
-                "la conservation ne se justifie plus (série abandonnée après quelques épisodes, rediffusion " +
-                "déjà possédée ailleurs, etc.), selon la consigne de l'administrateur fournie dans le " +
-                "message. La liste des candidats (objets JSON avec id, name, episode_count, unwatched_count, " +
-                "last_played, size_gb, et quand disponibles community_rating, production_year, status, " +
-                "genres, overview) est fournie en intégralité dans le message — tu n'as PAS besoin " +
-                "d'appeler d'outils. Les séries EN COURS D'ENREGISTREMENT (timers actifs) et les items EN " +
-                "FAVORI ont déjà été retirés de la liste côté serveur — ne les mentionne pas. ATTENTION : pour une série, " +
-                "l'id proposé est celui de la SÉRIE et la suppression effacera TOUS ses épisodes. RÈGLES ABSOLUES : (1) ne renvoie QUE des id " +
-                "présents dans la liste des candidats, recopiés tels quels en chaîne ; (2) jamais un id " +
-                "inventé ; (3) sois TRÈS conservateur : ne retiens une série que si elle est manifestement " +
-                "abandonnée (dernier épisode vu il y a très longtemps ET épisodes non vus majoritaires) ou " +
-                "clairement redondante ; en cas de doute, ne retiens PAS ; (4) chaque proposition porte une " +
-                "reason d'une phrase concrète qui CITE les motifs du candidat (nombre d'épisodes non vus, " +
-                "dernier visionnage, genre/synopsis, statut « terminée », note) — jamais de reason " +
-                "générique. Réponds UNIQUEMENT par un tableau JSON [{id, reason}] — " +
-                "maximum 10 entrées, vide [] si aucune suppression ne se justifie.");
+                "Tu es chargé d'évaluer la bibliothèque pour proposer des suppressions : classe " +
+                "CHAQUE série candidate de la liste en trois sections. Une série candidate est " +
+                "partiellement vue (au moins un épisode vu par quelqu'un) et sa conservation ne " +
+                "se justifie peut-être plus (abandonnée après quelques épisodes, rediffusion " +
+                "déjà possédée ailleurs…). Les séries EN COURS D'ENREGISTREMENT (timers actifs) " +
+                "et les items EN FAVORI ont déjà été retirées de la liste côté serveur — ne les " +
+                "mentionne pas. ATTENTION : pour une série, l'id est celui de la SÉRIE et la " +
+                "suppression effacera TOUS ses épisodes. La consigne de l'administrateur " +
+                "fournie dans le message, s'il y en a une, AFFINE ces règles sans jamais " +
+                "remplacer le classement complet. RÈGLES DE CLASSEMENT : section \"delete\" = " +
+                "quasi certain que personne ne la terminera — série abandonnée depuis très " +
+                "longtemps (last_played ancien ET unwatched_count majoritaire), produits télé " +
+                "médiocres (note < 6), sans lien avec le profil de goûts ; section " +
+                "\"can_delete\" = doute raisonnable — statut \"Continuing\" (des épisodes " +
+                "futurs pourraient être enregistrés), affinité partielle avec le profil, " +
+                "unwatched_count élevé mais visionnage récent ; section \"keep\" = à conserver " +
+                "— séries cultes ou acclamées (note >= 7.5), classiques reconnus, " +
+                "genres/époques clairement dans l'historique de l'admin, visionnage récent. " +
+                "RÈGLES ABSOLUES : (1) classe TOUS les candidats — exactement UNE entrée par " +
+                "série ; (2) ne renvoie QUE des id présents dans la liste, recopiés tels quels " +
+                "en chaîne — jamais un id inventé ; (3) chaque entrée porte une reason d'une " +
+                "phrase concrète qui CITE les motifs du candidat (nombre d'épisodes non vus, " +
+                "dernier visionnage, genre/synopsis, statut, note) — jamais de reason " +
+                "générique. Réponds UNIQUEMENT par un tableau JSON " +
+                "[{\"id\":\"…\",\"section\":\"delete ou can_delete ou keep\",\"reason\":\"…\"}] — " +
+                "un élément par série.");
 
         /// <summary>
         /// Version anglaise — jamais installée automatiquement : elle sert au
@@ -281,39 +297,55 @@ namespace LLM_AI
                 "ask you to execute them if wanted. Be factual and precise (copy the numeric values " +
                 "returned by the tools).",
             libReviewTask:
-                "Weekly Sunday 05:10 | You are tasked with proposing LIBRARY DELETIONS: MOVIES whose " +
-                "keeping is no longer justified — two families in the list: (a) WATCHED movies " +
-                "(last_played set: duplicates, watched once long ago, poor quality) and (b) NEVER-WATCHED " +
-                "movies (last_played empty) added long ago, sorted by rating ascending — the \"ugly " +
-                "ducklings\" (low or missing rating, unrelated to the admin's tastes whose PROFILE is " +
-                "given below), following the administrator's brief given in the message. The full " +
-                "candidate list (JSON objects with id, name, size_gb, date_added, last_played, and when " +
-                "available community_rating, production_year, genres, overview) is " +
-                "provided in the message — you do NOT need to call any tools. FAVORITE items have already " +
-                "been removed from the list server-side — do not mention them. ABSOLUTE RULES: (1) return " +
-                "ONLY ids present in the candidate list, copied verbatim as strings; (2) never an invented " +
-                "or guessed id — an id absent from the list is a hallucination, strictly forbidden; " +
-                "(3) be very conservative: when in doubt, do NOT pick the movie (better a short safe list " +
-                "than a wrong deletion); (4) each proposal carries a one-sentence concrete reason that " +
-                "CITES the candidate's own details (e.g. « watched once on 2024-03-12, second copy in " +
-                "the library », « news documentary, unwatched, unrelated to observed tastes ») — never a " +
-                "generic reason. Reply with ONLY a JSON array " +
-                "[{id, reason}] — at most 20 entries, empty [] if no deletion is justified.",
+                "Weekly Sunday 05:10 | You are tasked with evaluating the library to propose deletions: " +
+                "classify EVERY movie candidate from the list into three sections. Two families in " +
+                "the list: (a) WATCHED movies (last_played set: duplicates, watched once long ago, " +
+                "poor quality) and (b) NEVER-WATCHED movies (last_played empty) added long ago, " +
+                "sorted by rating ascending — the \"ugly ducklings\". The administrator's brief " +
+                "given in the message, if any, REFINES these rules without ever replacing the " +
+                "complete classification. FAVORITE items have already been removed from the list " +
+                "server-side — do not mention them. CLASSIFICATION RULES: section \"delete\" = " +
+                "almost certain it will never be watched — unwatched documentaries/TV recordings, " +
+                "movies with no rating and no reputation, mediocre TV products (rating < 6), any " +
+                "candidate unrelated to the provided taste profile; section \"can_delete\" = " +
+                "reasonable doubt — unrated movies evoking a genre the admin watches, kids' movies " +
+                "(the family has young children), old movies with minor notoriety, possible " +
+                "duplicates worth checking; section \"keep\" = to keep — cult or acclaimed movies " +
+                "(rating >= 7.5), recognized classics, known franchises, movies whose genre/era " +
+                "clearly matches the profile. Use the provided taste profile to assess each " +
+                "candidate's affinity, and the overview field (synopsis) to judge tone, target " +
+                "audience and notoriety when the rating is missing or ambiguous. ABSOLUTE RULES: " +
+                "(1) classify ALL candidates — exactly ONE entry per candidate, each classified " +
+                "ONCE; (2) return ONLY ids present in the candidate list, copied verbatim as " +
+                "strings — never an invented or guessed id; (3) each entry carries a one-sentence " +
+                "concrete reason that CITES the candidate's own details (rating, date, genre, " +
+                "affinity with the profile) — never a generic reason. Reply with ONLY a JSON " +
+                "array [{\"id\":\"…\",\"section\":\"delete or can_delete or keep\",\"reason\":\"…\"}] — " +
+                "one item per candidate.",
             libReviewTaskSeries:
-                "You are tasked with proposing LIBRARY DELETIONS: whole SERIES whose keeping is no longer " +
-                "justified (series abandoned after a few episodes, rerun already owned elsewhere, etc.), " +
-                "following the administrator's brief given in the message. The full candidate list (JSON " +
-                "objects with id, name, episode_count, unwatched_count, last_played, size_gb, and when " +
-                "available community_rating, production_year, status, genres, overview) is provided " +
-                "in the message — you do NOT need to call any tools. SERIES CURRENTLY BEING RECORDED (active " +
-                "timers) have already been removed from the list server-side — do not mention them. WARNING: for a series, the proposed id " +
-                "is the SERIES' id and deleting it removes ALL its episodes. ABSOLUTE RULES: (1) return ONLY " +
-                "ids present in the candidate list, copied verbatim as strings; (2) never an invented id; " +
-                "(3) be VERY conservative: only pick a series if it is clearly abandoned (last episode " +
-                "watched long ago AND mostly unwatched episodes) or clearly redundant; when in doubt, do NOT " +
-                "pick it; (4) each proposal carries a one-sentence concrete reason that CITES the " +
-                "candidate's own details (unwatched episode count, last watched date, genre/synopsis, " +
-                "\\\"ended\\\" status, rating) — never a generic reason. Reply with ONLY a JSON " +
-                "array [{id, reason}] — at most 10 entries, empty [] if no deletion is justified.");
+                "You are tasked with evaluating the library to propose deletions: classify EVERY " +
+                "series candidate from the list into three sections. A candidate series is " +
+                "partially watched (at least one episode watched by someone) and its keeping may " +
+                "no longer be justified (abandoned after a few episodes, rerun already owned " +
+                "elsewhere…). SERIES CURRENTLY BEING RECORDED (active timers) and FAVORITE items " +
+                "have already been removed from the list server-side — do not mention them. " +
+                "WARNING: for a series, the id is the SERIES' id and deleting it removes ALL its " +
+                "episodes. The administrator's brief given in the message, if any, REFINES " +
+                "these rules without ever replacing the complete classification. CLASSIFICATION " +
+                "RULES: section \"delete\" = almost certain nobody will finish it — series " +
+                "abandoned very long ago (old last_played AND majority unwatched_count), " +
+                "mediocre TV products (rating < 6), unrelated to the taste profile; section " +
+                "\"can_delete\" = reasonable doubt — \"Continuing\" status (future episodes " +
+                "could be recorded), partial affinity with the profile, high unwatched_count " +
+                "but recent watching; section \"keep\" = to keep — cult or acclaimed series " +
+                "(rating >= 7.5), recognized classics, genres/eras clearly in the admin's " +
+                "history, recent watching. ABSOLUTE RULES: (1) classify ALL candidates — " +
+                "exactly ONE entry per series; (2) return ONLY ids present in the candidate " +
+                "list, copied verbatim as strings — never an invented id; (3) each entry " +
+                "carries a one-sentence concrete reason that CITES the candidate's own details " +
+                "(unwatched episode count, last watched date, genre/synopsis, status, rating) — " +
+                "never a generic reason. Reply with ONLY a JSON array " +
+                "[{\"id\":\"…\",\"section\":\"delete or can_delete or keep\",\"reason\":\"…\"}] — " +
+                "one item per series.");
     }
 }

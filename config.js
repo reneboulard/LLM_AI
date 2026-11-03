@@ -1622,6 +1622,17 @@ define(["loading"], function (loading) {
                 if (!grid) return;
                 grid.innerHTML = "";
                 var items = (data && data.Items) || [];
+                // v2.12.0 — classement 3 sections : ordre delete → can_delete → keep
+                // (rétro-compat : sans section = rapport < 2.12.0 → delete).
+                var secOrder = { delete: 0, can_delete: 1, keep: 2 };
+                var secOf = function (it) {
+                    return secOrder[it.Section] != null ? it.Section : "delete";
+                };
+                items = items.slice().sort(function (a, b) {
+                    return secOrder[secOf(a)] - secOrder[secOf(b)];
+                });
+                var secCounts = { delete: 0, can_delete: 0, keep: 0 };
+                items.forEach(function (it) { secCounts[secOf(it)]++; });
                 if (empty) empty.style.display = items.length ? "none" : "block";
                 items.forEach(function (it) {
                     var card = document.createElement("div");
@@ -1655,6 +1666,11 @@ define(["loading"], function (loading) {
                     var t = document.createElement("div");
                     t.className = "librevTitle";
                     t.textContent = kindBadge + " " + (it.Name || "");
+                    // v2.12.0 — pastille du verdict de classement (delete / can_delete / keep).
+                    var chip = document.createElement("span");
+                    chip.className = "librevChip librevChip-" + secOf(it);
+                    chip.textContent = i18n.t("cfg.libreview.section." + secOf(it));
+                    t.appendChild(chip);
                     var m = document.createElement("div");
                     m.className = "librevMeta2";
                     m.textContent = meta2;
@@ -1730,7 +1746,10 @@ define(["loading"], function (loading) {
                         lrvFmtDate(data.GeneratedAt),
                         items.length,
                         data.Candidates || 0,
-                        data.KeptCount || 0));
+                        data.KeptCount || 0) +
+                        (items.length
+                            ? " · " + i18n.t("cfg.libreview.sections", secCounts.delete, secCounts.can_delete, secCounts.keep)
+                            : ""));
                 }
             };
             var lrvToast = function (msg) {

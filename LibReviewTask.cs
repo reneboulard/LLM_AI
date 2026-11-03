@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -107,8 +108,11 @@ namespace LLM_AI
                     _logger, prog, cancellationToken).ConfigureAwait(false);
 
                 progress?.Report(100);
-                _logger.Info("[LLM_AI] [LibReview] Tâche terminée : {0} proposition(s) persistée(s) ({1} candidat(s)).",
-                    report?.Items.Count ?? 0, report?.Candidates ?? 0);
+                _logger.Info("[LLM_AI] [LibReview] Tâche terminée : {0} suppression(s) proposée(s), {1} à discuter, {2} à garder ({3} candidat(s)).",
+                    report?.Items.Count(i => i.Section == "delete") ?? 0,
+                    report?.Items.Count(i => i.Section == "can_delete") ?? 0,
+                    report?.Items.Count(i => i.Section == "keep") ?? 0,
+                    report?.Candidates ?? 0);
             }
             catch (OperationCanceledException)
             {

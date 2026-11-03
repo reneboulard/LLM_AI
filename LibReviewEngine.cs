@@ -29,13 +29,27 @@ namespace LLM_AI
     /// lance DEUX runs LLM indépendants (un par kind, deux contextes séparés
     /// comme LlmScheduledTask), valide les ids renvoyés (id présent dans le
     /// pool correspondant — un id hors pool = hallucination écartée), et
-    /// persiste le rapport brut (id + reason + kind) via
-    /// <see cref="LibReviewReportStore"/>.
+    /// persiste le rapport brut via <see cref="LibReviewReportStore"/>.
     ///
-    /// Contrat de sortie du LLM : tableau JSON brut
-    /// <c>[{ "id": "147321", "reason": "…" }]</c> — id = InternalId en chaîne.
-    /// AUCUN enrichissement de reco ici (EnrichRecommendations matche des
-    /// titres EPG) : le parse se fait directement sur le payload extrait.
+    /// Contrat de sortie du LLM (v2.12.0) : tableau JSON brut qui classe
+    /// CHAQUE candidat — <c>[{ "id": "147321", "section":
+    /// "delete|can_delete|keep", "reason": "…" }]</c>, id = InternalId en
+    /// chaîne, exactement UNE entrée par candidat. Repris d'emby-delete.sh /
+    /// emby-delete-series.sh (vécu prod : le MÊME modèle local classe
+    /// correctement sous ce contrat mais répondait « - » / « Aucun. » sous
+    /// l'ancien contrat de sélection conservatrice — l'échappatoire « vide
+    /// [] si rien ne se justifie » est le chemin de moindre résistance d'un
+    /// petit modèle). Rétro-compat : une réponse SANS champ « section » sur
+    /// toutes les entrées = ancien contrat [{id, reason}] (prompt stocké
+    /// d'une install existante) → entrées traitées comme propositions de
+    /// suppression, comportement v2.10.x inchangé.
+    ///
+    /// Run « liste fermée » (v2.12.0) : AUCUN outil injecté (la liste est
+    /// complète dans le message ; manifest + protocole tool-calling
+    /// déroutent les petits modèles) et AUCUNE directive RAG de
+    /// recommandation. AUCUN enrichissement de reco ici
+    /// (<see cref="LlmRunner.EnrichRecommendations"/> matche des titres
+    /// EPG) : le parse se fait directement sur le payload extrait.
     ///
     /// L'affichage revalide chaque id à la lecture (GET ?Last=true) : un item
     /// effacé entre-temps ne réapparaît jamais.
@@ -46,38 +60,48 @@ namespace LLM_AI
     internal static class LibReviewEngine
     {
         /// <summary>
-        /// Rôle du LLM pour ce run : lecture seule (outils read-only), la
-        /// décision porte sur une liste déjà fournie — aucune action Emby.
+        /// Rôle du LLM pour ce run (v2.12.0 : liste fermée, AUCUN outil) :
+        /// la décision porte sur une liste déjà fournie — aucune action Emby.
         /// </summary>
         internal const string ROLE_INTRO =
-            "Tu es un assistant Emby chargé d'évaluer la bibliothèque pour " +
-            "proposer des suppressions. Tu as accès à des outils de LECTURE " +
-            "SEULE qui interrogent le serveur Emby in-process (bibliothèque, " +
-            "guide TV, métadonnées) — tu n'as AUCUN outil d'action et tu ne " +
-            "dois JAMAIS prétendre avoir supprimé quoi que ce soit : la " +
-            "suppression est toujours exécutée ensuite, manuellement, par " +
-            "l'administrateur via Emby.";
+            "Tu es un assistant Emby chargé d'évaluer la bibliothèque pour proposer " +
+            "des suppressions. La liste COMPLÈTE des candidats t'est fournie dans le " +
+            "message : classe chaque candidat selon les règles de la tâche, en t'appuyant " +
+            "sur ses champs (note, année, genres, synopsis, dates, épisodes). Tu n'as " +
+            "AUCUN outil et AUCUNE action Emby — ne prétends JAMAIS avoir supprimé " +
+            "quoi que ce soit : la suppression est toujours exécutée ensuite, " +
+            "manuellement, par l'administrateur via Emby.";
 
         /// <summary>
         /// Bloc format de sortie personnalisé (à la place de « FORMAT DES
-        /// RECOMMANDATIONS ») : le contrat [{id, reason}]. Le user prompt
-        /// (prompt config) rappelle aussi le gabarit — gemma4 suit le schéma
-        /// du user prompt plutôt que celui du system prompt.
+        /// RECOMMANDATIONS ») : le contrat de classement [{id, section, reason}].
+        /// Le user prompt (prompt config) rappelle aussi le gabarit — les petits
+        /// modèles suivent le schéma du user prompt plutôt que celui du system
+        /// prompt (quirk documenté).
         /// </summary>
         internal const string FORMAT_SECTION =
             "### FORMAT DE SORTIE\n" +
-            "Ta réponse finale EST un tableau JSON d'objets, chaque objet avec " +
-            "exactement deux champs : id (chaîne — l'InternalId recopié TEL QUEL " +
-            "depuis la liste des candidats fournie dans le message user) et reason " +
-            "(une phrase concrète justifiant la suppression). Exemple :\n" +
-            "[{\"id\":\"147321\",\"reason\":\"Vu une seule fois le 2024-03-12, copie présente aussi en bibliothèque.\"}]\n" +
+            "Ta réponse finale EST un tableau JSON qui classe TOUS les candidats de la " +
+            "liste fournie dans le message — EXACTEMENT UNE entrée par candidat, chaque " +
+            "objet avec trois champs : id (chaîne — l'InternalId recopié TEL QUEL depuis " +
+            "la liste), section (\"delete\", \"can_delete\" ou \"keep\"), reason (une " +
+            "phrase concrète justifiant le classement, qui cite les motifs du candidat). " +
+            "Exemple :\n" +
+            "[{\"id\":\"147321\",\"section\":\"delete\",\"reason\":\"Documentaire d'actualité jamais regardé, sans lien avec les goûts constatés.\"},{\"id\":\"147345\",\"section\":\"keep\",\"reason\":\"Classique acclamé (note 8.1), genre que l'admin regarde.\"}]\n" +
             "Règles : premier caractère = [, dernier = ] (sans texte autour, sans " +
             "balises ```) ; JAMAIS de prose, de tiret (« - »), de « Aucun » ou de " +
-            "commentaire à la place du tableau — si rien ne se justifie, la réponse " +
-            "est exactement [] et RIEN d'autre ; jamais un id absent de la liste des " +
-            "candidats ; échappe les guillemets doubles internes (\\\") dans reason.";
+            "commentaire à la place du tableau — même si rien ne mérite la suppression, " +
+            "classe tous les candidats \"keep\" ; jamais un id absent de la liste ; " +
+            "échappe les guillemets doubles internes (\\\") dans reason.";
 
-        private const int MaxProposalsPerRun = 20;
+        /// <summary>
+        /// Gabarit embarqué dans la demande de renvoi (réparation v2.12.0,
+        /// quirk documenté : le schéma doit être dans le message USER).
+        /// </summary>
+        internal const string REPAIR_GABARIT =
+            "[{\"id\":\"<id exact recopié de la liste>\"," +
+            "\"section\":\"delete ou can_delete ou keep\"," +
+            "\"reason\":\"Motif court en une phrase\"}]";
 
         /// <summary>
         /// Exécute un run complet « Gestion bibliothèque » : rassemblement +
@@ -194,12 +218,15 @@ namespace LLM_AI
             }
 
             LibReviewReportStore.Save(report, logger);
-            logger.Info("[LLM_AI] [LibReview] Rapport persisté : {0} proposition(s) sur {1} candidat(s).",
-                report.Items.Count, totalCandidates);
+            int nDel = report.Items.Count(i => i.Section == "delete");
+            int nCan = report.Items.Count(i => i.Section == "can_delete");
+            int nKeep = report.Items.Count(i => i.Section == "keep");
+            logger.Info("[LLM_AI] [LibReview] Rapport persisté : {0} suppression(s) proposée(s), {1} à discuter, {2} à garder — sur {3} candidat(s) classé(s).",
+                nDel, nCan, nKeep, report.Items.Count);
 
             try
             {
-                NotifyAdmins(notifications, users, host, cfg, report.Items.Count, totalCandidates, logger);
+                NotifyAdmins(notifications, users, host, cfg, nDel, nCan, nKeep, totalCandidates, logger);
             }
             catch (Exception ex)
             {
@@ -230,34 +257,48 @@ namespace LLM_AI
             string ollamaCloudKey = LlmRunner.ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
             string geminiKey = LlmRunner.ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
 
-            var agent = new LlmAgentService(backends, cfg.RagDirectives, "",
+            // v2.12.0 (P3) — run « liste fermée » : ragDirectives null (les
+            // directives RAG sont celles de la RECOMMANDATION — « vérifie
+            // avec les outils avant d'affirmer » contredit le classement
+            // d'une liste déjà fournie), finalArrayKey « id » + gabarit de
+            // renvoi pour la réparation v2.12.0 (P2).
+            var agent = new LlmAgentService(backends, null, "",
                 ollamaCloudKey, geminiKey, json, logger, cfg.DebugVerbose,
                 roleIntro: ROLE_INTRO,
                 formatSection: FORMAT_SECTION,
-                responseLanguage: proseLang);
-            // Outils read-only (get_emby_info + web) — la liste des candidats
-            // est déjà dans le user prompt ; les outils servent à creuser si
-            // le modèle veut vérifier. Aucune couche d'action (jamais).
-            var tools = runner.BuildTools(cfg, null);
+                responseLanguage: proseLang,
+                finalArrayKey: "id",
+                finalRepairHint: REPAIR_GABARIT);
+            // v2.12.0 (P3) : AUCUN outil — la liste des candidats est déjà
+            // complète dans le user prompt. Manifest + protocole tool-calling
+            // déroutaient les petits modèles locaux (prod 2026-11-02 :
+            // ministral-3:14b « - » / « Aucun. » sous le plugin alors que le
+            // MÊME modèle classe via emby-delete*.sh sans aucun outil) ;
+            // la boucle agent tourne ici à 1 itération, comme un appel plat.
+            var tools = new List<ILlmTool>();
 
             string fullUser = userPrompt.Trim() + "\n\n### CANDIDATS (" + kind.ToUpperInvariant() + ")\n" +
-                "Liste fournie par l'extension — ne recommande QUE des id de cette liste :\n" + poolJson;
+                "Liste fournie par l'extension — classe TOUS les candidats de cette liste, " +
+                "chacun exactement UNE fois, en recopiant les id tels quels :\n" + poolJson;
             if (!string.IsNullOrWhiteSpace(tasteProfile))
                 fullUser += "\n\n### PROFIL DE GOÛTS DE L'ADMINISTRATEUR (référence pour tes justifications)\n" + tasteProfile;
 
             var (reply, _toolResults) = await agent.RunAsync(fullUser, tools, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [{0}] Réponse brute (tronquée) :\n{1}", label, Truncate(reply, 1500));
 
-            // v2.10.5 : tolérance « réponse courte » — un petit modèle local
-            // peut répondre « - » ou « Aucun. » au lieu de [] (vu en prod
-            // 2026-11-02, ministral-3:14b, run FILMS/SÉRIES → 0 proposition).
+            // v2.10.5 (rôle affiné v2.12.0) : tolérance « réponse courte » —
+            // un petit modèle local peut répondre « - » ou « Aucun. » au lieu
+            // de [] (vu en prod 2026-11-02, ministral-3:14b, run FILMS/SÉRIES
+            // → 0 proposition). La réparation v2.12.0 (P2) a déjà relancé le
+            // modèle (borné) DANS la boucle avant d'arriver ici : cette
+            // tolérance n'est plus que le DERNIER filet (échec après relances).
             // Toute réponse SANS tableau JSON = liste vide valide (côté sûr :
-            // aucune suppression proposée), et on ne logue que le début pour
+            // aucune suppression proposée), et on logue le début pour
             // diagnostiquer. Jamais d'invention de propositions ici.
             string payload = LlmRunner.ExtractJsonPayload(reply);
             if (!payload.StartsWith("[", StringComparison.Ordinal))
             {
-                logger.Info("[LLM_AI] [{0}] Réponse sans tableau JSON (« {1} ») — interprétée comme liste vide [].",
+                logger.Warn("[LLM_AI] [{0}] Réponse sans tableau JSON après relances (« {1} ») — interprétée comme liste vide [].",
                     label, Truncate(payload, 80));
                 payload = "[]";
             }
@@ -265,11 +306,18 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Parse le payload [{id, reason}…] et valide chaque id contre le
-        /// pool du run (knownIds null pour les films — set construit ici à
+        /// Parse le payload [{id, section, reason}…] et valide chaque id contre
+        /// le pool du run (knownIds null pour les films — set construit ici à
         /// partir du pool passé à ValidateAndAdd ; pour les séries, passé
         /// explicitement). Id inconnu → écarté + log (hallucination).
-        /// Cap 20 entrées au total par run.
+        /// v2.12.0 : section normalisée delete|can_delete|keep, défaut
+        /// « keep » (côté sûr — jamais de suppression proposée sur ambigüité).
+        /// RÉTRO-COMPAT : si AUCUNE entrée ne porte de champ « section », la
+        /// réponse vient de l'ancien contrat [{id, reason}] (prompt stocké
+        /// d'une install existante) → toutes les entrées sont des
+        /// PROPOSITIONS de suppression (comportement v2.10.x inchangé —
+        /// leçon v2.6.10 : le filet serveur doit couvrir le prompt stocké,
+        /// pas seulement celui par défaut).
         /// </summary>
         private static List<LibReviewEntry> ParseProposals(string payload, string kind,
             HashSet<string> knownIds, ILibraryManager library, ILogger logger)
@@ -284,10 +332,23 @@ namespace LLM_AI
                     logger.Warn("[LLM_AI] [LibReview-{0}] Payload final non tableau — ignoré.", kind.ToUpperInvariant());
                     return list;
                 }
-                int n = 0;
+
+                // Rétro-compat ancien contrat : au moins un champ « section » ?
+                bool hasSections = false;
                 foreach (var el in doc.RootElement.EnumerateArray())
                 {
-                    if (n >= MaxProposalsPerRun) break;
+                    if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("section", out _))
+                    {
+                        hasSections = true;
+                        break;
+                    }
+                }
+                if (!hasSections && doc.RootElement.GetArrayLength() > 0)
+                    logger.Info("[LLM_AI] [LibReview-{0}] Réponse sans champ « section » — ancien contrat {{id, reason}} supposé : {1} proposition(s) de suppression.",
+                        kind.ToUpperInvariant(), doc.RootElement.GetArrayLength());
+
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
                     if (el.ValueKind != JsonValueKind.Object) continue;
                     string id = null, reason = "";
                     if (el.TryGetProperty("id", out var idEl))
@@ -299,6 +360,17 @@ namespace LLM_AI
                         reason = rEl.GetString() ?? "";
                     if (string.IsNullOrWhiteSpace(id)) continue;
                     id = id.Trim();
+
+                    // Section : normalisée, défaut sûr « keep ». Sous l'ancien
+                    // contrat (aucune section nulle part) → « delete » : les
+                    // entrées sont des propositions de suppression.
+                    string section = hasSections ? "keep" : "delete";
+                    if (el.TryGetProperty("section", out var sEl) && sEl.ValueKind == JsonValueKind.String)
+                    {
+                        var s = (sEl.GetString() ?? "").Trim().ToLowerInvariant();
+                        if (s == "delete" || s == "can_delete" || s == "keep") section = s;
+                    }
+
                     // Validation : l'id doit exister en bibliothèque (InternalId)
                     // — un id inventé ne résout pas. Pour les séries, il doit
                     // EN PLUS appartenir au pool (knownIds).
@@ -315,8 +387,7 @@ namespace LLM_AI
                             kind.ToUpperInvariant(), id, item.Name);
                         continue;
                     }
-                    list.Add(new LibReviewEntry { Id = id, Kind = kind, Reason = reason });
-                    n++;
+                    list.Add(new LibReviewEntry { Id = id, Kind = kind, Reason = reason, Section = section });
                 }
             }
             catch (Exception ex)
@@ -326,12 +397,18 @@ namespace LLM_AI
             return list;
         }
 
-        /// <summary>Ajoute les entrées validées au rapport (dédup par id).</summary>
+        /// <summary>
+        /// Ajoute les entrées validées au rapport (dédup par id) + journalise
+        /// la ventilation par section et la complétude du classement
+        /// (v2.12.0 — visibilité : un run qui classe moins de candidats que
+        /// le pool doit se VOIR, même leçon que la règle « 0 toast(s) »).
+        /// </summary>
         private static void ValidateAndAdd(LastLibReviewReport report, List<LibReviewEntry> entries,
             List<PoolItem> pool, string kind, ILogger logger)
         {
             var known = new HashSet<string>(pool.Select(p => p.Id), StringComparer.Ordinal);
             var seen = new HashSet<string>(report.Items.Select(i => i.Id), StringComparer.Ordinal);
+            int added = 0, del = 0, can = 0, keep = 0;
             foreach (var e in entries)
             {
                 if (!known.Contains(e.Id))
@@ -341,7 +418,19 @@ namespace LLM_AI
                 }
                 if (!seen.Add(e.Id)) continue; // dédup
                 report.Items.Add(e);
+                added++;
+                switch (e.Section)
+                {
+                    case "delete": del++; break;
+                    case "can_delete": can++; break;
+                    default: keep++; break;
+                }
             }
+            logger.Info("[LLM_AI] [LibReview-{0}] Classement : {1} entrée(s) sur {2} candidat(s) — {3} delete, {4} can_delete, {5} keep.",
+                kind.ToUpperInvariant(), added, pool.Count, del, can, keep);
+            if (added < pool.Count)
+                logger.Warn("[LLM_AI] [LibReview-{0}] {1} candidat(s) NON classé(s) par le LLM (absents de la réponse).",
+                    kind.ToUpperInvariant(), pool.Count - added);
         }
 
         // ------------------------------------------------------------------
@@ -972,7 +1061,8 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         private static void NotifyAdmins(INotificationManager notifications, IUserManager users,
-            IServerApplicationHost host, PluginConfiguration cfg, int count, int candidates, ILogger logger)
+            IServerApplicationHost host, PluginConfiguration cfg,
+            int del, int can, int keep, int candidates, ILogger logger)
         {
             if (notifications == null || users == null) return;
             List<User> admins;
@@ -991,10 +1081,12 @@ namespace LLM_AI
 
             string url = ResolveEmbyUrl(cfg, host);
             string title = I18n.SDisplay("librev.notif.title", host) ?? "LLM AI — Gestion bibliothèque";
+            // v2.12.0 — ventilation 3 sections (le classement remplace la
+            // sélection de propositions ; l'admin voit l'étendue du verdict).
             string desc = string.Format(CultureInfo.InvariantCulture,
                 I18n.SDisplay("librev.notif.desc", host) ??
-                "{0} proposition(s) de nettoyage sur {1} candidat(s) — onglet « Gestion bibliothèque » de la configuration.",
-                count, candidates);
+                "{0} suppression(s) proposée(s), {1} à discuter, {2} à garder sur {3} candidat(s) — onglet « Gestion bibliothèque » de la configuration.",
+                del, can, keep, candidates);
             if (!string.IsNullOrWhiteSpace(url))
                 desc = desc + "\n" + url + "/web/configurationpage?name=LLMAIConfigPage#tab-libreview";
 

@@ -14,7 +14,7 @@ namespace LLM_AI
     //  chaque run RÉUSSI dans Plugin.Paths.PluginConfigurationsPath,
     //  best-effort fail-open (un échec IO n'interrompt jamais le run).
     //
-    //  Le rapport brut ne porte QUE id + reason (contrat LLM) + méta :
+    //  Le rapport brut ne porte QUE id + section + reason (contrat LLM) + méta :
     //  l'enrichissement en DTO affichable (titre, type, taille, poster,
     //  nombre d'épisodes…) est refait à CHAQUE lecture (LibReviewApiService)
     //  en re-résolvant les ids — ainsi un item effacé entre-temps (via Emby,
@@ -31,6 +31,12 @@ namespace LLM_AI
         public string Kind;
         /// <summary>Justificatif du LLM (affiché tel quel sur la carte).</summary>
         public string Reason;
+        /// <summary>
+        /// Verdict v2.12.0 : « delete » | « can_delete » | « keep ». Null/absent
+        /// = rapport d'une version &lt; 2.12.0 (proposition de suppression)
+        /// → traité « delete » en lecture (rétro-compat du stockage).
+        /// </summary>
+        public string Section;
     }
 
     /// <summary>Le dernier rapport d'évaluation persisté (un seul enregistrement).</summary>
@@ -86,11 +92,16 @@ namespace LLM_AI
                         if (n is not JsonObject o) continue;
                         var id = OStr(o, "id");
                         if (string.IsNullOrWhiteSpace(id)) continue;
+                        // Rétro-compat v2.12.0 : sans « section » = rapport
+                        // ancien format (propositions de suppression) → « delete ».
+                        string section = OStr(o, "section");
                         r.Items.Add(new LibReviewEntry
                         {
                             Id = id.Trim(),
                             Kind = OStr(o, "kind") ?? "",
-                            Reason = OStr(o, "reason") ?? ""
+                            Reason = OStr(o, "reason") ?? "",
+                            Section = (section == "delete" || section == "can_delete" || section == "keep")
+                                ? section : "delete"
                         });
                     }
                 }
@@ -118,7 +129,8 @@ namespace LLM_AI
                     {
                         ["id"] = it.Id,
                         ["kind"] = it.Kind ?? "",
-                        ["reason"] = it.Reason ?? ""
+                        ["reason"] = it.Reason ?? "",
+                        ["section"] = string.IsNullOrEmpty(it.Section) ? "delete" : it.Section
                     });
                 }
                 var root = new JsonObject
