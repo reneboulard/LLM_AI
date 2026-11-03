@@ -255,7 +255,7 @@ define([], function () {
 
             // -- Gestion bibliothèque (v2.10.0) --
             "cfg.libreview.h": "Gestion bibliothèque (évaluation IA des suppressions)",
-            "cfg.libreview.desc": "Le LLM évalue la bibliothèque (films vus, films jamais vus, séries partiellement vues) et classe CHAQUE candidat en trois sections — 🗑 à supprimer, 🟠 à discuter, 🔵 à garder — affichées ci-dessous sous forme de cartes « 🗑️ Effacer / ✔️ Conserver ». <b>Le plugin ne supprime jamais lui-même</b> : « Effacer » délègue la suppression à Emby sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer. Chaque carte est revalidée à l'affichage : un média déjà supprimé n'apparaît plus. L'étiquette « AI Delete » reste réservée à la passe disque (pression disque des enregistrements). Réservé aux administrateurs (cette page l'est).",
+            "cfg.libreview.desc": "Le LLM évalue la bibliothèque (films vus, films jamais vus, séries partiellement vues) et classe CHAQUE candidat en trois sections — ❌ à supprimer, ⚠️ peut être supprimé, ✅ à conserver — affichées ci-dessous groupées par section. <b>Le plugin ne supprime jamais lui-même</b> : « Effacer » délègue la suppression à Emby sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer.",
             "cfg.libreview.enabled": "Activer la tâche planifiée « Gestion bibliothèque »",
             "cfg.libreview.enabled.desc": "Active la tâche planifiée (planification en tête du premier prompt ci-dessous, ex. « Weekly Sunday 05:10 ») et le bouton « Lancer l'évaluation » de cette page. Désactivée par défaut (consomme des appels LLM).",
             "cfg.libreview.task": "Tâche (planification | prompt FILMS)",
@@ -270,7 +270,7 @@ define([], function () {
             "cfg.libreview.maxbatch": "Candidats max par run",
             "cfg.libreview.maxbatch.desc": "Plafond de candidats (films, puis séries séparément) envoyés au LLM par run — protège le contexte du modèle. Défaut 60.",
             "cfg.libreview.unplayedmindays": "Âge min. film jamais vu (jours)",
-            "cfg.libreview.unplayedmindays.desc": "Le run films considère AUSSI les films jamais vus par personne et ajoutés il y a plus de ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord, comme emby-delete.sh). 0 = désactivé (seuls les films vus sont candidats).",
+            "cfg.libreview.unplayedmindays.desc": "Le run films considère AUSSI les films jamais vus par personne et ajoutés il y a plus de ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord). 0 = désactivé (seuls les films vus sont candidats).",
             "cfg.libreview.tasteprofile": "Profil de goûts injecté au prompt (historique + favoris)",
             "cfg.libreview.tasteuser": "Usager du profil de goûts",
             "cfg.libreview.tasteuser.desc": "Usager propriétaire du profil de goûts injecté au prompt (films ET séries : historique de visionnage + favoris). Vide = premier usager administrateur. Nom exact d'un usager Emby (la casse est tolérée). Ne change PAS les candidats — uniquement la référence de goûts du classement.",
@@ -802,7 +802,7 @@ define([], function () {
 
             // -- Library management (v2.10.0) --
             "cfg.libreview.h": "Library management (AI deletion review)",
-            "cfg.libreview.desc": "The LLM evaluates the library (watched movies, never-watched movies, partially watched series) and classifies EVERY candidate into three sections — 🗑 to delete, 🟠 to discuss, 🔵 to keep — shown below as \"🗑️ Delete / ✔️ Keep\" cards. <b>The plugin never deletes anything by itself</b>: \"Delete\" delegates the deletion to Emby on your click; \"Keep\" adds the media to a do-not-propose list. Every card is revalidated on display: an already-deleted media no longer appears. The \"AI Delete\" tag stays reserved for the disk-pressure pass on recordings. Administrators only (this page is).",
+            "cfg.libreview.desc": "The LLM evaluates the library (watched movies, never-watched movies, partially watched series) and classifies EVERY candidate into three sections — ❌ to delete, ⚠️ can be deleted, ✅ to keep — shown below grouped by section. <b>The plugin never deletes anything by itself</b>: \"Delete\" delegates the deletion to Emby on your click; \"Keep\" adds the media to a do-not-propose list.",
             "cfg.libreview.enabled": "Enable the \"Library management\" scheduled task",
             "cfg.libreview.enabled.desc": "Enables the scheduled task (schedule at the head of the first prompt below, e.g. \"Weekly Sunday 05:10\") and the \"Run evaluation\" button on this page. Off by default (consumes LLM calls).",
             "cfg.libreview.task": "Task (schedule | MOVIES prompt)",
@@ -817,7 +817,7 @@ define([], function () {
             "cfg.libreview.maxbatch": "Max candidates per run",
             "cfg.libreview.maxbatch.desc": "Cap of candidates (movies, then series separately) sent to the LLM per run — protects the model's context. Default 60.",
             "cfg.libreview.unplayedmindays": "Min age of never-watched movie (days)",
-            "cfg.libreview.unplayedmindays.desc": "The movies run ALSO considers movies never watched by anyone and added more than this many days ago (sorted by rating ascending — the \"ugly ducklings\" first, like emby-delete.sh). 0 = disabled (only watched movies are candidates).",
+            "cfg.libreview.unplayedmindays.desc": "The movies run ALSO considers movies never watched by anyone and added more than this many days ago (sorted by rating ascending — the \"ugly ducklings\" first). 0 = disabled (only watched movies are candidates).",
             "cfg.libreview.tasteprofile": "Taste profile injected into the prompt (history + favorites)",
             "cfg.libreview.tasteuser": "Taste profile user",
             "cfg.libreview.tasteuser.desc": "Owner of the taste profile injected into the prompt (movies AND series: watching history + favorites). Empty = first administrator user. Must be the exact name of an existing Emby user (case tolerated). Does NOT change the candidates — only the classification's taste reference.",

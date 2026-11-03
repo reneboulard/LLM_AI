@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.1] — 2026-11-03
+
+### Changed (FR)
+- Page « Gestion bibliothèque » — revue du texte : description allégée (les
+  précisions « revalidation à l'affichage », « étiquette AI Delete réservée à
+  la passe disque » et « réservé aux administrateurs » vivent dans le README,
+  pas sur la page) ; référence à `emby-delete.sh` retirée des libellés (pas
+  pertinente pour l'usager) ; vocabulaire de la description aligné sur les
+  pastilles (❌ / ⚠️ / ✅ — elle décrivait encore les anciennes sections).
+- Pastilles de section : contraste corrigé — fond teinté plein et sombre +
+  texte clair (le texte était de teinte trop proche du fond translucide).
+
+### Changed (EN)
+- "Library management" page — text review: shorter description (the
+  "display-time revalidation", "\"AI Delete\" tag reserved for the disk pass"
+  and "administrators only" details live in the README, not on the page);
+  `emby-delete.sh` reference removed from the labels (not relevant to the
+  user); description vocabulary aligned with the chips (❌ / ⚠️ / ✅ — it
+  still described the old sections).
+- Section chips: contrast fixed — solid dark tinted background + light text
+  (the text's tint was too close to the translucent background).
+
+---
+
 ## [2.13.0] — 2026-11-03
 
 ### Added (FR)

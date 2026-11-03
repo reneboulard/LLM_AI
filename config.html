@@ -1961,13 +1961,11 @@
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.libreview.h">Gestion bibliothèque (évaluation IA des suppressions)</h3>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.desc">
-                            Le LLM évalue la bibliothèque (films vus, séries partiellement vues) et propose
-                            des suppressions, affichées ci-dessous sous forme de cartes « 🗑️ Effacer / ✔️ Conserver ».
+                            Le LLM évalue la bibliothèque (films vus, films jamais vus, séries partiellement vues)
+                            et classe CHAQUE candidat en trois sections — ❌ à supprimer, ⚠️ peut être supprimé,
+                            ✅ à conserver — affichées ci-dessous groupées par section.
                             <b>Le plugin ne supprime jamais lui-même</b> : « Effacer » délègue la suppression à Emby
-                            sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer. Chaque
-                            carte est revalidée à l'affichage : un média déjà supprimé n'apparaît plus. L'étiquette
-                            « AI Delete » reste réservée à la passe disque (pression disque des enregistrements).
-                            Réservé aux administrateurs (cette page l'est).
+                            sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -2058,8 +2056,8 @@
                         </div>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.unplayedmindays.desc">
                             Le run films considère AUSSI les films jamais vus par personne et ajoutés il y a plus de
-                            ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord, comme
-                            emby-delete.sh). 0 = désactivé (seuls les films vus sont candidats). Le profil de goûts
+                            ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord).
+                            0 = désactivé (seuls les films vus sont candidats). Le profil de goûts
                             = historique + favoris de l'usager désigné ci-dessous (défaut : premier admin), pour des
                             justifications motivées.
                         </div>
@@ -2121,9 +2119,12 @@
                                 border-radius: 10px; font-size: 10px; font-weight: 600;
                                 vertical-align: middle; white-space: nowrap;
                             }
-                            .LLMAIConfigPage .librevChip-delete { background: rgba(220,60,60,0.25); color: #ff9a9a; }
-                            .LLMAIConfigPage .librevChip-can_delete { background: rgba(230,150,30,0.25); color: #ffc36b; }
-                            .LLMAIConfigPage .librevChip-keep { background: rgba(60,170,90,0.22); color: #7ddc9a; }
+                            /* v2.13.1 — contraste : fond teinté PLEIN (sombre) + texte clair —
+                               les fonds translucides donnaient un texte de teinte trop
+                               proche du fond. */
+                            .LLMAIConfigPage .librevChip-delete { background: #5c1f1f; color: #ffb3b3; }
+                            .LLMAIConfigPage .librevChip-can_delete { background: #5c3a12; color: #ffd9a1; }
+                            .LLMAIConfigPage .librevChip-keep { background: #1d4a30; color: #a8e6bf; }
                             /* v2.13.0 — en-têtes de section à la emby-delete.sh :
                                titre numéroté + compteur + Go, règle en sous-texte grisé. */
                             .LLMAIConfigPage .librevSectionHeader {
