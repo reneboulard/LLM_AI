@@ -108,7 +108,7 @@ namespace LLM_AI
                     _logger, prog, cancellationToken).ConfigureAwait(false);
 
                 progress?.Report(100);
-                _logger.Info("[LLM_AI] [LibReview] Tâche terminée : {0} suppression(s) proposée(s), {1} à discuter, {2} à garder ({3} candidat(s)).",
+                _logger.Info("[LLM_AI] [LibReview] Tâche terminée : {0} suppression(s) proposée(s), {1} supprimable(s), {2} à conserver ({3} candidat(s)).",
                     report?.Items.Count(i => i.Section == "delete") ?? 0,
                     report?.Items.Count(i => i.Section == "can_delete") ?? 0,
                     report?.Items.Count(i => i.Section == "keep") ?? 0,

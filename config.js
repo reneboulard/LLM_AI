@@ -1088,6 +1088,7 @@ define(["loading"], function (loading) {
         var lud = parseInt(cfg.LibReviewUnplayedMinDays, 10);
         view.querySelector("#numLibReviewUnplayedMinDays").value = isNaN(lud) ? 365 : lud;
         view.querySelector("#chkLibReviewTasteProfile").checked = cfg.LibReviewTasteProfile !== false;
+        view.querySelector("#txtLibReviewTasteUser").value = cfg.LibReviewTasteUser || "";
         // Chat interactif : plus de flag d'activation (v2.9.0 — l'onglet
         // « Chat en direct » de cette page, admin-only comme la page).
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
@@ -1241,6 +1242,7 @@ define(["loading"], function (loading) {
             LibReviewMaxBatch: Math.max(10, parseInt(view.querySelector("#numLibReviewMaxBatch").value, 10) || 60),
             LibReviewUnplayedMinDays: Math.max(0, parseInt(view.querySelector("#numLibReviewUnplayedMinDays").value, 10) || 0),
             LibReviewTasteProfile: view.querySelector("#chkLibReviewTasteProfile").checked,
+            LibReviewTasteUser: (view.querySelector("#txtLibReviewTasteUser").value || "").trim(),
             LibReviewKeptIds: (loadedCfg && loadedCfg.LibReviewKeptIds) || "",
             // Atelier de langues — dernier code de langue utilisé (confort :
             // le panneau rouvre sur le même code).
@@ -1632,12 +1634,36 @@ define(["loading"], function (loading) {
                     return secOrder[secOf(a)] - secOrder[secOf(b)];
                 });
                 var secCounts = { delete: 0, can_delete: 0, keep: 0 };
-                items.forEach(function (it) { secCounts[secOf(it)]++; });
-                if (empty) empty.style.display = items.length ? "none" : "block";
+                var secGo = { delete: 0, can_delete: 0, keep: 0 };
                 items.forEach(function (it) {
+                    secCounts[secOf(it)]++;
+                    secGo[secOf(it)] += (it.SizeGb || 0);
+                });
+                if (empty) empty.style.display = items.length ? "none" : "block";
+                // v2.13.0 — en-têtes de section à la emby-delete.sh : titre
+                // numéroté + compteur + total Go (le « gain de place » réel de
+                // chaque verdict) + règle en sous-texte grisé. Insérés au
+                // changement de section (items déjà triés par secOf).
+                var lastSec = null;
+                items.forEach(function (it) {
+                    var sec = secOf(it);
+                    if (sec !== lastSec) {
+                        lastSec = sec;
+                        var sh = document.createElement("div");
+                        sh.className = "librevSectionHeader librevSectionHeader-" + sec;
+                        sh.setAttribute("data-sec-h", sec);
+                        sh.textContent = i18n.t("cfg.libreview.sec.h." + sec, secCounts[sec], secGo[sec].toFixed(1));
+                        var sd = document.createElement("div");
+                        sd.className = "librevSectionDesc";
+                        sd.setAttribute("data-sec-h", sec);
+                        sd.textContent = i18n.t("cfg.libreview.sec.desc." + sec);
+                        grid.appendChild(sh);
+                        grid.appendChild(sd);
+                    }
                     var card = document.createElement("div");
                     card.className = "librevCard";
                     card.setAttribute("data-id", it.Id || "");
+                    card.setAttribute("data-sec", sec);
                     var kindBadge = it.Kind === "series" ? "📺" : (it.Kind === "movie" ? "🎬" : "🎞️");
                     var meta2 = (it.Kind === "series")
                         ? i18n.t("cfg.libreview.card.seriesMeta", it.EpisodeCount || 0, (it.SizeGb || 0).toFixed(1))
@@ -1707,6 +1733,15 @@ define(["loading"], function (loading) {
                         card.classList.add("fading");
                         setTimeout(function () {
                             if (card.parentNode) card.parentNode.removeChild(card);
+                            // v2.13.0 : purge l'en-tête d'une section vidée
+                            // (dernière carte de la section supprimée/conservée).
+                            var goneSec = card.getAttribute("data-sec");
+                            if (goneSec && !grid.querySelector('.librevCard[data-sec="' + goneSec + '"]')) {
+                                var heads = grid.querySelectorAll('[data-sec-h="' + goneSec + '"]');
+                                for (var i = 0; i < heads.length; i++) {
+                                    if (heads[i].parentNode) heads[i].parentNode.removeChild(heads[i]);
+                                }
+                            }
                             if (!grid.querySelector(".librevCard") && empty) empty.style.display = "block";
                         }, 420);
                     };

@@ -2060,7 +2060,20 @@
                             Le run films considère AUSSI les films jamais vus par personne et ajoutés il y a plus de
                             ce nombre de jours (triés par note croissante — les « canards boîteux » d'abord, comme
                             emby-delete.sh). 0 = désactivé (seuls les films vus sont candidats). Le profil de goûts
-                            = historique + favoris du premier admin, pour des justifications motivées.
+                            = historique + favoris de l'usager désigné ci-dessous (défaut : premier admin), pour des
+                            justifications motivées.
+                        </div>
+
+                        <div class="inputContainer" style="max-width:340px;">
+                            <input is="emby-input" type="text" id="txtLibReviewTasteUser"
+                                   label="Usager du profil de goûts"
+                                   data-i18n-label="cfg.libreview.tasteuser" />
+                            <div class="fieldDescription" data-i18n-html="cfg.libreview.tasteuser.desc">
+                                Usager propriétaire du profil de goûts injecté au prompt (films ET séries :
+                                historique de visionnage + favoris). Vide = premier usager administrateur.
+                                Nom exact d'un usager Emby (la casse est tolérée). Ne change PAS les candidats
+                                — uniquement la référence de goûts du classement.
+                            </div>
                         </div>
 
                         <div style="margin:0.8em 0;">
@@ -2110,7 +2123,20 @@
                             }
                             .LLMAIConfigPage .librevChip-delete { background: rgba(220,60,60,0.25); color: #ff9a9a; }
                             .LLMAIConfigPage .librevChip-can_delete { background: rgba(230,150,30,0.25); color: #ffc36b; }
-                            .LLMAIConfigPage .librevChip-keep { background: rgba(70,130,220,0.25); color: #8ab4f8; }
+                            .LLMAIConfigPage .librevChip-keep { background: rgba(60,170,90,0.22); color: #7ddc9a; }
+                            /* v2.13.0 — en-têtes de section à la emby-delete.sh :
+                               titre numéroté + compteur + Go, règle en sous-texte grisé. */
+                            .LLMAIConfigPage .librevSectionHeader {
+                                grid-column: 1 / -1; font-weight: 700; font-size: 13px;
+                                margin: 0.8em 0 0.1em;
+                            }
+                            .LLMAIConfigPage .librevSectionHeader-delete { color: #ff9a9a; }
+                            .LLMAIConfigPage .librevSectionHeader-can_delete { color: #ffc36b; }
+                            .LLMAIConfigPage .librevSectionHeader-keep { color: #7ddc9a; }
+                            .LLMAIConfigPage .librevSectionDesc {
+                                grid-column: 1 / -1; color: #999; font-size: 11px;
+                                margin-bottom: 0.3em;
+                            }
                             .LLMAIConfigPage .librevCard .librevMeta2 { color: #999; font-size: 11px; }
                             .LLMAIConfigPage .librevCard .librevMotifs { color: #8ab4f8; font-size: 10.5px; line-height: 1.35; }
                             .LLMAIConfigPage .librevCard .librevReason { font-size: 12px; line-height: 1.4; }

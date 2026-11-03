@@ -1185,6 +1185,20 @@ namespace LLM_AI
         /// </summary>
         public bool LibReviewTasteProfile { get; set; } = true;
 
+        /// <summary>
+        /// Usager propriétaire du profil de goûts « Gestion bibliothèque »
+        /// (v2.13.0, même mécanique que
+        /// <see cref="TonightUserName"/> pour la playlist/favoris Tonight) :
+        /// nom d'usager Emby — résolution exacte puis repli insensible à la
+        /// casse (pattern <c>GetEmbyInfoTool.ResolveUser</c>). Vide = repli
+        /// premier usager administrateur, sinon premier usager
+        /// (comportement antérieur inchangé). La portée est STRICTEMENT le
+        /// profil de goûts injecté au prompt (films + séries) — les POOLS de
+        /// candidats restent calculés sur la bibliothèque entière (union des
+        /// vus de tous les usagers).
+        /// </summary>
+        public string LibReviewTasteUser { get; set; } = string.Empty;
+
         // ------------------------------------------------------------------
         //  Atelier de langues (v1.17.0) : génération/entretien des langues
         //  d'interface par le LLM du plugin (gabarit du run détaché d'audit ;

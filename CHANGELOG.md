@@ -10,6 +10,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.0] — 2026-11-03
+
+### Added (FR)
+- Module « Gestion bibliothèque » — **usager du profil de goûts désignable
+  en config** (même mécanique que l'usager « AI Tonight ») : champ « Usager
+  du profil de goûts » — nom exact, repli insensible à la casse ;
+  vide = premier administrateur (comportement antérieur inchangé). La ligne
+  de log distingue « champ config » / « repli premier admin ». Portée
+  STRICTEMENT le profil : les pools de candidats restent calculés sur la
+  bibliothèque entière (union des vus de tous).
+- Profil de goûts **étendu au run SÉRIES** (repris d'`emby-delete-series.sh`) :
+  épisodes vus groupés par série — « série (année) [genres] — N épisode(s)
+  vu(s) » — + séries favorites de l'usager désigné (avant : profil films
+  uniquement).
+- Page « Gestion bibliothèque » — **en-têtes de section à la emby-delete.sh** :
+  « 1. À SUPPRIMER — N item(s) · X Go » / « 2. PEUT ÊTRE SUPPRIMÉ » /
+  « 3. À CONSERVER », chacun avec sa règle en sous-texte grisé ; le total
+  Go par section donne le « gain de place » réel de chaque verdict
+  (calculé client, aucun changement serveur). Les pastilles passent au
+  verdict explicite : ❌ À supprimer (rouge) / ⚠️ Peut être supprimé
+  (orange) / ✅ À conserver (vert).
+
+### Added (EN)
+- "Library management" module — **designatable taste-profile user** (same
+  mechanism as the "AI Tonight" user): a "Taste profile user" field — exact
+  name, case-insensitive fallback; empty = first administrator (previous
+  behavior unchanged). The log line tells "config field" / "first-admin
+  fallback" apart. Scope STRICTLY the profile: candidate pools keep being
+  computed over the whole library (union of everyone's watched).
+- Taste profile **extended to the SERIES run** (taken from
+  `emby-delete-series.sh`): watched episodes grouped per series —
+  "series (year) [genres] — N watched episode(s)" — + the designated user's
+  favorite series (before: movies profile only).
+- "Library management" page — **emby-delete.sh-style section headers**:
+  "1. TO DELETE — N item(s) · X GB" / "2. CAN BE DELETED" / "3. TO KEEP",
+  each with its rule as a grey subtitle; the per-section GB total gives each
+  verdict's real "space gain" (computed client-side, no server change).
+  Chips switch to explicit verdicts: ❌ To delete (red) / ⚠️ Can be deleted
+  (orange) / ✅ To keep (green).
+
+---
+
 ## [2.12.0] — 2026-11-03
 
 ### Changed (FR)

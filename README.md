@@ -2810,8 +2810,10 @@ utilisable.
 
 Nouvel onglet **« Gestion bibliothèque »** de la page de configuration
 (admin-only). Le LLM évalue la bibliothèque et **classe chaque candidat en
-trois sections** — 🗑 à supprimer, 🟠 à discuter, 🔵 à garder — affichées sous
-forme de cartes triées par section (pastille colorée), avec **« 🗑️ Effacer /
+trois sections** — ❌ à supprimer, ⚠️ peut être supprimé, ✅ à conserver —
+affichées sous forme de cartes groupées par section, chacune introduite par un
+**en-tête à la `emby-delete.sh`** (« 1. À SUPPRIMER — N item(s) · X Go » — le
+total Go donne le gain de place réel du verdict), avec **« 🗑️ Effacer /
 ✔️ Conserver »**.
 
 - **Deux runs indépendants** (mêmes prompts séparés que la tâche EPG :
@@ -2824,6 +2826,16 @@ forme de cartes triées par section (pastille colorée), avec **« 🗑️ Effac
   contre le pool envoyé (hors pool = hallucination écartée et loguée). Le run
   est **sans aucun outil** : la liste des candidats est complète dans le
   message, un seul format de sortie à respecter.
+- **Profil de goûts** (v2.11.0, étendu v2.13.0) : historique de visionnage +
+  favoris injectés au prompt pour des justifications motivées (« sans lien
+  avec les goûts constatés »). L'usager du profil est **désignable** (champ
+  « Usager du profil de goûts », même mécanique que l'usager « AI Tonight » —
+  nom exact, casse tolérée ; vide = premier administrateur) et le profil
+  couvre films **et** séries — le profil séries reprend `emby-delete-series.sh` :
+  épisodes vus groupés par série (« série (année) [genres] — N épisode(s)
+  vu(s) ») + séries favorites. Portée **strictement** le profil : les pools de
+  candidats restent calculés sur la bibliothèque entière (union des vus de
+  tous les usagers).
 - **Lancement** : bouton « Lancer l'évaluation » (consigne libre facultative)
   ou tâche planifiée « Gestion bibliothèque » (désactivée par défaut ;
   planification en tête du champ `LibReviewTask`, ex. « Weekly Sunday 05:10 »).

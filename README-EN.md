@@ -2723,8 +2723,10 @@ stays usable.
 
 New **"Library management"** tab on the configuration page (admin-only). The
 LLM evaluates the library and **classifies every candidate into three
-sections** — 🗑 to delete, 🟠 to discuss, 🔵 to keep — shown as cards sorted by
-section (colored chip), with **"🗑️ Delete / ✔️ Keep"** buttons.
+sections** — ❌ to delete, ⚠️ can be deleted, ✅ to keep — shown as cards
+grouped by section, each opened by an **`emby-delete.sh`-style header**
+("1. TO DELETE — N item(s) · X GB" — the GB total gives the verdict's real
+space gain), with **"🗑️ Delete / ✔️ Keep"** buttons.
 
 - **Two independent runs** (same split prompts as the EPG task:
   `LibReviewTask` = "schedule | MOVIES prompt", `LibReviewTaskSeries` = SERIES
@@ -2736,6 +2738,15 @@ section (colored chip), with **"🗑️ Delete / ✔️ Keep"** buttons.
   (out-of-pool = hallucination, dropped + logged). The run is **entirely
   tool-less**: the candidate list is complete in the message, a single output
   format to comply with.
+- **Taste profile** (v2.11.0, extended v2.13.0): watch history + favorites
+  injected into the prompt for motivated justifications ("unrelated to the
+  observed tastes"). The profile's user is **designatable** ("Taste profile
+  user" field, same mechanism as the "AI Tonight" user — exact name, case
+  tolerated; empty = first administrator) and the profile covers movies **and**
+  series — the series profile mirrors `emby-delete-series.sh`: watched episodes
+  grouped per series ("series (year) [genres] — N watched episode(s)") +
+  favorite series. Scope **strictly** the profile: candidate pools keep being
+  computed over the whole library (union of everyone's watched items).
 - **Launch**: "Run evaluation" button (optional free-form brief) or the
   "Library management" **scheduled task** (off by default; schedule read from
   the head of `LibReviewTask`, e.g. "Weekly Sunday 05:10"). The run is

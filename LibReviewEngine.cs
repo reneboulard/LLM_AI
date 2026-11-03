@@ -179,6 +179,23 @@ namespace LLM_AI
                 if (!string.IsNullOrWhiteSpace(seriesPrompt)) seriesPrompt += "\n\nConsigne de l'administrateur pour ce run :\n" + brief.Trim();
             }
 
+            // v2.11.0 (étendu v2.13.0) — profil de goûts injecté au prompt
+            // (historique + favoris, repris d'emby-delete.sh) : permet au
+            // LLM de justifier « sans lien avec les goûts constatés ».
+            // v2.13.0 : l'usager du profil est DÉSIGNABLE en config
+            // (LibReviewTasteUser, même mécanique que l'usager Tonight) et
+            // le run SÉRIES reçoit AUSSI un profil (épisodes vus groupés par
+            // série + séries favorites, comme emby-delete-series.sh).
+            User tasteUser = cfg.LibReviewTasteProfile
+                ? ResolveTasteUser(users, cfg, logger)
+                : null;
+            string tasteFilms = null, tasteSeries = null;
+            if (tasteUser != null)
+            {
+                tasteFilms = BuildTasteProfile(library, tasteUser, logger);
+                tasteSeries = BuildTasteProfileSeries(library, tasteUser, logger);
+            }
+
             // Deux runs indépendants (deux contextes) — un échec de l'un
             // n'empêche pas l'autre (même doctrine que LlmScheduledTask).
             if (!string.IsNullOrWhiteSpace(moviesPrompt) && moviePool.Count > 0)
@@ -186,13 +203,9 @@ namespace LLM_AI
                 progress(string.Format(CultureInfo.InvariantCulture,
                     I18n.SDisplay("librev.progress.movies", host) ?? "Évaluation des films ({0} candidats)…",
                     moviePool.Count));
-                // v2.11.0 — profil de goûts du premier admin (historique +
-                // favoris, repris d'emby-delete.sh) : permet au LLM de
-                // justifier « sans lien avec les goûts constatés ».
-                string taste = cfg.LibReviewTasteProfile ? BuildTasteProfile(library, users, userData, logger) : null;
                 var entries = await RunOneAsync(runner, cfg, proseLang, "LibReview-FILMS", moviesPrompt,
                     SerializePool(moviePool), "movie", knownIds: null, library, json, logger, progress, ct,
-                    tasteProfile: taste)
+                    tasteProfile: tasteFilms)
                     .ConfigureAwait(false);
                 ValidateAndAdd(report, entries, moviePool, "movie", logger);
             }
@@ -208,7 +221,8 @@ namespace LLM_AI
                     seriesPool.Count));
                 var known = new HashSet<string>(seriesPool.Select(p => p.Id), StringComparer.Ordinal);
                 var entries = await RunOneAsync(runner, cfg, proseLang, "LibReview-SÉRIES", seriesPrompt,
-                    SerializePool(seriesPool), "series", known, library, json, logger, progress, ct)
+                    SerializePool(seriesPool), "series", known, library, json, logger, progress, ct,
+                    tasteProfile: tasteSeries)
                     .ConfigureAwait(false);
                 ValidateAndAdd(report, entries, seriesPool, "series", logger);
             }
@@ -221,7 +235,7 @@ namespace LLM_AI
             int nDel = report.Items.Count(i => i.Section == "delete");
             int nCan = report.Items.Count(i => i.Section == "can_delete");
             int nKeep = report.Items.Count(i => i.Section == "keep");
-            logger.Info("[LLM_AI] [LibReview] Rapport persisté : {0} suppression(s) proposée(s), {1} à discuter, {2} à garder — sur {3} candidat(s) classé(s).",
+            logger.Info("[LLM_AI] [LibReview] Rapport persisté : {0} suppression(s) proposée(s), {1} supprimable(s), {2} à conserver — sur {3} candidat(s) classé(s).",
                 nDel, nCan, nKeep, report.Items.Count);
 
             try
@@ -281,7 +295,7 @@ namespace LLM_AI
                 "Liste fournie par l'extension — classe TOUS les candidats de cette liste, " +
                 "chacun exactement UNE fois, en recopiant les id tels quels :\n" + poolJson;
             if (!string.IsNullOrWhiteSpace(tasteProfile))
-                fullUser += "\n\n### PROFIL DE GOÛTS DE L'ADMINISTRATEUR (référence pour tes justifications)\n" + tasteProfile;
+                fullUser += "\n\n### PROFIL DE GOÛTS DE L'USAGER (référence pour tes justifications)\n" + tasteProfile;
 
             var (reply, _toolResults) = await agent.RunAsync(fullUser, tools, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [{0}] Réponse brute (tronquée) :\n{1}", label, Truncate(reply, 1500));
@@ -930,20 +944,62 @@ namespace LLM_AI
         /// pour permettre des justifications « sans lien avec les goûts ».
         /// Best-effort : jamais d'exception.
         /// </summary>
-        private static string BuildTasteProfile(ILibraryManager library, IUserManager users,
-            IUserDataManager userData, ILogger logger)
+        /// <summary>
+        /// Résout l'usager du profil de goûts (v2.13.0, même mécanique que
+        /// l'usager Tonight) : champ
+        /// <see cref="PluginConfiguration.LibReviewTasteUser"/> — nom exact
+        /// via <see cref="IUserManager.GetUserByName"/> puis repli
+        /// insensible à la casse (pattern <c>GetEmbyInfoTool.ResolveUser</c>) ;
+        /// vide ou introuvable = repli premier usager administrateur, sinon
+        /// premier usager (comportement antérieur à v2.13.0 inchangé).
+        /// La ligne de log distingue « champ config » / « repli premier
+        /// admin » (visibilité : l'usager du profil doit se VOIR au log).
+        /// Portée STRICTEMENT le profil de goûts — les pools de candidats
+        /// restent calculés sur la bibliothèque entière (union des vus de
+        /// tous les usagers).
+        /// </summary>
+        private static User ResolveTasteUser(IUserManager users, PluginConfiguration cfg, ILogger logger)
+        {
+            var all = (users?.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                .Where(u => u != null).ToArray();
+            if (all.Length == 0) return null;
+
+            var name = (cfg?.LibReviewTasteUser ?? "").Trim();
+            if (name.Length > 0)
+            {
+                User exact = null;
+                try { exact = users.GetUserByName(name); } catch { /* repli liste */ }
+                var u = exact
+                    ?? all.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (u != null)
+                {
+                    logger?.Info("[LLM_AI] [LibReview] Profil de goûts : usager « {0} » (champ config).", u.Name);
+                    return u;
+                }
+                logger?.Warn("[LLM_AI] [LibReview] Usager du profil de goûts « {0} » introuvable — repli premier admin.", name);
+            }
+            var admin = all.FirstOrDefault(x => x.Policy != null && x.Policy.IsAdministrator)
+                ?? all.FirstOrDefault();
+            if (admin != null)
+                logger?.Info("[LLM_AI] [LibReview] Profil de goûts : usager « {0} » (repli premier admin).", admin.Name);
+            return admin;
+        }
+
+        /// <summary>
+        /// Profil de goûts FILMS (v2.11.0, repris d'emby-delete.sh) :
+        /// historique de visionnage (nom (année) [genres]) + favoris de
+        /// l'usager résolu par <see cref="ResolveTasteUser"/> (avant
+        /// v2.13.0 : premier admin hardcodé). Coupé à 6000 car.
+        /// </summary>
+        private static string BuildTasteProfile(ILibraryManager library, User user, ILogger logger)
         {
             try
             {
-                var admin = users?.GetUserList(new UserQuery())
-                    ?.FirstOrDefault(u => u != null && u.Policy != null && u.Policy.IsAdministrator);
-                if (admin == null) return null;
-
                 var sb = new StringBuilder();
-                sb.Append("Films vus récemment par ").Append(admin.Name).Append(" (nom (année) [genres]) :");
+                sb.Append("Films vus récemment par ").Append(user.Name).Append(" (nom (année) [genres]) :");
                 var q = new InternalItemsQuery
                 {
-                    User = admin,
+                    User = user,
                     IsPlayed = true,
                     IncludeItemTypes = new[] { "Movie" },
                     Recursive = true,
@@ -960,10 +1016,10 @@ namespace LLM_AI
                       .Append(genres);
                 }
 
-                sb.Append("\n\nFavoris de ").Append(admin.Name).Append(" (films/séries) :");
+                sb.Append("\n\nFavoris de ").Append(user.Name).Append(" (films/séries) :");
                 var fq = new InternalItemsQuery
                 {
-                    User = admin,
+                    User = user,
                     IsFavorite = true,
                     Recursive = true,
                     EnableTotalRecordCount = false,
@@ -980,6 +1036,92 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 logger?.Warn("[LLM_AI] [LibReview] Profil de goûts illisible : {0}", ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Profil de goûts SÉRIES (v2.13.0, repris d'emby-delete-series.sh,
+        /// qui injecte l'historique séries du propriétaire) : épisodes vus
+        /// GROUPÉS par série — « série (année) [genres] — N épisode(s)
+        /// vu(s) » — + séries favorites. Résolution de la fiche série par
+        /// SeriesId (patron <c>CollectFavoriteIds</c>), repli SeriesName de
+        /// l'épisode. Coupé à 6000 car.
+        /// </summary>
+        private static string BuildTasteProfileSeries(ILibraryManager library, User user, ILogger logger)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                sb.Append("Séries avec épisodes vus par ").Append(user.Name)
+                  .Append(" (série (année) [genres] — N épisode(s) vu(s)) :");
+                var q = new InternalItemsQuery
+                {
+                    User = user,
+                    IsPlayed = true,
+                    IncludeItemTypes = new[] { "Episode" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    Limit = 300,
+                    OrderBy = new[] { ("DatePlayed", SortOrder.Descending) }
+                    // NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
+                };
+                // Groupement par SÉRIE (clé = SeriesId, repli SeriesName) :
+                // le run séries juge des SÉRIES entières, le LLM doit voir
+                // la position réelle du foyer série par série (le motif du
+                // script : « épisodes vus groupés par série »).
+                var bySeries = new Dictionary<string, int>();
+                var seriesMeta = new Dictionary<string, (long sid, string name)>();
+                foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                {
+                    if (it is not Episode ep) continue;
+                    string key = ep.SeriesId != 0 ? "s:" + ep.SeriesId.ToString(CultureInfo.InvariantCulture)
+                                                  : "n:" + (ep.SeriesName ?? it.Name ?? "?");
+                    bySeries.TryGetValue(key, out var n);
+                    bySeries[key] = n + 1;
+                    if (!seriesMeta.ContainsKey(key))
+                        seriesMeta[key] = (ep.SeriesId, ep.SeriesName ?? it.Name ?? "?");
+                }
+                int lines = 0;
+                foreach (var kv in bySeries)
+                {
+                    if (lines >= 40) { sb.Append("\n- …"); break; }
+                    var meta = seriesMeta[kv.Key];
+                    string name = meta.name;
+                    string year = "n/a", genres = "";
+                    if (meta.sid != 0 && library.GetItemById(meta.sid) is Series s && s != null)
+                    {
+                        name = s.Name ?? name;
+                        year = s.ProductionYear?.ToString(CultureInfo.InvariantCulture) ?? "n/a";
+                        genres = (s.Genres != null && s.Genres.Length > 0) ? " [" + string.Join(", ", s.Genres) + "]" : "";
+                    }
+                    sb.Append("\n- ").Append(name)
+                      .Append(" (").Append(year).Append(")").Append(genres)
+                      .Append(" — ").Append(kv.Value).Append(" épisode(s) vu(s)");
+                    lines++;
+                }
+
+                sb.Append("\n\nSéries favorites de ").Append(user.Name).Append(" :");
+                var fq = new InternalItemsQuery
+                {
+                    User = user,
+                    IsFavorite = true,
+                    IncludeItemTypes = new[] { "Series" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false,
+                    Limit = 30,
+                    OrderBy = new[] { ("DateCreated", SortOrder.Descending) }
+                };
+                foreach (var it in library.GetItemList(fq) ?? Array.Empty<BaseItem>())
+                    sb.Append("\n- ").Append(it.Name ?? "?")
+                      .Append(" (").Append(it.ProductionYear?.ToString(CultureInfo.InvariantCulture) ?? "n/a").Append(")");
+
+                var text = sb.ToString();
+                return text.Length > 6000 ? text.Substring(0, 6000) + "\n…" : text;
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Profil de goûts séries illisible : {0}", ex.Message);
                 return null;
             }
         }
@@ -1085,7 +1227,7 @@ namespace LLM_AI
             // sélection de propositions ; l'admin voit l'étendue du verdict).
             string desc = string.Format(CultureInfo.InvariantCulture,
                 I18n.SDisplay("librev.notif.desc", host) ??
-                "{0} suppression(s) proposée(s), {1} à discuter, {2} à garder sur {3} candidat(s) — onglet « Gestion bibliothèque » de la configuration.",
+                "{0} suppression(s) proposée(s), {1} supprimable(s), {2} à conserver sur {3} candidat(s) — onglet « Gestion bibliothèque » de la configuration.",
                 del, can, keep, candidates);
             if (!string.IsNullOrWhiteSpace(url))
                 desc = desc + "\n" + url + "/web/configurationpage?name=LLMAIConfigPage#tab-libreview";
