@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.4] — 2026-11-04
+
+### Fixed (FR)
+- Page de configuration — barre d'onglets : la barre de défilement
+  **horizontale** a disparu (les onglets passent désormais à la ligne,
+  `flex-wrap: wrap` + `overflow: visible`, libellés non coupés, boutons
+  légèrement resserrés). Correctif complémentaire : le soulignement de
+  l'onglet actif (`::after` en `bottom: -2px`) débordait de 2 px sous la
+  barre une fois `overflow` relâché et créait une **scrollbar verticale**
+  de 2–3 px sur Chrome — le trait est rentré dans la boîte du bouton
+  (`bottom: 0`).
+
+### Fixed (EN)
+- Configuration page — tab bar: the **horizontal** scrollbar is gone (tabs
+  now wrap to a second line, `flex-wrap: wrap` + `overflow: visible`,
+  labels never split, buttons slightly tightened). Companion fix: the active
+  tab underline (`::after` at `bottom: -2px`) overflowed 2 px below the bar
+  once overflow was released, which created a 2–3 px **vertical** page
+  scrollbar in Chrome — the underline is now inside the button box
+  (`bottom: 0`).
+
+---
+
 ## [2.13.3] — 2026-11-04
 
 ### Fixed (FR)

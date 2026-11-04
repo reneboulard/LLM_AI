@@ -192,11 +192,11 @@
                 top: 0;
                 z-index: 20;
                 display: flex;
+                flex-wrap: wrap; /* v2.13.4 — retour à la ligne plutôt que défilement */
                 gap: 4px;
                 border-bottom: 2px solid #e0e0e0;
-                overflow-x: auto;
-                white-space: nowrap;
-                scrollbar-width: thin;
+                overflow: visible; /* v2.13.4 — plus de barre de défilement horizontale */
+                white-space: nowrap; /* libellé d'un onglet jamais coupé en deux */
                 padding: 6px 0 0;
                 margin: 0.6em 0 1.2em;
                 background: #ffffff;
@@ -206,8 +206,8 @@
                 border: none;
                 cursor: pointer;
                 color: #666;
-                padding: 9px 14px;
-                font-size: 13px;
+                padding: 8px 12px; /* v2.13.4 — un peu plus compact pour tenir sur une ligne */
+                font-size: 12.5px;
                 font-weight: 600;
                 border-radius: 6px 6px 0 0;
                 position: relative;
@@ -233,7 +233,11 @@
                 position: absolute;
                 left: 0;
                 right: 0;
-                bottom: -2px;
+                /* v2.13.4 — bottom:0 et non -2px : avec overflow:visible sur
+                   la nav (plus de barre de défilement horizontale), un
+                   débordement de 2 px créait une scrollbar VERTICALE de la
+                   page sur Chrome. Le trait reste collé à la bordure grise. */
+                bottom: 0;
                 height: 2px;
                 background: #1c5a8a;
             }
