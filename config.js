@@ -1774,7 +1774,12 @@ define(["loading"], function (loading) {
                             data: JSON.stringify({ ItemId: it.Id }),
                             contentType: "application/json"
                         }).then(function (resp) { return resp.json(); }).then(function (res) {
-                            if (res && (res.Added || res.Added === false) && !res.Error) { fadeOut(); lrvToast(i18n.t("cfg.libreview.kept", it.Name || "")); }
+                            if (res && (res.Added || res.Added === false) && !res.Error) {
+                                fadeOut(); lrvToast(i18n.t("cfg.libreview.kept", it.Name || ""));
+                                // v2.13.5 — met à jour le compteur de l'onglet « Liste Conserver ».
+                                if (res.Added && typeof view._llmaiLrvSetKeptCount === "function")
+                                    view._llmaiLrvSetKeptCount((view._llmaiLrvKeptCount || 0) + 1);
+                            }
                             else { bDel.disabled = false; bKeep.disabled = false; lrvToast((res && res.Error) || i18n.t("cfg.libreview.keepFailed")); }
                         }, function () {
                             bDel.disabled = false; bKeep.disabled = false;
@@ -1812,6 +1817,10 @@ define(["loading"], function (loading) {
                 }
                 lrvStopPolling();
                 lrvSetBusy(false);
+                // v2.13.5 — le Status porte aussi KeptCount : resynchronise
+                // le compteur de l'onglet « Liste Conserver ».
+                if (typeof st.KeptCount === "number" && typeof view._llmaiLrvSetKeptCount === "function")
+                    view._llmaiLrvSetKeptCount(st.KeptCount);
                 if (st.Outcome === "ok") {
                     if (st.Items && st.Items.length !== undefined) {
                         lrvRenderCards(st);
@@ -1906,7 +1915,138 @@ define(["loading"], function (loading) {
                         return;
                     }
                     if (data.Items) lrvRenderCards(data);
+                    if (typeof data.KeptCount === "number") lrvSetKeptCount(data.KeptCount);
                 }, function () { /* pas de rapport : état d'origine */ });
+
+                // v2.13.5 — sélecteur de vue « Rapport » ⇄ « Liste Conserver »
+                // (même espace : un seul panneau affiché à la fois).
+                var tabReport = view.querySelector("#librevTabReport");
+                var tabKept = view.querySelector("#librevTabKept");
+                var viewReport = view.querySelector("#librevViewReport");
+                var viewKept = view.querySelector("#librevViewKept");
+                var btnResetKept = view.querySelector("#btnResetKept");
+                var keptList = view.querySelector("#librevKeptList");
+                var keptEmpty = view.querySelector("#librevKeptEmpty");
+
+                var lrvSetKeptCount = function (n) {
+                    view._llmaiLrvKeptCount = n;
+                    if (tabKept) tabKept.textContent = i18n.t("cfg.libreview.view.kept") + (n > 0 ? " (" + n + ")" : "");
+                };
+                view._llmaiLrvSetKeptCount = lrvSetKeptCount;
+
+                var lrvShowView = function (which) {
+                    var kept = which === "kept";
+                    if (viewReport) viewReport.style.display = kept ? "none" : "";
+                    if (viewKept) viewKept.style.display = kept ? "" : "none";
+                    if (tabReport) tabReport.setAttribute("aria-pressed", kept ? "false" : "true");
+                    if (tabKept) tabKept.setAttribute("aria-pressed", kept ? "true" : "false");
+                    if (btnResetKept) btnResetKept.style.display = kept ? "" : "none";
+                    if (kept) lrvLoadKept();
+                };
+                if (tabReport) once(tabReport, "click", function () { lrvShowView("report"); });
+                if (tabKept) once(tabKept, "click", function () { lrvShowView("kept"); });
+
+                // Charge la liste « Conserver » re-résolue côté serveur
+                // (?Kept=true purge aussi les ids d'items supprimés).
+                var lrvLoadKept = function () {
+                    if (!keptList) return;
+                    keptList.innerHTML = "";
+                    if (keptEmpty) keptEmpty.style.display = "none";
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/LibReview", { Kept: "true" }),
+                        type: "GET"
+                    }).then(function (resp) { return resp.json(); }).then(function (data) {
+                        if (!data) return;
+                        var items = data.KeptItems || [];
+                        lrvSetKeptCount(typeof data.KeptCount === "number" ? data.KeptCount : items.length);
+                        if (data.KeptPurged > 0)
+                            lrvToast(i18n.t("cfg.libreview.kept.purged", data.KeptPurged));
+                        if (!items.length) {
+                            if (keptEmpty) keptEmpty.style.display = "block";
+                            return;
+                        }
+                        items.forEach(function (it) {
+                            var row = document.createElement("div");
+                            row.className = "librevKeptRow";
+                            row.setAttribute("data-id", it.Id || "");
+                            if (it.ImageUrl) {
+                                var img = document.createElement("img");
+                                img.src = it.ImageUrl; img.alt = ""; img.loading = "lazy";
+                                row.appendChild(img);
+                            }
+                            var txt = document.createElement("div");
+                            txt.style.flex = "1 1 auto";
+                            txt.style.minWidth = "0";
+                            var t = document.createElement("div");
+                            t.className = "librevKeptTitle";
+                            t.textContent = (it.Kind === "series" ? "📺 " : (it.Kind === "movie" ? "🎬 " : "🎞️ ")) + (it.Name || "");
+                            var m = document.createElement("div");
+                            m.className = "librevKeptMeta";
+                            m.textContent = (it.Series ? it.Series + " · " : "") +
+                                ((it.EpisodeCount || 0) > 0
+                                    ? i18n.t("cfg.libreview.card.seriesMeta", it.EpisodeCount, (it.SizeGb || 0).toFixed(1))
+                                    : (it.SizeGb || 0).toFixed(1) + " Go");
+                            txt.appendChild(t); txt.appendChild(m);
+                            row.appendChild(txt);
+                            var b = document.createElement("button");
+                            b.type = "button";
+                            b.className = "raised emby-button";
+                            b.setAttribute("is", "emby-button");
+                            b.textContent = i18n.t("cfg.libreview.kept.remove");
+                            row.appendChild(b);
+                            keptList.appendChild(row);
+                            once(b, "click", function () {
+                                b.disabled = true;
+                                ApiClient.ajax({
+                                    url: ApiClient.getUrl("Plugins/LLMAI/LibReviewUnkeep"),
+                                    type: "POST",
+                                    data: JSON.stringify({ ItemId: it.Id }),
+                                    contentType: "application/json"
+                                }).then(function (resp) { return resp.json(); }).then(function (res) {
+                                    if (res && res.Removed) {
+                                        row.classList.add("fading");
+                                        setTimeout(function () {
+                                            if (row.parentNode) row.parentNode.removeChild(row);
+                                            lrvSetKeptCount(res.KeptCount || 0);
+                                            if (!keptList.querySelector(".librevKeptRow") && keptEmpty) keptEmpty.style.display = "block";
+                                        }, 300);
+                                        lrvToast(i18n.t("cfg.libreview.kept.removed", it.Name || ""));
+                                    } else {
+                                        b.disabled = false;
+                                        lrvToast((res && res.Error) || i18n.t("cfg.libreview.kept.removeFailed"));
+                                    }
+                                }, function () {
+                                    b.disabled = false;
+                                    lrvToast(i18n.t("cfg.libreview.kept.removeFailed"));
+                                });
+                            });
+                        });
+                    }, function () { /* silencieux : liste vide affichée */ });
+                };
+                if (btnResetKept) once(btnResetKept, "click", function () {
+                    if (!window.confirm(i18n.t("cfg.libreview.kept.reset.confirm"))) return;
+                    btnResetKept.disabled = true;
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/LibReviewResetKept"),
+                        type: "POST",
+                        data: "{}",
+                        contentType: "application/json"
+                    }).then(function (resp) { return resp.json(); }).then(function (res) {
+                        btnResetKept.disabled = false;
+                        if (res && res.Ok) {
+                            lrvSetKeptCount(0);
+                            if (keptList) keptList.innerHTML = "";
+                            if (keptEmpty) keptEmpty.style.display = "block";
+                            lrvToast(i18n.t("cfg.libreview.kept.reset.done", res.RemovedCount || 0));
+                        } else {
+                            lrvToast((res && res.Error) || i18n.t("cfg.libreview.kept.resetFailed"));
+                        }
+                    }, function () {
+                        btnResetKept.disabled = false;
+                        lrvToast(i18n.t("cfg.libreview.kept.resetFailed"));
+                    });
+                });
+
             }
 
             // Atelier de langues (v1.17.0) : couverture d'un code de langue +

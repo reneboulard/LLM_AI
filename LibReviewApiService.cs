@@ -42,6 +42,13 @@ namespace LLM_AI
     /// <item><c>POST /Plugins/LLMAI/LibReviewKeep {ItemId}</c> : inscrit l'id
     ///   dans LibReviewKeptIds (config) — exclu de l'affichage et des
     ///   prochains runs.</item>
+    /// <item><c>GET …?Kept=true</c> (v2.13.5) : liste « Conserver » re-résolue
+    ///   item par item ; les ids dont l'item n'existe plus sont purgés de la
+    ///   config (purge lazy) et comptés dans <c>KeptPurged</c>.</item>
+    /// <item><c>POST /Plugins/LLMAI/LibReviewUnkeep {ItemId}</c> (v2.13.5) :
+    ///   retire un id de la liste « Conserver ».</item>
+    /// <item><c>POST /Plugins/LLMAI/LibReviewResetKept</c> (v2.13.5) : vide
+    ///   toute la liste « Conserver ».</item>
     /// </list>
     /// </summary>
     public class LibReviewApiService : BaseApiService
@@ -74,6 +81,8 @@ namespace LLM_AI
             public bool Last { get; set; }
             /// <summary>Polling du run détaché.</summary>
             public bool Status { get; set; }
+            /// <summary>v2.13.5 — lecture seule : liste « Conserver » re-résolue.</summary>
+            public bool Kept { get; set; }
         }
 
         /// <summary>Une carte (DTO enrichi, validé à la volée).</summary>
@@ -116,6 +125,12 @@ namespace LLM_AI
             public int Candidates { get; set; }
             public List<LibReviewCard> Items { get; set; }
             public int KeptCount { get; set; }
+            // v2.13.5 — renseigné uniquement quand Kept=true : liste
+            // « Conserver » re-résolue (un item encore en bibliothèque).
+            public List<LibReviewCard> KeptItems { get; set; }
+            // v2.13.5 — ids purgés lors de ce ?Kept=true (item supprimé
+            // depuis dans Emby) — retirés de LibReviewKeptIds + sauvegarde.
+            public int KeptPurged { get; set; }
         }
 
         [Route("/Plugins/LLMAI/LibReviewDelete", "POST")]
@@ -140,6 +155,31 @@ namespace LLM_AI
         public class LibReviewKeepResponse
         {
             public bool Added { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/LibReviewUnkeep", "POST")]
+        public class LibReviewUnkeepRequest : IReturn<object>
+        {
+            public string ItemId { get; set; }
+        }
+
+        public class LibReviewUnkeepResponse
+        {
+            public bool Removed { get; set; }
+            public int KeptCount { get; set; }
+            public string Error { get; set; }
+        }
+
+        [Route("/Plugins/LLMAI/LibReviewResetKept", "POST")]
+        public class LibReviewResetKeptRequest : IReturn<object>
+        {
+        }
+
+        public class LibReviewResetKeptResponse
+        {
+            public bool Ok { get; set; }
+            public int RemovedCount { get; set; }
             public string Error { get; set; }
         }
 
@@ -199,6 +239,46 @@ namespace LLM_AI
                 // rapport frais filtré (zéro appel supplémentaire côté page).
                 if (st0.Outcome == "ok" && !st0.Running)
                     FillLast(resp, cfg);
+                return resp;
+            }
+
+            // ---- ?Kept=true : liste « Conserver » re-résolue (v2.13.5) -----
+            // Chaque id est re-résolu ; introuvable = purge lazy de la config
+            // (l'item a été supprimé dans Emby entre-temps) + sauvegarde.
+            if (req?.Kept ?? false)
+            {
+                var keptSet = LibReviewEngine.ParseKeptIds(cfg.LibReviewKeptIds);
+                var resp = new LibReviewResponse
+                {
+                    Enabled = cfg.LibReviewEnabled,
+                    KeptCount = keptSet.Count,
+                    KeptItems = new List<LibReviewCard>()
+                };
+                int purged = 0;
+                foreach (var id in keptSet.ToList())
+                {
+                    var item = ItemIdResolver.Resolve(LibraryManager, id);
+                    if (item == null)
+                    {
+                        keptSet.Remove(id);
+                        purged++;
+                        continue;
+                    }
+                    resp.KeptItems.Add(ToCard(item, new LibReviewEntry { Id = id, Section = "keep", Reason = "" }));
+                }
+                if (purged > 0)
+                {
+                    cfg.LibReviewKeptIds = JsonSerializer.Serialize(new List<string>(keptSet));
+                    try { Plugin.Instance?.SaveConfiguration(); }
+                    catch (Exception ex)
+                    {
+                        Logger?.ErrorException("[LLM_AI] [LibReview] Purge LibReviewKeptIds échouée : {0}", ex, ex.Message);
+                    }
+                    resp.KeptPurged = purged;
+                    resp.KeptCount = keptSet.Count;
+                    Logger?.Info("[LLM_AI] [LibReview] Liste « Conserver » : {0} id(s) purgé(s) (item(s) supprimé(s) depuis), {1} restant(s).", purged, keptSet.Count);
+                }
+                resp.KeptItems.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
                 return resp;
             }
 
@@ -336,6 +416,59 @@ namespace LLM_AI
             }
             Logger?.Info("[LLM_AI] [LibReview] id « {0} » ajouté à la liste « Conserver » ({1} entrées).", id, arr.Count);
             return new LibReviewKeepResponse { Added = true };
+        }
+
+        // v2.13.5 — retire un id de la liste « Conserver » (bouton de la vue
+        // « Liste Conserver » de la page). Miroir exact de LibReviewKeep.
+        public object Post(LibReviewUnkeepRequest req)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            var plugin = Plugin.Instance;
+            if (cfg == null || plugin == null)
+                return new LibReviewUnkeepResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
+            if (!IsAdmin())
+                return new LibReviewUnkeepResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            string id = (req?.ItemId ?? "").Trim();
+            if (string.IsNullOrEmpty(id))
+                return new LibReviewUnkeepResponse { Error = I18n.SDisplay("librev.err.noid", ApplicationHost) };
+
+            var kept = LibReviewEngine.ParseKeptIds(cfg.LibReviewKeptIds);
+            if (!kept.Remove(id))
+                return new LibReviewUnkeepResponse { Removed = false, KeptCount = kept.Count }; // absent
+
+            cfg.LibReviewKeptIds = JsonSerializer.Serialize(new List<string>(kept));
+            try { plugin.SaveConfiguration(); }
+            catch (Exception ex)
+            {
+                Logger?.ErrorException("[LLM_AI] [LibReview] Sauvegarde LibReviewKeptIds (unkeep) échouée : {0}", ex, ex.Message);
+                return new LibReviewUnkeepResponse { Error = ex.Message };
+            }
+            Logger?.Info("[LLM_AI] [LibReview] id « {0} » retiré de la liste « Conserver » ({1} entrées).", id, kept.Count);
+            return new LibReviewUnkeepResponse { Removed = true, KeptCount = kept.Count };
+        }
+
+        // v2.13.5 — reset global de la liste « Conserver ».
+        public object Post(LibReviewResetKeptRequest req)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            var plugin = Plugin.Instance;
+            if (cfg == null || plugin == null)
+                return new LibReviewResetKeptResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
+            if (!IsAdmin())
+                return new LibReviewResetKeptResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            var kept = LibReviewEngine.ParseKeptIds(cfg.LibReviewKeptIds);
+            int removed = kept.Count;
+            cfg.LibReviewKeptIds = "";
+            try { plugin.SaveConfiguration(); }
+            catch (Exception ex)
+            {
+                Logger?.ErrorException("[LLM_AI] [LibReview] Sauvegarde LibReviewKeptIds (reset) échouée : {0}", ex, ex.Message);
+                return new LibReviewResetKeptResponse { Error = ex.Message };
+            }
+            Logger?.Info("[LLM_AI] [LibReview] Liste « Conserver » réinitialisée ({0} entrée(s) retirée(s)).", removed);
+            return new LibReviewResetKeptResponse { Ok = true, RemovedCount = removed };
         }
 
         // ------------------------------------------------------------------

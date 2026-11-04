@@ -2090,7 +2090,34 @@
                             </div>
                         </div>
 
+                        <!-- v2.13.5 — sélecteur de vue : rapport de l'évaluation
+                             ⇄ liste « Conserver » (même espace, un seul affiché). -->
+                        <div id="librevTabs" class="librevTabs" style="margin:0.8em 0 0;">
+                            <button is="emby-button" type="button" class="raised librevTab" id="librevTabReport"
+                                    aria-pressed="true" data-i18n="cfg.libreview.view.report">Rapport de l'évaluation</button>
+                            <button is="emby-button" type="button" class="raised librevTab" id="librevTabKept"
+                                    aria-pressed="false" data-i18n="cfg.libreview.view.kept">Liste « Conserver »</button>
+                            <button is="emby-button" type="button" class="raised librevResetKept" id="btnResetKept"
+                                    style="display:none;" data-i18n="cfg.libreview.kept.reset">Tout réinitialiser</button>
+                        </div>
+
                         <style>
+                            .LLMAIConfigPage .librevTabs { display: flex; gap: 0.5em; align-items: center; flex-wrap: wrap; }
+                            .LLMAIConfigPage .librevTab[aria-pressed="true"] {
+                                background: #1c5a8a; color: #fff;
+                            }
+                            .LLMAIConfigPage .librevResetKept { margin-left: auto; }
+                            .LLMAIConfigPage .librevKeptRow {
+                                display: flex; align-items: center; gap: 0.6em;
+                                background: rgba(0,0,0,0.18); border-radius: 8px;
+                                padding: 0.45em 0.8em; margin: 0.3em 0;
+                            }
+                            .LLMAIConfigPage .librevKeptRow img {
+                                width: 30px; height: 42px; object-fit: cover;
+                                border-radius: 3px; background: rgba(0,0,0,0.3); flex: 0 0 auto;
+                            }
+                            .LLMAIConfigPage .librevKeptRow .librevKeptTitle { font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0; }
+                            .LLMAIConfigPage .librevKeptRow .librevKeptMeta { color: #999; font-size: 11px; }
                             .LLMAIConfigPage .libreviewMeta {
                                 color: #888; font-size: 11px; margin: 0.4em 0 0.8em;
                             }
@@ -2150,9 +2177,19 @@
                             .LLMAIConfigPage .librevEmpty { color: #888; font-size: 13px; margin: 0.6em 0; }
                         </style>
                         <div id="libreviewStatus" class="libreviewMeta" style="display:none;"></div>
-                        <div id="librevGrid" class="librevGrid"></div>
-                        <div id="librevEmpty" class="librevEmpty" style="display:none;" data-i18n="cfg.libreview.empty">
-                            Aucune proposition pour le moment — lancez une évaluation ou attendez la prochaine exécution planifiée.
+                        <!-- v2.13.5 — vue « rapport » -->
+                        <div id="librevViewReport">
+                            <div id="librevGrid" class="librevGrid"></div>
+                            <div id="librevEmpty" class="librevEmpty" style="display:none;" data-i18n="cfg.libreview.empty">
+                                Aucune proposition pour le moment — lancez une évaluation ou attendez la prochaine exécution planifiée.
+                            </div>
+                        </div>
+                        <!-- v2.13.5 — vue « liste Conserver » (même espace) -->
+                        <div id="librevViewKept" style="display:none;">
+                            <div id="librevKeptList"></div>
+                            <div id="librevKeptEmpty" class="librevEmpty" style="display:none;" data-i18n="cfg.libreview.kept.empty">
+                                Aucun item « Conserver » pour le moment.
+                            </div>
                         </div>
 
                         <!-- Pied sticky : « Enregistrer » reste visible quel que

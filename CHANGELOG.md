@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.5] — 2026-11-04
+
+### Added (FR)
+- Page de configuration, section « Gestion bibliothèque » — **sélecteur de
+  vue en deux onglets** dans le même espace : « Rapport de l'évaluation »
+  (les cartes avec les verdicts du LLM, inchangé) ⇄ « Liste « Conserver » »
+  (compteur N dans le libellé). La vue « Conserver » liste chaque id encore
+  présent en bibliothèque (titre, image, méta, taille) avec un bouton
+  **« Retirer »** par ligne (POST `LibReviewUnkeep`) et un bouton global
+  **« Tout réinitialiser »** (POST `LibReviewResetKept`, avec confirmation).
+- `GET /Plugins/LLMAI/LibReview?Kept=true` — renvoie la liste « Conserver »
+  **re-résolue item par item** ; les ids dont le média a été supprimé dans
+  Emby entre-temps sont **purgés automatiquement** de `LibReviewKeptIds`
+  (purge lazy + `SaveConfiguration`, comptés dans `KeptPurged`, loggé).
+  Ainsi plus besoin d'éditer le XML à la main pour nettoyer la liste.
+
+### Added (EN)
+- Configuration page, "Library management" section — **two-tab view switcher**
+  in the same panel: "Evaluation report" (the cards with the LLM's
+  verdicts, unchanged) ⇄ ""Keep" list" (count N in the label). The "Keep"
+  view lists every id still present in the library (title, image, meta,
+  size) with a **"Remove"** button per row (POST `LibReviewUnkeep`) and a
+  global **"Reset all"** button (POST `LibReviewResetKept`, with confirm).
+- `GET /Plugins/LLMAI/LibReview?Kept=true` — returns the "Keep" list
+  **re-resolved item by item**; ids whose media was deleted in Emby in the
+  meantime are **automatically purged** from `LibReviewKeptIds` (lazy purge
+  + `SaveConfiguration`, counted in `KeptPurged`, logged). No more hand
+  editing of the XML to clean the list.
+
+---
+
 ## [2.13.4] — 2026-11-04
 
 ### Fixed (FR)
