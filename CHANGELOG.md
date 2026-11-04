@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.13.3] — 2026-11-04
+
+### Fixed (FR)
+- Page de configuration, section « Gestion bibliothèque » — le bouton
+  « Lancer l'évaluation » restait **désactivé au chargement** de la page même
+  quand « Activer la tâche planifiée » était coché et enregistré : la
+  synchronisation du bouton tournait avant le retour réseau de la config
+  (`loadedCfg` encore nul), et ne se refaisait qu'après une sauvegarde
+  manuelle. Le bouton est désormais resynchronisé dès le chargement de la
+  config enregistrée (sans écraser l'état « run en cours »).
+
+### Fixed (EN)
+- Configuration page, "Library management" section — the "Run the evaluation"
+  button stayed **disabled on page load** even when "Enable the scheduled
+  task" was ticked and saved: the button sync ran before the config network
+  call came back (`loadedCfg` still null), and only re-ran after a manual
+  save. The button now re-syncs as soon as the saved config loads (without
+  clobbering the "run in progress" state).
+
+---
+
 ## [2.13.2] — 2026-11-03
 
 ### Fixed (FR)

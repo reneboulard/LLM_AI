@@ -1294,6 +1294,12 @@ define(["loading"], function (loading) {
                 ApiClient.getPluginConfiguration(pluginId).then(function (cfg) {
                     loadedCfg = cfg || {};
                     fill(loadedCfg, view);
+                    // v2.13.3 — resynchronise le bouton « Lancer l'évaluation »
+                    // dès le chargement : le _llmaiSyncLrvBtn() synchrone plus
+                    // bas a tourné avec loadedCfg=null (appel réseau pas encore
+                    // revenu), le bouton restait désactivé jusqu'à une
+                    // sauvegarde manuelle.
+                    if (typeof view._llmaiSyncLrvBtn === "function") view._llmaiSyncLrvBtn();
                 });
 
                 // Bandeau « nouvelle version disponible » : GET /Plugins/LLMAI/Update
@@ -1846,6 +1852,10 @@ define(["loading"], function (loading) {
             // case courante du formulaire).
             view._llmaiSyncLrvBtn = function () {
                 if (!runLrvBtn) return;
+                // v2.13.3 — ne pas éteindre le bouton si un run est en cours
+                // (lrvSetBusy l'a mis en « occupé » ; la resynchro post-charge
+                // ne doit pas écraser cet état).
+                if (view._llmaiLrvTimer) return;
                 var on = !!(loadedCfg && loadedCfg.LibReviewEnabled);
                 runLrvBtn.disabled = !on;
                 runLrvBtn.title = on ? "" : i18n.t("cfg.libreview.disabled");
