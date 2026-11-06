@@ -1474,8 +1474,16 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
         /// <summary>Étiquettes courtes ambiguës avec la prose (« identified »
         /// existe comme mot ordinaire en anglais) : considérées étiquette
         /// uniquement entre guillemets — « x », « x » (espaces), "x", “x”,
-        /// 'x'.</summary>
-        private static readonly string[] TagsQuoted = { "identified", "needs-review" };
+        /// 'x'. Noms de groupes regex lus par le parseur des sources
+        /// « nouveautés » (v2.15.0) : <c>Groups["title"]</c> est LIT — un
+        /// groupe traduit (« título », constaté dans le pack es) échoue en
+        /// silence ; la citation entre guillemets est la signature de ces
+        /// valeurs de données.</summary>
+        private static readonly string[] TagsQuoted =
+        {
+            "identified", "needs-review",
+            "title", "url", "date",
+        };
 
         /// <summary>Valeurs techniques de données — noms de fichiers journaux,
         /// endpoints du chat externe, exemple d'enregistrement JSON (les
@@ -1502,6 +1510,20 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             // CHANGELOG, pas une chose à enseigner).
             "MM HH * * *", "MM HH * * D", "0 */N * * *",
             "10 3 * * *", "10 5 * * 0",
+            // Syntaxe de ligne des sources « nouveautés » (même classe de
+            // défaut, complément v2.15.0) : le parseur attend EXACTEMENT
+            // « :: » avec ses espaces (NewReleasesTool) et le jeton
+            // « @showbizz » ; le groupe regex « title » est verrouillé en
+            // TagsQuoted (mot ambigu). « URL :: @showbizz » est le gabarit
+            // copié-collé de l'admin.
+            "URL :: @showbizz", " :: ", "@showbizz",
+            // Méta-formes des fenêtres horaires « ce soir » (complément
+            // v2.15.0) : les valeurs sont des nombres (« 18:00 »), seul le
+            // gabarit « HH:mm » est enseigné en prose traduisible ;
+            // « 17:00-02:00 » est l'exemple concret de la fenêtre de
+            // production, « 23:59 » la borne par défaut documentée. Rejet
+            // bruyant associé : TryParseHHmmWarned (TonightService).
+            "HH:mm", "HH:mm-HH:mm", "17:00-02:00", "23:59",
         };
 
         /// <summary>Étiquettes de données présentes dans une valeur source

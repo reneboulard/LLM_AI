@@ -1455,7 +1455,7 @@ namespace LLM_AI
             {
                 var now = DateTimeOffset.Now;
                 var today = now.Date;
-                minStart = TryParseHHmm(cfg?.TonightWindowStart, out var st)
+                minStart = TonightService.TryParseHHmmWarned(cfg?.TonightWindowStart, "TonightWindowStart", _logger, out var st)
                     ? new DateTimeOffset(today.Add(st), now.Offset)
                     : now;
                 // Fin de fenêtre : ce soir 23:59 (défaut), ou l'heure configurée.
@@ -1463,7 +1463,7 @@ namespace LLM_AI
                 // veiller tard), on la reporte au lendemain.
                 var endStr = cfg?.TonightWindowEnd;
                 if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
-                if (TryParseHHmm(endStr, out var et))
+                if (TonightService.TryParseHHmmWarned(endStr, "TonightWindowEnd", _logger, out var et))
                 {
                     var endDt = today.Add(et);
                     if (endDt < minStart) endDt = endDt.AddDays(1);
@@ -1780,24 +1780,6 @@ namespace LLM_AI
                          + "visionnés et la RÉSERVE BIBLIOTHÈQUE pour compléter tes recommandations.";
             }
             return JsonSerializer.Serialize(new { total = results.Count, note, results }, s_json);
-        }
-
-        /// <summary>
-        /// Parse un <c>HH:mm</c> en <see cref="TimeSpan"/>. Retourne false si la
-        /// chaîne est vide ou mal formée. Tolérant sur les espaces.
-        /// </summary>
-        private static bool TryParseHHmm(string s, out TimeSpan ts)
-        {
-            ts = TimeSpan.Zero;
-            if (string.IsNullOrWhiteSpace(s)) return false;
-            s = s.Trim();
-            int colon = s.IndexOf(':');
-            if (colon <= 0 || colon >= s.Length - 1) return false;
-            if (!int.TryParse(s.Substring(0, colon), out var h) ||
-                !int.TryParse(s.Substring(colon + 1), out var m)) return false;
-            if (h < 0 || h > 23 || m < 0 || m > 59) return false;
-            ts = new TimeSpan(h, m, 0);
-            return true;
         }
 
         // ------------------------------------------------------------------

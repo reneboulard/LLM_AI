@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -297,6 +298,13 @@ namespace LLM_AI
         /// <summary>Dernière valeur invalide déjà signalée (anti-spam : une
         /// seule ligne Warn par valeur erronée distincte).</summary>
         private static string _prodWindowWarned;
+
+        /// <summary>Fenêtres horaires invalides déjà signalées (v2.15.0,
+        /// doctrine fail-loud — miroir du pattern <see cref="_prodWindowWarned"/>
+        /// pour <c>TonightWindowStart</c>/<c>TonightWindowEnd</c>, deux champs
+        /// partageant un même helper : une entrée par « champ|valeur »
+        /// distincte).</summary>
+        private static readonly ConcurrentDictionary<string, byte> _invalidWindowWarned = new();
 
         /// <summary>
         /// Gate « période de grande écoute » (<see
@@ -1580,7 +1588,7 @@ namespace LLM_AI
             var today = now.Date;
             var endStr = Plugin.Instance?.Configuration?.TonightWindowEnd;
             if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
-            if (TryParseHHmm(endStr, out var et))
+            if (TryParseHHmmWarned(endStr, "TonightWindowEnd", _logger, out var et))
             {
                 var d = today.Add(et);
                 if (d < now.LocalDateTime) d = d.AddDays(1);
@@ -1600,6 +1608,36 @@ namespace LLM_AI
             if (h < 0 || h > 23 || m < 0 || m > 59) return false;
             value = new TimeSpan(h, m, 0);
             return true;
+        }
+
+        /// <summary>
+        /// <see cref="TryParseHHmm"/> + garde-fou v2.15.0 (doctrine fail-loud,
+        /// miroir de <see cref="IsInProductionWindow"/>) : une valeur NON VIDE
+        /// invalide est journalisée une seule fois par « champ|valeur »
+        /// distincte. Terrain : le repli silencieux au défaut (début =
+        /// maintenant, fin = 23:59) masquait des fenêtres mal formées
+        /// (« 18 h 00 », méta-forme traduite…) — l'admin croyait sa fenêtre
+        /// appliquée, les recos couraient sur la mauvaise soirée. Vide =
+        /// légitime (défaut), jamais de Warn. Partagé par les trois sites de
+        /// parse (EpgTonight, BuildUpcomingRecordings, TonightWindowEnd) qui
+        /// lisent les mêmes bornes.
+        /// </summary>
+        internal static bool TryParseHHmmWarned(string s, string fieldLabel, ILogger logger, out TimeSpan value)
+        {
+            if (string.IsNullOrWhiteSpace(s))
+            {
+                value = TimeSpan.Zero;
+                return false;
+            }
+            if (TryParseHHmm(s, out value)) return true;
+            var key = (fieldLabel ?? "?") + "|" + s.Trim();
+            if (_invalidWindowWarned.TryAdd(key, 0))
+            {
+                logger?.Warn(
+                    "[LLM_AI] {0} « {1} » invalide (format HH:mm attendu, ex. 18:00) — valeur ignorée, repli au défaut de la fenêtre « ce soir ».",
+                    fieldLabel, s);
+            }
+            return false;
         }
 
         /// <summary>Lit une propriété string d'un JsonObject (null si absente/non-string).</summary>
@@ -1990,13 +2028,13 @@ namespace LLM_AI
                 // Fenêtre « ce soir » — mêmes bornes que GetEmbyInfoTool.EpgTonight.
                 var now = DateTimeOffset.Now;
                 var today = now.Date;
-                var minStart = TryParseHHmm(cfg?.TonightWindowStart, out var st)
+                var minStart = TryParseHHmmWarned(cfg?.TonightWindowStart, "TonightWindowStart", _logger, out var st)
                     ? new DateTimeOffset(today.Add(st), now.Offset)
                     : now;
                 var endStr = cfg?.TonightWindowEnd;
                 if (string.IsNullOrWhiteSpace(endStr)) endStr = "23:59";
                 DateTimeOffset maxStart;
-                if (TryParseHHmm(endStr, out var et))
+                if (TryParseHHmmWarned(endStr, "TonightWindowEnd", _logger, out var et))
                 {
                     var endDt = today.Add(et);
                     if (endDt < minStart) endDt = endDt.AddDays(1);

@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   verrouillés dans le filet i18n du générateur : toute langue générée doit
   les recopier à l'identique. Les formes héritées n'y sont pas verrouillées
   — elles ne sont plus citées par aucune native.
+- **Filet étendu aux deux autres surfaces du même défaut** : la syntaxe de
+  ligne des sources « nouveautés » (séparateur « :: » avec ses espaces,
+  jeton « @showbizz », gabarit « URL :: @showbizz ») et les noms de
+  groupes regex lus littéralement par le parseur (« title », « url »,
+  « date » — verrouillés entre guillemets, mots ambigus). Constat vécu :
+  le pack es avait traduit les groupes (« título », « fecha ») — un admin
+  suivant cette doc écrivait un regex que l'extracteur ne lisait pas, en
+  silence. Les méta-formes des fenêtres horaires « ce soir » (« HH:mm »,
+  « HH:mm-HH:mm », exemple « 17:00-02:00 », borne « 23:59 ») sont
+  verrouillées de la même façon.
 
 ### Changed (FR)
 - **Refus bruyant des planifications invalides** : toute tête non reconnue
@@ -50,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   au jour nul (jour traduit par un pack, faute de frappe) était un
   comportement serveur indéfini, silencieusement accepté avant cette
   version.
+- **Fenêtres horaires « ce soir » invalides désormais signalées** : une
+  valeur mal formée (« 18h00 » avec espaces, « 18 h 00 », méta-forme mal
+  recopiée) faisait basculer la fenêtre EPG
+  (`TonightWindowStart`/`TonightWindowEnd`) SANS un bruit sur le défaut
+  (maintenant → 23:59) — l'admin croyait sa fenêtre appliquée, les recos
+  couraient sur la mauvaise soirée. Elle est désormais journalisée en
+  `Warn` (une fois par valeur distincte), comme la fenêtre de production
+  l'était déjà ; les trois sites de lecture (EPG du chat, bloc
+  enregistrements à venir, snapshot de validation) partagent le même
+  garde-fou.
 - Défauts des prompts et documentation passés au crontab restreint
   (« 10 3 * * * » pour la tâche quotidienne de reco, « 10 5 * * 0 » pour
   la gestion bibliothèque) ; les contextes de chat d'édition de prompts
@@ -81,6 +101,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   i18n generator's mechanical net: every generated language must copy them
   verbatim. The legacy forms are not locked there — they are no longer
   quoted by any native string.
+- **Net extended to the two other surfaces carrying the same defect**: the
+  new-releases source line syntax ("::" separator with its spaces,
+  "@showbizz" token, "URL :: @showbizz" template) and the regex group
+  names read literally by the parser ("title", "url", "date" — locked
+  quoted, ambiguous words). Live finding: the es pack had translated the
+  groups ("título", "fecha") — an admin following that doc would write a
+  regex the extractor silently failed to read. The "tonight" time-window
+  meta-forms ("HH:mm", "HH:mm-HH:mm", example "17:00-02:00", documented
+  bound "23:59") are locked the same way.
 
 ### Changed (EN)
 - **Loud rejection of invalid schedules**: any unrecognized head (translated
@@ -90,6 +119,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   recognized English day AND a time: a WeeklyTrigger with a null day
   (day translated by a pack, typo) was undefined server-side behavior,
   silently accepted before this version.
+- **Invalid "tonight" time windows now reported**: a malformed value
+  ("6 pm", mistranscribed meta-form) made the EPG window
+  (`TonightWindowStart`/`TonightWindowEnd`) silently fall back to the
+  default (now → 23:59) — the admin believed their window was applied
+  while recommendations ran on the wrong evening. It is now logged as a
+  `Warn` (once per distinct value), mirroring the production window; all
+  three read sites (chat EPG, upcoming-recordings block, validation
+  snapshot) share the same guard.
 - Default prompts and documentation switched to the restricted crontab
   ("10 3 * * *" for the daily recommendation task, "10 5 * * 0" for
   library management); the chat prompt-editing contexts now teach the
