@@ -2847,8 +2847,7 @@ total Go donne le gain de place réel du verdict), avec **« 🗑️ Effacer /
 - **Lancement** : bouton « Lancer l'évaluation » (consigne libre facultative)
   ou tâche planifiée « Gestion bibliothèque » (désactivée par défaut ;
   planification en tête du champ `LibReviewTask`, ex. « 10 5 * * 0 » —
-  crontab restreint, 0=dimanche ; l'ancienne forme « Weekly Sunday 05:10 »
-  reste acceptée).
+  crontab restreint, 0=dimanche).
   Le run est **détaché** (quitter la page ne l'annule pas), résultat persisté
   dans `libreview_report.json`.
 - **Validation à l'affichage** : à chaque lecture, le serveur re-résout chaque

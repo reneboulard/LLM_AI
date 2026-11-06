@@ -1495,12 +1495,13 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             // à traduire). Terrain : l'ancienne syntaxe par mots-clés
             // anglais a été traduite par l'atelier es (« Diario 03:00 »)
             // et enseignait une forme que le parseur serveur ignorait —
-            // repli silencieux à minuit. Formes canoniques, exemples
-            // concrets et formes héritées (toujours acceptées).
+            // repli silencieux à minuit. Seules les formes CANONIQUES
+            // sont verrouillées : les surfaces usager n'enseignent que le
+            // crontab (décision usager 2026-11-06 — l'acceptation des
+            // anciens mots-clés est un fait du parseur, documenté au seul
+            // CHANGELOG, pas une chose à enseigner).
             "MM HH * * *", "MM HH * * D", "0 */N * * *",
             "10 3 * * *", "10 5 * * 0",
-            "Daily HH:MM", "Weekly Sunday HH:MM", "Hourly", "Interval",
-            "Daily 03:00", "Weekly Sunday 05:10",
         };
 
         /// <summary>Étiquettes de données présentes dans une valeur source

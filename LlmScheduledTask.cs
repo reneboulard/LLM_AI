@@ -569,8 +569,8 @@ namespace LLM_AI
                         if (day == null || !hasTime)
                         {
                             logger?.Warn(
-                                "[LLM_AI] Planification « {0} » : WEEKLY exige un jour anglais reconnu et une heure " +
-                                "(« Weekly Sunday 05:10 ») — repli : tous les jours à 00:00 (ou cron « MM HH * * J », 0=dimanche).",
+                                "[LLM_AI] Planification « {0} » : WEEKLY exige un jour reconnu et une heure — " +
+                                "repli : tous les jours à 00:00. Forme canonique : « MM HH * * J » (J : 0=dimanche…6=samedi).",
                                 schedule);
                             yield return DailyAt(0, 0);
                             yield break;
@@ -606,8 +606,8 @@ namespace LLM_AI
                         // journalisé, l'admin peut corriger.
                         logger?.Warn(
                             "[LLM_AI] Planification « {0} » non reconnue — repli : tous les jours à 00:00. " +
-                            "Syntaxe : cron « MM HH * * J » (J : 0=dimanche…6=samedi), ou l'ancienne " +
-                            "« Daily HH:MM / Hourly / Weekly Sunday HH:MM / Interval heures ».",
+                            "Syntaxe : « MM HH * * * » (tous les jours), « MM HH * * J » (J : 0=dimanche…6=samedi), " +
+                            "« 0 */N * * * » (toutes les N heures).",
                             schedule);
                         yield return DailyAt(0, 0);
                     }

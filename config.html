@@ -850,8 +850,7 @@
                                 Format : « planification | prompt de la tâche ». Planification (crontab
                                 restreint, heure locale du serveur) : « MM HH * * * » = tous les jours,
                                 « MM HH * * D » = chaque semaine le jour D (D : 0=dimanche…6=samedi),
-                                « 0 */N * * * » = toutes les N heures. L'ancienne syntaxe reste acceptée :
-                                Daily HH:MM, Hourly, Weekly Sunday HH:MM, Interval heures. Le texte
+                                « 0 */N * * * » = toutes les N heures. Le texte
                                 après le « | » est envoyé au LLM pour le run séries (premières
                                 S01E01 et nouvelles saisons). La tâche est aussi déclenchable
                                 manuellement dans « Tâches planifiées ».
@@ -2005,8 +2004,8 @@
                             <div class="fieldDescription" id="schedPreviewLibReview" style="font-style:italic;"></div>
                             <div class="fieldDescription" data-i18n-html="cfg.libreview.task.desc">
                                 Partie gauche de « | » = planification de la tâche (crontab restreint, ex.
-                                « 10 5 * * 0 » ; l'ancienne « Daily 03:00 / Weekly Sunday 05:10 » reste acceptée),
-                                partie droite = prompt du run FILMS. Le run SÉRIES a son propre prompt ci-dessous.
+                                « 10 5 * * 0 »), partie droite = prompt du run FILMS. Le run SÉRIES a son
+                                propre prompt ci-dessous.
                             </div>
                         </div>
 

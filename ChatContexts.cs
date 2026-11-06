@@ -151,9 +151,8 @@ namespace LLM_AI
                 "tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] " +
                 "avec kind=\"series\" — le moteur du plugin parse ce format : toute révision doit " +
                 "le préserver tel quel. La partie gauche du « | » est l'horaire de planification lu " +
-                "par la config (crontab restreint « MM HH * * J », 0=dimanche ; l'ancienne forme " +
-                "« Daily 03:00 » reste acceptée) : ne l'altérez que sur demande explicite et sans " +
-                "ambiguïté. " +
+                "par la config (crontab restreint « MM HH * * J », 0=dimanche) : ne l'altérez que " +
+                "sur demande explicite et sans ambiguïté. " +
                 "Champs EPG réels disponibles : ceux de get_emby_info (action=epg_series — " +
                 "premieres_only, new_seasons) ; ne référencez jamais un champ inventé.\n",
                 cfg => cfg.ScheduleTask, "schedule_task"),
@@ -209,8 +208,8 @@ namespace LLM_AI
                 "user, reason = une phrase concrète. Le moteur valide chaque id côté serveur (hors " +
                 "pool = écarté) : toute révision doit préserver ce contrat tel quel. La partie " +
                 "gauche du « | » est l'horaire de planification lu par la config (crontab restreint " +
-                "« MM HH * * J », 0=dimanche ; l'ancienne « Weekly Sunday 05:10 » reste acceptée) : " +
-                "ne l'altérez que sur demande explicite et sans ambiguïté. " +
+                "« MM HH * * J », 0=dimanche) : ne l'altérez que sur demande explicite et sans " +
+                "ambiguïté. " +
                 "Rappel du module : le plugin ne supprime JAMAIS — seules les suppressions " +
                 "explicites de l'admin via l'endpoint dédié (délégation à Emby). Les séries à " +
                 "enregistrer (timers actifs) sont exclues du pool côté serveur depuis v2.10.2 : ne " +

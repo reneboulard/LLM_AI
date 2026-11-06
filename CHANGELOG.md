@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   le parseur serveur ignorait (« Diario 03:00 ») — repli silencieux à
   minuit. L'ancienne syntaxe **reste acceptée pour toujours** (aucune
   migration forcée : les configs existantes et les packs antérieurs
-  continuent de fonctionner).
+  continuent de fonctionner) — c'est un fait du parseur documenté ici
+  uniquement : les surfaces destinées à l'usager (page de configuration,
+  README) n'enseignent QUE le crontab restreint ; une nouvelle installation
+  présente le nouveau standard et l'usager n'a pas à connaître l'ancien.
 - **Libellé dérivé sous les champs de planification** : la page de
   configuration calcule en direct le libellé humain (« Chaque dimanche à
   05:10 », « Toutes les 4 heures », « Tous les jours à 03:10 ») à partir des
@@ -33,9 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   canonique, libellé localisé) : le libellé est calculé au rendu, jamais
   stocké, jamais traduit par l'atelier ; une tête non reconnue s'affiche
   immédiatement sous le champ.
-- Les jetons de syntaxe (formes cron, exemples et formes héritées) sont
+- Les jetons de syntaxe canoniques (formes cron et exemples) sont
   verrouillés dans le filet i18n du générateur : toute langue générée doit
-  les recopier à l'identique.
+  les recopier à l'identique. Les formes héritées n'y sont pas verrouillées
+  — elles ne sont plus citées par aucune native.
 
 ### Changed (FR)
 - **Refus bruyant des planifications invalides** : toute tête non reconnue
@@ -62,16 +66,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   was the only translatable part of the field, and the workshop's es pack
   taught words the server parser ignored ("Diario 03:00") — silent
   fallback to midnight. The legacy syntax **stays accepted forever** (no
-  forced migration: existing configs and prior packs keep working).
+  forced migration: existing configs and prior packs keep working) —
+  that is a parser fact documented here only: user-facing surfaces
+  (configuration page, README) teach ONLY the restricted crontab; a fresh
+  install presents the new standard and the user does not need to know
+  the old one.
 - **Derived label under the schedule fields**: the configuration page
   computes the human label live ("Every Sunday at 05:10", "Every 4
   hours", "Every day at 03:10") from the typed numbers — Emby's scheduler
   value/label pattern (canonical value, localized label): the label is
   computed at render time, never stored, never translated by the workshop;
   an unrecognized head shows immediately under the field.
-- Schedule syntax tokens (cron shapes, examples and legacy forms) are
-  locked in the i18n generator's mechanical net: every generated language
-  must copy them verbatim.
+- Canonical schedule tokens (cron shapes and examples) are locked in the
+  i18n generator's mechanical net: every generated language must copy them
+  verbatim. The legacy forms are not locked there — they are no longer
+  quoted by any native string.
 
 ### Changed (EN)
 - **Loud rejection of invalid schedules**: any unrecognized head (translated

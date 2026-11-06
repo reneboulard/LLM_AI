@@ -2758,7 +2758,7 @@ space gain), with **"🗑️ Delete / ✔️ Keep"** buttons.
 - **Launch**: "Run evaluation" button (optional free-form brief) or the
   "Library management" **scheduled task** (off by default; schedule read from
   the head of `LibReviewTask`, e.g. "10 5 * * 0" — restricted crontab,
-  0=Sunday; the legacy "Weekly Sunday 05:10" is still accepted). The run is
+  0=Sunday). The run is
   **detached** (leaving the page does not cancel it), result persisted to
   `libreview_report.json`.
 - **Display-time validation**: on every read, the server re-resolves each id —
