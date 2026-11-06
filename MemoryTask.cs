@@ -20,7 +20,7 @@ namespace LLM_AI
     /// <summary>
     /// Tâche planifiée hebdomadaire de la <b>mémoire réflexive</b> (opt-in
     /// <see cref="PluginConfiguration.MemoryCardEnabled"/>, défaut dimanche
-    /// 4 h 30 — après l'analyse hebdo classique de 4 h). C'est la Phase C du
+    /// 4 h 40 — après l'analyse hebdo classique de 4 h 10). C'est la Phase C du
     /// concept : le LLM gère et met à jour lui-même sa <b>fiche mémoire</b>
     /// persistante (~250 mots, Markdown) — ses réussites, ses échecs, ses
     /// stratégies pour les prochains runs et chats.
@@ -712,7 +712,7 @@ namespace LLM_AI
         //  Déclencheur
         // ------------------------------------------------------------------
 
-        /// <summary>Dimanche 4 h 30 — après l'analyse hebdo classique (4 h),
+        /// <summary>Dimanche 4 h 40 — après l'analyse hebdo classique (4 h 10),
         /// avant les runs diurnes. La tâche ne tourne que si
         /// <see cref="PluginConfiguration.MemoryCardEnabled"/> est coché.</summary>
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()

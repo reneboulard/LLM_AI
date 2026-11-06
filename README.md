@@ -954,8 +954,12 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
   de série figés au moment de la lecture** — la clé de la jointure en cascade
   de l'analyse (v2.7.2 : l'épisode enregistré d'une reco compte comme
   consommation ; une carte `.strm` activée est un signal positif distinct).
+  **Profil enrichi v2.14.0** : genres + classification normalisés, année, type,
+  position dans la série, début de lecture, méthode, langues audio/sous-titres,
+  ids de session — tous figés au moment de la lecture (l'item DVR disparaît
+  souvent avant l'analyse hebdo).
 - `MemoryCardEnabled` (bool, défaut `false`) — tâche hebdomadaire (dimanche
-  4 h 30) : le LLM réécrit sa **fiche mémoire** (~250 mots, `memory_card.json`,
+  4 h 40) : le LLM réécrit sa **fiche mémoire** (~250 mots, `memory_card.json`,
   versionnée, 4 versions conservées) ; quand active, la fiche REMPLACE la
   directive de la boucle de rétroaction dans les prompts. La fiche pilote la
   **manière** de recommander, jamais la décision d'en faire — une consigne
@@ -2333,7 +2337,7 @@ rétention bornée, fail-open (fichier absent/corrompu → vide, jamais d'except
 |---|---|---|
 | `decisions.json` | Chaque reco émise (Tonight / enregistrement / rejet « Oublier » / **signal de goût du chat**) avec sa **raison LLM**, sa priorité, et la **version de fiche en vigueur** (`mv` — clé de la calibration) | 30 j |
 | `run_pool.json` | Le « menu » de candidats soumis à chaque run (EPG capté par `get_emby_info`, réserve bibliothèque, enregistrements non visionnés) — distingue une **mauvaise reco** d'une **erreur de classement** | 30 j |
-| `playback.json` | Chaque lecture terminée : item, usager, durée réelle, **fraction lue**, source (bibliothèque/.strm/direct), chaîne, client, appareil, **titre + nom de série figés au moment de la lecture** (v2.7.2 — un enregistrement DVR est souvent déplacé ou supprimé avant l'analyse hebdo ; l'id seul devient non joignable) | 30 j |
+| `playback.json` | Chaque lecture terminée : item, usager, durée réelle, **fraction lue**, source (bibliothèque/.strm/direct), chaîne, client, appareil, **titre + nom de série figés au moment de la lecture** (v2.7.2 — un enregistrement DVR est souvent déplacé ou supprimé avant l'analyse hebdo ; l'id seul devient non joignable) ; **profil enrichi v2.14.0** : genres + classification normalisés, année, type, position dans la série (id/saison/épisode), début de lecture, méthode, langues, ids de session — tous figés | 30 j |
 | `epg_snapshot.json` | Métadonnées EPG **figées** à l'émission au LLM / la création de timer (titre, synopsis, chaîne, **durée de diffusion** — dénominateur du % du direct, genres normalisés) | 90 j |
 
 Catégorisation comportementale dérivée : **rejet immédiat** < 5 %, **abandon**
@@ -2351,15 +2355,19 @@ rejet — plus de faux « rejet immédiat ».
 
 ### La fiche mémoire (Phase C, `MemoryTask` / `MemoryCard`)
 
-Tâche hebdomadaire (dimanche 4 h 30 — après l'analyse classique de 4 h, opt-in
-`MemoryCardEnabled`) :
+Tâche hebdomadaire (dimanche 4 h 40 — après l'analyse hebdo classique de
+4 h 10, opt-in `MemoryCardEnabled`) :
 
 1. **Jointure 100 % C#** (zéro LLM pour les données) : décisions × télémétrie
    (jointure en cascade id / fenêtre du direct / titre-série, v2.7.2) ×
    **calibration des versions de fiche** (les recos émises sous v3 ont-elles mieux
    marché que sous v4 ?) × candidats écartés des pools × vu-sans-recommandation
    (titres **et séries** résolus côté C#, cartes `.strm` exclues) × créneaux
-   de lecture.
+   de lecture (au **début** de session, v2.14.0) × **genres réellement
+   regardés** (v2.14.0 — miroir comportemental du profil de goût : genres
+   normalisés figés dans la télémétrie, backfill des entrées plus anciennes
+   quand l'item survit). Les résultats joints portent la position SxxEyy
+   quand l'entrée la porte.
 2. **Un appel LLM sans outils** réécrit la fiche : reprise de l'actuelle obligatoire,
    sections imposées (« Ce que je sais de l'usager / Ce qui a marché / Ce qui a
    échoué et pourquoi / Stratégies / Zones d'incertitude »), auto-évaluation de la

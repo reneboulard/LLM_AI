@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added (FR)
 - **Profil enrichi dans la télémétrie de lecture** (`playback.json`,
-  opt-in existant « Journaliser les lectures terminées ») : chaque session
+  opt-in existant « Télémétrie de lecture (% visionné de chaque lecture) ») : chaque session
   terminée fige désormais, en plus du titre/série (v2.7.2), les champs
   suivants — tous captés au moment de la lecture car l'item enregistré
   disparaît souvent de la bibliothèque avant l'analyse hebdomadaire :
@@ -49,10 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fiche n'avait jamais de données. Toutes les entrées existantes des
   journaux sont désormais relues correctement (aucune migration : le
   format d'écriture était sain, c'est la lecture qui était aveugle).
+- Page de configuration : l'heure affichée de la tâche « fiche mémoire »
+  était périmée (4 h 30 ; le déclencheur réel est 4 h 40, décalé de
+  l'analyse hebdo de 4 h 10) ; les descriptions de la télémétrie de
+  lecture reflètent désormais les champs figés (titre/série, genres et
+  classification normalisés, position dans la série, etc.).
 
 ### Added (EN)
 - **Enriched profile in playback telemetry** (`playback.json`, existing
-  opt-in "Log finished playbacks"): every finished session now freezes, on
+  opt-in "Playback telemetry (% watched of every playback)"): every finished session now freezes, on
   top of the title/series (v2.7.2), the following fields — all captured at
   playback time because recorded items often vanish from the library
   before the weekly analysis:
@@ -85,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   had in fact reported its position, and the card-version calibration
   never had data. All existing journal entries are now read back correctly
   (no migration needed: the write format was sound, the reader was blind).
+- Configuration page: the displayed "memory card" task time was stale
+  (4:30; the actual trigger is 4:40, offset from the 4:10 weekly analysis);
+  the playback-telemetry descriptions now reflect the frozen fields
+  (title/series, normalized genres and rating, position in the series,
+  etc.).
 
 ## [2.13.5] — 2026-11-04
 

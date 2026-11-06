@@ -928,7 +928,11 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
   **title + series name frozen at playback time** — the key to the analysis'
   cascade join (v2.7.2: a reco's recorded episode counts as consumption; an
   activated `.strm` card is a distinct positive signal).
-- `MemoryCardEnabled` (bool, default `false`) — weekly task (Sunday 4:30): the LLM
+  **Enriched profile v2.14.0**: normalized genres + rating, year, type,
+  position in the series, playback start, method, audio/subtitle languages,
+  session ids — all frozen at playback time (the DVR item often vanishes
+  before the weekly analysis).
+- `MemoryCardEnabled` (bool, default `false`) — weekly task (Sunday 4:40): the LLM
   rewrites its **memory card** (~250 words, `memory_card.json`, versioned, 4 previous
   versions kept); when active, the card REPLACES the classic feedback-loop directive
   in the prompts. The card steers **how** to recommend, never whether to recommend
@@ -2262,7 +2266,7 @@ retention, fail-open (missing/corrupt file → empty, never an exception):
 |---|---|---|
 | `decisions.json` | Every emitted reco (Tonight / recording / "Forget" rejection / **chat taste signal**) with its **LLM reason**, its priority, and the **card version in effect** (`mv` — the calibration key) | 30 days |
 | `run_pool.json` | The candidate "menu" submitted to each run (EPG captured by `get_emby_info`, library reserve, unwatched recordings) — tells a **bad reco** from a **ranking error** | 30 days |
-| `playback.json` | Every finished playback: item, user, actual duration, **watched fraction**, source (library/.strm/direct), channel, client, device, **title + series name frozen at playback time** (v2.7.2 — a DVR recording is often moved or deleted before the weekly analysis; the id alone becomes unresolvable) | 30 days |
+| `playback.json` | Every finished playback: item, user, actual duration, **watched fraction**, source (library/.strm/direct), channel, client, device, **title + series name frozen at playback time** (v2.7.2 — a DVR recording is often moved or deleted before the weekly analysis; the id alone becomes unresolvable); **enriched profile v2.14.0**: normalized genres + rating, year, type, position in the series (id/season/episode), playback start, method, languages, session ids — all frozen | 30 days |
 | `epg_snapshot.json` | EPG metadata **frozen** at LLM submission / timer creation (title, synopsis, channel, **air duration** — live-percentage denominator, normalized genres) | 90 days |
 
 Derived behavioral categories: **instant rejection** < 5 %, **abandon** 5–50 %,
@@ -2280,14 +2284,18 @@ stop) yields "watched, unknown duration", not a rejection — no more false
 
 ### The memory card (Phase C, `MemoryTask` / `MemoryCard`)
 
-Weekly task (Sunday 4:30 — after the classic 4:00 analysis, opt-in
+Weekly task (Sunday 4:40 — after the classic 4:10 weekly analysis, opt-in
 `MemoryCardEnabled`):
 
 1. **100% C# join** (zero LLM for the data): decisions × telemetry (cascade join
    item id / live window / title-series, v2.7.2) × **card-version
    calibration** (did recos issued under v3 perform better than under v4?) ×
    pool-discarded candidates × watched-without-reco (titles **and series**
-   resolved C#-side, `.strm` cards excluded) × playback slots.
+   resolved C#-side, `.strm` cards excluded) × playback slots (at session
+   **start**, v2.14.0) × **genres actually watched** (v2.14.0 — behavioural
+   mirror of the taste profile: normalized genres frozen in the telemetry,
+   backfill of older entries when the item survives). Joined outcomes carry
+   the SxxEyy position when the entry has it.
 2. **One tool-less LLM call** rewrites the card: carrying the current one forward is
    mandatory, imposed sections ("What I know about the user / What worked / What
    failed and why / Strategies for future recommendations / Uncertainty zones"),

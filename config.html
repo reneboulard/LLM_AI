@@ -1146,7 +1146,10 @@
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.playback.desc">
                             À chaque fin de lecture, écrit « playback.json » (item,
-                            usager, durée réelle, fraction lue, source, chaîne, client, appareil).
+                            usager, durée réelle, fraction lue, source, chaîne, client, appareil, titre
+                            et série figés ; genres et classification normalisés, année, position
+                            dans la série, début de lecture, langues — tout est figé au moment de la
+                            lecture, car l'item enregistré disparaît souvent avant l'analyse).
                             Signal central de la réflexion : rejet immédiat
                             (moins de 5 %), abandon (5 à 50 %), contenu validé (plus de 80 %). Aucun
                             effet sur la lecture elle-même.
@@ -1157,7 +1160,7 @@
                             <span class="checkboxLabel" data-i18n="cfg.memory.card.flag">Activer la fiche mémoire du LLM (révision hebdomadaire)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.memory.card.desc">
-                            Tâche hebdomadaire (dimanche 4 h 30) : le LLM réécrit lui-même sa fiche
+                            Tâche hebdomadaire (dimanche 4 h 40) : le LLM réécrit lui-même sa fiche
                             mémoire (~250 mots) à partir des événements de la semaine — ce qu'il sait
                             de l'usager, ses réussites, ses échecs et ses stratégies. Quatre versions
                             sont conservées. La fiche est réinjectée dans les prompts (recommandations,
