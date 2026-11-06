@@ -24,8 +24,9 @@ namespace LLM_AI
     /// suppressions explicites via l'endpoint admin (délégation à Emby).
     ///
     /// Planification lue dans la partie gauche de
-    /// <see cref="PluginConfiguration.LibReviewTask"/> (« Weekly Sunday
-    /// 05:10 | prompt films »), même mécanisme que
+    /// <see cref="PluginConfiguration.LibReviewTask"/> (« 10 5 * * 0 |
+    /// prompt films » — crontab restreint v2.15.0 ; l'ancienne « Weekly
+    /// Sunday 05:10 » reste acceptée), même mécanisme que
     /// <see cref="LlmScheduledTask.GetDefaultTriggers"/>.
     /// </summary>
     public class LibReviewTask : IScheduledTask, IConfigurableScheduledTask
@@ -138,7 +139,8 @@ namespace LLM_AI
         {
             var cfg = Plugin.Instance?.Configuration;
             var spec = cfg?.LibReviewTask ?? string.Empty;
-            foreach (var t in LlmScheduledTask.ParseTriggers(LibReviewEngine.ParseSchedule(spec)))
+            foreach (var t in LlmScheduledTask.ParseTriggers(
+                         LibReviewEngine.ParseSchedule(spec), _logger))
                 yield return t;
         }
     }

@@ -465,7 +465,8 @@ namespace LLM_AI
 
         /// <summary>
         /// Triggers par défaut déduits de la partie gauche du champ ScheduleTask
-        /// (ex. « Daily 03:00 », « Hourly », « Weekly Monday 03:00 »).
+        /// (crontab restreint : « 10 3 * * * », « 10 5 * * 0 » ; l'ancienne
+        /// syntaxe « Daily 03:00 » reste acceptée).
         /// L'utilisateur peut toujours les ajuster dans le planificateur Emby.
         /// </summary>
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
@@ -476,12 +477,22 @@ namespace LLM_AI
             int sep = spec.IndexOf('|');
             string schedule = (sep >= 0 ? spec.Substring(0, sep) : spec).Trim();
 
-            foreach (var t in ParseTriggers(schedule))
+            foreach (var t in ParseTriggers(schedule, _logger))
                 yield return t;
         }
 
-        /// <summary>Parseur de planification partagé (aussi utilisé par LibReviewTask — v2.10.0).</summary>
-        internal static IEnumerable<TaskTriggerInfo> ParseTriggers(string schedule)
+        /// <summary>Parseur de planification partagé (aussi utilisé par
+        /// LibReviewTask — v2.10.0). Forme canonique depuis v2.15.0 :
+        /// crontab restreint en 5 champs (« MM HH * * J »). L'ancienne
+        /// syntaxe par mots-clés anglais (Daily/Weekly/Hourly/Interval)
+        /// reste acceptée pour toujours — les configs existantes et les
+        /// packs de langues antérieurs la portent. Terrain 2026-11-06 :
+        /// ces mots-clés étaient la seule partie traduisible du champ et
+        /// la doc générée enseignait des mots que le parseur ignorait
+        /// (« Diario 03:00 » es) → repli silencieux à minuit ; le cron est
+        /// agnostique par construction (nombres et astérisques), et tout
+        /// échec est désormais signalé au lieu d'être avalé.</summary>
+        internal static IEnumerable<TaskTriggerInfo> ParseTriggers(string schedule, ILogger logger = null)
         {
             if (string.IsNullOrWhiteSpace(schedule))
             {
@@ -490,8 +501,28 @@ namespace LLM_AI
             }
 
             var parts = schedule.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-            var keyword = parts[0].ToUpperInvariant();
 
+            // Crontab restreint : exactement 5 champs « MM HH DoM Mo J ».
+            // Convention du jour : 0 = dimanche — identique au cron
+            // classique ET au DayOfWeek .NET/Emby (zéro conversion avec
+            // TaskTriggerInfo.DayOfWeek ; l'ISO 8601, elle, compte
+            // 1 = lundi : ne jamais y toucher).
+            if (parts.Length == 5)
+            {
+                if (TryParseCron(parts, out var cronTrigger, out var cronReason))
+                {
+                    yield return cronTrigger;
+                    yield break;
+                }
+                logger?.Warn(
+                    "[LLM_AI] Planification « {0} » non supportée ({1}) — repli : tous les jours à 00:00. " +
+                    "Syntaxe : « MM HH * * * », « MM HH * * J » (J : 0=dimanche…6=samedi), « 0 */N * * * ».",
+                    schedule, cronReason);
+                yield return DailyAt(0, 0);
+                yield break;
+            }
+
+            var keyword = parts[0].ToUpperInvariant();
             switch (keyword)
             {
                 case "HOURLY":
@@ -503,7 +534,7 @@ namespace LLM_AI
                     yield break;
 
                 case "INTERVAL":
-                    // « INTERVAL <heures> »
+                    // « INTERVAL <heures> » (ancienne syntaxe)
                     if (parts.Length >= 2 && int.TryParse(parts[1], out var hours) && hours > 0)
                         yield return new TaskTriggerInfo
                         {
@@ -511,21 +542,44 @@ namespace LLM_AI
                             IntervalTicks = TimeSpan.FromHours(hours).Ticks
                         };
                     else
+                    {
+                        logger?.Warn("[LLM_AI] Planification « {0} » : INTERVAL sans nombre d'heures valide — repli : toutes les heures.",
+                            schedule);
                         yield return new TaskTriggerInfo
                         {
                             Type = "IntervalTrigger",
                             IntervalTicks = TimeSpan.FromHours(1).Ticks
                         };
+                    }
                     yield break;
 
                 case "WEEKLY":
                     {
-                        var (h, m) = ParseTime(parts, 2, 1); // Weekly [Day] HH:MM
+                        // « Weekly Jour HH:MM » (ancienne syntaxe) — le jour
+                        // DOIT être un nom anglais reconnu ET l'heure
+                        // présente : un WeeklyTrigger au jour nul (jour
+                        // traduit par l'atelier ou faute de frappe — terrain
+                        // es « Semanal Domingo », terrain FR « Weekly
+                        // dimanche ») est un comportement serveur indéfini,
+                        // pas une planification. Refus bruyant plutôt que
+                        // trigger muet (v2.15.0 ; l'ancien code l'acceptait).
+                        var day = ParseDayOfWeek(parts, 1);
+                        int wh = 0, wm = 0;
+                        var hasTime = parts.Length >= 3 && TryParseTime(parts[2], out wh, out wm);
+                        if (day == null || !hasTime)
+                        {
+                            logger?.Warn(
+                                "[LLM_AI] Planification « {0} » : WEEKLY exige un jour anglais reconnu et une heure " +
+                                "(« Weekly Sunday 05:10 ») — repli : tous les jours à 00:00 (ou cron « MM HH * * J », 0=dimanche).",
+                                schedule);
+                            yield return DailyAt(0, 0);
+                            yield break;
+                        }
                         yield return new TaskTriggerInfo
                         {
                             Type = "WeeklyTrigger",
-                            DayOfWeek = ParseDayOfWeek(parts, 1),
-                            TimeOfDayTicks = new TimeSpan(h, m, 0).Ticks
+                            DayOfWeek = day,
+                            TimeOfDayTicks = new TimeSpan(wh, wm, 0).Ticks
                         };
                         yield break;
                     }
@@ -540,11 +594,105 @@ namespace LLM_AI
                 default:
                     // Peut-être juste une heure « 03:00 » → quotidien à cette heure.
                     if (TryParseTime(schedule, out var hh, out var mm))
+                    {
                         yield return DailyAt(hh, mm);
+                    }
                     else
+                    {
+                        // Terrain 2026-11-06 : ce repli silencieux à minuit
+                        // masquait des têtes de planification invalides
+                        // pendant des semaines (mots-clés « traduits » par
+                        // l'atelier, frappes fautives) — il est désormais
+                        // journalisé, l'admin peut corriger.
+                        logger?.Warn(
+                            "[LLM_AI] Planification « {0} » non reconnue — repli : tous les jours à 00:00. " +
+                            "Syntaxe : cron « MM HH * * J » (J : 0=dimanche…6=samedi), ou l'ancienne " +
+                            "« Daily HH:MM / Hourly / Weekly Sunday HH:MM / Interval heures ».",
+                            schedule);
                         yield return DailyAt(0, 0);
+                    }
                     yield break;
             }
+        }
+
+        /// <summary>Crontab restreint : « MM HH * * * » (quotidien),
+        /// « MM HH * * J » (hebdomadaire, J = 0..6, 0 = dimanche) et
+        /// « 0 */N * * * » (toutes les N heures). Tout autre assemblage
+        /// 5 champs (plages, listes, pas aux minutes, jour du mois, mois,
+        /// noms de jours) est refusé : Emby ne sait représenter que ces
+        /// trois triggers — un cron complet serait une promesse creuse.</summary>
+        private static bool TryParseCron(string[] f, out TaskTriggerInfo trigger, out string reason)
+        {
+            trigger = null;
+            reason = null;
+
+            // Minute : nombre simple 0-59.
+            if (!int.TryParse(f[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var minute)
+                || minute < 0 || minute > 59)
+            {
+                reason = "minute invalide (0-59, pas de */N ni de plage)";
+                return false;
+            }
+
+            // Jour du mois et mois : uniquement « * ».
+            if (f[2] != "*" || f[3] != "*")
+            {
+                reason = "jour du mois / mois : seul « * » est supporté";
+                return false;
+            }
+
+            // Heure : « */N » = intervalle de N heures (uniquement avec
+            // minute 0 et sans jour de semaine), sinon nombre simple 0-23.
+            if (f[1].StartsWith("*/", StringComparison.Ordinal))
+            {
+                if (minute != 0 || f[4] != "*")
+                {
+                    reason = "intervalle : forme « 0 */N * * * » uniquement";
+                    return false;
+                }
+                if (!int.TryParse(f[1].Substring(2), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)
+                    || n < 1)
+                {
+                    reason = "intervalle invalide (N >= 1)";
+                    return false;
+                }
+                trigger = new TaskTriggerInfo
+                {
+                    Type = "IntervalTrigger",
+                    IntervalTicks = TimeSpan.FromHours(n).Ticks
+                };
+                return true;
+            }
+
+            if (!int.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var hour)
+                || hour < 0 || hour > 23)
+            {
+                reason = "heure invalide (0-23)";
+                return false;
+            }
+
+            // Jour de semaine : « * » = quotidien, 0-6 = hebdomadaire
+            // (0 = dimanche — convention cron classique ET DayOfWeek .NET).
+            if (f[4] == "*")
+            {
+                trigger = DailyAt(hour, minute);
+                return true;
+            }
+
+            if (int.TryParse(f[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dow)
+                && dow >= 0 && dow <= 6)
+            {
+                trigger = new TaskTriggerInfo
+                {
+                    Type = "WeeklyTrigger",
+                    DayOfWeek = (DayOfWeek)dow,
+                    TimeOfDayTicks = new TimeSpan(hour, minute, 0).Ticks
+                };
+                return true;
+            }
+
+            reason = "jour de la semaine invalide (0-6, 0=dimanche ; noms refusés)";
+            return false;
         }
 
         private static TaskTriggerInfo DailyAt(int h, int m) => new TaskTriggerInfo

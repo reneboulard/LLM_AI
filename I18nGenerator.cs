@@ -1490,6 +1490,17 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             "playback.json",
             "POST /Plugins/LLMAI/ChatExternal", "POST /Plugins/LLMAI/Show",
             "[{\"u\":\"userId\",\"n\":\"name\",\"d\":\"date\",\"text\":\"…\"}]",
+            // Têtes de planification (v2.15.0) — crontab restreint,
+            // agnostique par construction (nombres et astérisques, rien
+            // à traduire). Terrain : l'ancienne syntaxe par mots-clés
+            // anglais a été traduite par l'atelier es (« Diario 03:00 »)
+            // et enseignait une forme que le parseur serveur ignorait —
+            // repli silencieux à minuit. Formes canoniques, exemples
+            // concrets et formes héritées (toujours acceptées).
+            "MM HH * * *", "MM HH * * D", "0 */N * * *",
+            "10 3 * * *", "10 5 * * 0",
+            "Daily HH:MM", "Weekly Sunday HH:MM", "Hourly", "Interval",
+            "Daily 03:00", "Weekly Sunday 05:10",
         };
 
         /// <summary>Étiquettes de données présentes dans une valeur source

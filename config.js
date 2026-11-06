@@ -608,6 +608,9 @@ define(["loading"], function (loading) {
                     // Remplit le textarea (non enregistré tant que l'admin
                     // n'a pas cliqué « Enregistrer »).
                     target.value = d[key] != null ? d[key] : "";
+                    // Aperçu de planification : la tête de planification
+                    // vient de changer — resynchroniser le libellé dérivé.
+                    updateSchedPreview(view, target);
                 }, function (err) {
                     if (typeof Dashboard !== "undefined" && Dashboard.alert) {
                         Dashboard.alert(i18n.t("cfg.reset.error",
@@ -981,6 +984,113 @@ define(["loading"], function (loading) {
     // SECTION_KEY_PREFIX ont été retirés ; le lien profond
     // « &section=crosskind » est repris par makeTabs (→ onglet tab-media).
 
+    // ----------------------------------------------------------------
+    //  Aperçu de planification (v2.15.0)
+    // ----------------------------------------------------------------
+    // Sous les deux champs à tête de planification (txtScheduleTask,
+    // txtLibReviewTask), un libellé humain DÉRIVÉ des nombres
+    // (« 10 5 * * 0 » → « Chaque dimanche à 05:10 »). Pattern
+    // valeur/libellé d'Emby (le dialogue « Tâches planifiées » affiche
+    // « dimanche » pour value="Sunday") : le libellé est CALCULÉ au
+    // rendu — jamais stocké, jamais traduit par l'atelier — les noms de
+    // jours viennent du dictionnaire i18n, la donnée reste des nombres.
+    // Miroir du parseur serveur (LlmScheduledTask.ParseTriggers) :
+    // cron restreint d'abord, ancienne syntaxe Daily/Weekly/Hourly/
+    // Interval ensuite (toujours acceptée). Divergence volontaire :
+    // le serveur est tolérant (WEEKLY sans heure → 01:00), l'aperçu est
+    // STRICT — son rôle est de pousser vers une forme valide, le Warn
+    // serveur couvre ce qui passe quand même.
+
+    var SCHED_DAY_KEYS = ["cfg.sched.day.0", "cfg.sched.day.1", "cfg.sched.day.2",
+        "cfg.sched.day.3", "cfg.sched.day.4", "cfg.sched.day.5", "cfg.sched.day.6"];
+    var SCHED_LEGACY_DAYS = { SUNDAY: 0, MONDAY: 1, TUESDAY: 2, WEDNESDAY: 3,
+        THURSDAY: 4, FRIDAY: 5, SATURDAY: 6 };
+
+    function schedHeadOf(text) {
+        var s = text || "";
+        var bar = s.indexOf("|");
+        return (bar >= 0 ? s.substring(0, bar) : s).trim();
+    }
+
+    function schedTime(str) {
+        var m = /^(\d{1,2}):(\d{1,2})$/.exec(str || "");
+        if (!m) return null;
+        var h = parseInt(m[1], 10);
+        var mi = parseInt(m[2], 10);
+        if (h > 23 || mi > 59) return null;
+        return { h: h, m: mi };
+    }
+
+    function schedNum(s) { return /^\d+$/.test(s) ? parseInt(s, 10) : null; }
+
+    // Tête de planification → { kind: "daily"|"weekly"|"interval"|"bad",
+    // h, m, day, n } — null quand vide.
+    function parseSchedHead(head) {
+        var parts = (head || "").split(/\s+/).filter(function (p) { return p.length > 0; });
+        if (parts.length === 0) return null;
+        if (parts.length === 5) {
+            var mo = schedNum(parts[0]);
+            var bad = mo === null || mo < 0 || mo > 59 || parts[2] !== "*" || parts[3] !== "*";
+            if (!bad && parts[1].indexOf("*/") === 0) {
+                if (mo === 0 && parts[4] === "*") {
+                    var n = schedNum(parts[1].substring(2));
+                    if (n !== null && n >= 1) return { kind: "interval", n: n };
+                }
+                return { kind: "bad" };
+            }
+            var hh = schedNum(parts[1]);
+            if (!bad && hh !== null && hh >= 0 && hh <= 23) {
+                if (parts[4] === "*") return { kind: "daily", h: hh, m: mo };
+                var d = schedNum(parts[4]);
+                if (d !== null && d >= 0 && d <= 6) return { kind: "weekly", day: d, h: hh, m: mo };
+            }
+            return { kind: "bad" };
+        }
+        var kw = (parts[0] || "").toUpperCase();
+        if (kw === "HOURLY") return { kind: "interval", n: 1 };
+        if (kw === "INTERVAL") {
+            var hrs = parts.length >= 2 ? schedNum(parts[1]) : null;
+            return { kind: "interval", n: (hrs !== null && hrs >= 1) ? hrs : 1 };
+        }
+        if (kw === "DAILY") {
+            var t = parts.length >= 2 ? schedTime(parts[1]) : null;
+            return t ? { kind: "daily", h: t.h, m: t.m } : { kind: "bad" };
+        }
+        if (kw === "WEEKLY") {
+            var day = parts.length >= 2 ? SCHED_LEGACY_DAYS[parts[1].toUpperCase()] : null;
+            var t2 = day !== null && parts.length >= 3 ? schedTime(parts[2]) : null;
+            return (day !== null && t2) ? { kind: "weekly", day: day, h: t2.h, m: t2.m } : { kind: "bad" };
+        }
+        // Heure seule « 03:00 » → quotidien à cette heure (comme le serveur).
+        var t3 = schedTime(head);
+        return t3 ? { kind: "daily", h: t3.h, m: t3.m } : { kind: "bad" };
+    }
+
+    function renderSchedHead(head) {
+        var r = parseSchedHead(head);
+        if (!r) return "";
+        var pad = function (n) { return (n < 10 ? "0" : "") + n; };
+        if (r.kind === "daily") return i18n.t("cfg.sched.preview.daily", pad(r.h) + ":" + pad(r.m));
+        if (r.kind === "weekly")
+            return i18n.t("cfg.sched.preview.weekly", i18n.t(SCHED_DAY_KEYS[r.day]), pad(r.h) + ":" + pad(r.m));
+        if (r.kind === "interval")
+            return r.n === 1 ? i18n.t("cfg.sched.preview.hourly") : i18n.t("cfg.sched.preview.interval", r.n);
+        return i18n.t("cfg.sched.preview.bad");
+    }
+
+    function updateSchedPreview(view, ta) {
+        var prevId = ta.getAttribute("data-sched-preview");
+        var prev = prevId ? view.querySelector("#" + prevId) : null;
+        if (prev) prev.textContent = renderSchedHead(schedHeadOf(ta.value));
+    }
+
+    function wireSchedPreviews(view) {
+        view.querySelectorAll("textarea[data-sched-preview]").forEach(function (ta) {
+            once(ta, "input", function () { updateSchedPreview(view, ta); });
+            updateSchedPreview(view, ta);
+        });
+    }
+
     function fill(cfg, view) {
         view.querySelector("#txtEmbyPublicUrl").value = cfg.EmbyPublicUrl || "";
         view.querySelector("#selResponseLanguage").value = cfg.ResponseLanguage || "";
@@ -1123,6 +1233,10 @@ define(["loading"], function (loading) {
         view.querySelector("#numExternalChatRecordingMaxPerDay").value = isNaN(ecr) ? 3 : Math.max(0, ecr);
         renderBackends(seedBackends(cfg), view);
         populateWhitelists(cfg || {}, view);
+
+        // Aperçu de planification (v2.15.0) : rendu initial APRÈS le
+        // remplissage (le branchement input est dédoublonné par once()).
+        wireSchedPreviews(view);
     }
 
     function collect(view) {

@@ -295,7 +295,9 @@ namespace LLM_AI
 
         /// <summary>
         /// Tâche planifiée combinée : « &lt;planification&gt; | &lt;prompt de tâche&gt; ».
-        /// Ex. « Daily 03:00 | Résume les nouveaux médias ajoutés cette semaine ».
+        /// Ex. « 10 3 * * * | Recommande des enregistrements de SÉRIES : … »
+        /// (crontab restreint v2.15.0 ; l'ancienne forme « Daily 03:00 »
+        /// reste acceptée par le parseur).
         /// La planification (gauche du '|') fixe les triggers par défaut ;
         /// le prompt (droite du '|') est envoyé au LLM comme message utilisateur.
         /// </summary>
@@ -1136,8 +1138,8 @@ namespace LLM_AI
         /// <summary>
         /// Champ « planification | prompt » de la tâche : la partie GAUCHE
         /// devant '|' alimente <c>GetDefaultTriggers</c> (ex.
-        /// « Weekly Sunday 05:10 »), la partie DROITE est le prompt du run
-        /// FILMS. Même convention que <see cref="ScheduleTask"/>.
+        /// « 10 5 * * 0 », cron restreint — 0=dimanche), la partie DROITE est
+        /// le prompt du run FILMS. Même convention que <see cref="ScheduleTask"/>.
         /// </summary>
         public string LibReviewTask { get; set; } = DefaultPrompts.Fr.LibReviewTask;
 

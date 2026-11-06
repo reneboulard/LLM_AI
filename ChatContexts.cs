@@ -150,8 +150,10 @@ namespace LLM_AI
                 "Directive de la tâche planifiée quotidienne de SÉRIES. Contrat de sortie : un " +
                 "tableau JSON [{title, kind, reason, priority, channel, start, showbizz_match}] " +
                 "avec kind=\"series\" — le moteur du plugin parse ce format : toute révision doit " +
-                "le préserver tel quel. Le préfixe « Daily 03:00 | » est l'horaire de planification " +
-                "lu par la config : ne l'altérez que sur demande explicite et sans ambiguïté. " +
+                "le préserver tel quel. La partie gauche du « | » est l'horaire de planification lu " +
+                "par la config (crontab restreint « MM HH * * J », 0=dimanche ; l'ancienne forme " +
+                "« Daily 03:00 » reste acceptée) : ne l'altérez que sur demande explicite et sans " +
+                "ambiguïté. " +
                 "Champs EPG réels disponibles : ceux de get_emby_info (action=epg_series — " +
                 "premieres_only, new_seasons) ; ne référencez jamais un champ inventé.\n",
                 cfg => cfg.ScheduleTask, "schedule_task"),
@@ -196,8 +198,8 @@ namespace LLM_AI
             // v2.10.4 — module « Gestion bibliothèque » (LibReview) : deux
             // modes d'édition, un par prompt (films / séries). Comme les
             // tâches d'enregistrement, le champ entier est édité :
-            // le préfixe « Weekly Sunday 05:10 | » (planification) est
-            // préservé dans le texte — le guide l'explique.
+            // le préfixe de planification (« 10 5 * * 0 | », cron restreint
+            // v2.15.0) est préservé dans le texte — le guide l'explique.
             new ChatContextDef("edit_libreview_movies",
                 "Éditer — Gestion bibliothèque (films)",
                 "### RÔLE DE CE PROMPT\n" +
@@ -205,9 +207,10 @@ namespace LLM_AI
                 "sortie : tableau JSON brut [{id, reason}] (max 20 entrées, [] accepté) — id = " +
                 "InternalId recopié tel quel depuis la liste des candidats fournie dans le message " +
                 "user, reason = une phrase concrète. Le moteur valide chaque id côté serveur (hors " +
-                "pool = écarté) : toute révision doit préserver ce contrat tel quel. Le préfixe " +
-                "« Weekly Sunday 05:10 | » est l'horaire de planification lu par la config (partie " +
-                "gauche du '|') : ne l'altérez que sur demande explicite et sans ambiguïté. " +
+                "pool = écarté) : toute révision doit préserver ce contrat tel quel. La partie " +
+                "gauche du « | » est l'horaire de planification lu par la config (crontab restreint " +
+                "« MM HH * * J », 0=dimanche ; l'ancienne « Weekly Sunday 05:10 » reste acceptée) : " +
+                "ne l'altérez que sur demande explicite et sans ambiguïté. " +
                 "Rappel du module : le plugin ne supprime JAMAIS — seules les suppressions " +
                 "explicites de l'admin via l'endpoint dédié (délégation à Emby). Les séries à " +
                 "enregistrer (timers actifs) sont exclues du pool côté serveur depuis v2.10.2 : ne " +
@@ -221,7 +224,7 @@ namespace LLM_AI
                 "sortie : tableau JSON brut [{id, reason}] (max 10 entrées, [] accepté) — id = " +
                 "InternalId de la SÉRIE (la suppression efface TOUS ses épisodes), reason = une " +
                 "phrase concrète. Le moteur valide chaque id côté serveur (hors pool = écarté). " +
-                "Le champ entier est édité, préfixe de planification « Weekly … | » compris " +
+                "Le champ entier est édité, préfixe de planification éventuel compris " +
                 "(partie gauche du '|') : ne l'altérez que sur demande explicite. Rappel du module " +
                 ": le plugin ne supprime JAMAIS — la suppression est déléguée à Emby via " +
                 "l'endpoint admin. Les séries à enregistrer (timers actifs) sont exclues du pool " +

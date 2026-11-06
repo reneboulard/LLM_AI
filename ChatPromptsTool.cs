@@ -45,7 +45,8 @@ namespace LLM_AI
             ("audit_prompt", "Prompt d'audit"),
             // v2.10.4 — module « Gestion bibliothèque » (LibReview) : les deux
             // prompts (films / séries), gardés ENTIERS (préfixe de planification
-            // « Weekly Sunday 05:10 | » compris, comme les tâches d'enregistrement).
+            // « 10 5 * * 0 | » — cron restreint v2.15.0 — compris, comme les
+            // tâches d'enregistrement).
             ("libreview_task", "Gestion bibliothèque — films"),
             ("libreview_task_series", "Gestion bibliothèque — séries")
         };

@@ -837,16 +837,21 @@
                                       label="Tâche planifiée Séries — planification et prompt"
                                       data-i18n-label="cfg.sched.series.label"
                                       rows="3"
+                                      data-sched-preview="schedPreviewTask"
                                       data-i18n-ph="cfg.sched.series.ph"
-                                      placeholder="Daily 03:00 | Recommande des enregistrements de SÉRIES : …"></textarea>
+                                      placeholder="10 3 * * * | Recommande des enregistrements de SÉRIES : …"></textarea>
                             <button is="emby-button" type="button" class="raised btnResetPrompt"
                                     data-reset-target="txtScheduleTask" data-default-key="ScheduleTask"
                                     data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
                                 Réinitialiser
                             </button>
+                            <div class="fieldDescription" id="schedPreviewTask" style="font-style:italic;"></div>
                             <div class="fieldDescription" data-i18n-html="cfg.sched.series.desc">
-                                Format : « planification | prompt de la tâche ». Planification :
-                                Daily HH:MM, Hourly, Weekly Jour HH:MM ou Interval heures. Le texte
+                                Format : « planification | prompt de la tâche ». Planification (crontab
+                                restreint, heure locale du serveur) : « MM HH * * * » = tous les jours,
+                                « MM HH * * D » = chaque semaine le jour D (D : 0=dimanche…6=samedi),
+                                « 0 */N * * * » = toutes les N heures. L'ancienne syntaxe reste acceptée :
+                                Daily HH:MM, Hourly, Weekly Sunday HH:MM, Interval heures. Le texte
                                 après le « | » est envoyé au LLM pour le run séries (premières
                                 S01E01 et nouvelles saisons). La tâche est aussi déclenchable
                                 manuellement dans « Tâches planifiées ».
@@ -1982,7 +1987,7 @@
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.libreview.enabled.desc">
                             Active la tâche planifiée (planification en tête du premier prompt ci-dessous, ex.
-                            « Weekly Sunday 05:10 ») et le bouton « Lancer l'évaluation » de cette page. Désactivée
+                            « 10 5 * * 0 ») et le bouton « Lancer l'évaluation » de cette page. Désactivée
                             par défaut (consomme des appels LLM).
                         </div>
 
@@ -1990,14 +1995,17 @@
                             <textarea is="emby-textarea" id="txtLibReviewTask" rows="5"
                                       label="Tâche (planification | prompt FILMS)"
                                       data-i18n-label="cfg.libreview.task"
+                                      data-sched-preview="schedPreviewLibReview"
                                       spellcheck="false"></textarea>
                             <button is="emby-button" type="button" class="raised btnResetPrompt"
                                     data-reset-target="txtLibReviewTask" data-default-key="LibReviewTask"
                                     data-i18n="cfg.reset" data-i18n-title="cfg.reset.title" title="Réinitialiser">
                                 Réinitialiser
                             </button>
+                            <div class="fieldDescription" id="schedPreviewLibReview" style="font-style:italic;"></div>
                             <div class="fieldDescription" data-i18n-html="cfg.libreview.task.desc">
-                                Partie gauche de « | » = planification de la tâche (Daily 03:00, Weekly Sunday 05:10…),
+                                Partie gauche de « | » = planification de la tâche (crontab restreint, ex.
+                                « 10 5 * * 0 » ; l'ancienne « Daily 03:00 / Weekly Sunday 05:10 » reste acceptée),
                                 partie droite = prompt du run FILMS. Le run SÉRIES a son propre prompt ci-dessous.
                             </div>
                         </div>

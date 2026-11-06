@@ -10,6 +10,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.15.0] — 2026-11-06
+
+### Added (FR)
+- **Syntaxe de planification agnostique (crontab restreint)** : la partie
+  gauche du « | » des champs de tâche (« Tâche planifiée Séries »,
+  « Gestion bibliothèque ») accepte désormais le format canonique
+  « MM HH * * * » (tous les jours), « MM HH * * J » (chaque semaine le jour
+  J — 0=dimanche…6=samedi, même convention que le cron classique et le
+  planificateur Emby) et « 0 */N * * * » (toutes les N heures) — nombres et
+  astérisques uniquement, rien à traduire. Motif : l'ancienne syntaxe par
+  mots-clés anglais (« Weekly Sunday 05:10 ») était la seule partie
+  traduisible du champ, et le pack es de l'atelier enseignait des mots que
+  le parseur serveur ignorait (« Diario 03:00 ») — repli silencieux à
+  minuit. L'ancienne syntaxe **reste acceptée pour toujours** (aucune
+  migration forcée : les configs existantes et les packs antérieurs
+  continuent de fonctionner).
+- **Libellé dérivé sous les champs de planification** : la page de
+  configuration calcule en direct le libellé humain (« Chaque dimanche à
+  05:10 », « Toutes les 4 heures », « Tous les jours à 03:10 ») à partir des
+  nombres saisis — le pattern valeur/libellé du planificateur Emby (valeur
+  canonique, libellé localisé) : le libellé est calculé au rendu, jamais
+  stocké, jamais traduit par l'atelier ; une tête non reconnue s'affiche
+  immédiatement sous le champ.
+- Les jetons de syntaxe (formes cron, exemples et formes héritées) sont
+  verrouillés dans le filet i18n du générateur : toute langue générée doit
+  les recopier à l'identique.
+
+### Changed (FR)
+- **Refus bruyant des planifications invalides** : toute tête non reconnue
+  (mot-clé traduit, forme cron non supportée — plages, listes, pas aux
+  minutes, jour 7, noms de jours) est journalisée en `Warn` avec la raison
+  au lieu du repli silencieux « tous les jours à minuit ». « Weekly »
+  exige désormais un jour anglais reconnu ET une heure : un WeeklyTrigger
+  au jour nul (jour traduit par un pack, faute de frappe) était un
+  comportement serveur indéfini, silencieusement accepté avant cette
+  version.
+- Défauts des prompts et documentation passés au crontab restreint
+  (« 10 3 * * * » pour la tâche quotidienne de reco, « 10 5 * * 0 » pour
+  la gestion bibliothèque) ; les contextes de chat d'édition de prompts
+  enseignent la forme canonique au LLM.
+
+### Added (EN)
+- **Language-agnostic schedule syntax (restricted crontab)**: the left side
+  of the "|" in the task fields ("Scheduled task Series", "Library
+  management") now accepts the canonical format "MM HH * * *" (every day),
+  "MM HH * * D" (every week on day D — 0=Sunday…6=Saturday, the same
+  convention as classic cron and Emby's scheduler) and "0 */N * * *"
+  (every N hours) — numbers and asterisks only, nothing to translate.
+  Rationale: the legacy English-keyword syntax ("Weekly Sunday 05:10")
+  was the only translatable part of the field, and the workshop's es pack
+  taught words the server parser ignored ("Diario 03:00") — silent
+  fallback to midnight. The legacy syntax **stays accepted forever** (no
+  forced migration: existing configs and prior packs keep working).
+- **Derived label under the schedule fields**: the configuration page
+  computes the human label live ("Every Sunday at 05:10", "Every 4
+  hours", "Every day at 03:10") from the typed numbers — Emby's scheduler
+  value/label pattern (canonical value, localized label): the label is
+  computed at render time, never stored, never translated by the workshop;
+  an unrecognized head shows immediately under the field.
+- Schedule syntax tokens (cron shapes, examples and legacy forms) are
+  locked in the i18n generator's mechanical net: every generated language
+  must copy them verbatim.
+
+### Changed (EN)
+- **Loud rejection of invalid schedules**: any unrecognized head (translated
+  keyword, unsupported cron shape — ranges, lists, minute steps, day 7,
+  day names) is now logged as a `Warn` with the reason, instead of the
+  silent "every day at midnight" fallback. "Weekly" now requires a
+  recognized English day AND a time: a WeeklyTrigger with a null day
+  (day translated by a pack, typo) was undefined server-side behavior,
+  silently accepted before this version.
+- Default prompts and documentation switched to the restricted crontab
+  ("10 3 * * *" for the daily recommendation task, "10 5 * * 0" for
+  library management); the chat prompt-editing contexts now teach the
+  LLM the canonical form.
+
 ## [2.14.0] — 2026-11-06
 
 ### Added (FR)
