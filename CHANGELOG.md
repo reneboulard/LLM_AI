@@ -10,6 +10,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.14.0] — 2026-11-06
+
+### Added (FR)
+- **Profil enrichi dans la télémétrie de lecture** (`playback.json`,
+  opt-in existant « Journaliser les lectures terminées ») : chaque session
+  terminée fige désormais, en plus du titre/série (v2.7.2), les champs
+  suivants — tous captés au moment de la lecture car l'item enregistré
+  disparaît souvent de la bibliothèque avant l'analyse hebdomadaire :
+  - **genres normalisés** (pont GenreCleaner : même vocabulaire curaté que
+    le profil de goût et les surfaces EPG) et **classification normalisée**
+    (« PG-13 »/« 13+ » → canonique « CA-14A ») ;
+  - année de production, type d'item, position dans la série (id, saison,
+    épisode) ;
+  - **début de lecture** (capté sur l'événement de démarrage : l'analyse
+    utilise le créneau de début plutôt que celui de fin) et méthode de
+    lecture (DirectPlay/DirectStream/Transcode) ;
+  - langues audio et sous-titres actives (signal VF/VO) et ids de session.
+- **Analyse hebdomadaire enrichie** (tâche « Mémoire réflexive ») :
+  - nouvelle section « GENRES RÉELLEMENT REGARDÉS » (lectures
+    substantielles ≥ 50 % ou ≥ 5 min) — le miroir *comportemental* du
+    profil de goût, par genre, avec % moyen ;
+  - les lignes « vu sans recommandation » portent désormais leurs genres
+    normalisés et l'année ;
+  - les résultats de visionnage joints affichent la position SxxEyy
+    quand l'épisode la porte ;
+  - backfill : les entrées écrites avant cette version retrouvent leurs
+    genres/classification/numérotation quand l'item survit encore en
+    bibliothèque.
+
+### Fixed (FR)
+- **Round-trip JSON des stores de la mémoire réflexive** : la lecture
+  tolérante des journaux échouait silencieusement sur les jetons numériques
+  et booléens — durée, % lu, complété, durée d'œuvre, version de fiche
+  (`mv`) ressortaient toujours à leur valeur par défaut (0, faux, null) à
+  la relecture. L'analyse voyait « durée inconnue » sur toute lecture qui
+  avait pourtant rapporté sa position, et la calibration des versions de
+  fiche n'avait jamais de données. Toutes les entrées existantes des
+  journaux sont désormais relues correctement (aucune migration : le
+  format d'écriture était sain, c'est la lecture qui était aveugle).
+
+### Added (EN)
+- **Enriched profile in playback telemetry** (`playback.json`, existing
+  opt-in "Log finished playbacks"): every finished session now freezes, on
+  top of the title/series (v2.7.2), the following fields — all captured at
+  playback time because recorded items often vanish from the library
+  before the weekly analysis:
+  - **normalized genres** (GenreCleaner bridge: the same curated vocabulary
+    as the taste profile and the EPG surfaces) and **normalized official
+    rating** ("PG-13"/"13+" → canonical "CA-14A");
+  - production year, item type, position in the series (id, season,
+    episode);
+  - **playback start time** (captured on the start event: the analysis now
+    uses the start slot instead of the stop slot) and play method
+    (DirectPlay/DirectStream/Transcode);
+  - active audio and subtitle languages (VF/VO signal) and session ids.
+- **Enriched weekly analysis** ("Reflective memory" task):
+  - new "GENRES ACTUALLY WATCHED" section (substantial playbacks ≥ 50% or
+    ≥ 5 min) — the *behavioural* mirror of the taste profile, per genre
+    with average %;
+  - "watched without recommendation" lines now carry their normalized
+    genres and the year;
+  - joined playback outcomes display the SxxEyy position when the entry
+    carries it;
+  - backfill: entries written before this version recover their
+    genres/rating/numbering whenever the item still exists in the library.
+
+### Fixed (EN)
+- **JSON round-trip of the reflective-memory stores**: the tolerant
+  journal reader silently failed on numeric and boolean tokens — watched
+  duration, watched fraction, completed flag, work duration and card
+  version (`mv`) always came back at their default value (0, false, null)
+  on re-read. The analysis saw "unknown duration" on every playback that
+  had in fact reported its position, and the card-version calibration
+  never had data. All existing journal entries are now read back correctly
+  (no migration needed: the write format was sound, the reader was blind).
+
 ## [2.13.5] — 2026-11-04
 
 ### Added (FR)

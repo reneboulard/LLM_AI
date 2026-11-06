@@ -746,11 +746,15 @@ namespace LLM_AI
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, chaque
         /// lecture terminée est journalisée dans <c>playback.json</c> (item,
         /// usager, durée réelle, fraction lue, source bibliothèque/.strm/
-        /// direct, chaîne, client, appareil). C'est le signal comportemental
-        /// central de la réflexion : rejet immédiat (&lt; 5 %), abandon en
-        /// cours (5–50 %), contenu validé (&gt; 80 %). Aucun effet sur la
-        /// lecture elle-même (best-effort) ; le pourcentage du direct reste
-        /// à dériver via le snapshot EPG (Phase B).
+        /// direct, chaîne, client, appareil, titre + série figés ; v2.14.0 :
+        /// genres et classification normalisés, année, type, position dans
+        /// la série, début de lecture, méthode, langues audio/sous-titres,
+        /// ids de session — tout figé au moment de la lecture). C'est le
+        /// signal comportemental central de la réflexion : rejet immédiat
+        /// (&lt; 5 %), abandon en cours (5–50 %), contenu validé (&gt; 80 %).
+        /// Aucun effet sur la lecture elle-même (best-effort) ; le
+        /// pourcentage du direct reste à dériver via le snapshot EPG
+        /// (Phase B).
         /// </summary>
         public bool PlaybackTelemetryEnabled { get; set; } = false;
 

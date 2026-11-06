@@ -116,6 +116,55 @@ namespace LLM_AI
         /// « la série recommandée a bien été regardée, via son épisode
         /// enregistré » (v2.7.2).</summary>
         public string SeriesName;
+        // -----------------------------------------------------------------
+        //  v2.14.0 — enrichissement du profil (tous FIGÉS au moment de la
+        //  lecture, comme Title/SeriesName : l'item peut disparaître avant
+        //  l'analyse hebdo). Champs OPTIONNELS : les entrées écrites avant
+        //  2.14.0 restent valides (lecture tolérante, défauts null/vide).
+        // -----------------------------------------------------------------
+        /// <summary>Genres figés NORMALISÉS via
+        /// <see cref="GenreCleanerMap.MapGenres"/> (vocabulaire curaté —
+        /// même alignement que le profil de goût et les surfaces epg_*) ;
+        /// tableau vide = item sans genres.</summary>
+        public string[] Genres;
+        /// <summary>Classification officielle figée NORMALISÉE via
+        /// <see cref="ClassificationMap.Normalize"/> (« PG-13 »/« 13+ » →
+        /// « CA-14A ») ; null = inconnue.</summary>
+        public string Rating;
+        /// <summary>Année de production figée ; null = inconnue.</summary>
+        public int? Year;
+        /// <summary>Type d'item en clair (nom de classe : Movie, Episode,
+        /// LiveTvProgram, LiveTvChannel…) — lisible sans résolution.</summary>
+        public string Type;
+        /// <summary>Id de série Emby figé (long, forme InternalId) ;
+        /// null = pas une série (ou id inconnu).</summary>
+        public long? SeriesId;
+        /// <summary>Numéro de SAISON figé (ParentIndexNumber) ; null = N/A.</summary>
+        public int? Season;
+        /// <summary>Numéro d'ÉPISODE figé (IndexNumber) ; null = N/A.</summary>
+        public int? Episode;
+        /// <summary>DÉBUT de la lecture (UTC), capté sur l'événement
+        /// <c>PlaybackStart</c> ; null = inconnu (<c>Date</c> = fin reste le
+        /// repli). Avec <c>Date</c>, donne la durée MURALE de la session
+        /// (pauses comprises) — distincte de <c>DurSec</c> (position
+        /// atteinte dans l'œuvre).</summary>
+        public DateTimeOffset? StartDate;
+        /// <summary>Méthode de lecture au dernier état connu de la session
+        /// (DirectPlay / DirectStream / Transcode) ; null = inconnue.</summary>
+        public string PlayMethod;
+        /// <summary>Langue/label de la piste AUDIO choisie (résolue via les
+        /// MediaStreams de la session — ex. « FRA - Stéréo », « ENG ») ;
+        /// null = inconnue. Signal VF/VO du foyer.</summary>
+        public string Audio;
+        /// <summary>Langue/label de la piste de SOUS-TITRES active ;
+        /// null = état inconnu (non remonté), vide = aucun sous-titre.</summary>
+        public string Subtitle;
+        /// <summary>Id de session Emby figé — corrélation avec les commandes
+        /// émises par le plugin (seek/pause/toasts).</summary>
+        public string SessionId;
+        /// <summary>Id de session de LECTURE figé — corrélation
+        /// PlaybackStart/Stopped.</summary>
+        public string PlaySessionId;
     }
 
     /// <summary>
@@ -502,6 +551,29 @@ namespace LLM_AI
                         };
                         if (e.Pct.HasValue) o["pct"] = Math.Round(e.Pct.Value, 3);
                         if (e.RtSec.HasValue) o["rt"] = Math.Max(0, e.RtSec.Value);
+                        // v2.14.0 — champs enrichis (figés, OPTIONNELS :
+                        // absents des entrées pré-2.14.0, émis seulement
+                        // quand présents pour garder le JSON compact).
+                        if (e.StartDate.HasValue)
+                            o["sd"] = e.StartDate.Value.ToString("o", CultureInfo.InvariantCulture);
+                        if (e.Genres != null && e.Genres.Length > 0)
+                        {
+                            var ga = new JsonArray();
+                            foreach (var g in e.Genres)
+                                if (!string.IsNullOrWhiteSpace(g)) ga.Add(g);
+                            if (ga.Count > 0) o["g"] = ga;
+                        }
+                        if (!string.IsNullOrEmpty(e.Rating)) o["cr"] = e.Rating;
+                        if (e.Year.HasValue) o["yr"] = e.Year.Value;
+                        if (!string.IsNullOrEmpty(e.Type)) o["ty"] = e.Type;
+                        if (e.SeriesId.HasValue) o["sid"] = e.SeriesId.Value.ToString(CultureInfo.InvariantCulture);
+                        if (e.Season.HasValue) o["sea"] = e.Season.Value;
+                        if (e.Episode.HasValue) o["ep"] = e.Episode.Value;
+                        if (!string.IsNullOrEmpty(e.PlayMethod)) o["pm"] = e.PlayMethod;
+                        if (e.Audio != null) o["au"] = e.Audio;
+                        if (e.Subtitle != null) o["su"] = e.Subtitle;
+                        if (!string.IsNullOrEmpty(e.SessionId)) o["se"] = e.SessionId;
+                        if (!string.IsNullOrEmpty(e.PlaySessionId)) o["ps"] = e.PlaySessionId;
                         arr.Add(o);
                     }
                     WriteAll(PlaybackPath, arr.ToJsonString(), logger);
@@ -533,9 +605,25 @@ namespace LLM_AI
                     SeriesName = OStr(o, "sn") ?? "",
                     Pct = OStr(o, "pct") is var ps && double.TryParse(ps, NumberStyles.Float,
                         CultureInfo.InvariantCulture, out var p) ? p : (double?)null,
-                    RtSec = OStr(o, "rt") is var rs && int.TryParse(rs, out var rt) ? rt : (int?)null
+                    RtSec = OStr(o, "rt") is var rs && int.TryParse(rs, out var rt) ? rt : (int?)null,
+                    // v2.14.0 — champs enrichis (absents des entrées
+                    // pré-2.14.0 : défauts null/vide, jamais d'échec de
+                    // lecture du journal entier).
+                    Rating = OStr(o, "cr"),
+                    Type = OStr(o, "ty"),
+                    PlayMethod = OStr(o, "pm"),
+                    Audio = OStr(o, "au"),
+                    Subtitle = OStr(o, "su"),
+                    SessionId = OStr(o, "se"),
+                    PlaySessionId = OStr(o, "ps"),
+                    Year = int.TryParse(OStr(o, "yr") ?? "", out var yr) ? yr : (int?)null,
+                    SeriesId = long.TryParse(OStr(o, "sid") ?? "", out var sid) ? sid : (long?)null,
+                    Season = int.TryParse(OStr(o, "sea") ?? "", out var sea) ? sea : (int?)null,
+                    Episode = int.TryParse(OStr(o, "ep") ?? "", out var epn) ? epn : (int?)null,
+                    Genres = ParseGenresArray(o)
                 };
                 if (OTry(o, "d", out var d)) e.Date = d.ToUniversalTime();
+                if (OTry(o, "sd", out var sd)) e.StartDate = sd.ToUniversalTime();
                 list.Add(e);
             }
             return list;
@@ -613,9 +701,22 @@ namespace LLM_AI
 
         private static string OStr(JsonObject o, string key)
         {
-            if (o.TryGetPropertyValue(key, out var v) && v is JsonValue jv
-                && jv.TryGetValue<string>(out var s))
-                return s;
+            if (o.TryGetPropertyValue(key, out var v) && v is JsonValue jv)
+            {
+                if (jv.TryGetValue<string>(out var s)) return s;
+                // Jeton NON-chaîne (nombre, bool) : la forme TEXTE du jeton
+                // (« 1234 », « true », « 0.556 ») — directement consommable
+                // par les parseurs amont (int/double.TryParse, == "true").
+                // Bug de round-trip (découvert v2.14.0, test minimal) :
+                // TryGetValue<string> échoue sur un jeton numérique/booléen
+                // et OStr retournait null → à la relecture, DurSec=0,
+                // Completed=false, Pct/RtSec null sur TOUTES les entrées
+                // (« durée inconnue » partout à l'analyse — une part du
+                // « 175/176 à dur=0 » du vécu v2.7.2 tenait à ÇA, pas
+                // seulement au client muet).
+                try { return jv.ToString(); }
+                catch { return null; }
+            }
             return null;
         }
 
@@ -626,6 +727,22 @@ namespace LLM_AI
             if (s == null) return false;
             return DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal, out value);
+        }
+
+        /// <summary>Lit le tableau de genres « g » (v2.14.0) : entrée absente
+        /// ou non-tableau → null (jamais d'exception sur un journal mixte
+        /// pré/post-2.14.0) ; valeurs vides ignorées.</summary>
+        private static string[] ParseGenresArray(JsonObject o)
+        {
+            if (!(o.TryGetPropertyValue("g", out var v) && v is JsonArray arr)) return null;
+            var list = new List<string>();
+            foreach (var n in arr)
+            {
+                if (n is JsonValue jv && jv.TryGetValue<string>(out var s)
+                    && !string.IsNullOrWhiteSpace(s))
+                    list.Add(s);
+            }
+            return list.Count > 0 ? list.ToArray() : Array.Empty<string>();
         }
     }
 }

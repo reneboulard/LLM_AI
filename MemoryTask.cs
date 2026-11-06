@@ -102,7 +102,8 @@ namespace LLM_AI
             "concrètes pour tes futures recommandations et conversations. On te fournit " +
             "ta fiche actuelle et les événements bruts de la semaine (décisions journalisées " +
             "avec leur résultat de visionnage, calibration de tes versions de fiche, " +
-            "candidats écartés, visionnages sans recommandation).";
+            "candidats écartés, visionnages sans recommandation, créneaux et genres " +
+            "réellement regardés).";
 
         internal const string MEMORY_RULES =
             "### TA TÂCHE\n" +
@@ -295,24 +296,41 @@ namespace LLM_AI
             // éphémères, migration quotidienne vers la bibliothèque
             // permanente) ne résolvent plus — c'est précisément ce que le
             // figage au moment de la lecture élimine pour l'avenir.
+            // v2.14.0 — le backfill étendu remplit AUSSI genres/classification
+            // normalisés, année, type et numérotation : l'historique 30 j
+            // pré-enrichissement profite de la section « GENRES REGARDÉS »
+            // dès le premier run post-2.14.0 (pour les items survivants).
             var resolvedIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in playback)
             {
                 if (p == null || string.IsNullOrEmpty(p.ItemId) || resolvedIds.Contains(p.ItemId)) continue;
-                if (string.IsNullOrWhiteSpace(p.Title) || string.IsNullOrWhiteSpace(p.SeriesName))
+                bool needTitles = string.IsNullOrWhiteSpace(p.Title) || string.IsNullOrWhiteSpace(p.SeriesName);
+                bool needExtras = p.Genres == null || string.IsNullOrEmpty(p.Type)
+                    || (p.Season == null && p.Episode == null);
+                if (!needTitles && !needExtras) continue;
+                resolvedIds.Add(p.ItemId);
+                try
                 {
-                    resolvedIds.Add(p.ItemId);
-                    try
+                    var it = ItemIdResolver.Resolve(_library, p.ItemId);
+                    if (string.IsNullOrWhiteSpace(p.Title))
+                        p.Title = it?.Name ?? "";
+                    if (string.IsNullOrWhiteSpace(p.SeriesName))
+                        p.SeriesName = (it as Episode)?.SeriesName
+                            ?? (it as LiveTvProgram)?.SeriesName ?? "";
+                    if (it != null && needExtras)
                     {
-                        var it = ItemIdResolver.Resolve(_library, p.ItemId);
-                        if (string.IsNullOrWhiteSpace(p.Title))
-                            p.Title = it?.Name ?? "";
-                        if (string.IsNullOrWhiteSpace(p.SeriesName))
-                            p.SeriesName = (it as Episode)?.SeriesName
-                                ?? (it as LiveTvProgram)?.SeriesName ?? "";
+                        if (p.Genres == null)
+                            p.Genres = GenreCleanerMap.MapGenres(it.Genres, SeriesCtxOf(it));
+                        if (p.Rating == null)
+                            p.Rating = ClassificationMap.Normalize(it.OfficialRating);
+                        if (p.Year == null) p.Year = it.ProductionYear;
+                        if (string.IsNullOrEmpty(p.Type)) p.Type = it.GetType().Name;
+                        if (p.SeriesId == null && it.SeriesId != 0) p.SeriesId = it.SeriesId;
+                        if (p.Season == null) p.Season = it.ParentIndexNumber;
+                        if (p.Episode == null) p.Episode = it.IndexNumber;
                     }
-                    catch { /* best-effort : id non résolvable */ }
                 }
+                catch { /* best-effort : id non résolvable */ }
             }
 
             // Index titre/série → lectures (v2.7.2, jointure de repli) :
@@ -434,10 +452,18 @@ namespace LLM_AI
                 if (!string.IsNullOrWhiteSpace(series)
                     && decisionTitles.Contains(LlmRunner.NormTitle(series)))
                     continue; // série recommandée (jointure série, v2.7.2)
-                var slot = p.Date.ToLocalTime();
+                var slot = (p.StartDate ?? p.Date).ToLocalTime();
+                // v2.14.0 — genres normalisés (+ année) figés dans la
+                // télométrie : l'opportunité manquée porte SA matière
+                // (quoi), pas seulement le titre et le moment (quand).
+                string taste = "";
+                if (p.Genres != null && p.Genres.Length > 0)
+                    taste = string.Join("/", p.Genres.Take(3)) + (p.Year.HasValue ? " " + p.Year.Value : "");
+                else if (p.Year.HasValue) taste = p.Year.Value.ToString(CultureInfo.InvariantCulture);
                 sb.AppendLine("- « " + (string.IsNullOrWhiteSpace(title) ? "?" : title)
                     + (string.IsNullOrWhiteSpace(series) ? "" : " [" + series + "]")
                     + " » (" + CategoryOf(p.Pct)
+                    + (taste.Length > 0 ? " — " + taste : "")
                     + ", " + slot.ToString("ddd HH\\hmm", CultureInfo.CurrentCulture)
                     + ", " + p.Src + ")");
                 surprisesShown++;
@@ -458,8 +484,8 @@ namespace LLM_AI
             sb.AppendLine("### CRÉNEAUX DE LECTURE (cette semaine, toutes lectures)");
             foreach (var g in weekPlayback.GroupBy(p => new
                      {
-                         Jour = (int)p.Date.ToLocalTime().DayOfWeek,
-                         Creneau = p.Date.ToLocalTime().Hour / 4   // tranche 4 h
+                         Jour = (int)(p.StartDate ?? p.Date).ToLocalTime().DayOfWeek,
+                         Creneau = (p.StartDate ?? p.Date).ToLocalTime().Hour / 4   // tranche 4 h
                      }).OrderBy(g => g.Key.Jour).ThenBy(g => g.Key.Creneau))
             {
                 sb.AppendLine("- " + JourFr(g.Key.Jour) + " " + (g.Key.Creneau * 4) + "h-"
@@ -467,7 +493,51 @@ namespace LLM_AI
                     + (g.Average(p => p.Pct ?? 0) * 100).ToString("0", CultureInfo.InvariantCulture) + " %");
             }
 
-            // 7) Fiche actuelle.
+            // 7) Genres réellement regardés (v2.14.0) — le miroir COMPORTEMENTAL
+            // du profil de goût (déclaratif) : ce que le foyer a vraiment
+            // consommé, par genre, genres NORMALISÉS figés dans la télémétrie
+            // (+ backfill best-effort ci-dessus pour les entrées plus
+            // anciennes). Même filtre de substance que « vu sans reco »
+            // (≥ 50 % lu, ou complété, ou ≥ 5 min) ; cartes .strm exclues
+            // (activation d'une reco ≠ visionnage).
+            sb.AppendLine();
+            sb.AppendLine("### GENRES RÉELLEMENT REGARDÉS (cette semaine, lectures substantielles)");
+            var genreRows = new Dictionary<string, List<PlaybackEntry>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in weekPlayback)
+            {
+                if (p == null) continue;
+                if (string.Equals(p.Src, "strm", StringComparison.OrdinalIgnoreCase)) continue;
+                var eff = p.Pct ?? (p.Completed ? 1.0 : (double?)null);
+                bool substantial = eff.HasValue ? eff.Value >= 0.5 : p.DurSec >= 300;
+                if (!substantial) continue;
+                foreach (var g in p.Genres ?? Array.Empty<string>())
+                {
+                    if (string.IsNullOrWhiteSpace(g)) continue;
+                    var k = g.Trim();
+                    if (!genreRows.TryGetValue(k, out var l))
+                        genreRows[k] = l = new List<PlaybackEntry>();
+                    l.Add(p);
+                }
+            }
+            if (genreRows.Count == 0)
+            {
+                sb.AppendLine("(aucun genre connu — télémétrie sans genres et items "
+                    + "déjà supprimés de la bibliothèque ; les prochaines lectures "
+                    + "porteront leurs genres figés)");
+            }
+            else
+            {
+                foreach (var g in genreRows
+                    .OrderByDescending(kv => kv.Value.Count).ThenBy(kv => kv.Key).Take(10))
+                {
+                    double avg = g.Value.Average(x =>
+                        (x.Pct ?? (x.Completed ? 1.0 : 0.0)) * 100);
+                    sb.AppendLine("- " + g.Key + " : " + g.Value.Count + " lecture(s), % moyen "
+                        + avg.ToString("0", CultureInfo.InvariantCulture) + " %");
+                }
+            }
+
+            // 8) Fiche actuelle.
             sb.AppendLine();
             sb.AppendLine("### TA FICHE ACTUELLE (v" + current.Version + ")");
             sb.AppendLine(string.IsNullOrWhiteSpace(current.Text)
@@ -558,15 +628,21 @@ namespace LLM_AI
         /// <summary>Libellé d'une lecture jointe par id ou par titre :
         /// catégorie par % lu (ou complétion), texte de durée robuste au
         /// client qui ne remonte pas la position au stop (vécu prod :
-        /// 175/176 entrées à dur=0 — la lecture a BIEN eu lieu).</summary>
+        /// 175/176 entrées à dur=0 — la lecture a BIEN eu lieu). v2.14.0 :
+        /// position SxxEyy figée quand l'entrée la porte (l'épisode
+        /// ENREGISTRÉ consommé d'une reco de série).</summary>
         private static string PlayOutcome(PlaybackEntry p, string via)
         {
             var effPct = p.Pct ?? (p.Completed ? 1.0 : (double?)null);
             var cat = effPct.HasValue ? CategoryOf(effPct) : "lu";
+            var sxxeyy = (p.Season.HasValue && p.Episode.HasValue)
+                ? string.Format(CultureInfo.InvariantCulture,
+                    " S{0:00}E{1:00}", p.Season.Value, p.Episode.Value)
+                : "";
             string pctTxt = effPct.HasValue
                 ? (effPct.Value * 100).ToString("0", CultureInfo.InvariantCulture) + " %"
                 : (p.DurSec > 0 ? "~" + (p.DurSec / 60) + " min lues" : "durée inconnue");
-            return cat + " (" + pctTxt + ", " + (p.Src ?? "?") + ", " + via + ", " + SlotOf(p) + ")";
+            return cat + sxxeyy + " (" + pctTxt + ", " + (p.Src ?? "?") + ", " + via + ", " + SlotOf(p) + ")";
         }
 
         /// <summary>Indexe une lecture par un titre (ou nom de série)
@@ -583,8 +659,22 @@ namespace LLM_AI
 
         private static string SlotOf(PlaybackEntry p)
         {
-            var lt = p.Date.ToLocalTime();
+            // v2.14.0 : créneau de DÉBUT quand connu (figé sur
+            // PlaybackStart), sinon le stop (comportement antérieur).
+            var lt = (p.StartDate ?? p.Date).ToLocalTime();
             return JourFr((int)lt.DayOfWeek) + " " + lt.Hour + "h";
+        }
+
+        /// <summary>Contexte séries/films d'un item résolu pour les tables
+        /// GenreCleaner (v2.14.0 — réplique locale du patron
+        /// <c>GetEmbyInfoTool.LibSeriesCtx</c>, non accessible ici) : un
+        /// programme EPG avec série compte côté séries.</summary>
+        private static bool? SeriesCtxOf(BaseItem it)
+        {
+            if (it is Episode || it is Series) return true;
+            if (it is MediaBrowser.Controller.Entities.Movies.Movie) return false;
+            if (it is LiveTvProgram lp && !string.IsNullOrEmpty(lp.SeriesName)) return true;
+            return null;
         }
 
         private static string JourFr(int dow) => dow switch
