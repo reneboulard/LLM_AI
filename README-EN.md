@@ -2755,6 +2755,17 @@ space gain), with **"🗑️ Delete / ✔️ Keep"** buttons.
   grouped per series ("series (year) [genres] — N watched episode(s)") +
   favorite series. Scope **strictly** the profile: candidate pools keep being
   computed over the whole library (union of everyone's watched items).
+- **Excluded libraries** (v2.16.2): the "Libraries being evaluated" selector in
+  the tab lets you tick libraries to exclude from the evaluation — a ticked
+  library provides no candidates (neither movies nor series): it is a "Keep"
+  at library scale, valid for any media added in the future too. Three
+  exclusions are **automatic and not untickable**, recomputed at every run:
+  non-video libraries (music, books, games, photos, collections, playlists…),
+  the plugin's `.strm` card library, and any library whose disk root falls
+  under the DVR recordings root. If the library list is unreadable or the
+  enabled `.strm` library cannot be resolved, the run is **aborted with an
+  explicit error** (fail-closed): never an evaluation without the safety
+  exclusions.
 - **Launch**: "Run evaluation" button (optional free-form brief) or the
   "Library management" **scheduled task** (off by default; schedule read from
   the head of `LibReviewTask`, e.g. "10 5 * * 0" — restricted crontab,

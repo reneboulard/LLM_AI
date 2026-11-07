@@ -229,6 +229,66 @@ define(["loading"], function (loading) {
     }
 
     // ----------------------------------------------------------------
+    //  Gestion bibliothèque (v2.16.1) — sélecteur de médiathèques exclues.
+    //  Même pattern que populateWhitelists/collectChecked : le rendu vit au
+    //  scope module, rempli depuis la config + la liste live de l'endpoint,
+    //  et collect() relit les cases au moment de la sauvegarde.
+    // ----------------------------------------------------------------
+
+    // Rend le sélecteur « Médiathèques évaluées » : liste live
+    // (GET /Plugins/LLMAI/LibReviewLibraries), cases cochées selon
+    // LibReviewExcludedLibraries (JSON d'ItemId). Les exclusions AUTO
+    // (type non vidéo, .strm, racine DVR) sont cochées ET désactivées :
+    // elles ne sont jamais stockées en config (recalculées à chaque run).
+    function populateLibReviewLibraries(cfg, view) {
+        var host = view.querySelector("#librevLibsList");
+        if (!host) return;
+        var manual = toSet(parseJsonArray(cfg && cfg.LibReviewExcludedLibraries));
+        ApiClient.ajax({
+            url: ApiClient.getUrl("Plugins/LLMAI/LibReviewLibraries"),
+            type: "GET"
+        }).then(function (r) { return r.json(); }).then(function (data) {
+            var libs = (data && data.Libraries) || [];
+            if (!libs.length) {
+                host.innerHTML = '<div class="wlEmpty">' + esc(i18n.t("cfg.libreview.libs.empty")) + '</div>';
+                return;
+            }
+            var html = libs.map(function (lib) {
+                var v = esc(lib.ItemId || "");
+                var auto = !!lib.ExcludedAuto;
+                var typeTag = lib.Type ? " [" + lib.Type + "]" : " [mixte]";
+                var label = esc((lib.Name || lib.ItemId) + typeTag);
+                if (auto) label += ' — <span class="wlText">' +
+                    esc(i18n.t("cfg.libreview.libs.auto." + (lib.AutoReasonCode || "type"))) + '</span>';
+                return '<label class="emby-checkbox-label wlItem' + (auto ? ' librevLibAuto' : '') + '">' +
+                    '<input type="checkbox" is="emby-checkbox" class="librevLibCheck" ' +
+                    'data-lib-item-id="' + v + '" ' +
+                    (auto || manual[lib.ItemId] ? "checked" : "") + ' ' +
+                    (auto ? "disabled" : "") + ' />' +
+                    '<span class="checkboxLabel"><span class="wlText">' + label + '</span></span>' +
+                    '</label>';
+            }).join("");
+            host.innerHTML = html;
+        }, function () {
+            host.innerHTML = '<div class="wlEmpty">' + esc(i18n.t("cfg.libreview.libs.err")) + '</div>';
+        });
+    }
+
+    // ItemIds des médiathèques cochées MANUELLEMENT (les cases auto,
+    // disabled, ne sont jamais sérialisées — recalcul serveur à chaque run).
+    function collectLibReviewLibraries(view) {
+        var host = view.querySelector("#librevLibsList");
+        var out = [];
+        if (!host) return out;
+        host.querySelectorAll(".librevLibCheck").forEach(function (c) {
+            if (!c.checked || c.disabled) return;
+            var v = c.getAttribute("data-lib-item-id") || "";
+            if (v) out.push(v);
+        });
+        return out;
+    }
+
+    // ----------------------------------------------------------------
     //  Backends LLM (repli par priorité)
     // ----------------------------------------------------------------
 
@@ -1199,6 +1259,9 @@ define(["loading"], function (loading) {
         view.querySelector("#numLibReviewUnplayedMinDays").value = isNaN(lud) ? 365 : lud;
         view.querySelector("#chkLibReviewTasteProfile").checked = cfg.LibReviewTasteProfile !== false;
         view.querySelector("#txtLibReviewTasteUser").value = cfg.LibReviewTasteUser || "";
+        // v2.16.1 — sélecteur de médiathèques exclues (pattern whitelists :
+        // rendu au scope module, liste live + cases selon la config).
+        populateLibReviewLibraries(cfg, view);
         // Chat interactif : plus de flag d'activation (v2.9.0 — l'onglet
         // « Chat en direct » de cette page, admin-only comme la page).
         view.querySelector("#chkChatMemoryEnabled").checked = !!cfg.ChatMemoryEnabled;
@@ -1357,6 +1420,7 @@ define(["loading"], function (loading) {
             LibReviewUnplayedMinDays: Math.max(0, parseInt(view.querySelector("#numLibReviewUnplayedMinDays").value, 10) || 0),
             LibReviewTasteProfile: view.querySelector("#chkLibReviewTasteProfile").checked,
             LibReviewTasteUser: (view.querySelector("#txtLibReviewTasteUser").value || "").trim(),
+            LibReviewExcludedLibraries: arrayToJson(collectLibReviewLibraries(view)),
             LibReviewKeptIds: (loadedCfg && loadedCfg.LibReviewKeptIds) || "",
             // Atelier de langues — dernier code de langue utilisé (confort :
             // le panneau rouvre sur le même code).
@@ -1717,6 +1781,11 @@ define(["loading"], function (loading) {
             // polling ?Status=true toutes les 5 s, quitter la page coupe le
             // polling pas le run. Les cartes sont revalidées côté serveur au
             // GET ?Last=true (chaque id re-résolu ; effacé/conservé = exclu).
+
+            // (v2.16.1 — sélecteur de médiathèques exclues : le rendu vit au
+            // scope module, pattern populateWhitelists — voir
+            // populateLibReviewLibraries / collectLibReviewLibraries.)
+
             var lrvStopPolling = function () {
                 if (view._llmaiLrvTimer) { clearInterval(view._llmaiLrvTimer); view._llmaiLrvTimer = null; }
             };

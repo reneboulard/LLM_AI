@@ -1205,6 +1205,22 @@ namespace LLM_AI
         /// </summary>
         public string LibReviewTasteUser { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Médiathèques EXCLUES de l'évaluation « Gestion bibliothèque »
+        /// (v2.16.1) : tableau JSON d'<b>ItemId</b> de VirtualFolder (chaînes,
+        /// ex. <c>["101262","148313"]</c>), cochées dans la page de config.
+        /// Une médiathèque exclue ne fournit AUCUN candidat (films ni séries)
+        /// — c'est un « Conserver » à l'échelle de la médiathèque, dynamique :
+        /// tout média futur sous cette racine est exclu d'office.
+        /// Indépendamment de ce champ, sont TOUJOURS exclues (résolues à
+        /// chaque run) : les médiathèques dont le CollectionType n'est pas
+        /// vidéo (musique, livres, jeux, boxsets, playlists…), la bibliothèque
+        /// .strm du plugin (<see cref="StrmLibraryName"/>) et toute médiathèque
+        /// contenant la racine DVR des enregistrements. Vide = aucune
+        /// exclusion manuelle (comportement antérieur pour les biblio vidéo).
+        /// </summary>
+        public string LibReviewExcludedLibraries { get; set; } = "";
+
         // ------------------------------------------------------------------
         //  Atelier de langues (v1.17.0) : génération/entretien des langues
         //  d'interface par le LLM du plugin (gabarit du run détaché d'audit ;

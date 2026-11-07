@@ -155,6 +155,89 @@ namespace LLM_AI
             return true;
         }
 
+        /// <summary>
+        /// Résout TOUTES les racines d'enregistrements DVR (v2.16.2) — chemins
+        /// 4.9.x (<c>RecordingPath</c>/<c>MovieRecordingPath</c>/
+        /// <c>SeriesRecordingPath</c>) ET ids de dossiers 4.10+
+        /// (<c>RecordingFolderId</c>/<c>MovieRecordingFolderId</c>/
+        /// <c>SeriesRecordingFolderId</c>), dédoublonnées.
+        /// <para><see cref="TryResolveRecordingPath"/> ne renvoie que la
+        /// PREMIÈRE racine non vide : une install avec dossiers films et
+        /// séries distincts (constaté en production :
+        /// <c>MovieRecordingPath</c> et <c>SeriesRecordingPath</c> tous
+        /// deux définis) n'en exposait qu'une — tout test d'appartenance
+        /// « sous la racine DVR » ratait l'autre moitié des enregistrements
+        /// (signalement terrain : une médiathèque d'enregistrements TV non
+        /// exclue d'office du sélecteur LibReview).</para>
+        /// Repli : si AUCUNE racine n'est configurée, le défaut Emby
+        /// « &lt;DataPath&gt;/livetv/recordings » (même sémantique que
+        /// <see cref="TryResolveRecordingPath"/>). Élément strictement
+        /// élargissant : la liste contient toujours la racine que la forme
+        /// singulière aurait retournée.
+        /// </summary>
+        internal static bool TryResolveRecordingPaths(
+            IServerApplicationHost host, ILogger logger, out List<string> paths)
+        {
+            paths = new List<string>();
+            try
+            {
+                var cm = host?.TryResolve<MediaBrowser.Common.Configuration.IConfigurationManager>();
+                var opts = cm?.GetConfiguration("livetv") as MediaBrowser.Model.LiveTv.LiveTvOptions;
+                if (opts != null)
+                {
+                    // Chemins string (4.9.x — conservés par les upgrades : la
+                    // config XML n'est pas migrée vers les ids).
+                    AddPath(paths, OptString(opts, "RecordingPath"));
+                    AddPath(paths, OptString(opts, "MovieRecordingPath"));
+                    AddPath(paths, OptString(opts, "SeriesRecordingPath"));
+                    // Ids de dossiers de bibliothèque (4.10+).
+                    var lib = host?.TryResolve<ILibraryManager>();
+                    foreach (var idProp in new[] { "RecordingFolderId", "MovieRecordingFolderId", "SeriesRecordingFolderId" })
+                    {
+                        var raw = OptString(opts, idProp);
+                        if (string.IsNullOrWhiteSpace(raw) || raw == Guid.Empty.ToString()) continue;
+                        var folderPath = ItemIdResolver.Resolve(lib, raw)?.Path;
+                        if (!string.IsNullOrWhiteSpace(folderPath)) AddPath(paths, folderPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] Disque enregistrements : lecture LiveTvOptions (config nommée « livetv ») échouée : {0}", ex.Message);
+                return false;
+            }
+            if (paths.Count == 0)
+            {
+                // Défaut Emby quand aucun chemin n'est configuré — même repli
+                // que TryResolveRecordingPath.
+                var appPaths = host?.TryResolve<MediaBrowser.Common.Configuration.IApplicationPaths>()
+                    ?? host as MediaBrowser.Common.Configuration.IApplicationPaths;
+                string dataRoot = null;
+                try { dataRoot = appPaths?.DataPath; }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Disque enregistrements : DataPath illisible : {0}", ex.Message); }
+                if (!string.IsNullOrWhiteSpace(dataRoot))
+                {
+                    var def = Path.Combine(dataRoot, "livetv", "recordings");
+                    paths.Add(def);
+                    logger?.Info("[LLM_AI] Disque enregistrements : aucun chemin configuré — repli sur le défaut Emby « {0} ».", def);
+                }
+            }
+            if (paths.Count == 0)
+            {
+                logger?.Warn("[LLM_AI] Disque enregistrements : chemin d'enregistrements indéterminable — racines DVR inapplicables.");
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>Ajoute un chemin non vide, dédoublonné (casse indifférente).</summary>
+        private static void AddPath(List<string> paths, string p)
+        {
+            if (string.IsNullOrWhiteSpace(p)) return;
+            var t = p.Trim();
+            if (!paths.Contains(t, StringComparer.OrdinalIgnoreCase)) paths.Add(t);
+        }
+
         /// <summary>Premier chemin non vide/blanc de la liste, sinon null.</summary>
         private static string FirstNonEmpty(params string[] paths)
         {

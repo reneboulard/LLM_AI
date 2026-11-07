@@ -171,6 +171,33 @@ namespace LLM_AI
             public string Error { get; set; }
         }
 
+        [Route("/Plugins/LLMAI/LibReviewLibraries", "GET")]
+        public class LibReviewLibrariesRequest : IReturn<object>
+        {
+        }
+
+        /// <summary>Une médiathèque proposée dans le sélecteur d'exclusions (v2.16.1).</summary>
+        public class LibReviewLibrary
+        {
+            /// <summary>ItemId du VirtualFolder (clé stockée en config).</summary>
+            public string ItemId { get; set; }
+            public string Name { get; set; }
+            /// <summary>CollectionType Emby ("movies", "tvshows", null = mixte…).</summary>
+            public string Type { get; set; }
+            /// <summary>Exclusion automatique (non décochable) : type non vidéo, .strm du plugin, racine DVR.</summary>
+            public bool ExcludedAuto { get; set; }
+            /// <summary>Code de l'exclusion auto : "type" | "strm" | "dvr" (libellé i18n côté client).</summary>
+            public string AutoReasonCode { get; set; }
+            /// <summary>Cochée manuellement en config (LibReviewExcludedLibraries).</summary>
+            public bool ExcludedManual { get; set; }
+        }
+
+        public class LibReviewLibrariesResponse
+        {
+            public LibReviewLibrary[] Libraries { get; set; }
+            public string Error { get; set; }
+        }
+
         [Route("/Plugins/LLMAI/LibReviewResetKept", "POST")]
         public class LibReviewResetKeptRequest : IReturn<object>
         {
@@ -346,6 +373,93 @@ namespace LLM_AI
                 Progress = st2.Progress,
                 StartedAt = st2.StartedAt?.ToString("o", CultureInfo.InvariantCulture)
             };
+        }
+
+        // ------------------------------------------------------------------
+        //  GET Libraries (v2.16.1 — sélecteur d'exclusions de médiathèques)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Liste les médiathèques pour le sélecteur « exclure de
+        /// l'évaluation » de la page de config : toutes les VirtualFolders,
+        /// avec pour chacune le flag <c>ExcludedAuto</c> (type non vidéo,
+        /// racine .strm, racine DVR — non décochable) et
+        /// <c>ExcludedManual</c> (cochée dans LibReviewExcludedLibraries).
+        /// Même test « videoish » que CrossKindApiService et le moteur.
+        /// </summary>
+        public object Get(LibReviewLibrariesRequest req)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return new LibReviewLibrariesResponse { Error = I18n.SDisplay("err.noconfig", ApplicationHost) };
+            if (!IsAdmin())
+                return new LibReviewLibrariesResponse { Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            var libs = new List<LibReviewLibrary>();
+            try
+            {
+                string strmRoot = null;
+                if (!string.IsNullOrWhiteSpace(cfg.StrmLibraryName))
+                {
+                    try { strmRoot = StrmLibraryGenerator.ResolveLibraryRoot(LibraryManager, cfg.StrmLibraryName, Logger); }
+                    catch (Exception ex) { Logger?.Warn("[LLM_AI] LibReviewLibraries : racine .strm illisible ({0}).", ex.Message); }
+                }
+                // Racines DVR (v2.16.2 — PLURIEL : films + séries peuvent être
+                // deux dossiers distincts ; la forme singulière n'en résout
+                // qu'une — signalement terrain : une médiathèque
+                // d'enregistrements TV n'était pas exclue d'office).
+                var dvrRoots = new List<string>();
+                try
+                {
+                    if (RecordingDiskManager.TryResolveRecordingPaths(ApplicationHost, Logger, out var roots))
+                        dvrRoots = roots;
+                }
+                catch (Exception ex) { Logger?.Warn("[LLM_AI] LibReviewLibraries : racines DVR illisibles ({0}).", ex.Message); }
+
+                var manual = new HashSet<string>(
+                    LibReviewEngine.ParseExcludedLibraryItemIds(cfg.LibReviewExcludedLibraries),
+                    StringComparer.OrdinalIgnoreCase);
+
+                var folders = LibraryManager.GetVirtualFolders()
+                    ?? new List<MediaBrowser.Model.Entities.VirtualFolderInfo>();
+                foreach (var f in folders)
+                {
+                    if (f == null || string.IsNullOrWhiteSpace(f.ItemId)) continue;
+                    string ctype = f.CollectionType;
+                    bool videoish = string.IsNullOrWhiteSpace(ctype)
+                        || string.Equals(ctype, "movies", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(ctype, "tvshows", StringComparison.OrdinalIgnoreCase);
+
+                    string autoReason = null;
+                    if (!videoish) autoReason = "type";
+                    bool underStrm = false, underDvr = false;
+                    foreach (var loc in f.Locations ?? Array.Empty<string>())
+                    {
+                        if (string.IsNullOrWhiteSpace(loc)) continue;
+                        if (!string.IsNullOrWhiteSpace(strmRoot) && TonightService.IsUnderPath(loc, strmRoot)) underStrm = true;
+                        if (dvrRoots.Count > 0 && dvrRoots.Any(r => TonightService.IsUnderPath(loc, r))) underDvr = true;
+                    }
+                    if (underStrm) autoReason = "strm";
+                    else if (underDvr) autoReason = "dvr";
+
+                    libs.Add(new LibReviewLibrary
+                    {
+                        ItemId = f.ItemId.Trim(),
+                        Name = f.Name ?? f.ItemId,
+                        Type = ctype ?? "",
+                        ExcludedAuto = autoReason != null,
+                        AutoReasonCode = autoReason,
+                        ExcludedManual = manual.Contains(f.ItemId.Trim())
+                    });
+                }
+                libs.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] LibReviewLibraries : échec ({0}).", ex.Message);
+                return new LibReviewLibrariesResponse { Error = ex.Message };
+            }
+            return new LibReviewLibrariesResponse { Libraries = libs.ToArray() };
         }
 
         // ------------------------------------------------------------------

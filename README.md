@@ -2844,6 +2844,18 @@ total Go donne le gain de place réel du verdict), avec **« 🗑️ Effacer /
   vu(s) ») + séries favorites. Portée **strictement** le profil : les pools de
   candidats restent calculés sur la bibliothèque entière (union des vus de
   tous les usagers).
+- **Médiathèques exclues** (v2.16.2) : le sélecteur « Médiathèques évaluées » de
+  l'onglet permet de cocher les médiathèques à exclure de l'évaluation — une
+  médiathèque cochée ne fournit aucun candidat (ni film ni série), c'est un
+  « Conserver » à l'échelle de la médiathèque, valable aussi pour tout média
+  ajouté à l'avenir. Trois exclusions sont **automatiques et non décochables**,
+  recalculées à chaque run : les médiathèques dont le type de contenu n'est pas
+  vidéo (musique, livres, jeux, photos, collections, listes de lecture…), la
+  bibliothèque de cartes `.strm` du plugin, et toute médiathèque dont une racine
+  disque tombe sous la racine DVR des enregistrements. Si la liste des
+  médiathèques est illisible ou si la bibliothèque `.strm` activée est
+  introuvable, le run est **annulé avec une erreur explicite** (fail-closed) :
+  jamais d'évaluation sans les exclusions de sécurité.
 - **Lancement** : bouton « Lancer l'évaluation » (consigne libre facultative)
   ou tâche planifiée « Gestion bibliothèque » (désactivée par défaut ;
   planification en tête du champ `LibReviewTask`, ex. « 10 5 * * 0 » —

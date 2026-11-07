@@ -1978,6 +1978,7 @@
                             ✅ à conserver — affichées ci-dessous groupées par section.
                             <b>Le plugin ne supprime jamais lui-même</b> : « Effacer » délègue la suppression à Emby
                             sur votre clic ; « Conserver » inscrit le média dans une liste à ne plus proposer.
+                            L'évaluation porte sur les médiathèques non cochées ci-dessous.
                         </div>
 
                         <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
@@ -2087,6 +2088,19 @@
                                 Nom exact d'un usager Emby (la casse est tolérée). Ne change PAS les candidats
                                 — uniquement la référence de goûts du classement.
                             </div>
+                        </div>
+
+                        <div class="inputContainer" style="margin-top:0.8em;">
+                            <div class="fieldDescription" style="font-weight:bold;" data-i18n="cfg.libreview.libs.h">
+                                Médiathèques évaluées
+                            </div>
+                            <div class="fieldDescription" style="margin-bottom:0.5em;" data-i18n-html="cfg.libreview.libs.desc">
+                                Cochez les médiathèques à <b>exclure</b> de l'évaluation : aucun de leurs médias
+                                ne sera proposé. Sont déjà exclues d'office (non décochables) : les médiathèques
+                                non vidéo (musique, livres, jeux, collections, listes de lecture…), la bibliothèque
+                                de cartes .strm du plugin et toute médiathèque contenant les enregistrements DVR.
+                            </div>
+                            <div id="librevLibsList" style="display:flex;flex-direction:column;gap:0.3em;max-width:520px;"></div>
                         </div>
 
                         <div style="margin:0.8em 0;">

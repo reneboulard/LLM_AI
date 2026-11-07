@@ -131,6 +131,33 @@ namespace LLM_AI
 
             progress(I18n.SDisplay("librev.progress.collect", host) ?? "Rassemblement des candidats…");
 
+            // ---- Exclusions de médiathèques (v2.16.1) : automatique
+            //      (type non-vidéo, bibliothèque .strm, racine DVR) +
+            //      manuelle (cases cochées, ItemId stockés en config).
+            //      Fail-closed : si la liste des médiathèques ou la
+            //      bibliothèque .strm activée est illisible, le run
+            //      S'ARRÊTE (jamais de pool calculé sans les exclusions
+            //      de sécurité) — InvalidOperationException propagée.
+            var libExcl = ComputeLibraryExclusions(cfg, library, host, logger, ct);
+            var exclRoots = new List<long>();
+            var exclNames = new List<string>();
+            foreach (var le in libExcl)
+            {
+                if (le.InternalId <= 0)
+                {
+                    logger?.Warn("[LLM_AI] [LibReview] Médiathèque exclue « {0} » (ItemId {1}) non résolue — ignorée (Warn).", le.Name, le.ItemId);
+                    continue;
+                }
+                exclRoots.Add(le.InternalId);
+                exclNames.Add(le.Name + (le.AutoReason != null ? " (" + le.AutoReason + ")" : ""));
+            }
+            if (exclRoots.Count > 0)
+                logger.Info("[LLM_AI] [LibReview] {0} médiathèque(s) exclue(s) : {1}.",
+                    exclRoots.Count, string.Join(", ", exclNames));
+            var excludedMovieIds = CollectIdsUnderRoots(library, exclRoots, new[] { "Movie" }, logger, ct);
+            var excludedSeriesIds = CollectIdsUnderRoots(library, exclRoots, new[] { "Series" }, logger, ct);
+            int libExcluded = 0;
+
             // ---- Exclusion FAVORIS (v2.11.1) : un item en favori par QUELQU'UN
             //      n'est JAMAIS candidat — règle absolue, avant même le LLM.
             //      Un favori sur un épisode protège aussi la série parente.
@@ -146,16 +173,16 @@ namespace LLM_AI
             //      triés par note croissante (les « canards boîteux » d'abord).
             //      Hors kept ET hors favoris, capés au total.
             var moviePool = CollectMovies(library, users, userData, kept, favIds, cap,
-                cfg.LibReviewUnplayedMinDays, ref favExcluded, logger, ct);
+                cfg.LibReviewUnplayedMinDays, ref favExcluded, excludedMovieIds, ref libExcluded, logger, ct);
             // ---- Pool SÉRIES : séries partiellement vues, hors kept, hors
             //      favoris, hors séries à enregistrer (SeriesTimers + timers
             //      programmés — même règle que emby-delete-series.sh :
             //      exclusion stricte par titre normalisé EXACT), capées.
             int timerExcluded = 0;
             var seriesPool = CollectSeries(library, users, userData, liveTv, kept, favIds, cap,
-                ref timerExcluded, ref favExcluded, logger, ct);
+                ref timerExcluded, ref favExcluded, excludedSeriesIds, ref libExcluded, logger, ct);
 
-            logger.Info("[LLM_AI] [LibReview] {0} favori(s) exclu(s) des pools.", favExcluded);
+            logger.Info("[LLM_AI] [LibReview] {0} favori(s) exclu(s) des pools, {1} candidat(s) écarté(s) par médiathèque exclue.", favExcluded, libExcluded);
 
             int totalCandidates = moviePool.Count + seriesPool.Count;
             logger.Info("[LLM_AI] [LibReview] Candidats : {0} film(s), {1} série(s) (hors {2} conservé(s), {3} favori(s), {4} série(s) en enregistrement).",
@@ -553,6 +580,212 @@ namespace LLM_AI
             return set;
         }
 
+        // ------------------------------------------------------------------
+        //  Exclusions de médiathèques (v2.16.1)
+        // ------------------------------------------------------------------
+
+        /// <summary>Une médiathèque exclue du run « Gestion bibliothèque ».</summary>
+        internal sealed class LibExclusion
+        {
+            public string ItemId { get; set; }      // ItemId du VirtualFolder (config)
+            public string Name { get; set; }
+            public long InternalId { get; set; }    // 0 = non résolu
+            public string AutoReason { get; set; }  // non null = exclusion automatique
+        }
+
+        /// <summary>
+        /// Calcule les médiathèques exclues du run (v2.16.1) :
+        /// <list type="bullet">
+        /// <item><b>Automatiques</b> (résolues à CHAQUE run, jamais stockées) :
+        /// tout VirtualFolder dont le <c>CollectionType</c> n'est pas vidéo
+        /// (liste blanche : null/mixte, « movies », « tvshows » — même test
+        /// que CrossKindApiService), la bibliothèque .strm du plugin
+        /// (<see cref="PluginConfiguration.StrmLibraryName"/>) et toute
+        /// médiathèque dont une racine disque tombe sous la racine DVR.</item>
+        /// <item><b>Manuelles</b> : les ItemId de
+        /// <see cref="PluginConfiguration.LibReviewExcludedLibraries"/>
+        /// (vidéo ou non — l'admin peut exclure une biblio mixte aussi).</item>
+        /// </list>
+        /// <b>Fail-closed</b> : si <c>GetVirtualFolders</c> échoue, ou si la
+        /// bibliothèque .strm est ACTIVÉE mais introuvable, on lève — le run
+        /// ne produit JAMAIS un pool calculé sans les exclusions de sécurité
+        /// (une erreur silencieuse = des .strm/DVR potentiellement proposés à
+        /// la suppression).
+        /// </summary>
+        private static List<LibExclusion> ComputeLibraryExclusions(
+            PluginConfiguration cfg, ILibraryManager library, IServerApplicationHost host,
+            ILogger logger, CancellationToken ct)
+        {
+            var result = new List<LibExclusion>();
+            var byItemId = new Dictionary<string, LibExclusion>(StringComparer.OrdinalIgnoreCase);
+
+            List<MediaBrowser.Model.Entities.VirtualFolderInfo> folders;
+            try
+            {
+                folders = library.GetVirtualFolders() ?? new List<MediaBrowser.Model.Entities.VirtualFolderInfo>();
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    "Gestion bibliothèque : GetVirtualFolders a échoué (" + ex.Message + ") — run annulé (fail-closed, exclusions de médiathèques illisibles).", ex);
+            }
+
+            // Racines .strm (config) et DVR (réflexion, pattern CrossKindApiService).
+            string strmRoot = null, strmName = null;
+            if (cfg != null && !string.IsNullOrWhiteSpace(cfg.StrmLibraryName))
+            {
+                strmName = cfg.StrmLibraryName.Trim();
+                try { strmRoot = StrmLibraryGenerator.ResolveLibraryRoot(library, strmName, logger); }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] [LibReview] Racine .strm illisible : {0}", ex.Message); }
+                if (string.IsNullOrWhiteSpace(strmRoot))
+                    throw new InvalidOperationException(
+                        "Gestion bibliothèque : la bibliothèque .strm « " + strmName + " » (StrmLibraryName) est introuvable — run annulé (fail-closed : elle ne doit jamais être évaluée).");
+            }
+            // Racines DVR (v2.16.2 — PLURIEL : une install peut avoir un
+            // dossier films ET un dossier séries distincts ; la forme
+            // singulière n'en expose qu'une — signalement terrain : une
+            // médiathèque d'enregistrements TV passait au travers du
+            // fail-closed).
+            var dvrRoots = new List<string>();
+            try
+            {
+                if (RecordingDiskManager.TryResolveRecordingPaths(host, logger, out var roots))
+                    dvrRoots = roots;
+            }
+            catch (Exception ex) { logger?.Warn("[LLM_AI] [LibReview] Racines DVR illisibles : {0}", ex.Message); }
+
+            foreach (var f in folders)
+            {
+                if (f == null || string.IsNullOrWhiteSpace(f.ItemId)) continue;
+                ct.ThrowIfCancellationRequested();
+                string ctype = f.CollectionType;
+                // Liste blanche vidéo (même test que CrossKindApiService) :
+                // null/mixte, movies, tvshows passent ; musique, livres, jeux,
+                // boxsets, playlists, photos, homevideos… sont exclus d'office.
+                bool videoish = string.IsNullOrWhiteSpace(ctype)
+                    || string.Equals(ctype, "movies", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(ctype, "tvshows", StringComparison.OrdinalIgnoreCase);
+                string autoReason = null;
+                if (!videoish) autoReason = "type non vidéo (" + (ctype ?? "?") + ")";
+
+                bool underStrm = false, underDvr = false;
+                foreach (var loc in f.Locations ?? Array.Empty<string>())
+                {
+                    if (string.IsNullOrWhiteSpace(loc)) continue;
+                    if (!string.IsNullOrWhiteSpace(strmRoot) && TonightService.IsUnderPath(loc, strmRoot)) underStrm = true;
+                    if (dvrRoots.Count > 0 && dvrRoots.Any(r => TonightService.IsUnderPath(loc, r))) underDvr = true;
+                }
+                if (underStrm) autoReason = "bibliothèque .strm du plugin";
+                else if (underDvr) autoReason = "racine DVR (enregistrements)";
+
+                if (autoReason == null) continue;
+                var le = new LibExclusion
+                {
+                    ItemId = f.ItemId.Trim(),
+                    Name = f.Name ?? f.ItemId,
+                    AutoReason = autoReason
+                };
+                result.Add(le);
+                if (!byItemId.ContainsKey(le.ItemId)) byItemId[le.ItemId] = le;
+            }
+
+            // Manuelles (cases cochées) : ItemId vidéo OU non — l'admin décide.
+            foreach (var raw in ParseExcludedLibraryItemIds(cfg?.LibReviewExcludedLibraries))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (byItemId.TryGetValue(raw, out var existing))
+                {
+                    existing.AutoReason = existing.AutoReason; // déjà auto : rien à changer
+                    continue;
+                }
+                var f = folders.FirstOrDefault(x => x != null
+                    && string.Equals((x.ItemId ?? "").Trim(), raw, StringComparison.OrdinalIgnoreCase));
+                var le = new LibExclusion
+                {
+                    ItemId = raw,
+                    Name = f?.Name ?? raw,
+                    AutoReason = null // manuelle
+                };
+                result.Add(le);
+                byItemId[raw] = le;
+            }
+
+            // Résolution ItemId → InternalId (GetItemById(long), pattern
+            // StrmLibraryGenerator.ResolveVirtualFolderItem). Non résolu = 0
+            // (l'appelant Warn + ignore — la médiathèque a disparu d'Emby).
+            foreach (var le in result)
+            {
+                try
+                {
+                    if (long.TryParse(le.ItemId, NumberStyles.Integer, CultureInfo.InvariantCulture, out long lid))
+                    {
+                        var item = library.GetItemById(lid);
+                        le.InternalId = item?.InternalId ?? 0;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] [LibReview] Résolution médiathèque « {0} » (ItemId {1}) échouée : {2}", le.Name, le.ItemId, ex.Message);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Ensemble des InternalId (long) des items du <paramref name="types"/>
+        /// situés sous l'une des racines <paramref name="roots"/> — UNE requête
+        /// par type (AncestorIds = union), jamais une requête par médiathèque.
+        /// NB : AUCUN filtre Tags/Genres assigné (piège InternalItemsQuery).
+        /// </summary>
+        private static HashSet<long> CollectIdsUnderRoots(ILibraryManager library, List<long> roots,
+            string[] types, ILogger logger, CancellationToken ct)
+        {
+            var set = new HashSet<long>();
+            if (roots == null || roots.Count == 0 || types == null || types.Length == 0) return set;
+            try
+            {
+                var q = new InternalItemsQuery
+                {
+                    IncludeItemTypes = types,
+                    AncestorIds = roots.ToArray(),
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                    // NB : AUCUN filtre Tags/Genres/User assigné (piège InternalItemsQuery).
+                };
+                foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (it != null && it.Id != Guid.Empty) set.Add(it.InternalId);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Warn("[LLM_AI] [LibReview] Requête d'exclusion médiathèques échouée : {0}", ex.Message);
+            }
+            return set;
+        }
+
+        /// <summary>Parse la config <see cref="PluginConfiguration.LibReviewExcludedLibraries"/> (tableau JSON d'ItemId en chaînes). Tolérant.</summary>
+        internal static List<string> ParseExcludedLibraryItemIds(string json)
+        {
+            var list = new List<string>();
+            if (string.IsNullOrWhiteSpace(json)) return list;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        string s = el.ValueKind == JsonValueKind.String ? el.GetString() : el.GetRawText();
+                        if (!string.IsNullOrWhiteSpace(s)) list.Add(s.Trim());
+                    }
+                }
+            }
+            catch { /* liste illisible = vide (fail-open) */ }
+            return list;
+        }
+
         /// <summary>
         /// Films candidats, hors kept ET hors favoris, capés au total (v2.11.0) :
         /// moitié du plafond pour les films VUS (union des usagers, du plus
@@ -564,7 +797,8 @@ namespace LLM_AI
         /// </summary>
         private static List<PoolItem> CollectMovies(ILibraryManager library, IUserManager users,
             IUserDataManager userData, HashSet<string> kept, HashSet<string> favIds, int cap,
-            int unplayedMinDays, ref int favExcluded, ILogger logger, CancellationToken ct)
+            int unplayedMinDays, ref int favExcluded, HashSet<long> excludedIds, ref int libExcluded,
+            ILogger logger, CancellationToken ct)
         {
             int napCap = unplayedMinDays > 0 ? cap / 2 : cap;
             var list = new List<PoolItem>();
@@ -578,6 +812,7 @@ namespace LLM_AI
                 string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
                 if (kept.Contains(id)) continue;
                 if (favIds.Contains(id)) { favExcluded++; continue; }   // v2.11.1 — jamais de favori
+                if (excludedIds != null && excludedIds.Contains(item.InternalId)) { libExcluded++; continue; } // v2.16.1 — médiathèque exclue
                 list.Add(ToPoolItem(item, id, kv.Value.LastPlayedUtc, logger));
             }
 
@@ -596,6 +831,7 @@ namespace LLM_AI
                     string id = item.InternalId.ToString(CultureInfo.InvariantCulture);
                     if (kept.Contains(id)) continue;
                     if (favIds.Contains(id)) { favExcluded++; continue; }   // v2.11.1
+                    if (excludedIds != null && excludedIds.Contains(item.InternalId)) { libExcluded++; continue; } // v2.16.1
                     list.Add(ToPoolItem(item, id, null, logger));
                     unplayedAdded++;
                 }
@@ -745,7 +981,8 @@ namespace LLM_AI
         /// </summary>
         private static List<PoolItem> CollectSeries(ILibraryManager library, IUserManager users,
             IUserDataManager userData, ILiveTvManager liveTv, HashSet<string> kept, HashSet<string> favIds,
-            int cap, ref int timerExcluded, ref int favExcluded, ILogger logger, CancellationToken ct)
+            int cap, ref int timerExcluded, ref int favExcluded, HashSet<long> excludedSeriesIds,
+            ref int libExcluded, ILogger logger, CancellationToken ct)
         {
             var timerNames = TimerSeriesNames(liveTv);
             if (timerNames.Count > 0)
@@ -783,6 +1020,15 @@ namespace LLM_AI
                 {
                     favExcluded++;
                     logger?.Info("[LLM_AI] [LibReview] Série « {0} » exclue du pool : en favori.", series.Name);
+                    continue;
+                }
+                // v2.16.1 — médiathèque exclue : la série est retirée AVANT
+                // de compter ses épisodes (zéro requête gaspillée ; une série
+                // à cheval entre racines est exclue, côté sûr).
+                if (excludedSeriesIds != null && excludedSeriesIds.Contains(series.InternalId))
+                {
+                    libExcluded++;
+                    logger?.Info("[LLM_AI] [LibReview] Série « {0} » exclue du pool : médiathèque exclue.", series.Name);
                     continue;
                 }
                 // Exclusion « série à enregistrer » (titre normalisé exact).

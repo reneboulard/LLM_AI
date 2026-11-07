@@ -10,6 +10,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.16.2] — 2026-11-07
+
+### Fixed (FR)
+- **Médiathèque d'enregistrements TV pas exclue d'office — racines DVR
+  multiples** :
+  `RecordingDiskManager.TryResolveRecordingPath` ne renvoie que la PREMIÈRE
+  racine d'enregistrements non vide. Une installation avec dossiers films et
+  séries distincts (constaté en production : un dossier films en
+  `MovieRecordingPath` + un dossier séries en `SeriesRecordingPath`)
+  n'exposait que la racine films —
+  la médiathèque d'enregistrements TV apparaissait cochable dans le
+  sélecteur et n'était pas couverte par le fail-closed du moteur. Nouvelle
+  forme PLURIELLE `TryResolveRecordingPaths` : TOUTES les racines (chemins
+  4.9.x et ids de dossiers 4.10+, dédoublonnés, repli sur le défaut Emby
+  si aucune n'est configurée — strictement élargissant : la liste contient
+  toujours la racine que la forme singulière retournait). Appliqué aux deux
+  surfaces de la v2.16.1 : moteur (`ComputeLibraryExclusions`) et sélecteur
+  (`GET /Plugins/LLMAI/LibReviewLibraries`). Les autres consommateurs de la
+  forme singulière (gate disque, passe de tag, tests d'appartenance
+  CrossKind/EpgTonight/RecordingWatcher) sont inchangés à dessein — chaque
+  site a sa propre sémantique (un disque à mesurer, un dossier à scanner)
+  et mérite sa propre validation terrain.
+
+### Fixed (EN)
+- **TV recordings library not auto-excluded — multiple DVR roots**:
+  `RecordingDiskManager.TryResolveRecordingPath` returns only the FIRST
+  non-empty recordings root. An installation with distinct movie and series
+  recording folders (seen in production: a movie folder in
+  `MovieRecordingPath` + a series folder in `SeriesRecordingPath`) only
+  exposed the movie root — the
+  TV recordings library showed as tickable in the selector and was
+  not covered by the engine's fail-closed. New PLURAL form
+  `TryResolveRecordingPaths`: ALL roots (4.9.x path strings and 4.10+
+  folder ids, deduplicated, falling back to the Emby default when none is
+  configured — strictly widening: the list always contains the root the
+  singular form would have returned). Applied to both v2.16.1 surfaces:
+  the engine (`ComputeLibraryExclusions`) and the selector
+  (`GET /Plugins/LLMAI/LibReviewLibraries`). The other consumers of the
+  singular form (disk gate, tagging pass, CrossKind/EpgTonight/
+  RecordingWatcher membership tests) are deliberately unchanged — each
+  site has its own semantics (one disk to measure, one folder to scan) and
+  deserves its own field validation.
+
+---
+
+## [2.16.1] — 2026-11-07
+
+### Added (FR)
+- **Gestion bibliothèque — médiathèques exclues de l'évaluation** : nouveau
+  sélecteur « Médiathèques évaluées » dans l'onglet du même nom (case à cocher
+  par médiathèque, liste live lue via `GET /Plugins/LLMAI/LibReviewLibraries`,
+  sélection persistée par ItemId dans `LibReviewExcludedLibraries`). Une
+  médiathèque cochée ne fournit **aucun** candidat — films ni séries — :
+  c'est un « Conserver » à l'échelle de la médiathèque, dynamique (tout média
+  futur sous cette racine est exclu d'office). Trois exclusions sont
+  **automatiques et non décochables**, recalculées à chaque run : les
+  médiathèques dont le type de contenu n'est pas vidéo (musique, livres audio,
+  livres, jeux, photos, collections, listes de lecture, bandes-annonces… —
+  liste blanche `movies`/`tvshows`/mixte), la bibliothèque de cartes `.strm`
+  du plugin (`StrmLibraryName`), et toute médiathèque dont une racine disque
+  tombe sous la racine DVR des enregistrements. Mécanique : UNE requête
+  d'exclusion par type d'item (`InternalItemsQuery.AncestorIds` = union des
+  racines exclues — jamais une requête par médiathèque), puis soustraction en
+  mémoire dans les pools, comme `LibReviewKeptIds`/favoris ; logs greppables
+  (« N médiathèque(s) exclue(s) : … », « N candidat(s) écarté(s)… »).
+  **Fail-closed** : si la liste des médiathèques est illisible, ou si la
+  bibliothèque `.strm` activée est introuvable, le run est annulé avec une
+  erreur explicite — jamais de pool calculé sans les exclusions de sécurité.
+
+### Added (EN)
+- **Library management — libraries excluded from the evaluation**: new
+  "Libraries being evaluated" selector in the tab of the same name (one
+  checkbox per library, live list via `GET /Plugins/LLMAI/LibReviewLibraries`,
+  selection persisted by ItemId in `LibReviewExcludedLibraries`). A ticked
+  library provides **no** candidates — neither movies nor series: it is a
+  "Keep" at library scale, dynamic (any future media under that root is
+  excluded by default). Three exclusions are **automatic and not untickable**,
+  recomputed at every run: libraries whose content type is not video (music,
+  audiobooks, books, games, photos, collections, playlists, trailers… —
+  whitelist `movies`/`tvshows`/mixed), the plugin's `.strm` card library
+  (`StrmLibraryName`), and any library whose disk root falls under the DVR
+  recordings root. Mechanics: ONE exclusion query per item type
+  (`InternalItemsQuery.AncestorIds` = union of excluded roots — never one
+  query per library), then in-memory subtraction in the pools, like
+  `LibReviewKeptIds`/favorites; greppable logs ("N excluded librar(y/ies): …",
+  "N candidate(s) dropped…"). **Fail-closed**: if the library list is
+  unreadable, or if the enabled `.strm` library cannot be resolved, the run is
+  aborted with an explicit error — never a pool computed without the safety
+  exclusions.
+
+### Fixed (FR)
+- **Sélecteur de médiathèques sans cases à cocher** (validé terrain avant
+  publication) : les helpers de rendu/récolte du sélecteur étaient déclarés
+  au scope du listener `viewshow`, inaccessibles depuis `fill()`/`collect()`
+  (scope module) — le libellé s'affichait mais la liste restait vide, et le
+  `ReferenceError` interrompait le remplissage des champs suivants. Refactor
+  au pattern maison `populateWhitelists`/`collectChecked` : rendu au scope
+  module (`populateLibReviewLibraries`/`collectLibReviewLibraries`). Les
+  exclusions automatiques portent désormais un **code** de raison
+  (`type`/`strm`/`dvr`) libellé côté client en i18n (FR+EN) au lieu d'un texte
+  serveur français brut.
+
+### Fixed (EN)
+- **Library selector without checkboxes** (field-validated before release):
+  the selector's render/collect helpers were declared inside the `viewshow`
+  listener scope, unreachable from the module-scope `fill()`/`collect()` —
+  the label displayed but the list stayed empty, and the `ReferenceError`
+  broke the filling of the remaining fields. Refactored to the house
+  `populateWhitelists`/`collectChecked` pattern: rendering now lives at module
+  scope (`populateLibReviewLibraries`/`collectLibReviewLibraries`). Automatic
+  exclusions now carry a reason **code** (`type`/`strm`/`dvr`) labelled
+  client-side via i18n (FR+EN) instead of raw server-side French text.
+
+---
+
 ## [2.15.0] — 2026-11-06
 
 ### Added (FR)
