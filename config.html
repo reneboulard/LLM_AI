@@ -1486,6 +1486,22 @@
                             chaîne S1→S2→S3. Respecte le mode simulation. Modifie des métadonnées.
                         </div>
 
+                        <div class="inputContainer">
+                        <textarea is="emby-textarea" id="txtOrphanExcludedTitles" rows="2"
+                                  label="Titres exclus (un titre par ligne)"
+                                  data-i18n-label="cfg.orphan.excluded"></textarea>
+                        <div class="fieldDescription" data-i18n-html="cfg.orphan.excluded.desc">
+                            Items que la passe ne doit jamais tenter d'identifier : une entrée
+                            correspond au titre exact, ou à un préfixe suivi d'une frontière de mot
+                            (« Le téléjournal » attrape « Le téléjournal avec Claudine Bourbonnais »,
+                            jamais « Le téléjournaliste ») ; casse et accents tolérés. Un item exclu
+                            ne reçoit aucun appel d'identification ni étiquette — conçu pour les
+                            enregistrements éphémères volontairement non identifiés (ex. les
+                            nouvelles quotidiennes, regardées puis supprimées). Vide = aucune
+                            exclusion.
+                        </div>
+                        </div>
+
                         <!-- id : cible du lien profond de notification « fiche
                              croisée » (&section=crosskind dans le hash —
                              config.js déplie et défile jusqu'à la section). -->

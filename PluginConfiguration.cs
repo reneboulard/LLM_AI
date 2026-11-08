@@ -1053,6 +1053,24 @@ namespace LLM_AI
         /// </summary>
         public bool OrphanAuditTaggedIds { get; set; } = false;
 
+        /// <summary>
+        /// Titres exclus de la passe d'identification des orphelins —
+        /// <b>une entrée par ligne</b>. Une entrée correspond au titre de
+        /// l'item (casse et accents tolérés) s'il est <b>égal</b> à
+        /// l'entrée ou s'il <b>commence par elle suivie d'une frontière de
+        /// mot</b> (caractère non alphanumérique — « Le téléjournal »
+        /// attrape « Le téléjournal avec Claudine Bourbonnais », jamais
+        /// « Le téléjournaliste »). Item exclu = ignoré d'office par la
+        /// passe : aucun appel S0/S1/S2/S3, aucune étiquette — conçu pour
+        /// les enregistrements éphémères volontairement non identifiés
+        /// (ex. les nouvelles quotidiennes, regardées puis supprimées :
+        /// aucun catalogue ne les identifiera jamais, chaque passe y
+        /// brûlait des appels pour rien). La vérité EPG continu d'être
+        /// figée au store par la validation en fin d'enregistrement (sans
+        /// coût LLM). Vide = aucune exclusion. Défaut vide.
+        /// </summary>
+        public string OrphanExcludedTitles { get; set; } = string.Empty;
+
         // ------------------------------------------------------------------
         //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
         //  Indépendant de la recommandation : un run agent dédié interroge

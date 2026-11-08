@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller;
@@ -201,6 +204,31 @@ namespace LLM_AI
             try { deferredEntries = RecordingValidateStore.Parse(); }
             catch (Exception) { deferredEntries = null; } // tolérant : repli sans vérité
 
+            // Exclusions par titre (config OrphanExcludedTitles) : items
+            // volontairement hors du pipeline — ex. les nouvelles
+            // quotidiennes, éphémères par design (enregistrées, regardées,
+            // supprimées) : aucun catalogue ne les identifiera jamais et
+            // chaque passe y brûlait S1+S2 (LLM) + S3 pour rien. L'entrée
+            // matche le titre exact OU un préfixe suivi d'une frontière de
+            // mot (casse/accents tolérés — voir MatchExcludedTitle).
+            var excludedTitles = new List<KeyValuePair<string, string>>(); // clé = titre normalisé, valeur = entrée saisie
+            try
+            {
+                foreach (var line in (cfg.OrphanExcludedTitles ?? string.Empty).Split('\n'))
+                {
+                    var rawEntry = line?.Trim();
+                    if (string.IsNullOrEmpty(rawEntry)) continue;
+                    var norm = NormExcludedTitle(rawEntry);
+                    if (norm.Length == 0) continue;
+                    if (!excludedTitles.Any(kv => kv.Key.Equals(norm, StringComparison.Ordinal)))
+                        excludedTitles.Add(new KeyValuePair<string, string>(norm, rawEntry));
+                }
+            }
+            catch { /* tolérant : liste vide */ }
+            if (excludedTitles.Count > 0)
+                _logger?.Info("[LLM_AI] OrphanIdentify : liste d'exclusion chargée — {0} entrée(s) : {1}.",
+                    excludedTitles.Count, string.Join(" | ", excludedTitles.Select(kv => kv.Value)));
+
             // Les enregistrements DVR terminés sont importés par Emby dans une
             // bibliothèque (Movies/Series) — or GetRecordings ne retourne que les
             // enregistrements actifs/à venir, PAS les enregistrements complétés (qui
@@ -225,7 +253,7 @@ namespace LLM_AI
                 return;
             }
 
-            int scanned = 0, orphans = 0, resolved = 0, review = 0, notFound = 0, skipped = 0, errors = 0;
+            int scanned = 0, orphans = 0, resolved = 0, review = 0, notFound = 0, skipped = 0, excluded = 0, errors = 0;
             // Œuvres à nommer dans la notification (seules les fiches
             // croisées NOUVELLES de cette passe — tag add-only).
             var crossItems = new List<BaseItem>();
@@ -240,6 +268,19 @@ namespace LLM_AI
                 idx++;
                 try { progress?.Report((double)idx / total * 100.0); } catch { /* best-effort */ }
                 scanned++;
+
+                // Exclusion par titre : AVANT tout traitement — aucun appel
+                // d'identification (S0/S1/S2/S3), aucune étiquette. Ligne
+                // dédiée au journal : un silence serait indiscernable d'un
+                // bug de balayage (leçon des « 0 toast(s) »).
+                var excludedBy = MatchExcludedTitle(item.Name, excludedTitles);
+                if (excludedBy != null)
+                {
+                    excluded++;
+                    _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » exclu par la liste (entrée « {1} ») → ignoré — aucun appel d'identification.",
+                        item.Name, excludedBy);
+                    continue;
+                }
 
                 // Snapshot du tag croisé AVANT traitement : le tag est
                 // add-only — un gain = fiche croisée fraîchement appliquée
@@ -298,8 +339,8 @@ namespace LLM_AI
             }
 
             _logger?.Info(
-                "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} introuvables={4} ignorés(non-orphelin/.strm/déjà taggé)={5} erreurs={6} fiches-croisées-nouvelles={7} ({8}).",
-                scanned, orphans, resolved, review, notFound, skipped, errors, crossItems.Count, dry ? "DRY-RUN" : "application");
+                "[LLM_AI] OrphanIdentify : terminé. items={0} orphelins={1} résolus={2} needs-review={3} introuvables={4} ignorés(non-orphelin/.strm/déjà taggé)={5} exclus(titre)={6} erreurs={7} fiches-croisées-nouvelles={8} ({9}).",
+                scanned, orphans, resolved, review, notFound, skipped, excluded, errors, crossItems.Count, dry ? "DRY-RUN" : "application");
 
             // Notification (pattern des tags disque) : uniquement les fiches
             // croisées NOUVELLES de cette passe — nominatives (l'œuvre y
@@ -340,6 +381,50 @@ namespace LLM_AI
                 if (best == null || e.Updated > best.Updated) best = e;
             }
             return best;
+        }
+
+        /// <summary>Normalise un titre pour la liste d'exclusion
+        /// <see cref="PluginConfiguration.OrphanExcludedTitles"/> : trim,
+        /// minuscule invariant, accents pliés (FormD — marques non
+        /// espacées retirées). « Téléjournal » = « téléjournal ».
+        /// </summary>
+        private static string NormExcludedTitle(string s)
+        {
+            var raw = (s ?? string.Empty).Trim().ToLowerInvariant();
+            if (raw.Length == 0) return string.Empty;
+            string formD;
+            try { formD = raw.Normalize(NormalizationForm.FormD); }
+            catch { return raw; } // repli : comparaison sans pli d'accents
+            var sb = new StringBuilder(formD.Length);
+            foreach (var ch in formD)
+                if (CharUnicodeInfo.GetUnicodeCategory(ch) != UnicodeCategory.NonSpacingMark)
+                    sb.Append(ch);
+            return sb.ToString();
+        }
+
+        /// <summary>Retourne l'entrée (saisie d'origine) qui exclut ce
+        /// titre, ou null. Correspondance : égalité, OU préfixe suivi
+        /// d'une frontière de mot (caractère non alphanumérique —
+        /// « Le téléjournal » attrape « Le téléjournal avec Claudine
+        /// Bourbonnais », jamais « Le téléjournaliste »). Casse et
+        /// accents tolérés des deux côtés.
+        /// </summary>
+        internal static string MatchExcludedTitle(string name, List<KeyValuePair<string, string>> patterns)
+        {
+            if (patterns == null || patterns.Count == 0) return null;
+            var n = NormExcludedTitle(name);
+            if (n.Length == 0) return null;
+            foreach (var kv in patterns)
+            {
+                var p = kv.Key;
+                if (p.Length == 0) continue;
+                if (n.Equals(p, StringComparison.Ordinal)) return kv.Value;
+                if (n.Length > p.Length
+                    && n.StartsWith(p, StringComparison.Ordinal)
+                    && !char.IsLetterOrDigit(n[p.Length]))
+                    return kv.Value;
+            }
+            return null;
         }
     }
 }

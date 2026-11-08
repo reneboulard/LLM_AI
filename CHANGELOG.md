@@ -10,6 +10,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.17.0] — 2026-11-08
+
+### Added (FR)
+- **Liste d'exclusion par titre pour l'identification des
+  orphelins** : nouvelle option « Titres exclus » (un titre par
+  ligne) — les items correspondants sont ignorés d'office par la
+  passe quotidienne : aucun appel d'identification (S0/S1/S2/S3,
+  donc aucun appel LLM ni recherche web), aucune étiquette. Conçue
+  pour les enregistrements éphémères volontairement non identifiés
+  — ex. les nouvelles quotidiennes (enregistrées, regardées,
+  supprimées chaque jour) : la grille leur donne un titre-anchor
+  propre qu'aucun catalogue ne connaît, et la passe y brûlait des
+  appels chaque nuit pour un item qui n'existe plus le matin.
+  Correspondance : titre exact, ou préfixe suivi d'une frontière de
+  mot (une seule entrée « Le téléjournal » couvre toutes les
+  éditions-anchor passées et futures, sans jamais attraper
+  « Le téléjournaliste ») ; casse et accents tolérés. Journal :
+  entrées chargées énoncées au démarrage de la passe, chaque item
+  exclu logué nominativement (entrée responsable citée), compteur
+  dédié au bilan. Vide = aucun changement.
+
+### Added (EN)
+- **Excluded-titles list for orphan identification**: new
+  "Excluded titles" option (one title per line) — matching items
+  are skipped outright by the daily pass: no identification calls
+  (S0/S1/S2/S3, hence no LLM or web-search calls), no tags. Designed
+  for ephemeral recordings deliberately left unidentified — e.g.
+  daily news broadcasts (recorded, watched, deleted every day): the
+  guide gives each anchor edition its own title no catalog knows,
+  and the pass burned calls every night on an item that no longer
+  exists by morning. Matching: exact title, or a prefix followed by
+  a word boundary (a single "Le téléjournal" entry covers every
+  anchor edition, past and future, without ever catching
+  "Le téléjournaliste"); case and accents tolerated. Logging: loaded
+  entries echoed at pass start, each excluded item logged by name
+  (matching entry cited), dedicated counter in the summary. Empty =
+  no change.
+
 ## [2.16.3] — 2026-11-08
 
 ### Fixed (FR)
