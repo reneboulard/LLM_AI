@@ -42,7 +42,10 @@ namespace LLM_AI
     /// arbitrage du juge, rejet par prudence sinon). Repli de type : une série dont la chaîne
     /// échoue est rejouée en kind movie (film importé comme série par
     /// Emby — la fiche est alors appliquée à l'item, dont le type est
-    /// conservé).</para>
+    /// conservé) ; la passe 04 h y injecte la vérité EPG différée du
+    /// store (entrée d'épisode gelée « pour l'audit de sa série »),
+    /// jamais dans la passe série (l'année EPG d'un épisode = année de
+    /// saison, pas de l'œuvre).</para>
     /// <para><b>Application non destructive</b> : on ne remplit que les ids
     /// provider absents, un <c>Overview</c> vide, des <c>Genres</c> vides, et un
     /// poster <c>Primary</c> manquant. <b>Le <c>Name</c> EPG n'est jamais
@@ -180,6 +183,24 @@ namespace LLM_AI
             _logger?.Info("[LLM_AI] OrphanIdentify : démarrage ({0}{1}).",
                 dry ? "DRY-RUN" : "application", verbose ? ", verbose" : "");
 
+            // Vérité EPG différée pour le repli film (cross-kind) : le
+            // watcher gèle l'entrée d'un épisode « couvert par l'audit de
+            // sa série à la passe 04 h » — sans ce relais, cette vérité
+            // mourait dans le store (rétention 7 j) et le repli film
+            // courait sans année ni synopsis (cas réel : documentaire
+            // importé en série, fiche film trouvée par S1 ET S3 mais
+            // rejetée faute de preuve — l'année de diffusion et le
+            // synopsis EPG de l'épisode auraient corroboraient). Lecture
+            // UNE fois par passe ; l'entrée la plus récente dont le chemin
+            // vit sous le dossier de la série alimente le REPLI FILM
+            // UNIQUEMENT (OrphanResolver) : la passe série reste sans
+            // vérité — l'année EPG d'un épisode = année de SAISON (ex.
+            // magazine S39E06 annoncé 2026, série 1988), l'y injecter
+            // casserait la garde ±1 des séries longues orphelines.
+            List<RecordingValidateStore.Entry> deferredEntries;
+            try { deferredEntries = RecordingValidateStore.Parse(); }
+            catch (Exception) { deferredEntries = null; } // tolérant : repli sans vérité
+
             // Les enregistrements DVR terminés sont importés par Emby dans une
             // bibliothèque (Movies/Series) — or GetRecordings ne retourne que les
             // enregistrements actifs/à venir, PAS les enregistrements complétés (qui
@@ -229,8 +250,29 @@ namespace LLM_AI
                 OrphanResolver.Status st;
                 try
                 {
-                    // Passe nocturne : vérité EPG absente (comportement historique).
-                    st = await _resolver.ResolveItemAsync(item, null, cfg, dry, userTmdb, verbose, ct).ConfigureAwait(false);
+                    // Passe nocturne : vérité EPG directe absente
+                    // (comportement historique) — la vérité DIFFÉRÉE du
+                    // store est résolue pour les séries et consommée par
+                    // le repli film uniquement (voir MostRecentDeferredTruth).
+                    OrphanResolver.EpgTruth deferredTruth = null;
+                    if (deferredEntries != null && deferredEntries.Count > 0
+                        && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        var entry = MostRecentDeferredTruth(deferredEntries, item.Path);
+                        if (entry != null)
+                        {
+                            deferredTruth = new OrphanResolver.EpgTruth
+                            {
+                                // Title volontairement null : titre d'épisode ≠
+                                // titre de série — repli item.Name dans le repli film.
+                                Title = null,
+                                Overview = entry.Overview,
+                                Year = entry.Year,
+                                Channel = entry.Channel
+                            };
+                        }
+                    }
+                    st = await _resolver.ResolveItemAsync(item, null, cfg, dry, userTmdb, verbose, ct, deferredTruth).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
@@ -270,6 +312,34 @@ namespace LLM_AI
                     _host.TryResolve<IUserManager>(),
                     cfg, _host, _logger, crossItems).ConfigureAwait(false);
             }
+        }
+        /// <summary>
+        /// Entrée du store la plus récente dont le chemin vit sous le dossier
+        /// de la série (préfixe de chemin avec frontière de séparateur,
+        /// OrdinalIgnoreCase) — la vérité EPG différée d'un épisode gelé pour
+        /// l'audit de sa série. Seules les entrées portant une année OU un
+        /// synopsis comptent (sans preuve à injecter, le relais est un no-op).
+        /// Null si aucune.
+        /// </summary>
+        private static RecordingValidateStore.Entry MostRecentDeferredTruth(
+            List<RecordingValidateStore.Entry> entries, string folderPath)
+        {
+            string folder = (folderPath ?? string.Empty).TrimEnd('\\', '/');
+            if (folder.Length == 0) return null;
+
+            RecordingValidateStore.Entry best = null;
+            foreach (var e in entries)
+            {
+                if (e == null) continue;
+                if (!e.Year.HasValue && string.IsNullOrWhiteSpace(e.Overview)) continue;
+                string p = e.Path ?? string.Empty;
+                if (p.Length <= folder.Length) continue;
+                if (!p.StartsWith(folder, StringComparison.OrdinalIgnoreCase)) continue;
+                char sep = p[folder.Length];
+                if (sep != '\\' && sep != '/') continue;
+                if (best == null || e.Updated > best.Updated) best = e;
+            }
+            return best;
         }
     }
 }

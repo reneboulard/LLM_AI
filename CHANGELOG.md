@@ -10,6 +10,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.16.3] — 2026-11-08
+
+### Fixed (FR)
+- **La vérité EPG différée meurt dans le store — le repli film
+  (cross-kind) courait sur un item creux** : le watcher gèle
+  l'entrée d'un épisode « couvert par l'audit de sa série à la passe
+  04 h », mais cette passe traitait la série sans jamais relire le
+  store — l'année de diffusion et le synopsis EPG de l'épisode
+  n'étaient consommés par personne. Conséquence de terrain : un
+  documentaire importé en série, dont la fiche film était TROUVÉE
+  par la recherche (S1) ET par le web (S3), rejetée deux fois faute de
+  preuve (item série sans année ni synopsis : sans année fiable,
+  seule l'égalité exacte du titre du guide est une preuve — un
+  titre-préfixe ne passe pas). La passe 04 h relaie désormais
+  l'entrée la plus récente du store dont le chemin vit sous le
+  dossier de la série, injectée dans le REPLI FILM UNIQUEMENT —
+  l'année du guide y vaut année de l'œuvre ; la passe série reste
+  volontairement sans vérité (l'année EPG d'un épisode = année de
+  SAISON : l'injecter casserait la garde ±1 des séries longues
+  orphelines). Le titre de l'entrée différée est ignoré à dessein
+  (titre d'épisode ≠ titre de série — repli sur le nom de l'item).
+
+### Added (FR)
+- **Rejet S1 désormais tracé** : le rejet du garde de titre de la
+  recherche S1 était le seul chemin de la chaîne d'identification
+  sans ligne de log — un diagnostic se lisait « NON résolu » sans
+  raison. Le rejet distingue désormais la porte sans année fiable
+  (égalité exacte du titre seule) de la garde titre/année, au niveau
+  Info, dans le style des autres rejets de la porte commune.
+
+### Fixed (EN)
+- **Deferred EPG truth died in the store — the movie fallback
+  (cross-kind) ran on a hollow item**: the watcher freezes a
+  numbered episode's entry as "covered by its series audit at the
+  04:00 pass", but that pass processed the series without ever
+  reading the store back — the episode's air-date year and EPG
+  synopsis were consumed by no one. Field consequence: a documentary
+  imported as a series, whose movie fiche was FOUND by the title
+  search (S1) AND by the web (S3), got rejected twice for lack of
+  proof (a series item without year or synopsis: without a reliable
+  year, only the exact guide-title equality is proof — a
+  title-prefix does not pass). The 04:00 pass now relays the most
+  recent store entry whose path lives under the series folder,
+  injected into the MOVIE FALLBACK ONLY — the guide year is the
+  work's year there; the series pass deliberately stays without
+  truth (an episode's EPG year = its SEASON's year: injecting it
+  would break the ±1 guard of long orphan series). The deferred
+  entry's title is deliberately ignored (episode title ≠ series
+  title — falls back to the item name).
+
+### Added (EN)
+- **S1 rejection now logged**: the title-gate rejection of the S1
+  search was the only path of the identification chain without a
+  log line — a diagnostic read "NOT resolved" with no reason. The
+  rejection now distinguishes the no-reliable-year gate (exact
+  guide-title equality only) from the title/year guard, at Info
+  level, in the style of the common door's other rejections.
+
+---
+
 ## [2.16.2] — 2026-11-07
 
 ### Fixed (FR)

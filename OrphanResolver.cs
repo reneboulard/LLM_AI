@@ -171,7 +171,7 @@ namespace LLM_AI
 
         internal async Task<Status> ResolveItemAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, bool dry, string userTmdb, bool verbose,
-            CancellationToken ct)
+            CancellationToken ct, EpgTruth deferredTruth = null)
         {
             bool isSeries = item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0;
             string kind = isSeries ? "series" : "movie";
@@ -273,8 +273,29 @@ namespace LLM_AI
             // les candidats vus par les DEUX passes.
             if (meta == null && isSeries)
             {
+                // Vérité EPG différée (passe 04 h) : le watcher gèle
+                // l'entrée d'un épisode « couvert par l'audit de sa
+                // série » — sans relais, cette vérité mourait dans le
+                // store (rétention 7 j) et le repli film courait sur un
+                // item creux (sans année ni synopsis), rejetant des
+                // fiches trouvées faute de preuve. Injectée ICI
+                // UNIQUEMENT : la passe série ci-dessus reste sans
+                // vérité — l'année EPG d'un épisode = année de SAISON
+                // (ex. magazine S39E06 annoncé 2026, série 1988),
+                // l'y injecter casserait la garde ±1 des séries longues
+                // orphelines ; dans la passe film, l'année du guide =
+                // année de l'œuvre (sémantique exacte). Le Title de
+                // l'entrée différée est null par construction (titre
+                // d'épisode ≠ titre de série) — repli item.Name.
+                var movieTruth = deferredTruth ?? truth;
+                if (deferredTruth != null)
+                    _logger?.Info(
+                        "[LLM_AI] OrphanIdentify : « {0} » — repli film avec vérité EPG différée du store (année={1}, synopsis={2}) ; la passe série reste volontairement sans vérité (année d'épisode ≠ année de série).",
+                        epgTitle,
+                        deferredTruth.Year.HasValue ? deferredTruth.Year.Value.ToString(CultureInfo.InvariantCulture) : "?",
+                        string.IsNullOrWhiteSpace(deferredTruth.Overview) ? "non" : "oui");
                 var movieTrace = new PipelineTrace { SawCandidates = trace.SawCandidates };
-                meta = await ResolvePipelineAsync(item, truth, cfg, "movie", false,
+                meta = await ResolvePipelineAsync(item, movieTruth, cfg, "movie", false,
                     allowS0, langs, effTmdb, dry, movieTrace, ct, crossKind: true).ConfigureAwait(false);
                 trace = movieTrace;
                 if (meta != null)
@@ -471,6 +492,23 @@ namespace LLM_AI
                             meta = s1;
                             stage = "S1";
                         }
+                    }
+                    else if (s1 != null)
+                    {
+                        // Rejet historiquement MUET — le seul chemin de la
+                        // chaîne sans log (cas réel : documentaire importé
+                        // en série, la bonne fiche film trouvée par S1 puis
+                        // rejetée sans trace, « NON résolu » sans raison —
+                        // diagnostic d'une lecture impossible). La raison
+                        // distingue la porte sans année fiable (égalité
+                        // exacte du titre seule) de la garde titre/année.
+                        _logger?.Info(
+                            "[LLM_AI] OrphanIdentify : S1 « {0} » — candidat « {1} » ({2}) rejeté : {3}.",
+                            epgTitle, s1.Title,
+                            s1.Year.HasValue ? s1.Year.Value.ToString(CultureInfo.InvariantCulture) : "?",
+                            exactOnlyS1
+                                ? "sans année fiable, seule l'égalité exacte du titre du guide est une preuve"
+                                : "garde titre/année non satisfaite");
                     }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
