@@ -777,6 +777,20 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
   lexicale ne voit pas les titres traduits (ex. « Erreur vitale » = « The Fatal
   Flaw ») et la reprise S1→S2→S3 échouerait pareillement ; la confirmation (ou le
   retrait de l'id) reste humaine, dans l'éditeur Emby. Respecte le dry-run.
+- `OrphanExcludedTitles` (texte, une entrée par ligne, défaut vide) — champ
+  « Titres exclus (un titre par ligne) » : les items dont le titre correspond
+  sont ignorés d'office par la passe — **avant même** la recherche d'orphelins :
+  aucun appel d'identification (S0/S1/S2/S3, donc aucun appel LLM ni recherche
+  web), aucune étiquette. Correspondance : égalité exacte du titre, ou préfixe
+  suivi d'une frontière de mot — une seule entrée « Le téléjournal » couvre
+  toutes les éditions-anchor passées et futures, sans jamais attraper
+  « Le téléjournaliste » ; casse et accents tolérés. Conçu pour les
+  enregistrements éphémères volontairement non identifiés — ex. les nouvelles
+  quotidiennes, dont chaque édition porte un titre-anchor propre qu'aucun
+  catalogue ne connaît, et dont l'item n'existe déjà plus le matin. Journal :
+  entrées chargées énoncées au démarrage de la passe, chaque item exclu logué
+  nominativement (entrée responsable citée), compteur dédié au bilan. Vide =
+  aucun changement.
 - Détail de la chaîne (v1.13.27) : quand Emby n'identifie pas une vidéo il colle une
   **date ISO en fin de titre** (date de diffusion, pas l'année de l'œuvre) — le
   pipeline la retire des requêtes et traite l'année comme **indicative** (pas de
@@ -1001,7 +1015,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (statique interne) | **Contextes d'édition du chat** (v1.13.8, portage du pattern « contextes » de llm_core) : cinq modes déroulants (un par prompt éditable). `BuildBlock` injecte à CHAQUE tour : guide d'édition (rôle, invariants, conventions), TEXTE COURANT du prompt (source de vérité read-modify-write, relu de la config) et langue cible résolue serveur. Porte aussi les `CommonRules` (canal de livraison ```text, read-modify-write, conventions de rédaction, langues, sauvegarde, mode exclusif) appendées en fin de bloc. La liste servie à la page et la validation `context_id` dérivent du registre `All` (une entrée = un mode). Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (statique interne) | Store des propositions de modification en attente (`chat_pending.json`, expiration 10 min, une par conversation, par usager). `TakePagePending` (relève la carte de diff pour le tour), `PeekPagePending` (consulte sans consommer — filet nudge), `Consume` (approbation : retire l'action si elle existe, n'a pas expiré, appartient à cet usager ET à cette session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Tool de chat `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`) : `list`/`get` (lecture des cinq champs) et `set` — **two-phase** : valide (liste blanche, plafond 8000 car., texte non vide, champ = mode actif) puis sérialise la proposition dans `ChatPromptStore` ; l'écriture n'a lieu qu'au clic « Approuver » (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, C# déterministe) — le LLM n'a AUCUN chemin d'écriture direct. Avertissement de divergence (recouvrement lexical < 25 %) porté par la carte de diff. Voir [Édition des prompts par le chat](#édition-des-prompts-par-le-chat). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series), résolution déléguée à `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found gelé), dry-run. Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Identification quotidienne 04:00 des items bibliothèque orphelins (sans id IMDb/TMDB/TVDB — enregistrements DVR terminés importés en bibliothèque) : découverte via `ILibraryManager.GetItemList` (Movie/Series), résolution déléguée à `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found gelé), dry-run. **Exclusion par titre en tête de passe** (`OrphanExcludedTitles` — un item exclu ne coûte aucun appel ni étiquette) ; **vérité EPG différée du store** alimentant le repli film des séries (v2.16.3). Voir [Identification des orphelins](#identification-des-enregistrements-orphelins). |
 | `OrphanResolver.cs` | `OrphanResolver` (classe interne) | **Résolveur partagé** (tâche 04 h + `RecordingWatcher`) : audit d'un id posé par Emby (juge synopsis — match → verrous+tag, mismatch → retrait des ids + retour à l'état EPG + reprise), audit des taggés ayant reçu un id entre-temps (`OrphanAuditTaggedIds` — match → tag identifié, mismatch → flag needs-review **ids conservés**, titres traduits invisibles à la garde lexicale), **SB** ancrage bibliothèque (dossier frère homonyme ± année portant une fiche — candidat n° 0, curation de l'usager, règle d'année séries dédiée), **S0** recherche native Emby (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (TMDB multilingue, marqueur de date Emby = année soft + cascade annuelle) → S2 (LLM, ids IMDb/TMDB/TVDB séries) → S3 (SearXNG, ids IMDb et TMDB des URLs), porte d'acceptation commune (année + garde lexicale + juge `JudgeSynopsisMatchAsync`, corroboration obligatoire sur les voies par id sans synopsis comparable) **suivie de la garde « fiche déjà portée »** (porteur au même titre → passage + log doublon ; titre divergent → arbitrage du juge EPG-vs-porteur, rejet par prudence sinon ; conflit d'id déjà porté → rejet), application non destructive + verrous add-only, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation à la fin de chaque enregistrement DVR (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle sans redémarrage) : fige la **vérité EPG** dans `recording_validate.json` (`RecordingValidateStore`, pattern EpgSnapshotStore) **avant** que l'identification d'Emby n'écrase le synopsis, boucle d'arrière-plan (~3 min après l'import) → `OrphanResolver` avec la vérité ; dry-run respecté, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose une image par défaut standardisée (ressource embedded) : `default_poster.jpg` (400×600 portrait) sur la collection `AI Tonight` (BoxSet) et sur les playlists « AI Tonight » (publique + privées par usager), `default_library.jpg` (640×360 16:9) sur la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
@@ -1674,6 +1688,13 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 > en bibliothèque comme des items normaux. Les cartes `.strm` sont exclues
 > (extension `.strm`).
 
+> 💡 **Liste d'exclusion (v2.17.0)** : avant toute résolution, la passe applique
+> le champ « Titres exclus » (`OrphanExcludedTitles`) — un item dont le titre
+> correspond (égalité exacte, ou préfixe suivi d'une frontière de mot ; casse
+> et accents tolérés) est ignoré sans aucun appel d'identification (S0/S1/S2/S3)
+> ni étiquette, et chaque exclusion est logée nominativement. Voir
+> [Configuration](#identification-des-enregistrements-orphelins).
+
 ### Flux (trois stages)
 
 1. **S1 — nettoyage + recherche multilingue.** Le titre EPG est débarrassé de son
@@ -1898,6 +1919,16 @@ contiguë **ou sous-séquence ordonnée de tokens**, p. ex. « ADN business :
 la face cachée des tests grand public » vs « ADN, la face cachée des tests
 grand public » — + juge synopsis) :
 
+- la passe nocturne peut relayer une **vérité EPG différée** (v2.16.3) : quand
+  le watcher a gelé l'entrée d'un épisode « couvert par l'audit de sa série à
+  la passe 04 h », cette passe relit du store (`recording_validate.json`)
+  l'entrée la plus récente dont le chemin vit sous le dossier de la série et
+  l'injecte dans ce repli **film seulement** — l'année du guide y vaut année de
+  l'œuvre, le repli part donc avec l'année et le synopsis EPG. **La passe série
+  reste volontairement sans vérité** (l'année EPG d'un épisode vaut celle de sa
+  SAISON — l'injecter casserait la garde ±1 des séries longues orphelines) ;
+  le titre de l'entrée différée est ignoré à dessein (titre d'épisode ≠ titre
+  de série — repli sur le nom de l'item).
 - une fiche croisée acceptée est **appliquée** (non destructive + verrous — le
   type de l'item, fixé par Emby à l'import, n'est jamais modifié) mais taguée
   **`llmai-needs-review`** avec un log explicite (« fiche de type film

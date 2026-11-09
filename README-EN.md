@@ -754,6 +754,19 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   guard cannot see translated titles (e.g. a French title sharing no token with the
   original) and an S1→S2→S3 retry would fail the same way; confirming (or removing
   the id) stays a human decision, in the Emby editor. Honors the dry-run.
+- `OrphanExcludedTitles` (text, one entry per line, default empty) — the
+  "Excluded titles (one title per line)" field: items whose title matches are
+  skipped outright by the pass — **before** the orphan search even starts: no
+  identification calls (S0/S1/S2/S3, hence no LLM or web-search calls), no
+  tags. Matching: exact title equality, or a prefix followed by a word
+  boundary — a single "Le téléjournal" entry covers every anchor edition, past
+  and future, without ever catching "Le téléjournaliste"; case and accents
+  tolerated. Designed for ephemeral recordings deliberately left unidentified
+  — e.g. daily news broadcasts, whose every anchor edition carries its own
+  title no catalog knows, and whose item no longer exists by morning.
+  Logging: loaded entries echoed at pass start, each excluded item logged by
+  name (matching entry cited), dedicated counter in the summary. Empty = no
+  change.
 - Chain details (v1.13.27): when Emby fails to identify a video it appends an **ISO
   date to the title** (a broadcast date, not the work's year) — the pipeline strips
   it from queries and treats the year as **indicative** (no `primary_release_year`
@@ -974,7 +987,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `ChatContexts.cs` | `ChatContexts` / `ChatContextDef` (internal static) | **Chat editing contexts** (v1.13.8, port of the llm_core "contexts" pattern): five dropdown modes (one per editable prompt). `BuildBlock` injects at EVERY turn: the mode's editing guide (prompt role, invariants, drafting conventions), the prompt's CURRENT text re-read from config (read-modify-write source of truth) and the server-resolved target language. Also carries the `CommonRules` (```text delivery channel, read-modify-write, drafting conventions, languages, saving, exclusive mode) appended at the end of the block. The page list and `context_id` validation both derive from the `All` registry (one entry = one mode). See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
 | `ChatPromptStore.cs` | `ChatPromptStore` / `ChatPendingAction` (internal static) | Pending-modification store (`chat_pending.json`, 10-min expiry, one per conversation, per user). `TakePagePending` (collects the diff card for the turn), `PeekPagePending` (peeks without consuming — nudge net), `Consume` (approval: removes the action if it exists, has not expired, belongs to this user AND session). |
 | `ChatPromptsTool.cs` | `ChatPromptsTool : ILlmTool` | Chat tool `plugin_prompts` (v1.13.8, opt-in `ChatPromptsEnabled`): `list`/`get` (read the five fields) and `set` — **two-phase**: validates (field whitelist, 8000-char cap, non-empty text, field = active mode) then serializes the proposal into `ChatPromptStore`; the write happens only on the "Approve" click (endpoint `POST /Plugins/LLMAI/ChatPrompt/Approve`, deterministic C#) — the LLM has NO direct write path. Divergence warning (lexical overlap < 25 %) carried by the diff card. See [Prompt editing from the chat](#prompt-editing-from-the-chat). |
-| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. See [Orphan identification](#orphan-recording-identification). |
+| `OrphanIdentifyTask.cs` | `OrphanIdentifyTask : IScheduledTask` | Daily 04:00 identification of orphan library items (no IMDb/TMDB/TVDB id — completed DVR recordings imported into a library): discovered via `ILibraryManager.GetItemList` (Movie/Series), resolution delegated to `OrphanResolver` (SB→S0→S1→S2→S3), tags `llmai-identified`/`llmai-needs-review`/`llmai-not-found`, retry needs-review (not-found frozen), dry-run. **Title exclusion at the top of the pass** (`OrphanExcludedTitles` — an excluded item costs no call and no tag); **deferred EPG truth from the store** feeding the movie fallback of series (v2.16.3). See [Orphan identification](#orphan-recording-identification). |
 | `OrphanResolver.cs` | `OrphanResolver` (internal class) | **Shared resolver** (04:00 task + `RecordingWatcher`): audit of an id written by Emby (synopsis judge — match → locks+tag, mismatch → ids removed + back to EPG state + pipeline resume), audit of tagged items that received an id in the meantime (`OrphanAuditTaggedIds` — match → identified tag, mismatch → needs-review flag with **ids kept**, translated titles invisible to the lexical guard), **SB** library anchoring (same-named sibling folder ± year carrying a card — candidate #0, the user's curation, dedicated series year rule), **S0** native Emby search (`IProviderManager.GetRemoteSearchResults`, option `OrphanEmbyFirstPass`) → S1 (multi-language TMDB, Emby date marker = soft year + year cascade) → S2 (LLM, IMDb/TMDB/series-TVDB ids) → S3 (SearXNG, IMDb and TMDB ids from URLs), common acceptance gate (year + lexical guard + `JudgeSynopsisMatchAsync`, mandatory corroboration on id-based paths without a comparable synopsis) **followed by the "card already carried" gate** (same-title carrier → pass + duplicate log; divergent title → EPG-vs-carrier judge arbitration, reject out of caution otherwise; already-carried id conflict → reject), non-destructive apply + add-only locks, poster via `SaveImage`. |
 | `RecordingWatcher.cs` | `RecordingWatcher : IServerEntryPoint` | Validation when each DVR recording finishes (`ILiveTvManager.RecordingEnded` + `ILibraryManager.ItemAdded`, opt-in `OrphanValidateOnRecordingEnd`, toggle without restart): freezes the **EPG truth** into `recording_validate.json` (`RecordingValidateStore`, EpgSnapshotStore pattern) **before** Emby's identification can overwrite the synopsis, background loop (~3 min after import) → `OrphanResolver` with the truth; dry-run honored, best-effort. |
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default image (embedded resource): `default_poster.jpg` (400×600 portrait) on the `AI Tonight` collection (BoxSet) and on the "AI Tonight" playlists (public + per-user private), `default_library.jpg` (640×360 16:9) on the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
@@ -1632,6 +1645,13 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
 > only **active/upcoming** recordings — **completed** recordings live in the library as
 > normal items. `.strm` cards are excluded (`.strm` extension).
 
+> 💡 **Exclusion list (v2.17.0)**: before any resolution, the pass applies the
+> "Excluded titles" field (`OrphanExcludedTitles`) — an item whose title
+> matches (exact equality, or a prefix followed by a word boundary; case and
+> accents tolerated) is skipped with no identification calls (S0/S1/S2/S3) and
+> no tags, and every exclusion is logged by name. See
+> [Configuration](#orphan-recording-identification).
+
 ### Flow (three stages)
 
 1. **S1 — cleanup + multi-language search.** The EPG title is stripped of noise by
@@ -1845,6 +1865,16 @@ ordered token subsequence**, e.g. "ADN business : la face cachée des tests
 grand public" vs "ADN, la face cachée des tests grand public" — + synopsis
 judge):
 
+- the nightly pass can relay a **deferred EPG truth** (v2.16.3): when the
+  watcher froze an episode's entry as "covered by its series audit at the
+  4 AM pass", that pass reads back from the store (`recording_validate.json`)
+  the most recent entry whose path lives under the series folder and injects
+  it into this **movie fallback only** — the guide year is the work's year
+  there, so the fallback starts with the EPG year and synopsis. **The series
+  pass deliberately stays without truth** (an episode's EPG year is its
+  SEASON's year — injecting it would break the ±1 guard of long orphan
+  series); the deferred entry's title is deliberately ignored (episode title
+  ≠ series title — falls back to the item name).
 - an accepted cross-kind fiche is **applied** (non-destructive + locks — the
   item type, fixed by Emby at import, is never changed) but tagged
   **`llmai-needs-review`** with an explicit log line ("movie fiche applied to
