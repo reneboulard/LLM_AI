@@ -244,7 +244,11 @@ namespace LLM_AI
                 return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, effTmdb, metaLang, ct).ConfigureAwait(false);
             }
 
-            string epgTitle = truth?.Title ?? itemName;
+            // Même piège que l'entrée du pipeline (t="" = programme creux au
+            // store) : la coalescence doit être tolérante aux espaces pour
+            // que le repli item.Name garde l'item traitable — Skipped
+            // seulement si les DEUX sont vides (aucun ancre de titre).
+            string epgTitle = string.IsNullOrWhiteSpace(truth?.Title) ? itemName : truth.Title;
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
             // Orphelin pur : S0 (Emby natif) puis S1→S2→S3.
@@ -387,7 +391,19 @@ namespace LLM_AI
             string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct,
             bool crossKind = false)
         {
-            string epgTitle = truth?.Title ?? item.Name;
+            // t="" au store = programme creux au RecordingEnded (état
+            // légitime et fréquent : Sahara vert, téléjournal, « De
+            // souche »). La coalescence `??` ne rattrape PAS la chaîne
+            // vide (seul null), et la vérité relayée par la branche
+            // épisode (fix B v2.18.0) porte le t BRUT — la résolution
+            // différée de la passe 04 h, elle, nullifie le titre à dessein
+            // (titre d'épisode ≠ titre de série). Un titre vide ici
+            // empoisonne toute la chaîne : requête web «  2026 », ids
+            // parasites, bras « année corroborante » (cas réel
+            // 2026-11-10 : « Eleições 2026 » acceptée sur la seule année).
+            // Tolérant aux espaces, comme la tête de l'audit
+            // (IsNullOrWhiteSpace, l. ci-dessous) — repli item.Name.
+            string epgTitle = string.IsNullOrWhiteSpace(truth?.Title) ? item.Name : truth.Title;
             // Année = ProductionYear UNIQUEMENT (date de DIFFUSION pour un DVR,
             // pas PremiereDate/DateCreated). La vérité EPG peut corriger.
             int? year = truth?.Year ?? item.ProductionYear;
@@ -1208,6 +1224,17 @@ namespace LLM_AI
             string epgTitle, string cleanTitle, string kind, int? gateYear, bool yearSoft,
             string overview, string userTmdb, BaseItem item, PipelineTrace trace, CancellationToken ct)
         {
+            // Requête web sans titre = année seule («  2026 ») : des
+            // résultats existent pour n'importe quoi et leurs ids sont du
+            // bruit d'année — annulée (le filet de porte rejeterait de
+            // toute façon tout candidat sur titre vide).
+            if (string.IsNullOrWhiteSpace(cleanTitle))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — recherche web annulée : titre du guide vide.",
+                    epgTitle);
+                return null;
+            }
+
             // Requête : titre NETTOYÉ (la date-marqueur Emby empoisonne la
             // recherche) + année fiable si connue (aide à lever l'ambiguïté ;
             // jamais l'année soft).
@@ -1381,6 +1408,22 @@ namespace LLM_AI
             bool corroborateNoSynopsis = false, int? gateYear = null, bool siblingAnchor = false)
         {
             if (m == null || m.TmdbId <= 0) return false;
+
+            // Titre du guide vide : AUCUNE corroboration n'est possible.
+            // Le bras « année corroborante » de la voie sans synopsis
+            // (titleOk || yearsOk) matcherait n'importe quelle fiche de la
+            // même année (cas réel 2026-11-10 : « Eleições 2026 » acceptée
+            // sur la seule année corroborante 2026, requête web «  2026 »
+            // issue d'un titre vide passé jusqu'ici). Un titre vide n'est jamais
+            // une preuve — filet indépendant des entrées du pipeline : la
+            // défense en profondeur fait respecter ce que la coalescence
+            // prévient.
+            if (string.IsNullOrWhiteSpace(epgTitle))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) rejeté — titre du guide vide, aucune preuve possible (programme creux ?).",
+                    m.Title, m.TmdbId);
+                return false;
+            }
 
             bool seriesKind = string.Equals(m.Kind, "series", StringComparison.OrdinalIgnoreCase);
 

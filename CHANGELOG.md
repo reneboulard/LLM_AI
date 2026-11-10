@@ -10,6 +10,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.19.1] — 2026-11-10
+
+### Fixed (FR)
+- **Un titre de guide vide n'est jamais une preuve — défense en
+  profondeur sur toute la chaîne d'identification** : un
+  enregistrement dont le Programme EPG était creux à la fin
+  (titre vide au store — état légitime et fréquent : téléjournal,
+  magazine) traversait quand même la chaîne de re-identification
+  après un revert : la coalescence `truth?.Title ?? item.Name` ne
+  rattrapait que `null`, pas la chaîne vide. Cas réel (2026-11-10,
+  deuxième occurrence du cas « fiche croisée ») : la fausse fiche
+  posée par Emby à l'import a bien été rejetée par le juge, mais
+  la reprise S1/S2/S3 qui suit le retour EPG a tourné sur un titre
+  vide — requête web réduite à l'année, candidat parasite de la
+  même année accepté sur le seul bras « année corroborante » de la
+  voie sans synopsis. Désormais, trois gardes indépendantes :
+  (1) les entrées du pipeline replient sur le nom de l'item quand
+  la vérité du guide est vide (l'item n'est traité que si les deux
+  sont vides) ; (2) la porte d'acceptation rejette tout candidat
+  quand le titre du guide est vide, quoi qu'il arrive — aucune
+  corroboration n'est possible ; (3) la recherche web est annulée
+  d'entrée sur titre vide. La tête de l'audit était déjà tolérante
+  (espace) — seule la re-identification était exposée.
+
+### Fixed (EN)
+- **An empty guide title is never proof — defense in depth across
+  the identification chain**: a recording whose EPG Program was
+  hollow at recording end (empty title in the store — a
+  legitimate, common state: newscasts, magazines) still flowed
+  through the re-identification chain after a revert: the
+  `truth?.Title ?? item.Name` coalescing only caught `null`, not
+  the empty string. Real case (2026-11-10, second occurrence of
+  the "crossed fiche" case): the wrong fiche Emby attached at
+  import was correctly rejected by the judge, but the S1/S2/S3
+  re-run that follows the EPG revert ran on an empty title — the
+  web query degenerated to the bare year, and a same-year
+  parasite candidate was accepted on the "corroborating year"
+  arm alone of the no-synopsis path. Three independent guards
+  now: (1) the pipeline entries fall back to the item name when
+  the guide truth is empty (the item is skipped only if both
+  are empty); (2) the acceptance gate rejects any candidate when
+  the guide title is empty, unconditionally — no corroboration is
+  possible; (3) the web search is cancelled up front on an empty
+  title. The audit head was already space-tolerant — only
+  re-identification was exposed.
+
 ## [2.19.0] — 2026-11-10
 
 ### Added (FR)
