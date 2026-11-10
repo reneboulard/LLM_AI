@@ -10,6 +10,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.18.0] — 2026-11-10
+
+### Fixed (FR)
+- **Filet d'import DVR : la garde d'adhésion ne testait que la
+  PREMIÈRE racine d'enregistrement** : une installation peut
+  avoir des racines films ET séries distinctes (ex. `E:\Films` +
+  `E:\Series`) — la forme singulière n'en exposait que la première,
+  et le filet d'import ignorait toute l'autre moitié des
+  enregistrements. Cas réel (2026-11-09) : le documentaire « De
+  souche » (racine séries) fiché à tort par Emby en « Immigrants
+  de souche » n'a jamais reçu son filet, tandis que le film « La
+  confession » du même soir (racine films) passait — la mauvaise
+  fiche n'a donc jamais été auditée. L'adhésion est désormais
+  testée contre n'importe laquelle des racines.
+- **« Déjà auditée » mensongère — les ids d'Emby ne sont pas une
+  preuve d'audit** : la branche épisode du watcher gelait
+  l'entrée en la déclarant « couverte par l'audit de sa série »,
+  en prenant la présence d'ids provider comme preuve d'audit —
+  or une série fichée à tort a des ids aussi. Si la série parente
+  n'a jamais été traitée par le plugin (aucun de ses tags),
+  l'entrée de l'épisode — qui détient la vérité EPG figée à la
+  fin de l'enregistrement, synopsis du guide inclus — nourrit
+  MAINTENANT l'audit de la série, immédiatement. Le gel est
+  conservé à dessein : l'entrée reste la vérité différée que la
+  passe 04 h consomme pour le repli film. La cloche « fiche
+  croisée » est émise dans ce chemin aussi.
+- **Motifs d'audit reporté désormais toujours loggués** : « pas
+  de synopsis EPG à comparer » n'était émis qu'en mode verbeux —
+  en champ, un « reporté » silencieux se lisait comme une
+  validation. Niveau Info permanent (le motif ne court que
+  depuis la validation fin d'enregistrement).
+
+### Added (FR)
+- **Fiche muette non corroborable → re-identification immédiate**
+  : une fiche TMDB sans synopsis (overview vide) ne donnera
+  JAMAIS matière au juge sémantique — défaut structurel, pas un
+  échec backend. Si la fiche ne porte en plus aucune preuve
+  corroborante (titre ≠ égalité exacte du guide ET année
+  incompatible), l'id posé par Emby n'est qu'une supposition non
+  vérifiable → même chemin qu'un mismatch : retour à l'état EPG +
+  reprise S1/S2/S3, la passe 04 h complétant ensuite le repli
+  film sur la vérité différée. Cas réel : « Immigrants de
+  souche » (overview vide, 2022) posée sur le documentaire « De
+  souche » (guide 2026). Une fiche muette au titre égal ou à
+  l'année compatible reste « reportée » : prudence — on ne
+  détruit pas une identification plausible sans preuve (protège
+  notamment les séries longues muettes correctement fichées).
+  L'échec backend LLM reste lui aussi « reporté » inchangé.
+
+### Fixed (EN)
+- **DVR import safety net: the membership gate only tested the
+  FIRST recording root**: an installation can have distinct
+  movie AND series recording roots (e.g. `E:\Movies` +
+  `E:\Series`) — the singular form exposed only the first one,
+  and the import net ignored the entire other half of the
+  recordings. Real case (2026-11-09): the documentary "De
+  souche" (series root) mis-identified by Emby as "Immigrants de
+  souche" never received its net, while the same evening's movie
+  "La confession" (movie root) did — so the wrong fiche was
+  never audited. Membership is now tested against any of the
+  roots.
+- **Lying "already audited" — Emby ids are not proof of an
+  audit**: the watcher's episode branch froze the entry as
+  "covered by its series audit", taking the presence of provider
+  ids as proof of an audit — but a mis-fiched series has ids
+  too. If the parent series was never processed by the plugin
+  (none of its tags), the episode's entry — which holds the EPG
+  truth frozen at recording end, guide synopsis included — now
+  feeds the series audit, immediately. The freeze is deliberate
+  and kept: the entry remains the deferred truth the 04:00 pass
+  consumes for the movie fallback. The "crossed fiche" bell is
+  emitted on this path too.
+- **Deferred-audit reasons now always logged**: "no EPG synopsis
+  to compare" was only emitted in verbose mode — in the field, a
+  silent "deferred" read as a validation. Permanent Info level
+  (the reason only occurs on the recording-end validation path).
+
+### Added (EN)
+- **Mute fiche without corroboration → immediate
+  re-identification**: a TMDB fiche without a synopsis (empty
+  overview) will NEVER give the semantic judge anything to
+  compare — a structural defect, not a backend failure. If the
+  fiche additionally carries no corroborating evidence (title ≠
+  exact equality with the guide AND incompatible year), the id
+  Emby wrote is an unverifiable guess → same path as a mismatch:
+  revert to EPG state + S1/S2/S3 re-run, the 04:00 pass then
+  completing the movie fallback on the deferred truth. Real
+  case: "Immigrants de souche" (empty overview, 2022) posed on
+  the documentary "De souche" (guide 2026). A mute fiche with an
+  equal title or a compatible year stays "deferred": caution —
+  a plausible identification is never destroyed without proof
+  (this notably protects long-running series correctly fiched
+  by Emby). An LLM backend failure likewise remains "deferred",
+  unchanged.
+
 ## [2.17.0] — 2026-11-08
 
 ### Added (FR)

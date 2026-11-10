@@ -45,7 +45,11 @@ namespace LLM_AI
     /// synopsis EPG figé au synopsis TMDB. Match → validation (verrous + tag
     /// identifié). Mismatch → retrait des ids écrits par Emby, retour à l'état
     /// EPG, puis S1/S2/S3 immédiat. Sans synopsis à comparer ou juge
-    /// indisponible → on ne touche pas (prudence).</para></item>
+    /// indisponible (backend) → on ne touche pas (prudence). Une fiche
+    /// MUETTE (overview vide — le juge n'aura jamais d'avis) sans preuve
+    /// corroborante (titre ≠ égalité exacte ET année incompatible) → même
+    /// chemin que le mismatch (v2.18.0) : l'id d'Emby n'est alors qu'une
+    /// supposition non vérifiable.</para></item>
     /// <item><b>SB — ancrage bibliothèque</b> (dossier frère) : avant toute
     /// banque externe, la bibliothèque de l'usager est interrogée — un item
     /// homonyme (± « (année) », parenthèses et bruit EPG retirés) portant
@@ -237,7 +241,7 @@ namespace LLM_AI
             if (!orphan)
             {
                 if (truth == null || taggedIdentified) return Status.Skipped;
-                return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, effTmdb, metaLang, verbose, ct).ConfigureAwait(false);
+                return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, effTmdb, metaLang, ct).ConfigureAwait(false);
             }
 
             string epgTitle = truth?.Title ?? itemName;
@@ -587,16 +591,19 @@ namespace LLM_AI
 
         private async Task<Status> AuditEmbyIdsAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool dry,
-            string userTmdb, string metaLang, bool verbose, CancellationToken ct)
+            string userTmdb, string metaLang, CancellationToken ct)
         {
             string epgTitle = string.IsNullOrWhiteSpace(truth.Title) ? item.Name : truth.Title;
             string epgSynopsis = truth.Overview;
 
             if (string.IsNullOrWhiteSpace(epgSynopsis))
             {
-                if (verbose)
-                    _logger?.Info("[LLM_AI] Recording : « {0} » identifié par Emby (tmdb={1}) — pas de synopsis EPG à comparer, audit reporté.",
-                        epgTitle, item.GetProviderId("tmdb") ?? "—");
+                // Toujours loggué (v2.18.0) : ce motif ne court que depuis le
+                // RecordingWatcher (vérité EPG présente) — un « reporté »
+                // silencieux se lisait en champ comme une validation (cas
+                // 2026-11-09 : la mauvaise fiche restait posée sans trace).
+                _logger?.Info("[LLM_AI] Recording : « {0} » identifié par Emby (tmdb={1}) — pas de synopsis EPG à comparer, audit reporté.",
+                    epgTitle, item.GetProviderId("tmdb") ?? "—");
                 return Status.Skipped;
             }
 
@@ -642,9 +649,51 @@ namespace LLM_AI
 
             if (!verdict.IsValid)
             {
-                // Juge indisponible : ni confirmation ni réfutation — on ne
-                // détruit pas une identification existante sur un échec backend.
-                _logger?.Info("[LLM_AI] Recording : « {0} » — juge synopsis indisponible, audit reporté.", epgTitle);
+                // D (v2.18.0) : distinguer deux « indisponibles » de nature
+                // différente. Une fiche MUETTE (overview vide) ne donnera
+                // JAMAIS matière au juge — défaut STRUCTUREL, pas un échec
+                // backend (cas réel 2026-11-09 : « Immigrants de souche »,
+                // tmdb 155980, overview vide, impossible à réfuter). Si la
+                // fiche ne porte en plus AUCUNE preuve corroborante (titre ≠
+                // égalité exacte du guide ET année incompatible), l'id posé
+                // par Emby n'est qu'une supposition non vérifiable → même
+                // chemin que le mismatch : retour EPG + re-pipeline S1/S2/S3.
+                // La passe 04 h refera ensuite le repli film de la série sur
+                // la vérité différée du store. Une fiche muette au titre
+                // égal ou à l'année compatible reste « reportée » : prudence
+                // — on ne détruit pas une identification plausible sans
+                // preuve (protège les séries longues muettes correctement
+                // fichées par Emby).
+                if (string.IsNullOrWhiteSpace(meta.Overview)
+                    && !TitlesExactlyEqual(epgTitle, meta.Title)
+                    && !YearCompatible(truth.Year, meta.Year))
+                {
+                    _logger?.Info(
+                        "[LLM_AI] Recording : « {0} » — fiche « {1} » (tmdb={2}) sans synopsis, titre non égal, année {3} incompatible : identification d'Emby non corroborable → reversion EPG + re-identification.",
+                        epgTitle, meta.Title, meta.TmdbId,
+                        meta.Year.HasValue ? meta.Year.Value.ToString(CultureInfo.InvariantCulture) : "?");
+                    if (dry)
+                    {
+                        _logger?.Info("[LLM_AI] Recording (DRY-RUN) : ids d'Emby rejetés pour « {0} » — aucune écriture (reversion + reprise S1/S2/S3 non exécutées).", epgTitle);
+                        return Status.NeedsReview;
+                    }
+                    await RevertToEpgAsync(item, truth, epgTitle, ct).ConfigureAwait(false);
+                    var dLangs = BuildLangCascade(metaLang, userTmdb);
+                    // Même trace pré-ensemencée que le mismatch : une fiche
+                    // TMDB réelle (muette) a été vue — l'échec du
+                    // re-pipeline reste needs-review, jamais introuvable.
+                    var dRetrace = new PipelineTrace { SawCandidates = true };
+                    var dMeta = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
+                        false, dLangs, userTmdb, dry, dRetrace, ct).ConfigureAwait(false);
+                    return dMeta != null ? Status.OrphanResolved : Status.NeedsReview;
+                }
+
+                // Juge indisponible (backend LLM, ou fiche muette plausible) :
+                // ni confirmation ni réfutation — on ne détruit pas une
+                // identification existante sur un échec backend.
+                _logger?.Info("[LLM_AI] Recording : « {0} » — juge synopsis indisponible ({1}), audit reporté.",
+                    epgTitle,
+                    string.IsNullOrWhiteSpace(meta.Overview) ? "fiche sans synopsis" : "backend LLM");
                 return Status.Skipped;
             }
 
@@ -1839,6 +1888,18 @@ namespace LLM_AI
             if (!expected.HasValue || expected.Value < 1900) return true;
             if (!actual.HasValue || actual.Value < 1900) return true;
             return Math.Abs(expected.Value - actual.Value) <= 1;
+        }
+
+        /// <summary>Égalité EXACTE des titres normalisés (doctrine « sans
+        /// preuve d'année, seule l'égalité exacte du guide↔fiche est une
+        /// preuve ») — false si l'un des deux est vide. Sert au discriminant
+        /// de la fiche muette dans l'audit : une égalité exacte est une
+        /// preuve corroborante, une inclusion seule n'en est pas une.</summary>
+        internal static bool TitlesExactlyEqual(string a, string b)
+        {
+            string na = NormalizeTitle(a);
+            string nb = NormalizeTitle(b);
+            return na.Length > 0 && string.Equals(na, nb, StringComparison.Ordinal);
         }
 
         internal static string NormalizeTitle(string s)

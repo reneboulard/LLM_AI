@@ -40,7 +40,10 @@ namespace LLM_AI
     /// fenêtre EPG au moment de la diffusion) <b>avant</b> que l'identification
     /// n'ait pu l'écraser, puis confie l'item à <see cref="OrphanResolver"/> :
     /// audit de l'id posé par Emby (juge synopsis), identification immédiate
-    /// sinon.</para>
+    /// sinon. Les imports d'épisodes relaient leur vérité à l'audit de leur
+    /// série si elle n'a jamais été traitée par le plugin (les ids d'Emby ne
+    /// valent pas preuve d'audit), et l'adhésion DVR est testée contre TOUTES
+    /// les racines d'enregistrement (films ET séries distinctes).</para>
     /// <para><b>Decouplage</b> : les événements se contentent d'upserter la
     /// vérité dans <c>recording_validate.json</c> (<see cref="RecordingValidateStore"/>,
     /// pattern <see cref="EpgSnapshotStore"/>) — jamais de travail lourd dans
@@ -267,24 +270,83 @@ namespace LLM_AI
                 // les métadonnées d'un épisode dérivent de l'identification de
                 // SA série (les providers remplissent l'épisode à partir de
                 // l'id de la série) — chercher la série par son titre EPG (un
-                // titre d'épisode) donnerait un faux négatif garanti. L'épisode
-                // est donc couvert par l'audit de sa série (entrées Movie/Series
-                // du filet d'import) : l'entrée est gelée — la vérité EPG de
-                // l'épisode reste dans le store jusqu'à la rétention, sans
-                // re-traitement.
+                // titre d'épisode) donnerait un faux négatif garanti. La
+                // vérité EPG de CETTE entrée (figée à la fin de
+                // l'enregistrement — synopsis du guide inclus) est la
+                // meilleure preuve disponible pour auditer la série
+                // elle-même.
                 if (item.GetType().Name.IndexOf("Episode", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     var series = TryResolveParentSeries(item);
-                    entry.Attempts = RecordingValidateStore.MaxAttempts; // gel : purgé par la rétention
+
+                    // Sauvetage (v2.18.0) : les ids d'Emby ne sont PAS une
+                    // preuve d'audit — une série fichée à tort « a des ids ».
+                    // Si la série n'a JAMAIS été traitée par le plugin (aucun
+                    // de ses tags), l'audit part MAINTENANT avec la vérité de
+                    // l'épisode, au lieu de geler l'entrée en croyant la
+                    // série couverte. Cas réel 2026-11-09 : « De souche »
+                    // fichée « Immigrants de souche » par Emby — l'entrée au
+                    // bon synopsis gelée « couverte par sa série (déjà
+                    // auditée) » alors que la série n'avait jamais été
+                    // auditée (le filet d'import série ne passait pas la
+                    // garde DVR mono-racine, et l'entrée RecordingEnded
+                    // seule détenait la vérité).
+                    OrphanResolver.Status auditStatus = OrphanResolver.Status.Skipped;
+                    bool ranAudit = false;
+                    if (series != null && !IsSeriesAudited(series))
+                    {
+                        bool seriesHadCross = OrphanResolver.HasTag(series, OrphanIdentifyTask.TagCrossKind);
+                        try
+                        {
+                            var epTruth = new OrphanResolver.EpgTruth
+                            {
+                                Title = entry.Title,
+                                Overview = entry.Overview,
+                                Year = entry.Year,
+                                Channel = entry.Channel
+                            };
+                            auditStatus = await _resolver.ResolveItemAsync(series, epTruth, cfg, dry, userTmdb, verbose, ct).ConfigureAwait(false);
+                            ranAudit = true;
+                        }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                        catch (Exception ex)
+                        {
+                            auditStatus = OrphanResolver.Status.Skipped;
+                            _logger?.Warn("[LLM_AI] Recording : audit de la série « {0} » échoué ({1}) — entrée gelée.",
+                                series?.Name, ex.Message);
+                        }
+
+                        // Fiche croisée fraîchement appliquée sur la série →
+                        // cloche immédiate (même contrat que la branche
+                        // film/série : add-only, un gain seulement).
+                        if (!seriesHadCross && OrphanResolver.HasTag(series, OrphanIdentifyTask.TagCrossKind))
+                        {
+                            await OrphanResolver.NotifyCrossKindAsync(
+                                _host.TryResolve<INotificationManager>(),
+                                _host.TryResolve<IUserManager>(),
+                                cfg, _host, _logger, new[] { series }).ConfigureAwait(false);
+                        }
+                    }
+
+                    // Gel (inchangé, volontaire) : l'entrée reste dans le
+                    // store jusqu'à la rétention — c'est la vérité DIFFÉRÉE
+                    // que la passe 04 h consomme pour le repli film de la
+                    // série (MostRecentDeferredTruth).
+                    entry.Attempts = RecordingValidateStore.MaxAttempts;
                     RecordingValidateStore.Upsert(entry);
-                    if (series != null)
-                        _logger?.Info("[LLM_AI] Recording : épisode « {0} » couvert par l'audit de sa série « {1} » ({2}).",
-                            item.Name, series.Name, IsSeriesAudited(series)
-                                ? "déjà auditée"
-                                : "audit de la série en attente / à la passe 04 h");
-                    else
+
+                    if (series == null)
                         _logger?.Info("[LLM_AI] Recording : épisode « {0} » sans série parente résoluble — entrée gelée (audit par la série impossible).",
                             item.Name);
+                    else if (ranAudit)
+                        _logger?.Info("[LLM_AI] Recording : épisode « {0} » — série « {1} » auditée à l'instant → {2} ; entrée gelée (vérité différée conservée pour la passe 04 h).",
+                            item.Name, series.Name, auditStatus);
+                    else if (IsSeriesAudited(series))
+                        _logger?.Info("[LLM_AI] Recording : épisode « {0} » couvert par l'audit de sa série « {1} » (déjà traitée par le plugin).",
+                            item.Name, series.Name);
+                    else
+                        _logger?.Info("[LLM_AI] Recording : épisode « {0} » — audit de la série « {1} » non exécuté (erreur, voir Warn) ; entrée gelée.",
+                            item.Name, series.Name);
                     continue;
                 }
 
@@ -348,34 +410,51 @@ namespace LLM_AI
             catch { return null; }
         }
 
-        /// <summary>La série a-t-elle déjà été auditée (tag du plugin ou ids
-        /// provider posés) — un épisode en hérite, pas d'audit séparé.</summary>
+        /// <summary>La série a-t-elle déjà été TRAITÉE par le plugin (un de ses
+        /// tags : identifiée, à réviser, introuvable, fiche croisée) — les ids
+        /// provider d'Emby ne sont PAS une preuve d'audit : une fiche fausse
+        /// en pose aussi (piège « déjà auditée » du 2026-11-09, où la mauvaise
+        /// fiche posée par Emby valait « série auditée »). Un épisode en
+        /// hérite, pas d'audit séparé.</summary>
         private static bool IsSeriesAudited(BaseItem series)
         {
             if (series == null) return false;
             try
             {
                 var tags = series.Tags ?? Array.Empty<string>();
-                if (Array.IndexOf(tags, OrphanIdentifyTask.TagIdentified) >= 0
-                    || Array.IndexOf(tags, OrphanIdentifyTask.TagNeedsReview) >= 0) return true;
-                return OrphanResolver.HasItemProviderId(series, "tmdb")
-                    || OrphanResolver.HasItemProviderId(series, "tvdb")
-                    || OrphanResolver.HasItemProviderId(series, "imdb");
+                return Array.IndexOf(tags, OrphanIdentifyTask.TagIdentified) >= 0
+                    || Array.IndexOf(tags, OrphanIdentifyTask.TagNeedsReview) >= 0
+                    || Array.IndexOf(tags, OrphanIdentifyTask.TagNotFound) >= 0
+                    || Array.IndexOf(tags, OrphanIdentifyTask.TagCrossKind) >= 0;
             }
             catch { return false; }
         }
 
-        /// <summary>L'item vit-il sous le dossier d'enregistrements DVR ?</summary>
+        /// <summary>L'item vit-il sous l'une des racines d'enregistrements
+        /// DVR ? Pluriel (v2.18.0) : une install peut avoir des racines films
+        /// ET séries distinctes — la forme singulière n'en exposait que la
+        /// PREMIÈRE, et le filet d'import ignorait toute l'autre moitié des
+        /// enregistrements (cas réel 2026-11-09, prod DellXPS : racines
+        /// E:\Films + E:\Series — le film « La confession » (E:\Films)
+        /// recevait son filet, la série « De souche » (E:\Series) jamais, et
+        /// sa mauvaise fiche d'Emby n'a donc jamais été auditée). Adhésion =
+        /// sous N'IMPORTE QUELLE racine, avec frontière de séparateur.</summary>
         private bool IsUnderRecordingPath(string itemPath)
         {
             if (string.IsNullOrWhiteSpace(itemPath)) return false;
-            if (!RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out var root)
-                || string.IsNullOrWhiteSpace(root)) return false;
+            if (!RecordingDiskManager.TryResolveRecordingPaths(_host, _logger, out var roots)
+                || roots == null) return false;
 
-            if (itemPath.Length <= root.Length) return false;
-            if (!itemPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
-            var sep = itemPath[root.Length];
-            return sep == Path.DirectorySeparatorChar || sep == Path.AltDirectorySeparatorChar;
+            foreach (var root in roots)
+            {
+                if (string.IsNullOrWhiteSpace(root)) continue;
+                if (itemPath.Length <= root.Length) continue;
+                if (!itemPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+                var sep = itemPath[root.Length];
+                if (sep == Path.DirectorySeparatorChar || sep == Path.AltDirectorySeparatorChar)
+                    return true;
+            }
+            return false;
         }
 
         private static string Truncate(string s, int max)
