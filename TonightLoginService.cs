@@ -206,7 +206,8 @@ namespace LLM_AI
                     _logger?.Info("[LLM_AI] Login « {0} » : cache Tonight froid → run LLM puis toast.", user.Name);
                     var ct = CancellationToken.None; // le run survit à la requête login
                     var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger, _collections, _playlists, _userData);
-                    var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, ct).ConfigureAwait(false);
+                    var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, ct,
+                        runSource: "login").ConfigureAwait(false);
                     if (res.Error != null || string.IsNullOrEmpty(res.Payload))
                     {
                         _logger?.Info("[LLM_AI] Login « {0} » : run Tonight sans résultat ({1}).", user.Name, res.Error ?? "vide");

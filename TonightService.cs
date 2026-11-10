@@ -181,6 +181,35 @@ namespace LLM_AI
         private static readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
         private static readonly object _cacheLock = new object();
 
+        // Single-flight Tonight : au plus UN run de production par usager —
+        // le 2ᵉ déclencheur joint le résultat du run en cours au lieu de
+        // doubler l'appel LLM. Événement réel banc 2026-11-10 : trigger
+        // login + page GET simultanés → 2 runs × ~15,5k tokens d'entrée
+        // (Tonight complet) = 31k > fenêtre TPM free tier 16k/min → 429s
+        // mutuels, +2 min à la page, tokens doublés. In-memory, pas de
+        // fichier d'état — tout disparaît au restart.
+        private static readonly ConcurrentDictionary<string, InFlightRun> _inFlight =
+            new ConcurrentDictionary<string, InFlightRun>(StringComparer.Ordinal);
+        private static readonly object _inFlightLock = new object();
+
+        /// <summary>Âge au-delà duquel un run « en cours » est présumé
+        /// bloqué et ne tient plus les demandeurs en otage (join refusé,
+        /// registre nettoyé, un nouveau run prend le relais).</summary>
+        private static readonly TimeSpan InFlightMaxAge = TimeSpan.FromMinutes(10);
+
+        private sealed class InFlightRun
+        {
+            public DateTimeOffset StartedUtc = DateTimeOffset.UtcNow;
+            public string Source = "?";
+            /// <summary>Résultat partagé — complété par le run propriétaire
+            /// (succès ET échec : les demandeurs joints reçoivent le même
+            /// dénouement que lui). RunContinuationsAsynchronously : les
+            /// continuations des demandeurs ne s'exécutent pas inline sur
+            /// le chemin du propriétaire.</summary>
+            public readonly TaskCompletionSource<TonightResult> Tcs =
+                new TaskCompletionSource<TonightResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
         /// <summary>
         /// Renvoie le résultat caché pour un usager S'il est encore frais (sans
         /// relancer le LLM). Retourne null si pas de cache ou cache expiré.
@@ -388,7 +417,7 @@ namespace LLM_AI
         /// </summary>
         public async Task<TonightResult> GenerateTonightAsync(User user, PluginConfiguration cfg,
             bool refresh, CancellationToken ct,
-            string sessionDirectives = null, bool fromChat = false)
+            string sessionDirectives = null, bool fromChat = false, string runSource = null)
         {
             if (cfg == null)
                 return new TonightResult { Error = I18n.SDisplay("err.noconfig", _host) };
@@ -406,6 +435,72 @@ namespace LLM_AI
                         return new TonightResult { Payload = e.Items, Date = e.Date, FromCache = true };
                 }
             }
+
+            // Single-flight (join) : le 2ᵉ déclencheur pendant un run en
+            // cours attend son résultat au lieu de doubler l'appel LLM
+            // (2 runs Tonight = ~31k tokens d'entrée — incompatibles avec la
+            // fenêtre TPM free tier 16k/min). Un <paramref name="refresh"/>
+            // explicite joint aussi : l'intention « donnée fraîche » est
+            // servie par le run en cours, démarré il y a quelques secondes.
+            InFlightRun toJoin = null;
+            InFlightRun own = null;
+            lock (_inFlightLock)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (_inFlight.TryGetValue(cacheKey, out var flight))
+                {
+                    if (now - flight.StartedUtc <= InFlightMaxAge)
+                        toJoin = flight;
+                    else
+                    {
+                        _inFlight.TryRemove(cacheKey, out _);
+                        _logger?.Info("[LLM_AI] Tonight : run antérieur expiré ({0} s, source={1}) — un nouveau prend le relais.",
+                            (int)(now - flight.StartedUtc).TotalSeconds, flight.Source);
+                    }
+                }
+                if (toJoin == null)
+                {
+                    own = new InFlightRun { StartedUtc = now, Source = runSource ?? "?" };
+                    _inFlight[cacheKey] = own;
+                }
+            }
+            if (toJoin != null)
+            {
+                _logger?.Info("[LLM_AI] Tonight : run déjà en cours depuis {0} s (source={1}) — joint, pas de second run LLM.",
+                    (int)(DateTimeOffset.UtcNow - toJoin.StartedUtc).TotalSeconds, toJoin.Source);
+                return await toJoin.Tcs.Task.ConfigureAwait(false);
+            }
+
+            try
+            {
+                var result = await GenerateTonightCoreAsync(user, cfg, refresh, ct,
+                    sessionDirectives, fromChat, cacheKey, cacheHours).ConfigureAwait(false);
+                own.Tcs.TrySetResult(result);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                own.Tcs.TrySetException(ex);
+                throw;
+            }
+            finally
+            {
+                // Ne retire QUE notre entrée (une autre peut avoir remplacé
+                // la nôtre après un TTL expiré) — TryRemove(KeyValuePair)
+                // exige l'égalité de référence sur la valeur.
+                _inFlight.TryRemove(new KeyValuePair<string, InFlightRun>(cacheKey, own));
+            }
+        }
+
+        /// <summary>
+        /// Corps de production de <see cref="GenerateTonightAsync"/> (profil
+        /// de goût, run agent, enrichissement, post-traitement), appelé par
+        /// le wrapper qui gère cache + single-flight.
+        /// </summary>
+        private async Task<TonightResult> GenerateTonightCoreAsync(User user, PluginConfiguration cfg,
+            bool refresh, CancellationToken ct,
+            string sessionDirectives, bool fromChat, string cacheKey, int cacheHours)
+        {
 
             var runner = new LlmRunner(_logger, _json, _library, _users, _liveTv, _host);
 

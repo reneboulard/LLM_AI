@@ -141,7 +141,8 @@ namespace LLM_AI
                 try
                 {
                     string reply = await LlmClient.ChatAsync(backend, apiKey, messages,
-                        _json, Logger, cts.Token).ConfigureAwait(false);
+                        _json, Logger, cts.Token,
+                        waitCeiling: LlmRateLimitGate.InteractiveWaitCeiling).ConfigureAwait(false);
                     sw.Stop();
                     return new TestLlmResponse
                     {

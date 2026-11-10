@@ -194,7 +194,8 @@ namespace LLM_AI
                 try
                 {
                     var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger, _collections, _playlists, _userData);
-                    var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, cancellationToken)
+                    var res = await svc.GenerateTonightAsync(user, cfg, refresh: false, cancellationToken,
+                        runSource: "planifié")
                         .ConfigureAwait(false);
 
                     // Cache frais (produit aujourd'hui par login/chat/page) :

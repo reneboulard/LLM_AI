@@ -1312,7 +1312,7 @@ namespace LLM_AI
                         var svc = new TonightService(_users, _library, _liveTv, _json, _host, _logger,
                             null, null, null);
                         var res = await svc.GenerateTonightAsync(user, _cfg, refresh: true, ct,
-                            sessionDirectives: directives, fromChat: true).ConfigureAwait(false);
+                            sessionDirectives: directives, fromChat: true, runSource: "chat").ConfigureAwait(false);
 
                         if (!string.IsNullOrEmpty(res.Error))
                         {

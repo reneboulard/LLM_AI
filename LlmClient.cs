@@ -244,7 +244,7 @@ namespace LLM_AI
             if (!string.IsNullOrEmpty(systemPrompt))
                 messages.Add(new ChatMessage { Role = "system", Content = systemPrompt });
             messages.Add(new ChatMessage { Role = "user", Content = userPrompt ?? string.Empty });
-            return ChatOllamaAsync(url, model, null, messages, json, logger, ct, perCall);
+            return ChatOllamaAsync(url, model, null, messages, json, logger, ct, perCall, null);
         }
 
         /// <summary>
@@ -255,15 +255,25 @@ namespace LLM_AI
         /// null pour ollama_local. L'URL par défaut est appliquée si
         /// <see cref="LlmBackend.Url"/> est vide. Porte la dynamique des 3
         /// providers de /var/www/llm_core.
+        /// <para>Gate 429 (voir <see cref="LlmRateLimitGate"/>) : pour les
+        /// providers à quotas (gemini, ollama_cloud) un pré-contrôle précède
+        /// tout HTTP — backend encore bridé par un 429 récent → throw
+        /// immédiat (RPD / 2ᵉ 429 consécutif / fenêtre &gt; plafond, le
+        /// caller bascule) ou attente ct-aware bornée (fenêtre ≤ plafond,
+        /// puis l'appel part). <paramref name="waitCeiling"/> = plafond de
+        /// surface (tâches de fond : défaut 90 s ; chat interactif : 20 s).
+        /// L'attente effective des relances même-backend vit ICI — les
+        /// boucles décident, le client dort.</para>
         /// </summary>
-        public static Task<string> ChatAsync(
+        public static async Task<string> ChatAsync(
             LlmBackend backend,
             string apiKey,
             IReadOnlyList<ChatMessage> messages,
             IJsonSerializer json,
             ILogger logger,
             CancellationToken ct,
-            TimeSpan? perCall = null)
+            TimeSpan? perCall = null,
+            TimeSpan? waitCeiling = null)
         {
             if (backend == null)
                 throw new ArgumentNullException(nameof(backend));
@@ -273,15 +283,25 @@ namespace LLM_AI
                 ? LlmProviderHelper.DefaultUrl(provider)
                 : backend.Url.TrimEnd('/');
 
+            string gateKey = null;
+            if (provider == LlmProvider.Gemini ||
+                (provider == LlmProvider.OllamaCloud && !string.IsNullOrEmpty(apiKey)))
+            {
+                gateKey = LlmRateLimitGate.KeyOf(provider, url, backend.Model);
+                await LlmRateLimitGate.PrecheckAsync(gateKey, backend.Model,
+                    waitCeiling ?? LlmRateLimitGate.DefaultWaitCeiling, logger, ct)
+                    .ConfigureAwait(false);
+            }
+
             switch (provider)
             {
                 case LlmProvider.OllamaLocal:
                 case LlmProvider.OllamaCloud:
-                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall);
+                    return await ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall, gateKey).ConfigureAwait(false);
                 case LlmProvider.Gemini:
-                    return ChatGeminiAsync(url, backend.Model, apiKey, messages, logger, ct, perCall);
+                    return await ChatGeminiAsync(url, backend.Model, apiKey, messages, logger, ct, perCall, gateKey).ConfigureAwait(false);
                 default:
-                    return ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall);
+                    return await ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall, gateKey).ConfigureAwait(false);
             }
         }
 
@@ -294,6 +314,13 @@ namespace LLM_AI
         /// (<see cref="ResolveCallTimeout"/> — même discriminant local/cloud
         /// que num_ctx). Un <paramref name="perCall"/> explicite reste
         /// prioritaire (I18nGenerator 10 min).
+        /// <para>Un <paramref name="gateKey"/> non null = backend à quotas
+        /// (ollama_cloud) : un HTTP 429 jette la
+        /// <see cref="LlmRateLimitException"/> (fenêtre par défaut 60 s,
+        /// recadrée par l'en-tête Retry-After) après le marquage du gate ;
+        /// le succès apprend les tokens prompt (<see cref="LlmRateLimitGate.RecordSuccess"/>).
+        /// null (local) : comportement historique inchangé — le local est
+        /// une ressource à soi, pas un quota.</para>
         /// </summary>
         private static async Task<string> ChatOllamaAsync(
             string url,
@@ -303,7 +330,8 @@ namespace LLM_AI
             IJsonSerializer json,
             ILogger logger,
             CancellationToken ct,
-            TimeSpan? perCall = null)
+            TimeSpan? perCall = null,
+            string gateKey = null)
         {
             if (string.IsNullOrWhiteSpace(url))
                 throw new ArgumentException("URL du LLM non configurée.", nameof(url));
@@ -335,8 +363,29 @@ namespace LLM_AI
                     var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                     if (!resp.IsSuccessStatusCode)
+                    {
+                        if ((int)resp.StatusCode == 429 && gateKey != null)
+                        {
+                            // Gate 429 (ollama_cloud) : ni motif ni fenêtre
+                            // fiables servis par Ollama → fenêtre calendaire
+                            // par défaut (60 s), recadrée par l'en-tête
+                            // Retry-After s'il existe. Mark AVANT le throw :
+                            // la boucle appelante décide attente+reprise vs
+                            // bascule selon son plafond de surface.
+                            var retryAfter = RetryAfterDelta(resp);
+                            var rlex = LlmRateLimitGate.ParseOllama429(respText);
+                            LlmRateLimitGate.MarkThrottled(gateKey, rlex.Motif, retryAfter, rlex.QuotaMetric, rlex.Limit);
+                            logger?.Warn("[LLM_AI] Ollama Cloud 429 (modèle={0}){1} — gate renseigné, fenêtre {2} s.",
+                                model,
+                                retryAfter.HasValue
+                                    ? " Retry-After=" + (int)Math.Ceiling(retryAfter.Value.TotalSeconds) + " s"
+                                    : "",
+                                (int)Math.Ceiling(LlmRateLimitGate.TimeUntilRetry(gateKey).TotalSeconds));
+                            throw rlex;
+                        }
                         throw new HttpRequestException(
                             $"Ollama a répondu HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(respText, 500)}");
+                    }
 
                     // Compteurs d'usage réels renvoyés par Ollama (tokens réellement
                     // évalués par l'appel) : mesure du contexte consommé par la boucle
@@ -354,6 +403,11 @@ namespace LLM_AI
                             genTok >= 0 ? genTok.ToString() : "?", model, numCtx);
                     }
 
+                    // Gate : le succès lève le bridage appris + apprend le
+                    // volume d'entrée réel (tokens prompt) de ce (backend, modèle).
+                    if (gateKey != null)
+                        LlmRateLimitGate.RecordSuccess(gateKey, promptTok > 0 ? promptTok : 0);
+
                     return ExtractContent(respText, json, logger);
                 }
             }
@@ -365,6 +419,11 @@ namespace LLM_AI
         /// (system→systemInstruction, assistant→role "model"). Concatène les
         /// parts text de candidates[0].content.parts. Portage du
         /// GeminiProvider.php / dispatch ChatController de /var/www/llm_core.
+        /// <para>Gate 429 : <paramref name="gateKey"/> non null = backend à
+        /// quotas — un HTTP 429 est parsé (motif TPM/RPM/RPD depuis
+        /// <c>error.details</c>, fenêtre servie <c>RetryInfo.retryDelay</c>)
+        /// puis marqué au gate AVANT la <see cref="LlmRateLimitException"/> ;
+        /// le succès apprend <c>usageMetadata.promptTokenCount</c>.</para>
         /// </summary>
         private static async Task<string> ChatGeminiAsync(
             string baseUrl,
@@ -373,7 +432,8 @@ namespace LLM_AI
             IReadOnlyList<ChatMessage> messages,
             ILogger logger,
             CancellationToken ct,
-            TimeSpan? perCall = null)
+            TimeSpan? perCall = null,
+            string gateKey = null)
         {
             if (string.IsNullOrWhiteSpace(model))
                 throw new ArgumentException("Modèle Gemini non configuré.", nameof(model));
@@ -396,8 +456,40 @@ namespace LLM_AI
                     var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                     if (!resp.IsSuccessStatusCode)
+                    {
+                        if ((int)resp.StatusCode == 429)
+                        {
+                            // Gate 429 : classification du motif (TPM / RPM /
+                            // RPD) parsée du corps d'erreur Google,
+                            // fenêtre servie par RetryInfo (recadrée par
+                            // Retry-After). Mark AVANT le throw : la boucle
+                            // appelante décide attente+reprise même backend
+                            // vs bascule selon son plafond de surface.
+                            var rlex = LlmRateLimitGate.ParseGemini429(respText);
+                            var delay = rlex.RetryDelay ?? RetryAfterDelta(resp);
+                            LlmRateLimitGate.MarkThrottled(
+                                gateKey ?? LlmRateLimitGate.KeyOf(LlmProvider.Gemini, baseUrl, model),
+                                rlex.Motif, delay, rlex.QuotaMetric, rlex.Limit);
+                            logger?.Warn("[LLM_AI] Gemini 429 (modèle={0}) : motif={1}{2}{3} — gate renseigné.",
+                                model, rlex.MotifLabel,
+                                rlex.Limit.HasValue ? ", limite=" + rlex.Limit.Value : "",
+                                rlex.RetryDelay.HasValue
+                                    ? ", fenêtre servie " + (int)Math.Ceiling(rlex.RetryDelay.Value.TotalSeconds) + " s"
+                                    : "");
+                            throw rlex;
+                        }
                         throw new HttpRequestException(
                             $"Gemini a répondu HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(respText, 500)}");
+                    }
+
+                    // Usage réel (usageMetadata.promptTokenCount) — miroir
+                    // de « Ollama usage » : télémétrie du volume d'entrée par
+                    // appel, la matière du gate TPM (apprentissage in-memory).
+                    var promptTokens = ExtractIntField(respText, "promptTokenCount");
+                    if (promptTokens > 0)
+                        logger?.Info("[LLM_AI] Gemini usage : prompt={0} tok (modèle={1})", promptTokens, model);
+                    if (gateKey != null)
+                        LlmRateLimitGate.RecordSuccess(gateKey, promptTokens > 0 ? promptTokens : 0);
 
                     return ExtractGeminiContent(respText, logger);
                 }
@@ -571,6 +663,15 @@ namespace LLM_AI
         private static string Truncate(string s, int max) =>
             string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 
+        /// <summary>Délai servi par l'en-tête Retry-After (delta en secondes),
+        /// null si absent — recadrage du gate quand le corps ne porte rien
+        /// (Ollama cloud).</summary>
+        private static TimeSpan? RetryAfterDelta(HttpResponseMessage resp)
+        {
+            var d = resp?.Headers?.RetryAfter?.Delta;
+            return d.HasValue && d.Value > TimeSpan.Zero ? d.Value : (TimeSpan?)null;
+        }
+
         // --- Construction / parsing Gemini --------------------------------
 
         /// <summary>
@@ -629,8 +730,13 @@ namespace LLM_AI
 
         /// <summary>
         /// Extrait le texte de la réponse Gemini : concatène les
-        /// <c>text</c> de <c>candidates[*].content.parts</c>. Lève en cas
-        /// d'erreur renvoyée par l'API.
+        /// <c>text</c> de <c>candidates[*].content.parts</c> en SAUTANT les
+        /// parts marquées <c>thought:true</c> (raisonnement servi par les
+        /// modèles à thinking hébergés Google — bench 2026-11-10 gemma-4 :
+        /// mixer la prose de raisonnement dans le contenu casse le contrat
+        /// tableau JSON du protocole tool-calling ; gemini-2.5-flash, lui,
+        /// ne livre jamais ses thoughts en parts). Lève en cas d'erreur
+        /// renvoyée par l'API.
         /// </summary>
         private static string ExtractGeminiContent(string respText, ILogger logger)
         {
@@ -647,6 +753,7 @@ namespace LLM_AI
                     }
 
                     var sb = new StringBuilder();
+                    int thoughtParts = 0;
                     if (root.TryGetProperty("candidates", out var cands) &&
                         cands.ValueKind == JsonValueKind.Array)
                     {
@@ -658,6 +765,12 @@ namespace LLM_AI
                             {
                                 foreach (var part in parts.EnumerateArray())
                                 {
+                                    if (part.TryGetProperty("thought", out var isThought) &&
+                                        isThought.ValueKind == JsonValueKind.True)
+                                    {
+                                        thoughtParts++;
+                                        continue;
+                                    }
                                     if (part.TryGetProperty("text", out var t) &&
                                         t.ValueKind == JsonValueKind.String)
                                         sb.Append(t.GetString());
@@ -665,6 +778,9 @@ namespace LLM_AI
                             }
                         }
                     }
+                    if (thoughtParts > 0)
+                        logger?.Warn("[LLM_AI] Gemini : {0} part(s) de raisonnement (thought) ignorée(s) — exclues du contenu livré au protocole.",
+                            thoughtParts);
                     string text = sb.ToString();
                     return string.IsNullOrWhiteSpace(text)
                         ? "(réponse vide du LLM)" : text;

@@ -152,7 +152,12 @@ namespace LLM_AI
 
             // Génération partagée (cache par usager, builders, run LLM, enrich).
             // Le CancellationToken vient de la requête HTTP.
-            var ct = Request?.CancellationToken ?? CancellationToken.None;
+            // CancellationToken.None : le run Tonight survit à la déconnexion
+            // de la requête page (même doctrine que le trigger login). Avec le
+            // single-flight, la page peut être OWNER du run partagé — couper
+            // sur RequestAborted tuerait le run attendu par les demandeurs
+            // joints (login, tâche) à cause d'un simple F5 du client.
+            var ct = CancellationToken.None;
             var svc = new TonightService(UserManager, LibraryManager, _liveTv, _json, ApplicationHost, Logger, _collections, _playlists, _userData);
 
             // Cache complet (méta origin chat) sauf Refresh : TryGetCachedResult
@@ -199,7 +204,8 @@ namespace LLM_AI
                 };
             }
 
-            var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct).ConfigureAwait(false);
+            var res = await svc.GenerateTonightAsync(user, cfg, refresh, ct,
+                runSource: "page").ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(res.Error))
                 return new TonightResponse { Enabled = true, Error = res.Error, Date = res.Date, FromCache = res.FromCache };

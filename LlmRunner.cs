@@ -899,7 +899,8 @@ namespace LLM_AI
                     + (extraWorkflow ?? "");
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
-                    CHAT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host));
+                    CHAT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host),
+                    rateLimitWaitCeiling: LlmRateLimitGate.InteractiveWaitCeiling);
 
                 // Tous les outils existants : recommandation + audit santé +
                 // (couche d'action du chat, v1.13 : tools construits par
@@ -1430,13 +1431,22 @@ namespace LLM_AI
         /// qu'un réponde. Résolution de clé par provider calquée sur
         /// <c>LlmAgentService.CallBackendAsync</c>. Lève si tous échouent.
         /// <see cref="OperationCanceledException"/> est propagée.
+        /// <para>Gate 429 (<see cref="LlmRateLimitGate"/>) : un backend
+        /// rate-limité TPM/RPM est repris MÊME backend après la fenêtre
+        /// servie par Google (l'attente effective a lieu dans le
+        /// pré-contrôle de <see cref="LlmClient.ChatAsync"/> au moment de la
+        /// relance) — plafond d'attente en secondes par surface
+        /// (<paramref name="rateLimitWaitCeiling"/>, défaut 90 s = tâches de
+        /// fond ; une seule reprise par backend). RPD (fenêtre en heures) et
+        /// le 2ᵉ 429 consécutif basculent immédiatement au suivant.</para>
         /// <para>Internal : réutilisé par <see cref="TranslateTextAsync"/> (tier-3
         /// de la cascade TMDB du générateur .strm).</para>
         /// </summary>
         internal async System.Threading.Tasks.Task<string> ChatWithFallbackAsync(
             List<LlmBackend> backends, string ollamaCloudKey, string geminiKey,
             string systemPrompt, string userPrompt, string label,
-            System.Threading.CancellationToken ct)
+            System.Threading.CancellationToken ct,
+            TimeSpan? rateLimitWaitCeiling = null)
         {
             var messages = new List<LlmClient.ChatMessage>
             {
@@ -1444,26 +1454,50 @@ namespace LLM_AI
                 new LlmClient.ChatMessage { Role = "user",   Content = userPrompt ?? string.Empty }
             };
 
+            var ceiling = rateLimitWaitCeiling ?? LlmRateLimitGate.DefaultWaitCeiling;
             Exception last = null;
             for (int i = 0; i < backends.Count; i++)
             {
                 var b = backends[i];
-                try
+                bool resumed = false;
+                while (true)
                 {
-                    string apiKey = null;
-                    if (b.ProviderType == LlmProvider.OllamaCloud) apiKey = ollamaCloudKey;
-                    else if (b.ProviderType == LlmProvider.Gemini) apiKey = geminiKey;
-                    var reply = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, ct).ConfigureAwait(false);
-                    _logger.Info("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] OK.",
-                        label, b.Priority, b.ProviderType);
-                    return reply;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    last = ex;
-                    _logger.Warn("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] a échoué ({3}) — suivant.",
-                        label, b.Priority, b.ProviderType, ex.Message);
+                    try
+                    {
+                        string apiKey = null;
+                        if (b.ProviderType == LlmProvider.OllamaCloud) apiKey = ollamaCloudKey;
+                        else if (b.ProviderType == LlmProvider.Gemini) apiKey = geminiKey;
+                        var reply = await LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, ct,
+                            waitCeiling: ceiling).ConfigureAwait(false);
+                        _logger.Info("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] OK.",
+                            label, b.Priority, b.ProviderType);
+                        return reply;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (LlmRateLimitException ex)
+                    {
+                        var key = LlmRateLimitGate.KeyOf(b.ProviderType, b.Url, b.Model);
+                        if (!resumed && LlmRateLimitGate.CanResume(ex, key, ceiling))
+                        {
+                            resumed = true;
+                            _logger.Warn("[LLM_AI] [{0}] backend priorité {1} [{2}] : 429 {3} — attente {4} s puis reprise même backend (plafond {5} s, une seule reprise).",
+                                label, b.Priority, b.Model, ex.MotifLabel,
+                                (int)Math.Ceiling(LlmRateLimitGate.TimeUntilRetry(key).TotalSeconds),
+                                (int)ceiling.TotalSeconds);
+                            continue; // l'attente effective a lieu dans le pré-contrôle de LlmClient.ChatAsync
+                        }
+                        last = ex;
+                        _logger.Warn("[LLM_AI] [{0}] backend priorité {1} [{2}] : 429 {3} — bascule ({4}).",
+                            label, b.Priority, b.Model, ex.MotifLabel, ex.Message);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        last = ex;
+                        _logger.Warn("[LLM_AI] [{0}] Synthèse audit : backend priorité {1} [{2}] a échoué ({3}) — suivant.",
+                            label, b.Priority, b.ProviderType, ex.Message);
+                        break;
+                    }
                 }
             }
             throw new Exception("Tous les backends LLM ont échoué pour la synthèse d'audit.", last);

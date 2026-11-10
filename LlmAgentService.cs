@@ -55,6 +55,13 @@ namespace LLM_AI
         // verrouille le premier qui répond (changement de modèle possible).
         private int _activeIndex = -1;
 
+        /// <summary>Plafond d'attente du gate 429 (reprise même-backend) —
+        /// paramètre de surface : défaut 90 s (tâches de fond : reco EPG,
+        /// Tonight, audit, LibReview), 20 s (chat interactif, bouton Test de
+        /// config). Fixé dans le constructeur via
+        /// <c>rateLimitWaitCeiling</c>.</summary>
+        private readonly System.TimeSpan _rateLimitWaitCeiling;
+
         public LlmAgentService(IReadOnlyList<LlmBackend> backends, string ragDirectives,
                                string workflow,
                                string ollamaCloudKey, string geminiKey,
@@ -64,7 +71,8 @@ namespace LLM_AI
                                string formatSection = null,
                                string responseLanguage = "",
                                string finalArrayKey = null,
-                               string finalRepairHint = null)
+                               string finalRepairHint = null,
+                               System.TimeSpan? rateLimitWaitCeiling = null)
         {
             _backends = backends != null
                 ? new List<LlmBackend>(backends)
@@ -81,6 +89,7 @@ namespace LLM_AI
             _responseLang = responseLanguage ?? string.Empty;
             _finalArrayKey = string.IsNullOrWhiteSpace(finalArrayKey) ? "title" : finalArrayKey.Trim();
             _finalRepairHint = finalRepairHint ?? string.Empty;
+            _rateLimitWaitCeiling = rateLimitWaitCeiling ?? LlmRateLimitGate.DefaultWaitCeiling;
         }
 
         /// <summary>
@@ -694,6 +703,13 @@ namespace LLM_AI
         /// Toute exception hors annulation est considérée comme
         /// « backend indisponible → suivant » (serveur down, HTTP 4xx/5xx,
         /// modèle introuvable, erreur Ollama, délai par appel dépassé…).
+        /// <para>Les 429 (rate limit Gemini / Ollama cloud) passent d'abord
+        /// par la reprise même-backend du gate <see cref="LlmRateLimitGate"/>
+        /// via <see cref="CallWith429ResumeAsync"/> : attente de la fenêtre
+        /// servie par Google bornée au plafond de surface
+        /// (<see cref="_rateLimitWaitCeiling"/>) puis relance du MÊME backend
+        /// une fois, avant toute bascule ; RPD et 2ᵉ 429 consécutif basculent
+        /// immédiatement.</para>
         /// Distinction annulation vs délai par appel (gotcha HttpClient.Timeout
         /// vérifié live 2026-10-19, granite4.2:8b) : le dépassement du délai
         /// par appel (LlmClient.SendWithTimeoutAsync, défaut 2 min) jette une
@@ -712,7 +728,7 @@ namespace LLM_AI
             {
                 try
                 {
-                    return await CallBackendAsync(_backends[_activeIndex], messages, ct).ConfigureAwait(false);
+                    return await CallWith429ResumeAsync(_backends[_activeIndex], messages, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (OperationCanceledException)
@@ -742,7 +758,7 @@ namespace LLM_AI
                 {
                     _logger?.Info("[LLM_AI] Tentative backend priorité {0} : {1} / {2}",
                         b.Priority, b.Url, b.Model);
-                    var r = await CallBackendAsync(b, messages, ct).ConfigureAwait(false);
+                    var r = await CallWith429ResumeAsync(b, messages, ct).ConfigureAwait(false);
                     _activeIndex = i;
                     _logger?.Info("[LLM_AI] Backend retenu : {0} / {1} (priorité {2})",
                         b.Url, b.Model, b.Priority);
@@ -769,6 +785,49 @@ namespace LLM_AI
                 "Aucun backend LLM disponible (tous les serveurs activés ont échoué).", last);
         }
 
+        /// <summary>
+        /// Appelle <paramref name="b"/> avec la politique de reprise 429 du
+        /// gate <see cref="LlmRateLimitGate"/>. Un 429 TPM/RPM admissible
+        /// (premier de la séquence, fenêtre servie ≤ plafond de surface) →
+        /// attente puis reprise MÊME backend une fois : l'attente effective
+        /// a lieu dans le pré-contrôle de <see cref="LlmClient.ChatAsync"/>
+        /// au moment de la relance (les boucles décident, le client dort).
+        /// RPD (fenêtre en heures), le 2ᵉ 429 consécutif ou une fenêtre
+        /// &gt; plafond → log « bascule » + rethrow — le caller
+        /// dé-verrouille / passe au suivant (fail-loud, compteur
+        /// LLM_BACKEND_ECHEC gardé par le catch générique).
+        /// L'annulation réelle est propagée telle quelle.
+        /// </summary>
+        private async Task<string> CallWith429ResumeAsync(LlmBackend b,
+            IReadOnlyList<LlmClient.ChatMessage> messages, CancellationToken ct)
+        {
+            bool resumed = false;
+            while (true)
+            {
+                try
+                {
+                    return await CallBackendAsync(b, messages, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (LlmRateLimitException ex)
+                {
+                    var key = LlmRateLimitGate.KeyOf(b.ProviderType, b.Url, b.Model);
+                    if (!resumed && LlmRateLimitGate.CanResume(ex, key, _rateLimitWaitCeiling))
+                    {
+                        resumed = true;
+                        _logger?.Warn("[LLM_AI] Backend {0} / {1} : 429 {2} — attente {3} s puis reprise MÊME backend (plafond {4} s, une seule reprise).",
+                            b.Url, b.Model, ex.MotifLabel,
+                            (int)Math.Ceiling(LlmRateLimitGate.TimeUntilRetry(key).TotalSeconds),
+                            (int)_rateLimitWaitCeiling.TotalSeconds);
+                        continue;
+                    }
+                    _logger?.Warn("[LLM_AI] Backend {0} / {1} : 429 {2} — bascule ({3}).",
+                        b.Url, b.Model, ex.MotifLabel, ex.Message);
+                    throw;
+                }
+            }
+        }
+
         private Task<string> CallBackendAsync(LlmBackend b,
             IReadOnlyList<LlmClient.ChatMessage> messages, CancellationToken ct)
         {
@@ -781,7 +840,8 @@ namespace LLM_AI
                 case LlmProvider.Gemini:       apiKey = _geminiKey;      break;
                 default:                       apiKey = null;           break;
             }
-            return LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, ct);
+            return LlmClient.ChatAsync(b, apiKey, messages, _json, _logger, ct,
+                waitCeiling: _rateLimitWaitCeiling);
         }
 
         // ------------------------------------------------------------------

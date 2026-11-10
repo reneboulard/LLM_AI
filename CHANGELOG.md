@@ -10,6 +10,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.19.0] — 2026-11-10
+
+### Added (FR)
+- **Gate 429 du free tier Gemini — classification par motif, attente
+  plafonnée, reprise même-backend** (`LlmRateLimitGate.cs`) : une réponse 429
+  est classifiée depuis le corps HTTP (délai exact `RetryInfo`, métrique de
+  quota `violations[].quotaMetric` → TPM/RPM/RPD, limite dans le message) ;
+  l'état in-memory par clé « provider | URL résolue | modèle » est renseigné,
+  puis un **pré-contrôle avant chaque appel** attend la fenêtre quand elle
+  est trop serrée — au lieu de consommer le quota du repli backend suivant.
+  Sur 429 réel : motif classifié ; si la fenêtre restante ≤ plafond →
+  attente puis **reprise du MÊME backend** (bascule = ré-dépense des tokens
+  du 1ᵉʳ run) ; plafonds 90 s (tâches) / 20 s (interactif — chat et bouton
+  « Tester » de la config). Parsing impossible → fail-open (bascule comme
+  avant). Validé en champ 2026-11-10 sur 429 authentiques : Tonight
+  (délai total 429→succès 2:18, final produit sur le backend d'origine) et
+  tâche EPG (motif TPM-entrée, limite 16 000, fenêtre servie 21 s → reprise,
+  zéro bascule, zéro perte de qualité).
+- **Single-flight « ce soir » (mode join)** (`TonightService.cs`) : au plus
+  **un run de production par usager**. Le registre in-memory conserve le
+  run en cours (TCS « RunContinuationsAsynchronously ») ; un déclencheur
+  simultané (login, page, chat, tâche planifiée) **joint** son résultat au
+  lieu de doubler l'appel LLM — mesuré en champ : deux runs Tonight ≈ 31 k
+  tok d'entrée, au-dessus de la fenêtre TPM 16 k/min du free tier → 429
+  mutuels et +2 min de délai. Un `refresh=1` explicite joint aussi
+  (l'intention « donnée fraîche » est servie par le run démarré une poignée
+  de secondes plus tôt). TTL de sécurité 10 min : un run bloqué est présumé
+  mort, le registre est nettoyé et un nouveau run prend le relais. Le
+  propriétaire complète le dénouement partagé (succès OU échec) et ne
+  retire que SA propre entrée. Journalisation greppable (« run déjà en
+  cours depuis N s (source=…) — joint, pas de second run LLM »). Validé en
+  champ : 4 déclencheurs (login ×2 + 2 sessions page) → 1 seul run,
+  playlist/notification/toast émis une seule fois.
+
+### Changed (FR)
+- **Le run Tonight survit à la déconnexion de la requête page**
+  (`TonightApiService`) : même doctrine que le trigger login
+  (`CancellationToken.None`) — avec le single-flight la page peut être
+  propriétaire du run partagé ; couper sur l'abandon de requête tuerait le
+  run attendu par les demandeurs joints à cause d'un simple
+  rafraîchissement.
+- Log d'attente de gate arrondi au supérieur (`Math.Ceiling`) — « attente
+  0 s » n'apparaît plus.
+
+### Added (EN)
+- **Gemini free-tier 429 gate — motif classification, capped wait,
+  same-backend resume** (`LlmRateLimitGate.cs`): a 429 response is classified
+  from the HTTP body (exact `RetryInfo` delay, quota metric
+  `violations[].quotaMetric` → TPM/RPM/RPD, limit in the message); the
+  in-memory state keyed "provider | resolved URL | model" is filled, then a
+  **pre-check before every call** waits out the window when it is too tight —
+  instead of burning the next backend's fallback tokens on quota. On a real
+  429: motif classified; if the remaining window ≤ ceiling → wait then
+  **resume the SAME backend** (switching would re-spend the first run's
+  tokens); ceilings 90 s (tasks) / 20 s (interactive — chat and the config
+  "Test" button). Unparseable body → fail-open (switch backends as before).
+  Field-validated 2026-11-10 on genuine 429s: Tonight (total 429→success
+  delay 2:18, final produced on the original backend) and the EPG task
+  (TPM-input motif, limit 16,000, 21 s window served → resume, zero
+  switch, zero quality loss).
+- **"Watch tonight" single-flight (join mode)** (`TonightService.cs`): at most
+  **one production run per user**. The in-memory registry keeps the running
+  flight (TCS with "RunContinuationsAsynchronously"); a simultaneous trigger
+  (login, page, chat, scheduled task) **joins** its result instead of doubling
+  the LLM call — measured in the field: two Tonight runs ≈ 31k input tokens,
+  above the free tier's 16k/min TPM window → mutual 429s and +2 min delay.
+  An explicit `refresh=1` joins too (the "fresh data" intent is served by a
+  run started seconds ago). 10-min safety TTL: a stuck run is presumed dead,
+  the registry is cleaned and a new run takes over. The owner completes the
+  shared outcome (success OR failure) and removes only its own entry.
+  Grep-friendly log (« run déjà en cours depuis N s (source=…) — joint, pas
+  de second run LLM »). Field-validated: 4 triggers (login ×2 + 2 page
+  sessions) → a single run; playlist/notification/toast emitted once.
+
+### Changed (EN)
+- **The Tonight run survives the page request's disconnect**
+  (`TonightApiService`): same doctrine as the login trigger
+  (`CancellationToken.None`) — with single-flight the page can be the shared
+  run's owner; cutting on request abort would kill the run awaited by
+  joiners because of a simple page refresh.
+- Gate wait log now rounds up (`Math.Ceiling`) — "wait 0 s" no longer
+  appears.
+
 ## [2.18.0] — 2026-11-10
 
 ### Fixed (FR)
