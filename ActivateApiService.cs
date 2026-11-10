@@ -149,12 +149,15 @@ namespace LLM_AI
             {
                 var ct = Request?.CancellationToken ?? CancellationToken.None;
 
-                // Gate disque (même règle que AutoProgrammer.Program) : disque
-                // d'enregistrements sous le seuil → aucun nouveau timer ; la
-                // passe de tag « AI Delete » (opt-in) est déclenchée si activée.
+                // Gate disque (même règle que AutoProgrammer.Program) : volume
+                // de N'IMPORTE QUELLE racine d'enregistrements sous le seuil
+                // (v2.18.0, racines films et séries — un volume plein seul
+                // suffit à suspendre) → aucun nouveau timer ; la passe de tag
+                // « AI Delete » (opt-in) est déclenchée si activée.
                 if (cfg?.RecordingDiskThresholdGb > 0
-                    && RecordingDiskManager.TryResolveRecordingPath(_host, Logger, out string recPath)
-                    && RecordingDiskManager.IsBelowThreshold(cfg, recPath, Logger, out long freeBytes, out long thresholdBytes))
+                    && RecordingDiskManager.TryResolveRecordingPaths(_host, Logger, out var recPaths)
+                    && recPaths != null && recPaths.Count > 0
+                    && RecordingDiskManager.IsBelowThreshold(cfg, recPaths, Logger, out long freeBytes, out long thresholdBytes))
                 {
                     Logger?.Warn("[LLM_AI] Activate suspendu : {0} Go libre sur le volume d'enregistrements, sous le seuil ({1} Go) — aucun nouveau timer.",
                         (freeBytes / 1073741824.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
@@ -168,7 +171,7 @@ namespace LLM_AI
                         var host = _host;
                         var lib = _library;
                         _ = System.Threading.Tasks.Task.Run(() => RecordingDiskManager.RunTagPassAsync(
-                            lib, recPath,
+                            lib, recPaths,
                             host?.TryResolve<MediaBrowser.Controller.Library.IUserManager>(),
                             host?.TryResolve<MediaBrowser.Controller.Notifications.INotificationManager>(),
                             host, Logger, cfg, CancellationToken.None));

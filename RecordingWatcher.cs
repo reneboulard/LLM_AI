@@ -434,11 +434,12 @@ namespace LLM_AI
         /// DVR ? Pluriel (v2.18.0) : une install peut avoir des racines films
         /// ET séries distinctes — la forme singulière n'en exposait que la
         /// PREMIÈRE, et le filet d'import ignorait toute l'autre moitié des
-        /// enregistrements (cas réel 2026-11-09, prod DellXPS : racines
-        /// E:\Films + E:\Series — le film « La confession » (E:\Films)
-        /// recevait son filet, la série « De souche » (E:\Series) jamais, et
-        /// sa mauvaise fiche d'Emby n'a donc jamais été auditée). Adhésion =
-        /// sous N'IMPORTE QUELLE racine, avec frontière de séparateur.</summary>
+        /// enregistrements (cas réel 2026-11-09, production : racines films et
+        /// séries distinctes — le film du même soir, côté racine films,
+        /// recevait son filet ; la série « De souche », côté racine séries,
+        /// jamais, et sa mauvaise fiche d'Emby n'a donc jamais été auditée).
+        /// Adhésion = sous N'IMPORTE QUELLE racine, avec frontière de
+        /// séparateur.</summary>
         private bool IsUnderRecordingPath(string itemPath)
         {
             if (string.IsNullOrWhiteSpace(itemPath)) return false;

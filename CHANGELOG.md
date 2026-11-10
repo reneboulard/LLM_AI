@@ -15,15 +15,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed (FR)
 - **Filet d'import DVR : la garde d'adhésion ne testait que la
   PREMIÈRE racine d'enregistrement** : une installation peut
-  avoir des racines films ET séries distinctes (ex. `E:\Films` +
-  `E:\Series`) — la forme singulière n'en exposait que la première,
-  et le filet d'import ignorait toute l'autre moitié des
-  enregistrements. Cas réel (2026-11-09) : le documentaire « De
-  souche » (racine séries) fiché à tort par Emby en « Immigrants
-  de souche » n'a jamais reçu son filet, tandis que le film « La
-  confession » du même soir (racine films) passait — la mauvaise
-  fiche n'a donc jamais été auditée. L'adhésion est désormais
-  testée contre n'importe laquelle des racines.
+  avoir des racines films ET séries distinctes (un dossier films
+  en `MovieRecordingPath` + un dossier séries en
+  `SeriesRecordingPath`) — la forme singulière n'en exposait que
+  la première, et le filet d'import ignorait toute l'autre moitié
+  des enregistrements. Cas réel (2026-11-09) : le documentaire «
+  De souche » (racine séries) fiché à tort par Emby en
+  « Immigrants de souche » n'a jamais reçu son filet, tandis que
+  le film « La confession » du même soir (racine films)
+  passait — la mauvaise fiche n'a donc jamais été auditée.
+  L'adhésion est désormais testée contre n'importe laquelle des
+  racines, et **la forme singulière est supprimée du code** :
+  plus aucune surface ne peut renaître au singulier.
+- **Même défaut, toutes les surfaces — 7 autres sites testaient
+  au singulier** : après le cas « De souche », tout test
+  d'appartenance DVR du plugin est passé au peigne fin. Sur une
+  install à racines films et séries distinctes : la surface chat
+  « recordings » n'exposait que les enregistrements de la racine
+  films ; la file de révision cross-kind ignorait les
+  « introuvables » de la racine séries (pourtant LA population
+  documentaires) ; la conversion sur place refusait à tort tout
+  dossier de la racine séries ; l'avertissement de rétention DVR
+  n'était pas émis pour une destination dans la racine séries ;
+  le marqueur DVR des médiathèques manquait la racine séries ;
+  la passe de tag « AI Delete » ne suggérait jamais les
+  enregistrements séries visionnés (le gros du volume
+  quotidien) ; le recoupement DVR de l'audit système
+  sous-comptait le domaine. Tous passent à la forme plurielle
+  (appartenance = sous n'importe quelle racine, à frontière de
+  séparateur).
 - **« Déjà auditée » mensongère — les ids d'Emby ne sont pas une
   preuve d'audit** : la branche épisode du watcher gelait
   l'entrée en la déclarant « couverte par l'audit de sa série »,
@@ -43,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   depuis la validation fin d'enregistrement).
 
 ### Added (FR)
+- **Gate disque multi-volumes** : la gate d'espace libre
+  (`RecordingDiskThresholdGb`) mesure désormais le volume de
+  CHAQUE racine d'enregistrements (dédoublonné par volume — les
+  racines films et séries d'un même disque ne sont mesurées
+  qu'une fois) et suspend la programmation dès qu'UN volume est
+  sous le seuil ; l'espace libre rapporté est celui du volume le
+  plus contraint. L'ancienne forme ne mesurait que la première
+  racine — sur une installation à racines sur des volumes
+  DISTINCTS, un volume plein passait inaperçu. Échec de lecture
+  d'une racine → ignorée une à une (échoue ouvert, doctrine
+  inchangée).
 - **Fiche muette non corroborable → re-identification immédiate**
   : une fiche TMDB sans synopsis (overview vide) ne donnera
   JAMAIS matière au juge sémantique — défaut structurel, pas un
@@ -62,15 +93,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed (EN)
 - **DVR import safety net: the membership gate only tested the
   FIRST recording root**: an installation can have distinct
-  movie AND series recording roots (e.g. `E:\Movies` +
-  `E:\Series`) — the singular form exposed only the first one,
-  and the import net ignored the entire other half of the
-  recordings. Real case (2026-11-09): the documentary "De
+  movie AND series recording roots (a movie folder in
+  `MovieRecordingPath` + a series folder in
+  `SeriesRecordingPath`) — the singular form exposed only the
+  first one, and the import net ignored the entire other half of
+  the recordings. Real case (2026-11-09): the documentary "De
   souche" (series root) mis-identified by Emby as "Immigrants de
   souche" never received its net, while the same evening's movie
   "La confession" (movie root) did — so the wrong fiche was
   never audited. Membership is now tested against any of the
-  roots.
+  roots, and **the singular form is deleted from the code**: no
+  surface can regress to the singular.
+- **Same defect, every surface — 7 more sites tested against the
+  singular root**: following the "De souche" case, every DVR
+  membership test in the plugin was audited. On an installation
+  with distinct movie and series roots: the chat "recordings"
+  surface only exposed the movie root's recordings; the
+  cross-kind review queue ignored the series root's not-found
+  items (precisely the documentary population); the on-place
+  conversion wrongly refused any folder from the series root;
+  the DVR retention warning was not emitted for a destination in
+  the series root; the DVR marker on libraries missed the series
+  root; the "AI Delete" tag pass never suggested watched series
+  recordings (the bulk of the daily volume); the system audit's
+  DVR recoupement undercounted the domain. All now use the
+  plural form (membership = under any root, with a separator
+  boundary).
 - **Lying "already audited" — Emby ids are not proof of an
   audit**: the watcher's episode branch froze the entry as
   "covered by its series audit", taking the presence of provider
@@ -88,6 +136,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (the reason only occurs on the recording-end validation path).
 
 ### Added (EN)
+- **Multi-volume disk gate**: the free-space gate
+  (`RecordingDiskThresholdGb`) now measures the volume of EVERY
+  recording root (deduplicated per volume — movie and series
+  roots on the same disk are measured once) and suspends
+  programming as soon as ONE volume is below the threshold; the
+  reported free space is that of the most constrained volume.
+  The old form only measured the first root — on an installation
+  with roots on DISTINCT volumes, a full volume went unnoticed. A
+  root whose read fails is skipped one by one (fail-open, doctrine
+  unchanged).
 - **Mute fiche without corroboration → immediate
   re-identification**: a TMDB fiche without a synopsis (empty
   overview) will NEVER give the semantic judge anything to

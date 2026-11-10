@@ -151,9 +151,10 @@ namespace LLM_AI
                 {
                     var cfg = Plugin.Instance?.Configuration;
                     if (cfg?.RecordingDiskThresholdGb > 0 && cfg.RecordingTaggingEnabled
-                        && RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out string recPath))
+                        && RecordingDiskManager.TryResolveRecordingPaths(_host, _logger, out var recPaths)
+                        && recPaths != null && recPaths.Count > 0)
                     {
-                        await RecordingDiskManager.RunTagPassAsync(_library, recPath,
+                        await RecordingDiskManager.RunTagPassAsync(_library, recPaths,
                             _host.TryResolve<MediaBrowser.Controller.Library.IUserManager>(),
                             _host.TryResolve<MediaBrowser.Controller.Notifications.INotificationManager>(),
                             _host, _logger, cfg, cancellationToken).ConfigureAwait(false);

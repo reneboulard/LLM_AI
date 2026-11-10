@@ -103,17 +103,20 @@ namespace LLM_AI
                 return stats;
             }
 
-            // Gate disque (opt-in) : espace libre du volume d'enregistrements
-            // sous cfg.RecordingDiskThresholdGb → AUCUN nouveau timer (les
-            // timers déjà créés continuent — Emby les possède). Échoue OUVERT :
-            // chemin/volume indéterminable ne bloque jamais. Sous le seuil, la
-            // passe de tag « AI Delete » (suggestion, opt-in) est déclenchée
+            // Gate disque (opt-in) : espace libre du volume de N'IMPORTE
+            // QUELLE racine d'enregistrements (v2.18.0 : racines films et
+            // séries d'une install peuvent vivre sur des volumes DISTINCTS —
+            // un volume plein seul suffit à suspendre) sous
+            // cfg.RecordingDiskThresholdGb → AUCUN nouveau timer (les timers
+            // déjà créés continuent — Emby les possède). Échoue OUVERT :
+            // chemin/volume indéterminable ne bloque jamais. Sous le seuil,
+            // la passe de tag « AI Delete » (suggestion, opt-in) est déclenchée
             // immédiatement — c'est l'événement attendu, pas la routine.
             if (cfg?.RecordingDiskThresholdGb > 0)
             {
-                string recPath;
-                if (RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out recPath)
-                    && RecordingDiskManager.IsBelowThreshold(cfg, recPath, _logger, out long freeBytes, out long thresholdBytes))
+                if (RecordingDiskManager.TryResolveRecordingPaths(_host, _logger, out var recPaths)
+                    && recPaths != null && recPaths.Count > 0
+                    && RecordingDiskManager.IsBelowThreshold(cfg, recPaths, _logger, out long freeBytes, out long thresholdBytes))
                 {
                     _logger?.Warn("[LLM_AI] Auto-program suspendu : {0} Go libre sur le volume d'enregistrements, sous le seuil ({1} Go) — aucun nouveau timer.",
                         (freeBytes / 1073741824.0).ToString("0.#", CultureInfo.InvariantCulture),
@@ -124,7 +127,7 @@ namespace LLM_AI
                         {
                             var users = _host?.TryResolve<IUserManager>();
                             var notif = _host?.TryResolve<INotificationManager>();
-                            await RecordingDiskManager.RunTagPassAsync(_library, recPath, users, notif, _host, _logger, cfg, ct)
+                            await RecordingDiskManager.RunTagPassAsync(_library, recPaths, users, notif, _host, _logger, cfg, ct)
                                 .ConfigureAwait(false);
                         }
                         catch (OperationCanceledException) { throw; }

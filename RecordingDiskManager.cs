@@ -37,11 +37,14 @@ namespace LLM_AI
     /// s'est libéré ne fait donc que retirer les tags obsolètes.</para>
     /// </summary>
     /// <remarks>
-    /// <para><b>Scope</b> : seuls les items dont le fichier est sous le chemin
-    /// d'enregistrements résolu (<c>LiveTvOptions</c> — chemins string 4.9.x,
-    /// ids de dossiers 4.10+, repli défaut Emby
+    /// <para><b>Scope</b> : seuls les items dont le fichier est sous l'une des
+    /// racines d'enregistrements résolues (<c>LiveTvOptions</c> — chemins
+    /// string 4.9.x, ids de dossiers 4.10+, repli défaut Emby
     /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c> — voir
-    /// <see cref="TryResolveRecordingPath"/>) sont candidats au tag.</para>
+    /// <see cref="TryResolveRecordingPaths"/>) sont candidats au tag
+    /// (v2.18.0 : une install peut avoir des racines films ET séries
+    /// distinctes — l'ancienne forme singulière n'en voyait que la
+    /// première).</para>
     /// <para><b>Persistance des tags</b> : réutilise
     /// <see cref="AiTagger.AddAsync"/>/<see cref="AiTagger.RemoveAllAsync"/>
     /// (même mécanique que le tag « AI Tonight » — le cleanup nocturne
@@ -72,16 +75,11 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Résout le chemin d'enregistrements effectif :
-        /// <c>LiveTvOptions.RecordingPath</c>, repli <c>MovieRecordingPath</c>,
-        /// repli <c>SeriesRecordingPath</c> (builds 4.9.x), repli
-        /// <c>RecordingFolderId</c>/<c>MovieRecordingFolderId</c>/
-        /// <c>SeriesRecordingFolderId</c> résolus dans la bibliothèque (builds
-        /// 4.10+ : l'emplacement est un id de dossier), repli <b>défaut Emby</b>
-        /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c> (le dossier que
-        /// Emby utilise quand aucun chemin n'est configuré — constaté sur ce
-        /// serveur). Vide/inconnu → faux (les appelants traitent cela comme
-        /// « gate non applicable »).
+        /// Résout TOUTES les racines d'enregistrements DVR — chemins 4.9.x
+        /// (<c>RecordingPath</c>/<c>MovieRecordingPath</c>/
+        /// <c>SeriesRecordingPath</c>) ET ids de dossiers 4.10+
+        /// (<c>RecordingFolderId</c>/<c>MovieRecordingFolderId</c>/
+        /// <c>SeriesRecordingFolderId</c>), dédoublonnées.
         /// <para><b>Accès Emby</b> : les options LiveTV ne sont PAS sur
         /// <c>ServerConfiguration</c> — c'est une configuration <b>nommée</b>,
         /// clé <c>livetv</c> (confirmé par réflexion du serveur live :
@@ -91,90 +89,29 @@ namespace LLM_AI
         /// <c>LiveTvOptions</c> varie selon la build hôte — un accès compilé à
         /// une propriété absente (ex. <c>RecordingPath</c> retirée en 4.10)
         /// casse le JIT (MissingMethodException) et bloque toute la chaîne
-        /// appelante (Activate, auto-program). Les propriétés sont donc lues
-        /// par réflexion, et un id de dossier est résolu via
+        /// appelante (Activate, auto-program, passe de tag). Les propriétés
+        /// sont donc lues par réflexion, et un id de dossier est résolu via
         /// <see cref="ItemIdResolver.Resolve"/> → <c>BaseItem.Path</c>.</para>
-        /// </summary>
-        internal static bool TryResolveRecordingPath(
-            IServerApplicationHost host, ILogger logger, out string path)
-        {
-            path = null;
-            try
-            {
-                var cm = host?.TryResolve<MediaBrowser.Common.Configuration.IConfigurationManager>();
-                var opts = cm?.GetConfiguration("livetv") as MediaBrowser.Model.LiveTv.LiveTvOptions;
-                path = FirstNonEmpty(
-                    OptString(opts, "RecordingPath"),
-                    OptString(opts, "MovieRecordingPath"),
-                    OptString(opts, "SeriesRecordingPath"));
-
-                // Builds 4.10+ : l'emplacement est un id de dossier de
-                // bibliothèque (aucun chemin string sur LiveTvOptions).
-                if (string.IsNullOrWhiteSpace(path) && opts != null)
-                {
-                    var lib = host?.TryResolve<ILibraryManager>();
-                    foreach (var idProp in new[] { "RecordingFolderId", "MovieRecordingFolderId", "SeriesRecordingFolderId" })
-                    {
-                        var raw = OptString(opts, idProp);
-                        if (string.IsNullOrWhiteSpace(raw) || raw == Guid.Empty.ToString()) continue;
-                        var folder = ItemIdResolver.Resolve(lib, raw);
-                        var folderPath = folder?.Path;
-                        if (!string.IsNullOrWhiteSpace(folderPath))
-                        {
-                            path = folderPath;
-                            break;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                logger?.Warn("[LLM_AI] Disque enregistrements : lecture LiveTvOptions (config nommée « livetv ») échouée : {0}", ex.Message);
-                return false;
-            }
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                // Défaut Emby quand aucun chemin n'est configuré :
-                // <ProgramData>/data/livetv/recordings (constaté sur ce serveur).
-                var appPaths = host?.TryResolve<MediaBrowser.Common.Configuration.IApplicationPaths>()
-                    ?? host as MediaBrowser.Common.Configuration.IApplicationPaths;
-                string dataRoot = null;
-                try { dataRoot = appPaths?.DataPath; }
-                catch (Exception ex) { logger?.Warn("[LLM_AI] Disque enregistrements : DataPath illisible : {0}", ex.Message); }
-                if (!string.IsNullOrWhiteSpace(dataRoot))
-                {
-                    path = Path.Combine(dataRoot, "livetv", "recordings");
-                    logger?.Info("[LLM_AI] Disque enregistrements : aucun chemin configuré — repli sur le défaut Emby « {0} ».", path);
-                }
-            }
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                logger?.Warn("[LLM_AI] Disque enregistrements : chemin d'enregistrements indéterminable — gate disque et passe de tag inapplicables.");
-                return false;
-            }
-            return true;
-        }
-
-        /// <summary>
-        /// Résout TOUTES les racines d'enregistrements DVR (v2.16.2) — chemins
-        /// 4.9.x (<c>RecordingPath</c>/<c>MovieRecordingPath</c>/
-        /// <c>SeriesRecordingPath</c>) ET ids de dossiers 4.10+
-        /// (<c>RecordingFolderId</c>/<c>MovieRecordingFolderId</c>/
-        /// <c>SeriesRecordingFolderId</c>), dédoublonnées.
-        /// <para><see cref="TryResolveRecordingPath"/> ne renvoie que la
-        /// PREMIÈRE racine non vide : une install avec dossiers films et
-        /// séries distincts (constaté en production :
-        /// <c>MovieRecordingPath</c> et <c>SeriesRecordingPath</c> tous
-        /// deux définis) n'en exposait qu'une — tout test d'appartenance
-        /// « sous la racine DVR » ratait l'autre moitié des enregistrements
-        /// (signalement terrain : une médiathèque d'enregistrements TV non
-        /// exclue d'office du sélecteur LibReview).</para>
+        /// <para><b>La forme PLURIELLE est la seule légitime</b> : la forme
+        /// singulière historique ne renvoyait que la PREMIÈRE racine — une
+        /// install avec dossiers films et séries distincts (constaté en
+        /// production : <c>MovieRecordingPath</c> et
+        /// <c>SeriesRecordingPath</c> tous deux définis) n'en exposait qu'une,
+        /// et tout test d'appartenance « sous une racine DVR » ratait
+        /// l'autre moitié des enregistrements. Défauts vécus de cette
+        /// classe : médiathèque d'enregistrements TV non exclue d'office du
+        /// sélecteur LibReview (v2.16.2) ; filet d'import du
+        /// RecordingWatcher n'auditant jamais les enregistrements séries
+        /// (cas « De souche », v2.18.0) ; passe de tag AI Delete, surface
+        /// chat « recordings », page cross-kind et recoupement des stats
+        /// d'audit ne voyant que la première racine (v2.18.0). La forme
+        /// singulière est SUPPRIMÉE depuis v2.18.0 : plus aucun appelant ne
+        /// doit renaître au singulier.</para>
         /// Repli : si AUCUNE racine n'est configurée, le défaut Emby
-        /// « &lt;DataPath&gt;/livetv/recordings » (même sémantique que
-        /// <see cref="TryResolveRecordingPath"/>). Élément strictement
-        /// élargissant : la liste contient toujours la racine que la forme
-        /// singulière aurait retournée.
-        /// </summary>
+        /// « &lt;DataPath&gt;/livetv/recordings » (le dossier qu'Emby utilise
+        /// quand aucun chemin n'est configuré — constaté sur ce serveur).
+        /// Vide/inconnu → faux (les appelants traitent cela comme « non
+        /// applicable »).</summary>
         internal static bool TryResolveRecordingPaths(
             IServerApplicationHost host, ILogger logger, out List<string> paths)
         {
@@ -208,8 +145,8 @@ namespace LLM_AI
             }
             if (paths.Count == 0)
             {
-                // Défaut Emby quand aucun chemin n'est configuré — même repli
-                // que TryResolveRecordingPath.
+                // Défaut Emby quand aucun chemin n'est configuré — repli
+                // historique de la forme singulière d'origine.
                 var appPaths = host?.TryResolve<MediaBrowser.Common.Configuration.IApplicationPaths>()
                     ?? host as MediaBrowser.Common.Configuration.IApplicationPaths;
                 string dataRoot = null;
@@ -238,14 +175,6 @@ namespace LLM_AI
             if (!paths.Contains(t, StringComparer.OrdinalIgnoreCase)) paths.Add(t);
         }
 
-        /// <summary>Premier chemin non vide/blanc de la liste, sinon null.</summary>
-        private static string FirstNonEmpty(params string[] paths)
-        {
-            foreach (var p in paths ?? Array.Empty<string>())
-                if (!string.IsNullOrWhiteSpace(p)) return p;
-            return null;
-        }
-
         /// <summary>
         /// Lecture d'une propriété par réflexion, tolérante aux builds :
         /// renvoie null si la propriété n'existe pas (forme de
@@ -265,41 +194,60 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Indique si l'espace libre du volume hébergeant <paramref name="path"/>
-        /// est sous <c>cfg.RecordingDiskThresholdGb</c>. Échoue OUVERT : chemin
-        /// nul, volume introuvable ou lecture DriveInfo en échec → « non sous
-        /// le seuil » (on ne bloque jamais l'enregistrement sur une
-        /// indétermination). <paramref name="freeBytes"/> = -1 si indéterminé.
+        /// Gate disque MULTI-RACINES (v2.18.0) : mesure l'espace libre du volume
+        /// de CHAQUE racine (dédoublonné par volume — sur une install, les
+        /// racines films et séries vivent souvent sur le MÊME disque, inutile
+        /// de le mesurer deux fois) et renvoie true si N'IMPORTE QUEL volume
+        /// est sous le seuil ; <paramref name="freeBytes"/> rapporte le volume
+        /// le PLUS CONTRAINT. L'ancienne forme singulière ne mesurait que la
+        /// première racine : sur une install à racines sur des volumes
+        /// DISTINCTS, un volume plein passait inaperçu. Échoue OUVERT : racine
+        /// nulle/volume introuvable/lecture en échec → racine ignorée une à
+        /// une ; plus aucune racine mesurable → « non sous le seuil » (on ne
+        /// bloque jamais l'enregistrement sur une indétermination).
+        /// <paramref name="freeBytes"/> = -1 si indéterminé.
         /// </summary>
         internal static bool IsBelowThreshold(
-            PluginConfiguration cfg, string path, ILogger logger,
+            PluginConfiguration cfg, IEnumerable<string> paths, ILogger logger,
             out long freeBytes, out long thresholdBytes)
         {
             freeBytes = -1;
             thresholdBytes = 0;
             int gb = cfg?.RecordingDiskThresholdGb ?? 0;
-            if (gb <= 0 || string.IsNullOrWhiteSpace(path)) return false;
+            if (gb <= 0 || paths == null) return false;
 
             thresholdBytes = (long)gb * GiB;
-            try
+            var seenVolumes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            bool measured = false;
+            bool below = false;
+            long worst = long.MaxValue;
+            foreach (var path in paths)
             {
-                var drive = DriveInfo.GetDrives()
-                    .Where(d => d.IsReady)
-                    .OrderByDescending(d => d.Name.Length)  // préfixe le plus spécifique
-                    .FirstOrDefault(d => path.StartsWith(d.Name, StringComparison.OrdinalIgnoreCase));
-                if (drive == null)
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                try
                 {
-                    logger?.Warn("[LLM_AI] Disque enregistrements : aucun volume local ne préfixe « {0} » — gate disque inapplicable (échoue ouvert).", path);
-                    return false;
+                    var drive = DriveInfo.GetDrives()
+                        .Where(d => d.IsReady)
+                        .OrderByDescending(d => d.Name.Length)  // préfixe le plus spécifique
+                        .FirstOrDefault(d => path.StartsWith(d.Name, StringComparison.OrdinalIgnoreCase));
+                    if (drive == null)
+                    {
+                        logger?.Warn("[LLM_AI] Disque enregistrements : aucun volume local ne préfixe « {0} » — racine ignorée (échoue ouvert).", path);
+                        continue;
+                    }
+                    if (!seenVolumes.Add(drive.Name)) continue; // même volume : déjà mesuré
+                    measured = true;
+                    if (drive.AvailableFreeSpace < worst) worst = drive.AvailableFreeSpace;
+                    if (drive.AvailableFreeSpace < thresholdBytes) below = true;
                 }
-                freeBytes = drive.AvailableFreeSpace;
-                return freeBytes < thresholdBytes;
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] Disque enregistrements : lecture du volume de « {0} » échouée : {1} — racine ignorée (échoue ouvert).", path, ex.Message);
+                }
             }
-            catch (Exception ex)
-            {
-                logger?.Warn("[LLM_AI] Disque enregistrements : lecture du volume de « {0} » échouée : {1} — gate disque inapplicable (échoue ouvert).", path, ex.Message);
-                return false;
-            }
+            if (!measured) return false;
+            freeBytes = worst;
+            return below;
         }
 
         // ------------------------------------------------------------------
@@ -314,18 +262,23 @@ namespace LLM_AI
         /// jusqu'à l'objectif <c>libre + Σ ≥ seuil × marge</c>, puis notifie.
         /// Best-effort de bout en bout : ne lève jamais vers l'appelant.
         /// </summary>
-        /// <param name="recPath">Chemin d'enregistrements résolu (
-        /// <see cref="TryResolveRecordingPath"/>) — peut être nul : la passe
-        /// ne fait alors rien.</param>
+        /// <param name="recPaths">Racines d'enregistrements résolues (
+        /// <see cref="TryResolveRecordingPaths"/>) — liste vide/nulle : la
+        /// passe ne fait alors rien (le clear-first reste global).</param>
         internal static async Task RunTagPassAsync(
-            ILibraryManager library, string recPath,
+            ILibraryManager library, IEnumerable<string> recPaths,
             IUserManager users, INotificationManager notifications,
             IServerApplicationHost host, ILogger logger,
             PluginConfiguration cfg, CancellationToken ct)
         {
             try
             {
-                if (library == null || string.IsNullOrWhiteSpace(recPath))
+                var roots = (recPaths ?? Array.Empty<string>())
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Select(p => p.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (library == null || roots.Count == 0)
                 {
                     logger?.Info("[LLM_AI] Passe tag disque : chemin d'enregistrements non résolu — ignorée.");
                     return;
@@ -343,7 +296,7 @@ namespace LLM_AI
                     logger?.Info("[LLM_AI] Passe tag disque : suggestion désactivée — tags réinitialisés, rien re-tagué.");
                     return;
                 }
-                if (!IsBelowThreshold(cfg, recPath, logger, out long freeBytes, out long thresholdBytes))
+                if (!IsBelowThreshold(cfg, roots, logger, out long freeBytes, out long thresholdBytes))
                 {
                     logger?.Info("[LLM_AI] Passe tag disque : au-dessus du seuil ({0} Go libre) — tags réinitialisés, rien re-tagué.",
                         freeBytes >= 0 ? (freeBytes / (double)GiB).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) : "?");
@@ -364,26 +317,36 @@ namespace LLM_AI
                 foreach (var u in userList ?? new List<MediaBrowser.Controller.Entities.User>())
                 {
                     if (u == null) continue;
-                    ct.ThrowIfCancellationRequested();
-                    try
+                    // Multi-racines (v2.18.0) : une requête par usager PAR
+                    // racine — les enregistrements des racines films ET séries
+                    // sont tous candidats (PathStartsWith n'accepte qu'un
+                    // préfixe). Le dictionnaire dédoublonne les items (un item
+                    // ne vit que sous une racine, mais deux préfixes peuvent
+                    // se chevaucher en config tordue).
+                    foreach (var root in roots)
                     {
-                        var q = new InternalItemsQuery
+                        if (string.IsNullOrWhiteSpace(root)) continue;
+                        ct.ThrowIfCancellationRequested();
+                        try
                         {
-                            User = u,
-                            IsPlayed = true,
-                            PathStartsWith = recPath,
-                            Recursive = true,
-                            EnableTotalRecordCount = false
-                        };
-                        foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
-                        {
-                            if (it == null || it.Id == Guid.Empty || played.ContainsKey(it.Id)) continue;
-                            played[it.Id] = it;
+                            var q = new InternalItemsQuery
+                            {
+                                User = u,
+                                IsPlayed = true,
+                                PathStartsWith = root,
+                                Recursive = true,
+                                EnableTotalRecordCount = false
+                            };
+                            foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())
+                            {
+                                if (it == null || it.Id == Guid.Empty || played.ContainsKey(it.Id)) continue;
+                                played[it.Id] = it;
+                            }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.Warn("[LLM_AI] Passe tag disque : requête joués (usager {0}) échouée : {1}", u.Name, ex.Message);
+                        catch (Exception ex)
+                        {
+                            logger?.Warn("[LLM_AI] Passe tag disque : requête joués (usager {0}, racine {1}) échouée : {2}", u.Name, root, ex.Message);
+                        }
                     }
                 }
 

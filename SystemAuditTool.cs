@@ -1753,12 +1753,18 @@ namespace LLM_AI
                 reviewByType[t] = CountByTag(tagReview, t);
 
             // 2) Balayage Movie/Series — couverture de la validation (cap),
-            //    recoupée sur le domaine DVR (dossier d'enregistrements —
-            //    là où le plugin agit ; le reste de la bibliothèque est
-            //    identifié par Emby natif et n'est pas son périmètre).
-            string dvrRoot = null;
-            try { RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out dvrRoot); }
-            catch { /* null : recoupement DVR absent */ }
+            //    recoupée sur le domaine DVR (racines d'enregistrements,
+            //    pluriel v2.18.0 — là où le plugin agit ; le reste de la
+            //    bibliothèque est identifié par Emby natif et n'est pas son
+            //    périmètre).
+            var dvrRoots = new List<string>();
+            try
+            {
+                if (RecordingDiskManager.TryResolveRecordingPaths(_host, _logger, out var roots)
+                    && roots != null)
+                    dvrRoots = roots.Where(r => !string.IsNullOrWhiteSpace(r)).ToList();
+            }
+            catch { /* vide : recoupement DVR absent */ }
 
             int scanned = 0, idsNoTag = 0, noIdsNoTag = 0;
             bool capped = false;
@@ -1789,9 +1795,9 @@ namespace LLM_AI
                         bool taggedOk = Array.IndexOf(tags, tagOk) >= 0;
                         bool taggedReview = Array.IndexOf(tags, tagReview) >= 0;
                         bool taggedNotFound = Array.IndexOf(tags, tagNotFound) >= 0;
-                        bool isDvr = !string.IsNullOrEmpty(dvrRoot)
+                        bool isDvr = dvrRoots.Count > 0
                             && !string.IsNullOrEmpty(i.Path)
-                            && i.Path.StartsWith(dvrRoot, StringComparison.OrdinalIgnoreCase);
+                            && dvrRoots.Any(r => TonightService.IsUnderPath(i.Path, r));
                         if (isDvr)
                         {
                             dvrItems++;

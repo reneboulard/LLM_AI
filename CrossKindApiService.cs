@@ -482,19 +482,10 @@ namespace LLM_AI
                 return new CrossKindQueueResponse { Error = "Lecture bibliothèque échouée : " + ex.Message };
             }
 
-            // Racine des enregistrements DVR : le signal « suspect » (not-found
-            // dont le dossier vit sous la racine DVR) et la borne de la
-            // conversion sur place.
-            string dvrRoot = null;
-            try
-            {
-                if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string d))
-                    dvrRoot = d;
-            }
-            catch (Exception ex)
-            {
-                Logger?.Warn("[LLM_AI] CrossKind : racine DVR illisible ({0}).", ex.Message);
-            }
+            // Racines des enregistrements DVR (pluriel v2.18.0) : le signal
+            // « suspect » (not-found dont le dossier vit sous une racine DVR)
+            // et la borne de la conversion sur place.
+            var dvrRoots = ResolveDvrRoots();
 
             // Langues de sonde : même trio que la passe orphelins (en/fr + lang TMDB).
             var langs = new[] { "en-US", "fr-FR", lang }
@@ -515,9 +506,8 @@ namespace LLM_AI
                     // l'import DVR type l'item d'après le guide (tvshow.nfo →
                     // Series) alors que l'œuvre peut être un film absent de TMDB
                     // (cas « Les couleurs du passé », « Du zéro à l'infini »).
-                    bool underDvr = !string.IsNullOrWhiteSpace(dvrRoot)
-                        && !string.IsNullOrWhiteSpace(item.Path)
-                        && IsUnderPath(item.Path, dvrRoot);
+                    bool underDvr = !string.IsNullOrWhiteSpace(item.Path)
+                        && IsUnderAnyPath(item.Path, dvrRoots);
                     bool suspected = !cross && OrphanResolver.HasTag(item, OrphanIdentifyTask.TagNotFound) && underDvr;
                     if (!cross && !suspected) continue;
 
@@ -578,8 +568,7 @@ namespace LLM_AI
                     }
                     bool convertible = isSeries && files.Length > 0
                         && !string.IsNullOrWhiteSpace(srcFolder)
-                        && !string.IsNullOrWhiteSpace(dvrRoot)
-                        && IsUnderPath(srcFolder, dvrRoot)
+                        && IsUnderAnyPath(srcFolder, dvrRoots)
                         && tvshowNfo;
 
                     int tmdbId = 0;
@@ -652,16 +641,7 @@ namespace LLM_AI
                 {
                     Logger?.Warn("[LLM_AI] CrossKind : racine .strm illisible ({0}).", ex.Message);
                 }
-                string dvrRoot = null;
-                try
-                {
-                    if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string d))
-                        dvrRoot = d;
-                }
-                catch (Exception ex)
-                {
-                    Logger?.Warn("[LLM_AI] CrossKind : racine DVR illisible ({0}).", ex.Message);
-                }
+                var dvrRoots = ResolveDvrRoots();
 
                 var folders = LibraryManager.GetVirtualFolders() ?? new List<MediaBrowser.Model.Entities.VirtualFolderInfo>();
                 foreach (var f in folders)
@@ -679,7 +659,7 @@ namespace LLM_AI
                     {
                         if (string.IsNullOrWhiteSpace(loc)) continue;
                         if (!string.IsNullOrWhiteSpace(strmRoot) && IsUnderPath(loc, strmRoot)) continue;
-                        if (!string.IsNullOrWhiteSpace(dvrRoot) && IsUnderPath(loc, dvrRoot))
+                        if (IsUnderAnyPath(loc, dvrRoots))
                             isDvr = true;
                         kept.Add(loc);
                     }
@@ -963,12 +943,14 @@ namespace LLM_AI
                     return Refuse("Les fichiers de l'œuvre vivent dans plusieurs dossiers — conversion sur place impossible (utilisez la copie).");
             }
 
-            // Borne : le dossier doit être sous la racine des enregistrements
-            // DVR — ailleurs, la forme du dossier n'est pas un import DVR et
-            // la copie reste l'outil adapté.
-            if (!RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string dvrRoot)
-                || string.IsNullOrWhiteSpace(dvrRoot)
-                || !IsUnderPath(srcFolder, dvrRoot))
+            // Borne : le dossier doit être sous une des racines des
+            // enregistrements DVR (pluriel v2.18.0 — une install peut avoir
+            // des racines films ET séries distinctes : l'ancienne forme
+            // singulière refusait à tort toute la moitié « séries ») —
+            // ailleurs, la forme du dossier n'est pas un import DVR et la
+            // copie reste l'outil adapté.
+            string dvrRoot = ResolveDvrRoots().FirstOrDefault(r => IsUnderPath(srcFolder, r));
+            if (string.IsNullOrWhiteSpace(dvrRoot))
             {
                 return Refuse("La conversion sur place ne s'applique qu'aux dossiers du répertoire des enregistrements Live TV (ailleurs : utilisez la copie).");
             }
@@ -1450,13 +1432,17 @@ namespace LLM_AI
 
             try
             {
-                if (RecordingDiskManager.TryResolveRecordingPath(ApplicationHost, Logger, out string dvrRoot)
-                    && !string.IsNullOrWhiteSpace(dvrRoot)
-                    && IsUnderPath(folder, dvrRoot))
+                // Pluriel (v2.18.0) : la rétention DVR d'Emby s'applique à
+                // N'IMPORTE QUELLE racine d'enregistrements — l'ancienne forme
+                // singulière ne voyait que la première, et copier dans la
+                // racine séries passait sans le warning.
+                foreach (var dvrRoot in ResolveDvrRoots())
                 {
+                    if (!IsUnderPath(folder, dvrRoot)) continue;
                     parts.Add("la destination est dans le répertoire des enregistrements Live TV "
                         + "(« " + dvrRoot + " »), soumis à la rétention DVR d'Emby — "
                         + "préférez une racine de bibliothèque films/séries");
+                    break; // une seule occurrence du warning
                 }
             }
             catch (Exception ex)
@@ -1485,6 +1471,39 @@ namespace LLM_AI
 
             if (parts.Count == 0) return null;
             return "Attention : " + string.Join(" ; ", parts) + ".";
+        }
+
+        /// <summary>Racines d'enregistrements DVR, forme plurielle (v2.18.0) :
+        /// une install peut avoir des racines films ET séries distinctes —
+        /// l'ancienne forme singulière n'en voyait que la première, et toute la
+        /// moitié « séries » des enregistrements passait au travers de la file
+        /// cross-kind. Liste vide si aucune/illisible (le Warn d'échec est
+        /// émis ici).</summary>
+        private List<string> ResolveDvrRoots()
+        {
+            try
+            {
+                if (RecordingDiskManager.TryResolveRecordingPaths(ApplicationHost, Logger, out var roots)
+                    && roots != null)
+                    return roots.Where(r => !string.IsNullOrWhiteSpace(r)).ToList();
+            }
+            catch (Exception ex)
+            {
+                Logger?.Warn("[LLM_AI] CrossKind : racines DVR illisibles ({0}).", ex.Message);
+            }
+            return new List<string>();
+        }
+
+        /// <summary>Sous N'IMPORTE QUELLE racine DVR (v2.18.0 — même
+        /// comparaison à frontière de séparateur que
+        /// <see cref="IsUnderPath"/>). Candidat nul/vide ou liste vide →
+        /// false.</summary>
+        private static bool IsUnderAnyPath(string candidate, IEnumerable<string> roots)
+        {
+            if (string.IsNullOrWhiteSpace(candidate)) return false;
+            foreach (var root in roots ?? Array.Empty<string>())
+                if (IsUnderPath(candidate, root)) return true;
+            return false;
         }
 
         /// <summary>True si <paramref name="candidate"/> est <paramref name="root"/>

@@ -467,8 +467,8 @@ namespace LLM_AI
             }
             catch { }
 
-            if (!RecordingDiskManager.TryResolveRecordingPath(_host, _logger, out var dvrRoot)
-                || string.IsNullOrWhiteSpace(dvrRoot))
+            if (!RecordingDiskManager.TryResolveRecordingPaths(_host, _logger, out var dvrRoots)
+                || dvrRoots == null || dvrRoots.Count == 0)
             {
                 return JsonSerializer.Serialize(new
                 {
@@ -491,9 +491,14 @@ namespace LLM_AI
             if (ParentalUser != null) q.User = ParentalUser;
             if (watched.HasValue) q.IsPlayed = watched.Value;
 
-            var dvrPrefix = NormalizePath(dvrRoot);
+            // Multi-racines (v2.18.0) : une install peut avoir des racines
+            // films ET séries DISTINCTES — l'ancienne forme singulière
+            // n'exposait que la première, et les enregistrements séries
+            // n'apparaissaient jamais dans cette liste. Appartenance via la
+            // primitive partagée (frontière de séparateur, insensible à la
+            // casse).
             var items = (_library.GetItemList(q) ?? Array.Empty<BaseItem>())
-                .Where(i => !string.IsNullOrEmpty(i.Path) && NormalizePath(i.Path).StartsWith(dvrPrefix))
+                .Where(i => !string.IsNullOrEmpty(i.Path) && dvrRoots.Any(r => TonightService.IsUnderPath(i.Path, r)))
                 .OrderByDescending(i => i.DateCreated)
                 .Take(Math.Max(1, limit))
                 .ToArray();
@@ -525,11 +530,6 @@ namespace LLM_AI
             }
             catch { }
             return false;
-        }
-
-        private static string NormalizePath(string path)
-        {
-            return (path ?? "").Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
         }
 
         // ------------------------------------------------------------------
