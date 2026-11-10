@@ -751,7 +751,9 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   **validation when each recording finishes** (`RecordingWatcher`, hooked on
   `RecordingEnded`/`ItemAdded`): the plugin freezes the **EPG truth** (guide program
   title/synopsis/year) before Emby's automatic identification can overwrite the
-  synopsis, then audits the id Emby wrote with the synopsis judge — **match** → locks +
+  synopsis (the `ItemAdded` net freezes only the **path** — an imported item's
+  metadata derives from the native fiche, never from the guide, and must never
+  feed the judge), then audits the id Emby wrote with the synopsis judge — **match** → locks +
   identified tag; **mismatch** → ids removed, back to the EPG state, and the
   identification pipeline resumes immediately. Unidentified recordings go through
   immediately. Can be enabled without restart; honors the dry-run. The nightly 4 AM

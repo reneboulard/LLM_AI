@@ -154,18 +154,30 @@ namespace LLM_AI
                     return;
                 if (!IsUnderRecordingPath(item.Path)) return;
 
-                // Filet de l'événement RecordingEnded : si la vérité EPG est déjà
-                // figée pour ce chemin, Upsert ne l'écrase pas (complète seulement).
+                // Filet « chemin seul » (v2.19.0, cas « De souche » 2026-11-10) :
+                // NE JAMAIS figer les métadonnées de l'item (nom, synopsis, année).
+                // À l'import, ces champs dérivent de la fiche que les providers
+                // natifs viennent de poser (souvent avant l'événement) — les figer
+                // comme « vérité » rend l'audit CIRCULAIRE : le juge compare la
+                // fiche à elle-même et « valide » ce qu'Emby a posé, quelle que
+                // soit sa justesse (cas réel : série « De souche » importée sur
+                // « 80' douche comprise » — recherche TVDB floue, année du guide
+                // 2023 coïncidante — validée + taggée llmai-identified à tort à
+                // 10 h 30, pendant que la vraie vérité EPG (2026, synopsis du
+                // guide) figée à la fin de l'enregistrement n'atteignait jamais
+                // le juge). Le filet ne pose que le chemin : son rôle est de
+                // comptabiliser l'import (ligne de log) et de laisser la vérité
+                // du guide atterrir par l'événement de fin — même clé pour un
+                // film (l'upsert complète les champs manquants), vérité de
+                // l'épisode relayée à sa série par la branche épisode (v2.18.0).
+                // Sans vérité (fin jamais tirée) : audit reporté (« pas de
+                // synopsis EPG à comparer »), jamais de validation circulaire.
                 RecordingValidateStore.Upsert(new RecordingValidateStore.Entry
                 {
                     Path = item.Path,
-                    Title = Truncate(item.Name, 300),
-                    Overview = Truncate(item.Overview, 800),
-                    Year = item.ProductionYear,
-                    Channel = null,
                     Updated = DateTimeOffset.UtcNow
                 });
-                _logger?.Info("[LLM_AI] Recording : item DVR importé en bibliothèque « {0} » — filet d'import posé.", item.Name);
+                _logger?.Info("[LLM_AI] Recording : item DVR importé en bibliothèque « {0} » — filet d'import posé (chemin seul — la vérité viendra du guide).", item.Name);
             }
             catch (OperationCanceledException) { /* jamais */ }
             catch (Exception ex)
@@ -500,10 +512,12 @@ namespace LLM_AI
         /// <summary>
         /// Fige (upsert) une entrée, clé <see cref="Entry.Path"/>. Une entrée
         /// existante ne perd jamais une vérité déjà figée (le snapshot
-        /// RecordingEnded — programme du guide — prime sur les champs d'import,
-        /// potentiellement écrasés par l'identification d'Emby) : seuls les
-        /// champs manquants sont complétés, <see cref="Entry.Updated"/> n'est
-        /// pas repoussé. Best-effort : n'échoue jamais l'appelant.
+        /// RecordingEnded — programme du guide — prime : seuls les champs
+        /// manquants sont complétés, <see cref="Entry.Updated"/> n'est pas
+        /// repoussé). Le filet d'import ne fige que le chemin (v2.19.0) : les
+        /// métadonnées de l'item à l'import dérivent de la fiche native
+        /// d'Emby, jamais du guide — les figer rendait l'audit circulaire.
+        /// Best-effort : n'échoue jamais l'appelant.
         /// </summary>
         internal static void Upsert(Entry entry)
         {

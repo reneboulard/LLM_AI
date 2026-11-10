@@ -54,6 +54,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Log d'attente de gate arrondi au supérieur (`Math.Ceiling`) — « attente
   0 s » n'apparaît plus.
 
+### Fixed (FR)
+- **Le filet d'import ne fige plus les métadonnées de l'item**
+  (`RecordingWatcher`) : à l'import d'un enregistrement DVR, l'entrée du
+  store ne capture plus que le chemin — plus le nom/synopsis/année de
+  l'item, qui à cet instant dérivent de la fiche que les providers natifs
+  viennent de poser. Figés comme « vérité », ces champs rendaient l'audit
+  CIRCULAIRE : le juge comparait la fiche à elle-même et « validait »
+  l'identification d'Emby quelle que soit sa justesse, pendant que la
+  vraie vérité EPG (figée à la fin de l'enregistrement) n'atteignait
+  jamais le juge. Cas réel 2026-11-10 : une série documentaire importée
+  sur la fiche d'un talk-show homonyme flou (recherche TVDB, année du
+  guide coïncidante, fenêtre de diffusion « en cours ») — validée et
+  taggée `llmai-identified` à tort en une passe de trois minutes, puis
+  ignorée par la passe 04 h (le tag du plugin valait « traitée »).
+  Désormais : l'audit d'un import sans vérité du guide est **reporté**
+  (« pas de synopsis EPG à comparer »), la vérité atterrit par l'événement
+  de fin (même clé pour un film — l'upsert complète les champs manquants)
+  ou par le relais épisode→série, et le juge ne compare plus jamais une
+  fiche à elle-même.
+
 ### Added (EN)
 - **Gemini free-tier 429 gate — motif classification, capped wait,
   same-backend resume** (`LlmRateLimitGate.cs`): a 429 response is classified
@@ -92,6 +112,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   joiners because of a simple page refresh.
 - Gate wait log now rounds up (`Math.Ceiling`) — "wait 0 s" no longer
   appears.
+
+### Fixed (EN)
+- **The import net no longer freezes item metadata** (`RecordingWatcher`):
+  when a DVR recording is imported into a library, the store entry now
+  captures only the path — not the item's name/synopsis/year, which at
+  import time derive from the fiche the native providers have just
+  attached. Frozen as "truth", those fields made the audit CIRCULAR: the
+  judge compared the fiche to itself and "validated" Emby's
+  identification regardless of correctness, while the real EPG truth
+  (frozen at recording end) never reached the judge. Real case
+  2026-11-10: a documentary series imported onto a fuzzy-match talk-show
+  fiche (TVDB search, guide year coinciding, open-ended airing window) —
+  wrongly validated and tagged `llmai-identified` in a three-minute
+  pass, then ignored by the 04:00 pass (the plugin tag read as
+  "processed"). Now: an import audit without guide truth is
+  **deferred** ("no EPG synopsis to compare"), the truth lands via the
+  recording-end event (same key for a movie — the upsert completes
+  missing fields) or via the episode→series relay, and the judge never
+  compares a fiche to itself again.
 
 ## [2.18.0] — 2026-11-10
 

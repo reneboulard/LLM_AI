@@ -774,7 +774,10 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
   **validation à la fin de chaque enregistrement** (`RecordingWatcher`, événements
   `RecordingEnded`/`ItemAdded`) : le plugin fige la **vérité EPG** (titre/synopsis/année
   du programme du guide) avant que l'identification automatique d'Emby ne puisse
-  écraser le synopsis, puis audite l'id posé par Emby avec le juge de synopsis —
+  écraser le synopsis (le filet `ItemAdded` ne fige que le **chemin** — les
+  métadonnées d'un item à l'import dérivent de la fiche native, jamais du guide,
+  et ne doivent jamais alimenter le juge), puis audite l'id posé par Emby avec le
+  juge de synopsis —
   **match** → verrous + tag identifié ; **mismatch** → ids retirés, retour à l'état
   EPG et reprise immédiate du pipeline d'identification. Les enregistrements non
   identifiés passent immédiatement. Activable sans redémarrage ; respecte le dry-run.
