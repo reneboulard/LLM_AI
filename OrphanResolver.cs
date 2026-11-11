@@ -678,7 +678,9 @@ namespace LLM_AI
             // à titre égal — revert + voyage NFO pour des fiches justes,
             // guéries à 04 h par S1). Trois preuves déterministes, par
             // ordre de force : (1) corroboration de la série-sœur de
-            // l'usager (même clé de titre exacte, même fiche) ; (2) garde
+            // l'usager (même clé de titre exacte, même fiche, ≥1 épisode
+            // requis depuis v2.19.3 — un jumeau de métadonnées sans
+            // vidéos n'est pas une preuve indépendante) ; (2) garde
             // lexicale sur le titre-SÉRIE du guide ; (3) le juge pour les
             // divergences — avec la leçon de granularité au prompt
             // (LlmRunner). Risque résiduel assumé (doctrine S1) : l'homonyme
@@ -864,11 +866,14 @@ namespace LLM_AI
         }
 
         /// <summary>Série-sœur de l'item dans la bibliothèque (corroboration
-        /// d'audit v2.19.2) : même clé de titre EXACTE (SameTitleKey — jamais
-        /// la contenance), type Series uniquement (jamais un film), cartes
-        /// .strm et l'item lui-même exclus, fiche lisible (cascade tmdb →
-        /// imdb → tvdb dans le kind de l'item, miroir de SB). Première sœur
-        /// lisible ; (null, null) sinon. Best-effort : requête ou lecture
+        /// d'audit v2.19.2, garde « vraie sœur » v2.19.3) : même clé de titre
+        /// EXACTE (SameTitleKey — jamais la contenance), type Series
+        /// uniquement (jamais un film), cartes .strm et l'item lui-même
+        /// exclus, AU MOINS UN ÉPISODE requis (v2.19.3 : un jumeau de
+        /// métadonnées sans vidéos n'est pas une curation, voir
+        /// HasAnyEpisode), fiche lisible (cascade tmdb → imdb → tvdb dans le
+        /// kind de l'item, miroir de SB). Première sœur lisible et pourvue
+        /// d'épisodes ; (null, null) sinon. Best-effort : requête ou lecture
         /// échouée → null, l'audit poursuit par le juge.</summary>
         private async Task<(BaseItem sister, TmdbMeta fiche)> TryFindSeriesFicheAsync(
             BaseItem self, string seriesAnchor, string kind, string userTmdb, CancellationToken ct)
@@ -912,6 +917,21 @@ namespace LLM_AI
                 if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
                     && !HasItemProviderId(sib, "tvdb")) continue;
 
+                // Garde « vraie sœur » (v2.19.3) : un jumeau sans épisode
+                // n'est pas une curation de l'usager — sa fiche est l'état
+                // DVR mirroré (NFO sans vidéos), donc une COPIE de la fiche
+                // qu'on est en train d'auditer, pas une preuve indépendante
+                // (cas 2026-11-11 : « Mini-Jean et Mini-Bulle » validé sans
+                // juge par le jumeau né de son propre événement, 3 min plus
+                // tôt). Écartée avec trace ; la vraie sœur, si elle existe
+                // plus loin dans la réponse, qualifie seule.
+                if (!HasAnyEpisode(sib, ct))
+                {
+                    _logger?.Info("[LLM_AI] Recording : série sœur candidate « {0} » ({1}) écartée — aucun épisode en bibliothèque (jumeau de métadonnées ?), pas une preuve de curation.",
+                        sib.Name, sib.Path);
+                    continue;
+                }
+
                 TmdbMeta fiche = null;
                 int.TryParse(sib.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sibTmdb);
                 if (sibTmdb > 0)
@@ -926,6 +946,46 @@ namespace LLM_AI
                 if (fiche != null) return (sib, fiche);
             }
             return (null, null);
+        }
+
+        /// <summary>Une SÉRIE candidate porte-t-elle AU MOINS un épisode en
+        /// bibliothèque ? Garde « vraie sœur » v2.19.3 : les dossiers jumeaux
+        /// nés du miroir de métadonnées de l'usager (robocopy NFO sans
+        /// vidéos) deviennent de vrais items Série+Saison en base, mais
+        /// JAMAIS d'épisode (les conteneurs vidéo ne sont pas mirrorés) —
+        /// un item Série sans aucun épisode n'est donc pas une curation,
+        /// juste l'écho d'un enregistrement passé : sa fiche est une copie
+        /// de l'état DVR du moment (cas 2026-11-11 : « Mini-Jean et
+        /// Mini-Bulle » validé sans juge par le jumeau né de SON propre
+        /// événement 3 min plus tôt ; vraie sœur légitime le même matin :
+        /// « Les Pyjamasques » ↔ F:\SeriesE, curatorée 2023). Requête base
+        /// (AncestorIds+Episode, miroir des compteurs LibReview), jamais de
+        /// lecture disque. Échec de requête → false (fail-closed :
+        /// l'incertitude retombe sur les couches lexicales/juge, jamais sur
+        /// une preuve non vérifiable). NB : une fois l'usager y dépose les
+        /// vidéos, le jumeau convergé redevient une sœur à part entière —
+        /// la garde ne punit pas les séries nées fantômes.</summary>
+        private bool HasAnyEpisode(BaseItem series, CancellationToken ct)
+        {
+            if (series == null || _library == null) return false;
+            try
+            {
+                var eps = _library.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Episode" },
+                    AncestorIds = new[] { series.InternalId },
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+                return eps.Length > 0;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] : épisodes de la série « {0} » illisibles ({1}) — candidate non qualifiée (garde vraie sœur).",
+                    series.Name, ex.Message);
+                return false;
+            }
         }
 
         // ------------------------------------------------------------------
@@ -1137,6 +1197,23 @@ namespace LLM_AI
                 // Sans fiche à offrir (ids provider), le frère ne dit rien.
                 if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
                     && !HasItemProviderId(sib, "tvdb")) continue;
+
+                // Garde « vraie sœur » (v2.19.3), séries uniquement (un
+                // dossier film sans média ne crée pas d'item) : un frère
+                // jumeau sans épisode propose l'état DVR d'un événement
+                // passé (miroir NFO), pas une curation — son fanion de
+                // preuve lexicale (siblingLexicalProof) serait sinon
+                // automatique pour toute fiche d'homonyme : le jumeau porte
+                // par construction le titre de la série. Écarté avec trace ;
+                // la chaîne S0→S1→S2→S3 suit son cours (S1 titre exact
+                // retrouvera la même fiche si elle est juste).
+                if (string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
+                    && !HasAnyEpisode(sib, ct))
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : frère « {0} » ({1}) écarté — aucun épisode en bibliothèque (jumeau de métadonnées ?), proposition non retenue.",
+                        sib.Name, sib.Path);
+                    continue;
+                }
 
                 // Relire la fiche du frère (cascade tmdb → imdb → tvdb,
                 // miroir de S0). Illisible dans le kind de la passe → frère
