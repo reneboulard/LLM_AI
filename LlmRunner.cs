@@ -1675,7 +1675,16 @@ namespace LLM_AI
                     "(film ou série). Deux synopsis peuvent décrire la même œuvre même si " +
                     "l'accent diffère : par exemple l'un met l'accent sur une intrigue " +
                     "amoureuse et l'autre sur une enquête criminelle, mais même lieu, même " +
-                    "époque et mêmes personnages = même œuvre. En revanche, deux histoires " +
+                    "époque et mêmes personnages = même œuvre. " +
+                    "Granularité (leçon DVR 2026-11-10) : le synopsis A peut décrire un " +
+                    "ÉPISODE d'une série pendant que le synopsis B décrit la SÉRIE entière " +
+                    "(ou l'inverse) — c'est le cas NORMAL d'un enregistrement confronté à " +
+                    "la fiche de sa série, PAS deux œuvres différentes : si l'épisode " +
+                    "décrit par A est plausiblement un épisode de la série B (même " +
+                    "univers, mêmes personnages, même ton), réponds match=true — ne " +
+                    "conclus JAMAIS « œuvres différentes » sur la seule différence de " +
+                    "granularité ou d'intrigue entre un épisode et l'ensemble de sa série. " +
+                    "En revanche, deux histoires " +
                     "clairement indépendantes (ex. une comédie romantique vs un thriller " +
                     "policier sans rapport) = deux œuvres différentes. Réponds UNIQUEMENT " +
                     "un objet JSON compact, sans explication ni balises markdown : " +

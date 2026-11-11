@@ -10,6 +10,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.19.2] — 2026-11-11
+
+### Fixed (FR)
+- **Identification des séries : classer les cas AVANT le juge — le juge
+  comparait un synopsis d'épisode à une fiche de série**. Sur les
+  occurrences DVR réelles, l'audit d'une identification Emby confrontait
+  le synopsis d'un ÉPISODE du guide à l'overview d'une fiche de SÉRIE :
+  le juge sémantique rejetait systématiquement des fiches justes (fiche
+  de la série vs intrigue de l'épisode — différence de granularité lue
+  comme « œuvres différentes »), déclenchant retour EPG +
+  re-identification pour des identifications correctes, guéries
+  seulement par la passe nocturne. Trois couches déterministes
+  désormais, pour les enregistrements de séries, avant tout appel au
+  juge : (1) **corroboration bibliothèque** — la série-sœur de l'usager
+  (même titre exact, type série uniquement) porte la même fiche que
+  celle posée par Emby → validée sans juge (la curation de l'usager
+  tranche ; fiche divergente sur la sœur → conflit → juge ; les tags de
+  la sœur ne bloquent jamais, ils sont journalisés) ; (2) **garde
+  lexicale** — la fiche porte le titre-SÉRIE du guide (clé exacte) et
+  une année compatible (un enregistrement ne peut pas précéder sa
+  série) → validée sans juge, fiche non-muette requise ; (3) le juge
+  pour les divergences, avec la leçon de granularité au prompt : une
+  différence de granularité épisode-vs-série n'est PAS deux œuvres
+  différentes. L'ancre série est le titre-SÉRIE figé du guide au
+  RecordingEnded — jamais le nom de l'item, qui dérive de la fiche posée
+  par Emby à l'import (une garde ancrée sur l'item validerait
+  circulairement la fiche fausse qui l'a renommé). L'échappement des
+  fiches muettes (sans synopsis) teste désormais aussi cette ancre
+  série : une fiche muette au titre de série du guide reste reportée,
+  jamais retournée. Les propositions de résolution par dossier frère
+  (SB) bénéficient du même contournement : une fiche proposée PAR le
+  dossier frère de l'usager et portant la même clé de titre que le
+  titre de recherche passe sans juge — la garde « fiche déjà portée »
+  reconnaît le porteur divergent comme le frère lui-même (titre
+  d'épisode vs série), pas un conflit d'œuvre. Risque résiduel assumé
+  (doctrine de la recherche à titre exact) : l'homonyme parfait (même
+  titre, même année, autre œuvre) passe sans juge — classe jamais
+  observée. Les films gardent l'arbitrage complet (même granularité,
+  juge fiable).
+
+### Fixed (EN)
+- **Series identification: classify cases BEFORE the judge — the judge
+  was comparing an episode synopsis to a series fiche**. On real DVR
+  occurrences, the audit of an Emby identification pitted an EPISODE
+  synopsis from the guide against a SERIES fiche overview: the semantic
+  judge systematically rejected correct fiches (series fiche vs episode
+  plot — a granularity difference read as "different works"),
+  triggering an EPG revert + re-identification for correct
+  identifications, healed only by the nightly pass. Three deterministic
+  layers now, for series recordings, before any judge call:
+  (1) **library corroboration** — the user's sister series (exact same
+  title key, series type only) carries the same fiche Emby attached →
+  validated without a judge (the user's own curation decides; a divergent
+  fiche on the sister → conflict → judge; the sister's tags never block,
+  they are logged); (2) **lexical guard** — the fiche carries the
+  guide's SERIES title (exact key) and a compatible year (a recording
+  cannot precede its series) → validated without a judge, non-mute fiche
+  required; (3) the judge for divergences, with the granularity lesson
+  in its prompt: an episode-vs-series granularity difference is NOT two
+  different works. The series anchor is the SERIES title frozen from the
+  guide at recording end — never the item name, which derives from the
+  fiche Emby attached at import (a guard anchored on the item would
+  circularly validate the wrong fiche that renamed it). The mute-fiche
+  escape (no synopsis) now also tests this series anchor: a mute fiche
+  carrying the guide's series title stays deferred, never reverted. The
+  sibling-folder resolution proposals (SB) get the same bypass: a fiche
+  proposed BY the user's sibling folder and carrying the same title key
+  as the search title passes without a judge — the "fiche already
+  carried" gate recognizes a divergent-title carrier as the sibling
+  itself (episode title vs series), not a work conflict. Residual risk
+  accepted (exact-title search doctrine): the perfect homonym (same
+  title, same year, another work) passes without a judge — a class
+  never observed in the field. Movies keep the full arbitration (same
+  granularity, reliable judge).
+
+---
+
 ## [2.19.1] — 2026-11-10
 
 ### Fixed (FR)

@@ -123,6 +123,11 @@ namespace LLM_AI
                 {
                     Path = rec.Path,
                     Title = Truncate(prog?.Name, 300),
+                    // v2.19.2 : titre-SÉRIE du guide, ancre d'audit (corroboration
+                    // sœur / garde lexicale) — figé ici, AVANT toute identification,
+                    // jamais dérivé de l'item (leçon v2.19.0 : les champs de l'item
+                    // à l'import dérivent de la fiche posée par Emby).
+                    SeriesName = Truncate(prog?.SeriesName, 300),
                     Overview = Truncate(prog?.Overview, 800),
                     Year = prog?.ProductionYear,
                     Channel = Truncate(rec.Channel?.Name, 120),
@@ -313,6 +318,7 @@ namespace LLM_AI
                             var epTruth = new OrphanResolver.EpgTruth
                             {
                                 Title = entry.Title,
+                                SeriesName = entry.SeriesName,
                                 Overview = entry.Overview,
                                 Year = entry.Year,
                                 Channel = entry.Channel
@@ -370,6 +376,7 @@ namespace LLM_AI
                     var truth = new OrphanResolver.EpgTruth
                     {
                         Title = entry.Title,
+                        SeriesName = entry.SeriesName,
                         Overview = entry.Overview,
                         Year = entry.Year,
                         Channel = entry.Channel
@@ -494,6 +501,10 @@ namespace LLM_AI
             /// <summary>Chemin du fichier d'enregistrement (clé).</summary>
             public string Path;
             public string Title;
+            /// <summary>Titre SÉRIE du guide (v2.19.2 ; vide pour les films et
+            /// programmes creux). Ancre d'audit : figé au RecordingEnded,
+            /// jamais dérivé de l'item.</summary>
+            public string SeriesName;
             public string Overview;
             public int? Year;
             public string Channel;
@@ -536,6 +547,7 @@ namespace LLM_AI
                     else
                     {
                         if (string.IsNullOrWhiteSpace(e.Title)) e.Title = entry.Title;
+                        if (string.IsNullOrWhiteSpace(e.SeriesName)) e.SeriesName = entry.SeriesName;
                         if (string.IsNullOrWhiteSpace(e.Overview)) e.Overview = entry.Overview;
                         e.Year = e.Year ?? entry.Year;
                         if (string.IsNullOrWhiteSpace(e.Channel)) e.Channel = entry.Channel;
@@ -574,6 +586,7 @@ namespace LLM_AI
                 {
                     Path = OStr(o, "p") ?? "",
                     Title = OStr(o, "t"),
+                    SeriesName = OStr(o, "sn"),
                     Overview = OStr(o, "ov"),
                     Channel = OStr(o, "ch"),
                     Updated = DateTimeOffset.TryParse(OStr(o, "up"), CultureInfo.InvariantCulture,
@@ -602,6 +615,7 @@ namespace LLM_AI
                 {
                     ["p"] = e.Path,
                     ["t"] = e.Title ?? "",
+                    ["sn"] = e.SeriesName ?? "",
                     ["ov"] = e.Overview ?? "",
                     ["ch"] = e.Channel ?? "",
                     ["y"] = e.Year?.ToString(CultureInfo.InvariantCulture) ?? "",

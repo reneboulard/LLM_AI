@@ -159,8 +159,16 @@ namespace LLM_AI
         /// </summary>
         internal sealed class EpgTruth
         {
-            /// <summary>Titre de diffusion EPG (séries : titre de la série).</summary>
+            /// <summary>Titre de diffusion EPG (programmes sériés : souvent le
+            /// titre d'ÉPISODE — « Multicolore », pas « Empathie »).</summary>
             public string Title;
+            /// <summary>Titre SÉRIE du guide (SeriesName du programme ; vide
+            /// pour les films et programmes creux). Ancre d'audit v2.19.2 :
+            /// figé à la fin d'enregistrement, JAMAIS dérivé de l'item (leçon
+            /// v2.19.0 — les champs de l'item à l'import dérivent de la fiche
+            /// posée par Emby : ancrer une preuve sur item.Name validerait
+            /// circulairement la fiche fausse qui l'a renommé).</summary>
+            public string SeriesName;
             /// <summary>Synopsis EPG figé.</summary>
             public string Overview;
             /// <summary>Année EPG (ProductionYear du programme du guide).</summary>
@@ -660,6 +668,89 @@ namespace LLM_AI
                 return Status.Skipped;
             }
 
+            // v2.19.2 — classement AVANT le juge (séries uniquement, fiche du
+            // type de l'item : une fiche croisée garde l'arbitrage complet).
+            // Le juge compare le synopsis d'un ÉPISODE à l'overview d'une
+            // fiche de SÉRIE : sur les occurrences DVR réelles, cette
+            // différence de granularité produisait 6 rejets / 6 faux
+            // négatifs (2026-11-10 : « Empathie » E10 « Multicolore », « Le
+            // dernier des monstres » E3 « Solstice », propositions SB tuées
+            // à titre égal — revert + voyage NFO pour des fiches justes,
+            // guéries à 04 h par S1). Trois preuves déterministes, par
+            // ordre de force : (1) corroboration de la série-sœur de
+            // l'usager (même clé de titre exacte, même fiche) ; (2) garde
+            // lexicale sur le titre-SÉRIE du guide ; (3) le juge pour les
+            // divergences — avec la leçon de granularité au prompt
+            // (LlmRunner). Risque résiduel assumé (doctrine S1) : l'homonyme
+            // parfait (même titre, même année, autre œuvre) passe sans juge —
+            // classe jamais observée sur le terrain.
+            //
+            // Ancre série = titre-SÉRIE DU GUIDE uniquement. Vide (films,
+            // fiches croisées, entrées figées avant v2.19.2) → juge,
+            // comportement historique.
+            string seriesAnchor = isSeries && !crossRead
+                && !string.IsNullOrWhiteSpace(truth.SeriesName) ? truth.SeriesName : null;
+
+            if (seriesAnchor != null)
+            {
+                var (sister, sisterFiche) = await TryFindSeriesFicheAsync(
+                    item, seriesAnchor, kind, userTmdb, ct).ConfigureAwait(false);
+                if (sisterFiche != null)
+                {
+                    if (sisterFiche.TmdbId == meta.TmdbId)
+                    {
+                        // Garde d'année de l'ancrage série (Année EPG d'un
+                        // épisode = année de SAISON : la fiche d'une série
+                        // longue peut être bien antérieure — d'où
+                        // AnchorSeriesYearCompatible, pas YearCompatible).
+                        // Une année du guide ANTÉRIEURE à la fiche (un
+                        // enregistrement qui précéderait sa série ?) reste
+                        // inarbitrable ici → juge.
+                        if (AnchorSeriesYearCompatible(truth.Year, meta.Year))
+                        {
+                            // Les tags de la sœur ne sont jamais une porte :
+                            // un needs-review sur la série englobe ses
+                            // épisodes (l'usager révisera de toute façon) —
+                            // ils sont portés au journal pour le diagnostic.
+                            string proof = string.Format(CultureInfo.InvariantCulture,
+                                "corroboré par la série sœur « {0} » ({1}, tags [{2}])",
+                                sister.Name, sister.Path, string.Join(",", sister.Tags ?? Array.Empty<string>()));
+                            return await ApplyAuditedFicheAsync(item, meta, kind, isSeries,
+                                epgTitle, dry, proof, ct).ConfigureAwait(false);
+                        }
+                        _logger?.Info(
+                            "[LLM_AI] Recording : « {0} » — même fiche que la série sœur « {1} » ({2}) mais année du guide {3} antérieure à la fiche {4} (enregistrement qui précéderait sa série ?) → juge.",
+                            epgTitle, sister.Name, sister.Path,
+                            truth.Year.HasValue ? truth.Year.Value.ToString(CultureInfo.InvariantCulture) : "?",
+                            meta.Year.HasValue ? meta.Year.Value.ToString(CultureInfo.InvariantCulture) : "?");
+                    }
+                    else
+                    {
+                        _logger?.Info(
+                            "[LLM_AI] Recording : « {0} » — la série sœur « {1} » ({2}) porte tmdb={3} ≠ fiche d'Emby tmdb={4} (conflit de curation) → juge.",
+                            epgTitle, sister.Name, sister.Path, sisterFiche.TmdbId, meta.TmdbId);
+                    }
+                }
+            }
+
+            // Garde lexicale : la fiche porte le titre-SÉRIE du GUIDE (clé
+            // exacte, jamais la contenance) et une année compatible. Fiche
+            // non-muette requise : une fiche sans synopsis ne donne aucune
+            // matière à réfuter (elle garde l'échappement muet v2.18.0
+            // ci-dessous, pas un tampon lexical).
+            if (seriesAnchor != null
+                && !string.IsNullOrWhiteSpace(meta.Overview)
+                && SameTitleKey(seriesAnchor).Length > 0
+                && SameTitleKey(seriesAnchor) == SameTitleKey(meta.Title)
+                && AnchorSeriesYearCompatible(truth.Year, meta.Year))
+            {
+                string proof = string.Format(CultureInfo.InvariantCulture,
+                    "corroboré lexicalement (titre-SÉRIE du guide « {0} » = titre de la fiche, année compatible)",
+                    seriesAnchor);
+                return await ApplyAuditedFicheAsync(item, meta, kind, isSeries,
+                    epgTitle, dry, proof, ct).ConfigureAwait(false);
+            }
+
             var verdict = await _runner.JudgeSynopsisMatchAsync(cfg, epgTitle, truth.Year, epgSynopsis,
                 meta.Title, meta.Year, meta.Overview, ct).ConfigureAwait(false);
 
@@ -682,6 +773,7 @@ namespace LLM_AI
                 // fichées par Emby).
                 if (string.IsNullOrWhiteSpace(meta.Overview)
                     && !TitlesExactlyEqual(epgTitle, meta.Title)
+                    && !TitlesExactlyEqual(seriesAnchor, meta.Title) // v2.19.2 : ancre série — une fiche muette au titre-SÉRIE du guide reste plausible (defer, jamais de churn)
                     && !YearCompatible(truth.Year, meta.Year))
                 {
                     _logger?.Info(
@@ -749,6 +841,91 @@ namespace LLM_AI
             var meta2 = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
                 false, langs, userTmdb, dry, retrace, ct).ConfigureAwait(false);
             return meta2 != null ? Status.OrphanResolved : Status.NeedsReview;
+        }
+
+        /// <summary>Applique une fiche d'Emby VALIDÉE sans juge (corroboration
+        /// sœur ou garde lexicale, v2.19.2) : verrous + tag identifié + ligne
+        /// de journal forte portant la preuve — jamais un defer silencieux.
+        /// Miroir dry-run sans écriture. Ne lève jamais (annulation
+        /// exceptée).</summary>
+        private async Task<Status> ApplyAuditedFicheAsync(BaseItem item, TmdbMeta meta, string kind, bool isSeries,
+            string epgTitle, bool dry, string proof, CancellationToken ct)
+        {
+            if (dry)
+            {
+                _logger?.Info("[LLM_AI] Recording (DRY-RUN) : « {0} » = id d'Emby (tmdb={1}) {2} — aucune écriture.",
+                    epgTitle, meta.TmdbId, proof);
+                return Status.OrphanResolved;
+            }
+            await ApplyAsync(item, meta, kind, isSeries, ct).ConfigureAwait(false);
+            _logger?.Info("[LLM_AI] Recording : « {0} » = id d'Emby (tmdb={1}) {2} — validé sans juge, verrous posés, tag {3}.",
+                epgTitle, meta.TmdbId, proof, OrphanIdentifyTask.TagIdentified);
+            return Status.OrphanResolved;
+        }
+
+        /// <summary>Série-sœur de l'item dans la bibliothèque (corroboration
+        /// d'audit v2.19.2) : même clé de titre EXACTE (SameTitleKey — jamais
+        /// la contenance), type Series uniquement (jamais un film), cartes
+        /// .strm et l'item lui-même exclus, fiche lisible (cascade tmdb →
+        /// imdb → tvdb dans le kind de l'item, miroir de SB). Première sœur
+        /// lisible ; (null, null) sinon. Best-effort : requête ou lecture
+        /// échouée → null, l'audit poursuit par le juge.</summary>
+        private async Task<(BaseItem sister, TmdbMeta fiche)> TryFindSeriesFicheAsync(
+            BaseItem self, string seriesAnchor, string kind, string userTmdb, CancellationToken ct)
+        {
+            string key = SameTitleKey(seriesAnchor);
+            if (key.Length == 0 || _library == null || string.IsNullOrWhiteSpace(seriesAnchor))
+                return (null, null);
+
+            // Requête miroir de SB : le nom CONTIENT le titre nettoyé (le
+            // suffixe « (année) » de la sœur ne doit pas la cacher), puis
+            // confirmation stricte en mémoire par la clé.
+            string clean = TmdbLookupTool.CleanEpgTitle(seriesAnchor);
+            if (string.IsNullOrWhiteSpace(clean)) clean = seriesAnchor;
+            BaseItem[] siblings;
+            try
+            {
+                siblings = _library.GetItemList(new InternalItemsQuery
+                {
+                    NameContains = clean,
+                    IncludeItemTypes = new[] { "Series" },
+                    Recursive = true,
+                    Limit = 25,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] Recording : quête de la série sœur « {0} » échouée ({1}) — arbitrage par le juge.",
+                    seriesAnchor, ex.Message);
+                return (null, null);
+            }
+
+            foreach (var sib in siblings)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (sib == null || self == null || sib.InternalId == self.InternalId) continue;
+                if (IsStrmCard(sib)) continue;
+                if (SameTitleKey(sib.Name) != key) continue; // confirmation stricte en mémoire
+                // Sans fiche à offrir (ids provider), la sœur ne dit rien.
+                if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
+                    && !HasItemProviderId(sib, "tvdb")) continue;
+
+                TmdbMeta fiche = null;
+                int.TryParse(sib.GetProviderId("tmdb"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var sibTmdb);
+                if (sibTmdb > 0)
+                    fiche = await _tmdb.LookupMetaByIdAsync(sibTmdb, kind, userTmdb, ct).ConfigureAwait(false);
+                if (fiche == null && HasItemProviderId(sib, "imdb"))
+                    fiche = await _tmdb.FindByExternalIdAsync(sib.GetProviderId("imdb").Trim(), "imdb_id",
+                        kind, userTmdb, ct).ConfigureAwait(false);
+                if (fiche == null && string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
+                    && HasItemProviderId(sib, "tvdb"))
+                    fiche = await _tmdb.FindByExternalIdAsync(sib.GetProviderId("tvdb").Trim(), "tvdb_id",
+                        kind, userTmdb, ct).ConfigureAwait(false);
+                if (fiche != null) return (sib, fiche);
+            }
+            return (null, null);
         }
 
         // ------------------------------------------------------------------
@@ -1530,6 +1707,27 @@ namespace LLM_AI
                 return false;
             }
 
+            // v2.19.2 — preuve lexicale de l'ancrage frère (séries) : la
+            // fiche est proposée PAR le dossier frère de l'usager et porte
+            // la même clé de titre que le titre de recherche (l'année est
+            // déjà arbitrée par AnchorSeriesYearCompatible ci-dessus). Le
+            // juge comparerait un synopsis d'ÉPISODE à l'overview de la
+            // SÉRIE — granularité qui tuait les propositions SB à titre
+            // égal (faux négatifs 2026-11-10). Contournement → porte
+            // « fiche déjà portée » avec le fanion de preuve : le porteur
+            // au titre divergent est le frère (ou son jumeau de l'autre
+            // racine), la divergence = titre d'épisode vs série, pas un
+            // conflit d'œuvre.
+            if (siblingAnchor && seriesKind
+                && SameTitleKey(matchTitle).Length > 0
+                && SameTitleKey(matchTitle) == SameTitleKey(m.Title))
+            {
+                _logger?.Info("[LLM_AI] OrphanIdentify : candidat « {0} » (tmdb={1}) — preuve lexicale de l'ancrage frère (clé de titre égale, année arbitrée) : juge contourné.",
+                    m.Title, m.TmdbId);
+                return await FicheConflictGateAsync(cfg, m, item, epgTitle, epgYear, epgSynopsis,
+                    false, ct, siblingLexicalProof: true).ConfigureAwait(false);
+            }
+
             var v = await _runner.JudgeSynopsisMatchAsync(cfg, epgTitle, epgYear, epgSynopsis,
                 m.Title, m.Year, m.Overview, ct).ConfigureAwait(false);
 
@@ -1590,7 +1788,7 @@ namespace LLM_AI
 
         private async Task<bool> FicheConflictGateAsync(PluginConfiguration cfg, TmdbMeta m,
             BaseItem item, string epgTitle, int? epgYear, string epgSynopsis,
-            bool judgeConfirmed, CancellationToken ct)
+            bool judgeConfirmed, CancellationToken ct, bool siblingLexicalProof = false)
         {
             if (m == null || m.TmdbId <= 0) return true;
 
@@ -1615,6 +1813,20 @@ namespace LLM_AI
                 if (SameTitleKey(epgTitle).Length > 0 && SameTitleKey(epgTitle) == SameTitleKey(x.Name))
                 {
                     _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) — même œuvre en deux dossiers (fusion manuelle : décision de l'usager, jamais du plugin).",
+                        m.TmdbId, x.Name, x.Path);
+                    continue;
+                }
+
+                // Preuve lexicale d'ancrage frère (v2.19.2) : le titre du
+                // guide est un titre d'ÉPISODE, le porteur est le frère qui
+                // a PROPOSÉ la fiche (ou son jumeau de l'autre racine) — la
+                // divergence de titre est l'artefact de granularité
+                // épisode-vs-série, pas un conflit d'œuvre. Pas de juge
+                // ici non plus : c'est exactement la comparaison qui
+                // produisait les faux négatifs.
+                if (siblingLexicalProof)
+                {
+                    _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) — preuve lexicale de l'ancrage frère : titre du guide = épisode, porteur = la série, même œuvre.",
                         m.TmdbId, x.Name, x.Path);
                     continue;
                 }
