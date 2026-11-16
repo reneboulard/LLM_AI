@@ -135,13 +135,25 @@ namespace LLM_AI
             new ChatContextDef("edit_rag",
                 "Éditer — Prompt système",
                 "### RÔLE DE CE PROMPT\n" +
-                "Le « Prompt système » est injecté au début de TOUTES les tâches " +
-                "LLM du plugin (tâche quotidienne de séries, tâche films, exécution « ce soir »). Il " +
-                "portent les invariants transverses : ne jamais recommander un titre déjà possédé " +
-                "ou déjà programmé, ne jamais deviner une donnée absente (synopsis, année, id), " +
-                "préférence légère aux productions récentes SANS pénaliser une année inconnue, " +
-                "pas de doublon dans une même réponse. Toute révision doit préserver ces " +
-                "garde-fous — ils protègent contre les erreurs classiques des LLM.\n",
+                // v2.20.16 (décision usager 2026-11-14) : consommateurs réels
+                // énumérés — « TOUTES les tâches LLM » était FAUX pour
+                // LibReview (RAG=null dans LibReviewEngine : les tâches
+                // films/séries vivent sous leurs propres prompts, édités
+                // chacun dans son mode) et le générateur i18n (I18nGenerator
+                // construit son propre prompt). Le modèle éditeur pouvait
+                // croire qu'une règle transverse protégeait une surface
+                // qu'elle ne touche jamais.
+                "Le « Prompt système » est injecté au début des tâches LLM suivantes : " +
+                "tâche quotidienne de séries, tâche films, enrichissement des recommandations, " +
+                "exécution « ce soir », audit santé et le chat. Il porte les invariants " +
+                "transverses : ne jamais recommander un titre déjà possédé ou déjà programmé, " +
+                "ne jamais deviner une donnée absente (synopsis, année, id), préférence légère " +
+                "aux productions récentes SANS pénaliser une année inconnue, pas de doublon " +
+                "dans une même réponse. Toute révision doit préserver ces garde-fous — ils " +
+                "protègent contre les erreurs classiques des LLM. NB : ce prompt n'est PAS lu " +
+                "par la Gestion bibliothèque (les tâches LibReview films et séries ont leurs " +
+                "propres prompts, édités chacun dans son mode) ni par le générateur de " +
+                "langues — n'y écrivez pas de règle destinée à ces surfaces.\n",
                 cfg => cfg.RagDirectives, "rag_directives"),
 
             new ChatContextDef("edit_schedule_series",
@@ -154,7 +166,7 @@ namespace LLM_AI
                 "par la config (crontab restreint « MM HH * * J », 0=dimanche) : ne l'altérez que " +
                 "sur demande explicite et sans ambiguïté. " +
                 "Champs EPG réels disponibles : ceux de get_emby_info (action=epg_series — " +
-                "premieres_only, new_seasons) ; ne référencez jamais un champ inventé.\n",
+                "premieres_only, new_seasons, query) ; ne référencez jamais un champ inventé.\n",
                 cfg => cfg.ScheduleTask, "schedule_task"),
 
             new ChatContextDef("edit_schedule_movies",
@@ -290,11 +302,15 @@ namespace LLM_AI
 
         /// <summary>
         /// Construit le bloc contexte injecté dans le system prompt du tour
-        /// (vide si <paramref name="contextId"/> absent/inconnu ou si le
-        /// prompt courant est vide — fail-open : jamais de bloc dégénéré).
-        /// La langue cible est résolue serveur : <c>ResponseLanguage</c>
-        /// renseignée, sinon langue d'affichage Emby (même cascade que
-        /// l'endpoint DefaultPrompts).
+        /// (vide si <paramref name="contextId"/> absent/inconnu).
+        /// v2.20.11 : un mode d'édition de prompt injecte TOUJOURS son bloc,
+        /// même quand le prompt courant est VIDE — le TEXTE ACTUEL porte
+        /// alors une note explicite « (vide) » : sans elle, un petit LLM
+        /// conclut que « l'outil ne permet pas de récupérer le texte » et
+        /// répond en prose depuis sa mémoire (vécu prod 2026-11-14 avec
+        /// gemma4:latest sur un RagDirectives vide). La langue cible est
+        /// résolue serveur : <c>ResponseLanguage</c> renseignée, sinon langue
+        /// d'affichage Emby (même cascade que l'endpoint DefaultPrompts).
         /// </summary>
         internal static string BuildBlock(PluginConfiguration cfg, string contextId,
             IServerApplicationHost host)
@@ -314,8 +330,7 @@ namespace LLM_AI
                 return sg.ToString();
             }
 
-            string current = def.GetPrompt(cfg);
-            if (string.IsNullOrWhiteSpace(current)) return "";
+            string current = def.GetPrompt(cfg) ?? "";
 
             string lang = I18n.ParseLangName(cfg.ResponseLanguage);
             if (string.IsNullOrEmpty(lang))
@@ -331,7 +346,12 @@ namespace LLM_AI
             sb.Append("Le texte du prompt révisé doit rester en ").Append(langLabel)
               .Append(" (langue de réponse configurée du serveur — les runs la lisent).\n");
             sb.Append("### TEXTE ACTUEL DU PROMPT\n");
-            sb.Append(current.Trim());
+            // v2.20.11 : champ vide = note explicite, JAMAIS un bloc vide
+            // (un bloc vide = mode invisible pour le LLM, qui invente alors
+            // un contenu « depuis sa mémoire »).
+            sb.Append(string.IsNullOrWhiteSpace(current)
+                ? "(vide — aucune directive actuellement enregistrée pour ce prompt)"
+                : current.Trim());
             sb.Append("\n### FIN DU TEXTE ACTUEL\n");
             // Règles de révision (dont la clôture ```text qui active le
             // bouton de sauvegarde) : injectées en TOUT DERNIER du bloc —

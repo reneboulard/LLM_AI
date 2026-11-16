@@ -44,13 +44,29 @@ namespace LLM_AI
             "epg_tonight = liste CURATÉE pour les recommandations (filtre tes préférences genres/chaînes). " +
             "epg_now = vue informative BRUTE de l'EPG du jour (programmes en cours inclus, champ is_onair) " +
             "SANS ces filtres de préférence — appelle-le pour « qu'est-ce qui passe présentement » quand " +
-            "tu veux aussi le contenu hors de tes genres favoris ; ordre chronologique.";
+            "tu veux aussi le contenu hors de tes genres favoris ; ordre chronologique. " +
+            "epg_series/epg_movies acceptent query=<titre> : recherche ciblée des diffusions À VENIR de ce " +
+            "titre précis (filtres de préférences bypassés) — à utiliser pour « est-ce que X passe bientôt ?». " +
+            // v2.20.6 — croisement EPG ↔ programmations : is_scheduled existait
+            // sur epg_tonight/epg_now mais le modèle ne le relayait jamais
+            // (vécu 2026-11-13 : Excalibur listé sans « déjà programmé » alors
+            // que son timer courait depuis 05:40) — le champ est étendu aux
+            // chemins ciblés et find, et l'enseignement rend le relay explicite.
+            "Les résultats EPG (epg_tonight, epg_now, epg_series/epg_movies query=, find) portent " +
+            "is_scheduled=true quand un enregistrement DVR est déjà programmé pour ce programme : " +
+            "annote-le « déjà programmé » dans tes listes « ce qui passe ce soir », et ne propose PAS " +
+            "de l'enregistrer de nouveau (la demande serait refusée comme doublon). " +
+            // v2.20.7 : depuis le chat externe, genre_stats est borné à
+            // l'usager du run (le foyer ne se dévoile pas) — l'enseigner
+            // évite au modèle des demandes d'autres usagers vouées au refus.
+            "Depuis le chat externe, genre_stats ne projette que les statistiques de l'usager du " +
+            "run (tout autre nom demandé est refusé).";
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
   ""action"": ""summary | library | global_search | item_details | item_persons | person | find | genre_stats | epg_series | epg_movies | epg_tonight | epg_now | scheduled"",
   ""type"": ""(library) movie | series | episode | audio | album | book — filtre IncludeItemTypes"",
-  ""query"": ""(global_search/find) terme de recherche"",
+  ""query"": ""(global_search/find) terme de recherche ; (epg_series/epg_movies) titre précis à chercher dans l'EPG à venir — bypass les filtres de curation (biblio, timers, préférences genres/chaînes, flags) et retourne les diffusions de CE titre, ou une note explicite si aucune ne correspond"",
   ""name"": ""(person) nom de personne à chercher"",
   ""id"": ""(item_details / item_persons) identifiant de l'item (id renvoyé par library/global_search)"",
   ""genre"": ""(library) filtre par genre"",
@@ -61,7 +77,7 @@ namespace LLM_AI
   ""user"": ""(find/genre_stats) usager pour watched/favorites/date_played (défaut: premier usager; genre_stats: tous)"",
   ""watched"": ""(find) true=uniquement vus, false=uniquement non vus (besoin user)"",
   ""favorites"": ""(find) true=uniquement favoris, false=uniquement non-favoris (besoin user)"",
-  ""sort_by"": ""(library/find) recent | year | rating | name | date_played (défaut recent; date_played: nécessite user)"",
+  ""sort_by"": ""(library/find) recent | year | rating | name | date_played. recent = trié par DATE D'AJOUT en bibliothèque (DateCreated), PAS par visionnage. date_played = vus récemment (exige user) : action=find SEULEMENT — sur action=library il est ignoré et le résultat porte une note"",
   ""min_rating"": ""(library/find) note communautaire minimale"",
   ""types"": ""(find/global_search) tableau de types à restreindre"",
   ""premieres_only"": ""(epg_series) true pour ne garder que les S01E01 (nouvelles séries). Exclut kids/news sauf si les flags correspondants sont activés en config ; exclut documentary (sauf exclude_genres) et les séries de la biblio"",
@@ -252,6 +268,23 @@ namespace LLM_AI
             string sortBy = (OptString(args, "sort_by") ?? "recent").ToLowerInvariant();
             double? minRating = OptDouble(args, "min_rating");
 
+            // v2.20.2 : date_played n'est PAS implémenté sur library (il
+            // exige IUserDataManager, non injecté — cf. ToFindResult) :
+            // jusqu'ici le tri tombait SILENCIEUSEMENT sur recent et le
+            // modèle décrivait des AJOUTS comme des « visionnages récents »
+            // (vécu 2026-11-13, gemma4:latest local, chat externe). On
+            // substitue recent ET on le dit dans le résultat — une note,
+            // pas un Err : un Err déclencherait un tour de retry lent sur
+            // un modèle local alors que la donnée est déjà la bonne.
+            string sortNote = null;
+            if (sortBy == "date_played")
+            {
+                sortBy = "recent";
+                sortNote = "sort_by=date_played ignoré sur action=library : liste triée par date d'ajout " +
+                           "(recent). Pour les contenus VUS récemment, appelle action=find avec sort_by=date_played.";
+                _logger?.Info("[LLM_AI] library : sort_by=date_played non supporté — repli sur recent + note");
+            }
+
             var query = new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { MapType(type) },
@@ -281,10 +314,17 @@ namespace LLM_AI
                 rating = i.CommunityRating,
                 genres = i.Genres,
                 overview = Truncate(i.Overview, 150),
+                // v2.20.2 : ancrage factuel du tri « recent » — sans cette
+                // date, le modèle n'a aucun moyen de savoir si la liste est
+                // triée par AJOUT ou par VISIONNAGE, et il devine (vécu
+                // 2026-11-13 : « vos derniers visionnages » pour une liste
+                // d'enregistrements jamais regardés).
+                date_created = Local(i.DateCreated),
                 image_url = ImageUrl(i.InternalId)
             });
 
-            return JsonSerializer.Serialize(new { total = items.Length, results = proj }, s_json);
+            // note absente du JSON quand null (WhenWritingNull).
+            return JsonSerializer.Serialize(new { total = items.Length, results = proj, note = sortNote }, s_json);
         }
 
         private string GlobalSearch(JsonElement args)
@@ -370,6 +410,20 @@ namespace LLM_AI
             if (item == null)
                 return Err($"item introuvable : {idStr}");
 
+            // v2.20.7 — même gate parental qu'item_details (audit du
+            // 2026-11-13 : cet id y échappait — item_details refusait
+            // l'item bloqué pendant qu'item_persons livrait sa
+            // distribution). Doctrine : un item refusé ne révèle RIEN,
+            // ni détail ni distribution ; fail-closed, la raison n'est
+            // pas révélée.
+            if (ParentalUser != null &&
+                PermissionGate.IsParentallyAllowed(ParentalUser, item) != PermissionGate.ParentalVerdict.Allowed)
+            {
+                _logger?.Info("[LLM_AI] [CHAT-EXT] item_persons refusé (parental) — usager {0}, « {1} ».",
+                    ParentalUser.Name, item.Name);
+                return Err($"item indisponible pour cet usager : {item.Name ?? idStr}");
+            }
+
             var people = _library.GetItemPeople(item) ?? new List<PersonInfo>();
             var proj = people.Select(p => new
             {
@@ -416,12 +470,18 @@ namespace LLM_AI
 
         private string Scheduled()
         {
-            // Chat externe : les timers DVR sont un inventaire du foyer (usager
-            // admin) — pas projetés du tout à un usager externe.
-            if (ParentalUser != null)
+            // Chat externe : les timers DVR sont un inventaire du FOYER (Emby
+            // ne scope pas les timers par usager). v2.20.4 (décision usager
+            // 2026-11-13) : projetés à un usager externe portant le droit
+            // NATIF d'enregistrement — EnableLiveTvManagement, via
+            // PermissionGate.CanRecordLive, le MÊME critère que
+            // record_program : qui peut CRÉER un timer peut LIRE l'inventaire
+            // (symétrie écrire/lire). Sans ce droit : note explicite, jamais
+            // d'inventaire (fail-closed).
+            if (ParentalUser != null && !PermissionGate.CanRecordLive(ParentalUser))
                 return JsonSerializer.Serialize(new
                 {
-                    note = "Programmation DVR indisponible pour cet usager externe"
+                    note = "Programmation DVR indisponible : cet usager n'a pas le droit de gérer les enregistrements TV (EnableLiveTvManagement)."
                 }, s_json);
 
             // Series timers (enregistrements récurrents) + single timers programmés.
@@ -429,6 +489,66 @@ namespace LLM_AI
             var seriesTimers = st?.Items ?? Array.Empty<SeriesTimerInfoDto>();
             var tt = _liveTv.GetTimers(new TimerQuery { IsScheduled = true });
             var timers = tt?.Items ?? Array.Empty<TimerInfoDto>();
+
+            // v2.20.8 — profil restreint : l'inventaire du foyer est FILTRÉ
+            // au contexte parental de l'usager (décision usager 2026-11-13 :
+            // « le droit de céduler, mais pas la programmation hors de
+            // contexte »). Symétrie : visible = ce que l'usager pourrait
+            // programmer lui-même (même gate que record_program).
+            //   - Single timers : ProgramInfo (BaseItemDto) porte la cote —
+            //     verdict direct par IsEpgAllowed.
+            //   - Series timers : le DTO ne porte AUCUNE cote (dump
+            //     réflexion 4.10.2.0 : Name/ChannelName/Overview seulement)
+            //     → résolus par leurs diffusions À VENIR : visible si la
+            //     série a une future diffusion ET que TOUTES celles-ci
+            //     passent la gate ; aucune diffusion vérifiable = masquée
+            //     (fail-closed).
+            string scopeNote = null;
+            if (ParentalUser != null && PermissionGate.HasParentalRestrictions(ParentalUser))
+            {
+                var loc = _host?.TryResolve<MediaBrowser.Model.Globalization.ILocalizationManager>();
+                int hiddenSeries = 0, hiddenSingle = 0;
+
+                timers = timers.Where(d =>
+                {
+                    var pi = d.ProgramInfo;
+                    if (PermissionGate.IsEpgAllowed(ParentalUser, loc, pi?.OfficialRating,
+                            pi?.Tags ?? Array.Empty<string>(), out _)
+                        == PermissionGate.ParentalVerdict.Allowed)
+                        return true;
+                    hiddenSingle++;
+                    return false;
+                }).ToArray();
+
+                var fq = new InternalItemsQuery { HasAired = false };
+                var progs = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
+                seriesTimers = seriesTimers.Where(s =>
+                {
+                    var key = Norm(s.Name ?? string.Empty);
+                    if (key.Length == 0) { hiddenSeries++; return false; }
+                    int seen = 0;
+                    foreach (var p in progs)
+                    {
+                        var pn = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
+                        if (string.IsNullOrEmpty(pn)) continue;
+                        if (!string.Equals(Norm(pn), key, StringComparison.Ordinal)) continue;
+                        seen++;
+                        if (PermissionGate.IsEpgAllowed(ParentalUser, loc, p.OfficialRating,
+                                p.Tags ?? Array.Empty<string>(), out _)
+                            != PermissionGate.ParentalVerdict.Allowed)
+                        {
+                            hiddenSeries++;
+                            return false;
+                        }
+                    }
+                    if (seen == 0) { hiddenSeries++; return false; }   // invérifiable = masquée
+                    return true;
+                }).ToArray();
+
+                _logger?.Info("[LLM_AI] scheduled : inventaire filtré au profil parental de {0} — {1} timer(s) récurrent(s) et {2} timer(s) ponctuel(s) masqué(s).",
+                    ParentalUser.Name, hiddenSeries, hiddenSingle);
+                scopeNote = "inventaire filtré au profil de l'usager : les enregistrements hors de son contexte parental ne sont pas listés";
+            }
 
             var seriesProj = seriesTimers.Select(s => new
             {
@@ -446,14 +566,16 @@ namespace LLM_AI
             return JsonSerializer.Serialize(new
             {
                 series_timers = seriesProj,
-                single_timers = singleProj
+                single_timers = singleProj,
+                note = scopeNote
             }, s_json);
         }
 
         // ------------------------------------------------------------------
         //  recordings : enregistrements DVR COMPLÉTÉS visibles à l'usager
-        //  (complète scheduled — l'inventaire des timers reste bloqué aux
-        //  externes, décision inchangée : c'est un inventaire du foyer)
+        //  (complète scheduled — l'inventaire des timers reste, côté
+        //  externes, réservé aux porteurs du droit d'enregistrement :
+        //  inventaire du foyer, cf. Scheduled / v2.20.4)
         // ------------------------------------------------------------------
 
         private string Recordings(JsonElement args)
@@ -499,6 +621,18 @@ namespace LLM_AI
             // casse).
             var items = (_library.GetItemList(q) ?? Array.Empty<BaseItem>())
                 .Where(i => !string.IsNullOrEmpty(i.Path) && dvrRoots.Any(r => TonightService.IsUnderPath(i.Path, r)))
+                .ToArray();
+
+            // v2.20.8 — profil restreint : même discipline que scheduled —
+            // les enregistrements DVR complétés sont filtrés au contexte
+            // parental de l'usager. query.User couvre l'ACCÈS bibliothèque
+            // côté natif, mais la cote parentale n'est pas garantie par
+            // GetItemList : le plugin l'impose ici (décision usager
+            // 2026-11-13 : « pas de programmation hors de contexte »).
+            if (ParentalUser != null && PermissionGate.HasParentalRestrictions(ParentalUser))
+                items = PermissionGate.FilterParental(ParentalUser, items, _logger).ToArray();
+
+            items = items
                 .OrderByDescending(i => i.DateCreated)
                 .Take(Math.Max(1, limit))
                 .ToArray();
@@ -548,6 +682,7 @@ namespace LLM_AI
             public BaseItemDto Epg;        // null côté biblio
             public string[] Genres;        // genres enrichis (EPG : BuildGenreMap)
             public bool Owned;             // côté EPG : titre présent en biblio
+            public bool IsScheduled;       // côté EPG : titre couvert par un timer DVR (v2.20.6)
         }
 
         /// <summary>
@@ -722,6 +857,12 @@ namespace LLM_AI
                         best[k] = p;
                 }
 
+                // v2.20.6 — croisement EPG ↔ timers : marquage is_scheduled
+                // (même sémantique qu'epg_tonight, TimerNamesOnly). Set
+                // paresseux : les deux requêtes timers ne courent que si
+                // l'EPG contient des candidats.
+                var scheduledSet = best.Count > 0 ? TimerNamesOnly() : null;
+
                 foreach (var kv in best)
                 {
                     var p = kv.Value;
@@ -736,7 +877,15 @@ namespace LLM_AI
                     var owned = ownedSet.Contains(kv.Key);
                     // both : l'item bibliothèque gagne (dédup par titre).
                     if (source == "both" && owned) continue;
-                    epgMatches.Add(new FindResult { Epg = p, Genres = genres, Owned = owned });
+                    epgMatches.Add(new FindResult
+                    {
+                        Epg = p,
+                        Genres = genres,
+                        Owned = owned,
+                        // v2.20.6 : croisement EPG ↔ programmations — kv.Key
+                        // est déjà le titre normalisé (même clé que le set).
+                        IsScheduled = scheduledSet != null && scheduledSet.Contains(kv.Key)
+                    });
                 }
             }
 
@@ -796,7 +945,9 @@ namespace LLM_AI
                         end = Local(p.EndDate),
                         season = p.ParentIndexNumber,
                         episode = p.IndexNumber,
-                        owned = r.Owned
+                        owned = r.Owned,
+                        // v2.20.6 : croisement EPG ↔ programmations.
+                        is_scheduled = r.IsScheduled
                     });
                 }
             }
@@ -914,7 +1065,21 @@ namespace LLM_AI
         {
             string userName = OptString(args, "user");
             List<User> users;
-            if (string.IsNullOrWhiteSpace(userName))
+            // v2.20.7 — chat externe : le foyer ne se dévoile pas (audit du
+            // 2026-11-13). Sans ce garde, genre_stats sans paramètre itérait
+            // TOUS les usagers — noms + habitudes de visionnage agrégées —
+            // l'inverse exact du choix délibéré de summary (qui ne projette
+            // que l'usager du run). Un profil externe ne voit que SES
+            // propres statistiques ; un autre nom demandé = refus sans
+            // indice sur qui existe.
+            if (ParentalUser != null)
+            {
+                if (!string.IsNullOrWhiteSpace(userName) &&
+                    !string.Equals(userName.Trim(), ParentalUser.Name, StringComparison.OrdinalIgnoreCase))
+                    return Err("statistiques d'un autre usager indisponibles depuis ce canal");
+                users = new List<User> { ParentalUser };
+            }
+            else if (string.IsNullOrWhiteSpace(userName))
             {
                 users = (_users.GetUserList(new UserQuery()) ?? new User[0])
                     .Where(u => u != null).ToList();
@@ -1064,6 +1229,22 @@ namespace LLM_AI
             bool premieresOnly = OptBool(args, "premieres_only", false);
             bool newSeasons = OptBool(args, "new_seasons", false);
 
+            // v2.20.2 : query = recherche ciblée par titre. Le modèle local
+            // l'utilisait déjà naturellement (vécu 2026-11-13) mais elle était
+            // ignorée silencieusement : la réponse revenait pleine de
+            // programmes SANS RAPPORT avec le titre demandé, que le modèle
+            // présentait comme des diffusions de CE titre (fausse
+            // attribution). En mode ciblé on BYPASSE les filtres de curation
+            // (exclusions biblio/timers/drop list, whitelists, flags, genres
+            // exclus, modes premieres_only/new_seasons) : la question est
+            // « ce titre passe-t-il bientôt à l'antenne ? », pas « que
+            // recommanderais-tu ? ». Conservés : policy parentale
+            // (EpgAllowed) + dédup par titre. Une série déjà possédée ou hors
+            // préférences qui repasse à l'antenne reste une information
+            // légitime — c'est une question factuelle.
+            string query = OptString(args, "query");
+            bool targeted = !string.IsNullOrWhiteSpace(query);
+
             // Défaut des genres exclus : seulement en mode premieres_only
             // (emby-ai-suggest.sh exclut news + documentary). Sinon aucun.
             // Défauts bilingues : l'EPG émet souvent l'anglais, mais
@@ -1092,7 +1273,7 @@ namespace LLM_AI
                 HasAired = false,          // à venir (équivalent EndDate > now)
                 Limit = POOL
             };
-            if (premieresOnly)
+            if (premieresOnly && !targeted)
             {
                 // emby-ai-suggest.sh : S01E01 uniquement. IsKids/IsNews exclus
                 // SAUF si le flag correspondant est activé (sinon aucun kids/news
@@ -1111,25 +1292,38 @@ namespace LLM_AI
             // une requête library : BuildGenreMap retourne Id -> Genres.
             var genreMap = BuildGenreMap(q);
 
-            // Ensembles d'exclusion selon le mode.
-            HashSet<string> excluded;
+            // Ensembles d'exclusion selon le mode (SAUF mode ciblé).
+            HashSet<string> excluded = null;
             Dictionary<string, HashSet<int>> ownedSeasons = null;
-            if (newSeasons)
+            if (!targeted)
             {
-                // emby-absent-series.sh : on n'exclut QUE les timers (la biblio
-                // sert à détecter les nouvelles saisons, pas à exclure).
-                excluded = TimerNamesOnly();
-                ownedSeasons = OwnedSeasonsMap();
-            }
-            else
-            {
-                // emby-ai-suggest.sh / défaut : biblio Series + series timers + single timers.
-                excluded = ExcludedNames("Series", addSeriesTimers: true, addSingleTimers: true);
+                if (newSeasons)
+                {
+                    // emby-absent-series.sh : on n'exclut QUE les timers (la biblio
+                    // sert à détecter les nouvelles saisons, pas à exclure).
+                    excluded = TimerNamesOnly();
+                    ownedSeasons = OwnedSeasonsMap();
+                }
+                else
+                {
+                    // emby-ai-suggest.sh / défaut : biblio Series + series timers + single timers.
+                    excluded = ExcludedNames("Series", addSeriesTimers: true, addSingleTimers: true);
+                }
+
+                // Drop list persistante (bouton « Oublier » / page de config) : on retire
+                // ces titres de la liste envoyée au LLM (épuration en amont).
+                excluded.UnionWith(DroppedTitlesSet());
             }
 
-            // Drop list persistante (bouton « Oublier » / page de config) : on retire
-            // ces titres de la liste envoyée au LLM (épuration en amont).
-            excluded.UnionWith(DroppedTitlesSet());
+            // v2.20.6 — croisement EPG ↔ programmations (demande usager : le
+            // listing « ce qui passe ce soir » doit dire ce qui est déjà
+            // programmé) : marquage is_scheduled en mode ciblé, même sémantique
+            // qu'epg_tonight (TimerNamesOnly : series + single timers, par
+            // nom normalisé). En mode pool les timers sont EXCLUS ci-dessus
+            // dans TOUTES les combinaisons de flags — le champ y est
+            // structurellement false ; on ne paie les requêtes timers qu'en
+            // ciblé.
+            var scheduled = targeted ? TimerNamesOnly() : null;
 
             // Whitelists chaines/genres (inclusion) — set vide = pas de filtre.
             var wl = LoadWhitelists();
@@ -1153,10 +1347,23 @@ namespace LLM_AI
                 var title = !string.IsNullOrEmpty(p.SeriesName) ? p.SeriesName : p.Name;
                 if (string.IsNullOrEmpty(title)) continue;
                 var key = Norm(title);
-                if (excluded.Contains(key)) continue;
+                if (!targeted && excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;              // dédupliquer par série (unique_by)
                 if (!EpgAllowed(p)) continue;              // chat externe : policy parentale EPG
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
+                // Mode ciblé : match de titre sur la série, le nom du
+                // programme ET le titre d'épisode (accents pliés, casse
+                // ignorée), puis on garde directement — le résultat porte
+                // title + episode_title, le modèle ne peut plus confondre
+                // la diffusion trouvée avec le titre demandé.
+                if (targeted)
+                {
+                    if (!MatchesQuery(title, query) &&
+                        !MatchesQuery(p.Name, query) &&
+                        !MatchesQuery(p.EpisodeTitle, query)) continue;
+                    kept.Add((p, null, genres));
+                    continue;
+                }
                 if (IsExcludedGenre(genres, excludeGenres, series: true)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
@@ -1222,11 +1429,18 @@ namespace LLM_AI
                     season = p.ParentIndexNumber,
                     episode = p.IndexNumber,
                     episode_title = p.EpisodeTitle,
-                    is_new_season = t.isNewSeason
+                    is_new_season = t.isNewSeason,
+                    // v2.20.6 : false en mode pool (timers exclus), marquage
+                    // réel en mode ciblé (croisement EPG ↔ programmations).
+                    is_scheduled = scheduled != null && scheduled.Contains(Norm(title))
                 });
             }
-            _logger?.Info("[LLM_AI] epg_series : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
-                kept.Count, results.Count, wlFiltered, limit);
+            if (targeted)
+                _logger?.Info("[LLM_AI] epg_series : recherche ciblée « {0} » → {1} diffusion(s) à venir (filtres de curation bypassés).",
+                    query, results.Count);
+            else
+                _logger?.Info("[LLM_AI] epg_series : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
+                    kept.Count, results.Count, wlFiltered, limit);
             if ((cfg?.DebugVerbose ?? false) && wlRejected > 0)
                 _logger?.Info("[LLM_AI] epg_series wl rejetés={0}, échantillons : {1}",
                     wlRejected, string.Join(" | ", wlSamples));
@@ -1246,6 +1460,18 @@ namespace LLM_AI
                     EpgSnapshotStore.Upsert(t.p, mapped, _logger);
                 }
 
+            // Mode ciblé vide : une note explicite — le modèle doit relayer
+            // « aucun résultat pour ce titre », pas piocher un autre
+            // programme de sa mémoire (vécu 2026-11-13 : la fausse
+            // attribution venait exactement de ce blanc comblé).
+            if (targeted && results.Count == 0)
+                return JsonSerializer.Serialize(new
+                {
+                    total = 0,
+                    results,
+                    note = "aucun programme EPG à venir ne correspond au titre demandé — ne présente aucun autre programme comme réponse à cette recherche"
+                }, s_json);
+
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
 
@@ -1254,11 +1480,19 @@ namespace LLM_AI
         /// programmés (single timers). Reproduit <c>emby-absent.sh</c> :
         /// IsMovie=true (pas de filtre Kids/News), aucun genre exclu par défaut,
         /// exclusion = films biblio + single timers, tri par date, dédupliquer.
+        /// v2.20.2 : paramètre <c>query</c> = recherche ciblée par titre —
+        /// même sémantique qu'<see cref="EpgSeries"/> (filtres de curation
+        /// bypassés, policy parentale et dédup conservées).
         /// </summary>
         private string EpgMovies(JsonElement args)
         {
             // emby-absent.sh n'exclut aucun genre par défaut.
             var excludeGenres = NormGenreSet(OptStringArray(args, "exclude_genres") ?? Array.Empty<string>());
+
+            // v2.20.2 : recherche ciblée par titre — cf. EpgSeries pour la
+            // motivation terrain (fausse attribution du 2026-11-13).
+            string query = OptString(args, "query");
+            bool targeted = !string.IsNullOrWhiteSpace(query);
 
             // Plafond dur côté serveur + pool élargi pour le pré-tri.
             var cfg = Plugin.Instance?.Configuration;
@@ -1279,9 +1513,20 @@ namespace LLM_AI
             // GetPrograms ne peuple pas Genres sur le DTO ; on enrichit depuis
             // les BaseItem (LiveTvProgram) via une requête library (Id -> Genres).
             var genreMap = BuildGenreMap(q);
-            var excluded = ExcludedNames("Movie", addSeriesTimers: false, addSingleTimers: true);
-            // Drop list persistante : retire ces titres de la liste envoyée au LLM.
-            excluded.UnionWith(DroppedTitlesSet());
+            // Exclusions de curation (SAUF mode ciblé : un film déjà possédé
+            // ou hors préférences qui repasse à l'antenne reste une info).
+            HashSet<string> excluded = null;
+            if (!targeted)
+            {
+                excluded = ExcludedNames("Movie", addSeriesTimers: false, addSingleTimers: true);
+                // Drop list persistante : retire ces titres de la liste envoyée au LLM.
+                excluded.UnionWith(DroppedTitlesSet());
+            }
+
+            // v2.20.6 — croisement EPG ↔ programmations : marquage
+            // is_scheduled en mode ciblé (cf. EpgSeries ; en mode pool les
+            // single timers sont exclus — le champ y est false).
+            var scheduled = targeted ? TimerNamesOnly() : null;
 
             // Whitelists chaines/genres (inclusion) — set vide = pas de filtre.
             var wl = LoadWhitelists();
@@ -1305,10 +1550,17 @@ namespace LLM_AI
                 var title = p.Name;
                 if (string.IsNullOrEmpty(title)) continue;
                 var key = Norm(title);
-                if (excluded.Contains(key)) continue;
+                if (!targeted && excluded.Contains(key)) continue;
                 if (!seen.Add(key)) continue;
                 if (!EpgAllowed(p)) continue;              // chat externe : policy parentale EPG
                 var genres = GenreFor(p, genreMap);        // genres enrichis (BaseItem)
+                // Mode ciblé : match de titre, pas de filtre de curation.
+                if (targeted)
+                {
+                    if (!MatchesQuery(title, query) && !MatchesQuery(p.EpisodeTitle, query)) continue;
+                    kept.Add((p, genres));
+                    continue;
+                }
                 if (IsExcludedGenre(genres, excludeGenres, series: false)) continue;
                 if (wl.Any && !PassesWhitelists(p, genres, wl))
                 {
@@ -1360,11 +1612,18 @@ namespace LLM_AI
                     start = Local(p.StartDate),
                     end = Local(p.EndDate),
                     rating = p.CommunityRating,
-                    year = p.ProductionYear
+                    year = p.ProductionYear,
+                    // v2.20.6 : false en mode pool (timers exclus), marquage
+                    // réel en mode ciblé (croisement EPG ↔ programmations).
+                    is_scheduled = scheduled != null && scheduled.Contains(Norm(p.Name))
                 });
             }
-            _logger?.Info("[LLM_AI] epg_movies : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
-                kept.Count, results.Count, wlFiltered, limit);
+            if (targeted)
+                _logger?.Info("[LLM_AI] epg_movies : recherche ciblée « {0} » → {1} diffusion(s) à venir (filtres de curation bypassés).",
+                    query, results.Count);
+            else
+                _logger?.Info("[LLM_AI] epg_movies : pool filtré {0} → cap {1} retenu(s) (whitelists/flags : {2} rejeté(s), plafond {3}).",
+                    kept.Count, results.Count, wlFiltered, limit);
 
             // Capture mémoire réflexive (Phase A) — même rôle qu'epg_tonight
             // pour le run films (runId posé par LlmScheduledTask).
@@ -1376,6 +1635,15 @@ namespace LLM_AI
                         t.p.ChannelName, t.p.StartDate, mapped);
                     EpgSnapshotStore.Upsert(t.p, mapped, _logger);
                 }
+
+            // Mode ciblé vide : note explicite (même contrat qu'epg_series).
+            if (targeted && results.Count == 0)
+                return JsonSerializer.Serialize(new
+                {
+                    total = 0,
+                    results,
+                    note = "aucun film EPG à venir ne correspond au titre demandé — ne présente aucun autre programme comme réponse à cette recherche"
+                }, s_json);
 
             return JsonSerializer.Serialize(new { total = results.Count, results }, s_json);
         }
@@ -2167,6 +2435,22 @@ namespace LLM_AI
                 sb.Append(c);
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Match de recherche ciblée par titre pour <c>epg_series</c>/
+        /// <c>epg_movies</c> (paramètre <c>query</c>, v2.20.2) :
+        /// containment accents pliés (<see cref="FoldAscii"/>) et casse
+        /// ignorée. Le retrait d'article de <see cref="Norm"/> n'est PAS
+        /// appliqué — la recherche doit matcher le titre TEL QUEL à l'EPG
+        /// (« médecin malgré tout » matche « Médecin malgré tout », mais
+        /// pas n'importe quel titre contenant « médecin »).
+        /// </summary>
+        private static bool MatchesQuery(string title, string query)
+        {
+            if (string.IsNullOrEmpty(title) || string.IsNullOrEmpty(query)) return false;
+            return FoldAscii(title).ToLowerInvariant()
+                .Contains(FoldAscii(query).ToLowerInvariant(), StringComparison.Ordinal);
         }
 
         /// <summary>

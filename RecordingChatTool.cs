@@ -168,6 +168,56 @@ namespace LLM_AI
                 return Json(new { error = "Cet enregistrement n'est pas autorisé pour cet usager." });
             }
 
+            // v2.20.5 — pré-vérif Dedup au DÉPÔT (vécu prod 2026-11-13
+            // « Excalibur ») : un timer existant n'était découvert qu'au
+            // CONFIRM — l'usager traversait toute la danse du code
+            // (réservation + code à l'écran + saisie) pour apprendre un
+            // refus déjà certain, avec une consigne qui le faisait
+            // reboucler. Mêmes critères EXACTS que le confirm
+            // (AutoProgrammer : id programme + nom normalisé). Le confirm
+            // garde sa vérification (défense en profondeur : un timer
+            // peut naître entre les deux).
+            var dupIds = new HashSet<string>();
+            var dupNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            new AutoProgrammer(_liveTv, _library, _logger, _host)
+                .BuildExistingTimerSets(dupIds, dupNames);
+            string normTitle = GetEmbyInfoTool.Norm(title ?? string.Empty);
+            if (dupIds.Contains(programId) ||
+                (!string.IsNullOrEmpty(normTitle) && dupNames.Contains(normTitle)))
+            {
+                _logger.Info("[LLM_AI] [CHAT-EXT] record_program refusé (déjà programmé) — usager {0}, « {1} ».",
+                    _user.Name, title);
+                return Json(new {
+                    error = "« " + title + " » est DÉJÀ programmé (un timer existe) — " +
+                            "aucun nouvel enregistrement nécessaire. Informe l'usager que " +
+                            "c'est déjà prévu ; ne redemande PAS de code, ne propose PAS de " +
+                            "re-commencer : une nouvelle demande serait refusée pareil."
+                });
+            }
+
+            // v2.20.10 — budget du jour épuisé : refus IMMÉDIAT au dépôt,
+            // AVANT tout code affiché (même classe de défaut que la
+            // pré-vérif dedup v2.20.5 : sans ce pré-check, l'usager
+            // traversait toute la danse du code — code affiché, saisie —
+            // pour apprendre un refus déjà certain à la confirmation).
+            // Lecture seule : la consommation reste à la confirmation, le
+            // quota ne compte que les créations réelles (inchangé).
+            string quotaError;
+            if (RecordingPendingStore.QuotaFull(_user.Name,
+                    _cfg.ExternalChatRecordingMaxPerDay, out quotaError, LangKey()))
+            {
+                RecordingPendingStore.SetTurnNotice(_user.Name,
+                    I18n.S("rec.quota.notice", LangKey()));
+                _logger.Info("[LLM_AI] [CHAT-EXT] record_program refusé (quota du jour atteint) — usager {0}, « {1} ».",
+                    _user.Name, title);
+                return Json(new
+                {
+                    error = quotaError + " Aucun code n'a été affiché : la fenêtre de 24 h est " +
+                            "glissante (elle se libère au fil des créations les plus anciennes) — " +
+                            "propose à l'usager de réessayer plus tard, pas de re-demande immédiate."
+                });
+            }
+
             string pin, error;
             if (!RecordingPendingStore.TryReserve(_user.Name, programId,
                     title, kind, postPadding, out pin, out error, LangKey()))
@@ -256,11 +306,20 @@ namespace LLM_AI
             if (outcome != AutoProgrammer.OneOutcome.Created)
             {
                 RecordingPendingStore.RefundCreation(_user.Name);  // pas un effet réel
-                // Notice hors bande : affichée à l'écran de l'app — langue de l'usager.
-                RecordingPendingStore.SetTurnNotice(_user.Name,
-                    I18n.S("rec.failed", LangKey()));
-                return Json(new { error = "Enregistrement non programmé (" + outcome + "). "
-                    + "Rapportez le motif honnêtement et proposez de re-demander l'enregistrement." });
+                bool alreadyScheduled = outcome == AutoProgrammer.OneOutcome.Dedup;
+                // Notice hors bande : affichée à l'écran de l'app — langue de
+                // l'usager. v2.20.5 : le cas « déjà programmé » a son propre
+                // message (re-demander rebouclerait sur le même refus).
+                RecordingPendingStore.SetTurnNotice(_user.Name, alreadyScheduled
+                    ? string.Format(System.Globalization.CultureInfo.CurrentUICulture,
+                        I18n.S("rec.failed.duplicate", LangKey()), pending.Title)
+                    : I18n.S("rec.failed", LangKey()));
+                return Json(new { error = alreadyScheduled
+                    ? "« " + pending.Title + " » est DÉJÀ programmé (timer existant) — aucun nouvel "
+                      + "enregistrement nécessaire : informe l'usager que c'est déjà prévu, "
+                      + "ne propose PAS de re-demander (une nouvelle demande serait refusée pareil)."
+                    : "Enregistrement non programmé (" + outcome + "). "
+                      + "Rapportez le motif honnêtement et proposez de re-demander l'enregistrement." });
             }
 
             await ToastAsync(_sessions, _user, string.Format(
@@ -353,6 +412,13 @@ namespace LLM_AI
                 RecordingPendingStore.RefundCreation(user.Name);   // pas un effet réel
                 logger.Info("[LLM_AI] [CHAT-EXT] record_program confirm intercepté (échec {0}) — usager {1}, « {2} ».",
                     outcome, user.Name, pending.Title);
+                // v2.20.5 : le cas « déjà programmé » n'est pas un échec à
+                // corriger par l'usager — re-demander rebouclerait sur le
+                // même refus. Message dédié (i18n, va DIRECTEMENT à l'écran).
+                if (outcome == AutoProgrammer.OneOutcome.Dedup)
+                    return string.Format(
+                        System.Globalization.CultureInfo.CurrentUICulture,
+                        I18n.S("rec.failed.duplicate", lang), pending.Title);
                 return I18n.S("rec.failed", lang);
             }
 

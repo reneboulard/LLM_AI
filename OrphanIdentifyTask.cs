@@ -294,7 +294,11 @@ namespace LLM_AI
                     // Passe nocturne : vérité EPG directe absente
                     // (comportement historique) — la vérité DIFFÉRÉE du
                     // store est résolue pour les séries et consommée par
-                    // le repli film uniquement (voir MostRecentDeferredTruth).
+                    // le repli film (voir MostRecentDeferredTruth). Son
+                    // SeriesName (sn, v2.20.17) arme en outre la porte
+                    // d'acceptation ancrée du pipeline série (clé de titre
+                    // exacte + année compatible exigées — faux positif
+                    // 04 h « De souche » du 2026-11-16).
                     OrphanResolver.EpgTruth deferredTruth = null;
                     if (deferredEntries != null && deferredEntries.Count > 0
                         && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -307,6 +311,7 @@ namespace LLM_AI
                                 // Title volontairement null : titre d'épisode ≠
                                 // titre de série — repli item.Name dans le repli film.
                                 Title = null,
+                                SeriesName = entry.SeriesName,
                                 Overview = entry.Overview,
                                 Year = entry.Year,
                                 Channel = entry.Channel
@@ -372,7 +377,7 @@ namespace LLM_AI
             foreach (var e in entries)
             {
                 if (e == null) continue;
-                if (!e.Year.HasValue && string.IsNullOrWhiteSpace(e.Overview)) continue;
+                if (!e.Year.HasValue && string.IsNullOrWhiteSpace(e.Overview) && string.IsNullOrWhiteSpace(e.SeriesName)) continue;
                 string p = e.Path ?? string.Empty;
                 if (p.Length <= folder.Length) continue;
                 if (!p.StartsWith(folder, StringComparison.OrdinalIgnoreCase)) continue;

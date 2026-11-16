@@ -864,7 +864,9 @@ namespace LLM_AI
             string extraWorkflow = null,
             string contextBlock = null,
             User toolUser = null,
-            bool includeAuditTools = true)
+            bool includeAuditTools = true,
+            bool editMode = false,
+            bool promptEditMode = false)
         {
             try
             {
@@ -900,7 +902,8 @@ namespace LLM_AI
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, workflow,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
                     CHAT_ROLE_INTRO, "", I18n.ResolveProseLangName(cfg, _host),
-                    rateLimitWaitCeiling: LlmRateLimitGate.InteractiveWaitCeiling);
+                    rateLimitWaitCeiling: LlmRateLimitGate.InteractiveWaitCeiling)
+                { EditMode = editMode, PromptEditMode = promptEditMode };
 
                 // Tous les outils existants : recommandation + audit santé +
                 // (couche d'action du chat, v1.13 : tools construits par

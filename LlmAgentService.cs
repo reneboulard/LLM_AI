@@ -55,6 +55,32 @@ namespace LLM_AI
         // verrouille le premier qui répond (changement de modèle possible).
         private int _activeIndex = -1;
 
+        /// <summary>v2.20.12 : vrai quand le tour est un mode d'édition
+        /// (contexte « Éditer — … » du chat admin, atelier de langues
+        /// compris). Effet : la garde anti-narration est DÉSACTIVÉE —
+        /// les noms d'outils cités dans le TEXTE ACTUEL injecté dans le
+        /// system prompt provoquaient des faux positifs (vécu prod
+        /// 2026-11-14, gemma4:latest : « new_releases » cité depuis le
+        /// prompt echoed → boucle de réparations sans jamais livrer la
+        /// révision) ; idem en atelier où le guide nomme les outils
+        /// i18n à chaque tour. Les mécanismes du canal bloc ```text
+        /// sont portés par <see cref="PromptEditMode"/> depuis v2.20.16.</summary>
+        public bool EditMode { get; set; }
+
+        /// <summary>v2.20.16 : vrai UNIQUEMENT pour les modes d'édition à
+        /// CHAMP de prompt (FieldFor non vide) — le mode atelier de
+        /// langues (GuideOnly) livre par l'OUTIL i18n_set_key, pas par
+        /// un bloc ```text. Porte les mécanismes du canal bloc : le
+        /// nudge de livraison d'itération (v2.20.12) et le hint de
+        /// réparation des appels malformés (v2.20.14). Vécu prod
+        /// 2026-11-14 (gemma4:31b cloud, atelier) : EditMode englobait
+        /// l'atelier → le nudge exigeait un bloc ```text hors canal →
+        /// le modèle lisait l'exigence comme une demande hors mode et
+        /// REFUSAIT après un travail correct (bannière, réponse
+        /// i18n_get, résumé post-dépôt : 5 rappels, 3 refus confus
+        /// servis comme réponse finale).</summary>
+        public bool PromptEditMode { get; set; }
+
         /// <summary>Plafond d'attente du gate 429 (reprise même-backend) —
         /// paramètre de surface : défaut 90 s (tâches de fond : reco EPG,
         /// Tonight, audit, LibReview), 20 s (chat interactif, bouton Test de
@@ -252,6 +278,10 @@ namespace LLM_AI
             const int MaxNarrationRepairs = 2;
             int narrationRepairs = 0;
 
+            // v2.20.12 : borne des rappels de livraison du bloc ```text en
+            // mode édition (voir ci-dessous).
+            int editBlockNudges = 0;
+
             for (int iter = 0; iter < MaxIterations; iter++)
             {
                 var reply = await ChatAsync(messages, ct).ConfigureAwait(false);
@@ -289,6 +319,28 @@ namespace LLM_AI
                                 ? "Si tu as terminé, réponds UNIQUEMENT avec le tableau JSON exigé par la " +
                                   "section FORMAT DE SORTIE — sans texte autour, sans balise de code."
                                 : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.");
+                        // v2.20.14 — en mode édition à champ (v2.20.16 :
+                        // PromptEditMode — PAS l'atelier de langues, dont le
+                        // canal de dépôt est l'outil i18n_set_key : un bloc
+                        // ```text y serait relevé nulle part = perte
+                        // silencieuse de la classe v2.20.14), l'appel d'outil
+                        // malformé a une voie de sortie que le modèle maîtrise
+                        // (vécu prod 2026-11-14 08:21-08:23 : plugin_prompts
+                        // set avec ≈2400 car. portant des guillemets droits —
+                        // JSON invalide 10 fois d'affilée, MaxIterations épuisé,
+                        // réponse brute servie à l'usager) : le bloc ```text
+                        // clôturé, relevé par le dépôt serveur-side. Et un champ
+                        // NON actif ne passe ni par l'outil ni par le bloc :
+                        // la seule réponse honnête est le changement de mode
+                        // par l'usager.
+                        string editModeHint = PromptEditMode
+                            ? " En mode édition : pour livrer une révision du PROMPT ACTIF, réponds plutôt " +
+                              "en Markdown avec le texte COMPLET révisé dans un bloc de code clôturé " +
+                              "```text … ``` en tout dernier (le serveur relève lui-même ce bloc). " +
+                              "Pour modifier un AUTRE champ, aucun appel d'outil ne le permet : réponds " +
+                              "honnêtement que l'usager doit changer le mode actif dans le menu déroulant " +
+                              "de la page."
+                            : "";
                         messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
                             "Ton tableau d'appels d'outils est malformé (JSON invalide). " +
                             "Renvoie UNIQUEMENT un tableau JSON d'appels d'outils bien formé, " +
@@ -299,7 +351,7 @@ namespace LLM_AI
                             "sinon le JSON reste invalide. " +
                             "Si tu ne peux pas produire un tableau valide, dis-le honnêtement " +
                             "en texte : ne prétends JAMAIS qu'une action d'outil a été effectuée. " +
-                            finalFormatHint });
+                            finalFormatHint + editModeHint });
                         continue;
                     }
 
@@ -312,8 +364,17 @@ namespace LLM_AI
                     // de l'intention (« I must use the client_command
                     // tool… ») au lieu du JSON. Ré-injection exigeant
                     // l'émission (ou une réponse honnête), bornée.
-                    if (narrationRepairs < MaxNarrationRepairs && toolResults.Count == 0)
+                    if (narrationRepairs < MaxNarrationRepairs && toolResults.Count == 0
+                        && !EditMode)
                     {
+                        // v2.20.12 : garde anti-narration COUPÉE en mode
+                        // d'édition — les noms d'outils présents dans le
+                        // TEXTE ACTUEL du prompt (injecté dans le system
+                        // prompt) sont fréquemment cités en écho par les
+                        // petits modèles (vécu prod 2026-11-14,
+                        // gemma4:latest : « new_releases » cité depuis le
+                        // prompt actuel → faux positif → boucle de
+                        // réparations, aucune livraison de la révision).
                         string mentioned = FindMentionedToolName(reply, byName);
                         if (mentioned != null)
                         {
@@ -333,6 +394,38 @@ namespace LLM_AI
                                 "a été exécutée." });
                             continue;
                         }
+                    }
+
+                    // v2.20.12 — mode édition de prompt : si la réponse finale
+                    // est en prose SANS bloc clôturé ```text (et ne se termine
+                    // pas par une question — le filet question existe déjà
+                    // côté endpoint), un SEUL rappel en slot user exige la
+                    // livraison du bloc clôturé. Vécu prod 2026-11-14
+                    // (gemma4:latest) : sans ce rappel, le modèle répondait
+                    // « J'ai bien reçu votre rappel » en boucle sans jamais
+                    // émettre le bloc. Borné (2 rappels), puis la réponse
+                    // passe telle quelle (le serveur extrait de toute façon
+                    // tout bloc ```text présent — voir ChatApiService).
+                    // v2.20.16 — PromptEditMode, PAS EditMode : l'atelier de
+                    // langues (GuideOnly) livre par l'OUTIL i18n_set_key —
+                    // exiger un bloc ```text y dérape (vécu prod 2026-11-14,
+                    // gemma4:31b cloud : le modèle lisait le rappel comme une
+                    // demande hors mode et REFUSAIT — 5 rappels tirés, 3
+                    // refus confus servis comme réponse finale).
+                    if (PromptEditMode && editBlockNudges < 2
+                        && reply.IndexOf("```", StringComparison.Ordinal) < 0
+                        && !reply.TrimEnd().EndsWith("?", StringComparison.Ordinal))
+                    {
+                        editBlockNudges++;
+                        _logger?.Warn("[LLM_AI] Itération {0} — mode édition : réponse en prose sans bloc ```text ({1}/2). Rappel de livraison.",
+                            iter, editBlockNudges);
+                        messages.Add(new LlmClient.ChatMessage { Role = "assistant", Content = reply });
+                        messages.Add(new LlmClient.ChatMessage { Role = "user", Content =
+                            "En mode édition, ta révision n'existe pour l'interface QUE dans un bloc de code clôturé " +
+                            "```text … ``` (c'est le SEUL canal de livraison — le serveur et la page ne voient " +
+                            "que ce bloc). Renvoie MAINTENANT ta réponse avec le texte COMPLET du prompt révisé " +
+                            "dans un bloc ```text en tout dernier. Ne poses pas de question, ne narre pas : livres le bloc." });
+                        continue;
                     }
 
                     // Mode recommandation OU format custom (v2.12.0) : la réponse
@@ -943,6 +1036,25 @@ namespace LLM_AI
             sb.AppendLine("la réponse finale EST ce tableau JSON — renvoie-le UNIQUEMENT, sans texte ");
             sb.AppendLine("autour ni balise de code.");
             sb.AppendLine("Ne retourne que l'information demandée, rien de plus. Sois concis.");
+            // v2.20.2 : règles de fiabilité factuelle — durcissement pour les
+            // modèles locaux (« le dénominateur le plus bas » doit donner un
+            // résultat correct même si le cloud est plus rapide). Motivations
+            // terrain 2026-11-13 (chat externe, gemma4:latest local) : un
+            // argument non documenté (sort_by=date_played ignoré par le
+            // serveur) « confirmé » par le modèle comme un tri par visionnage ;
+            // un résultat epg_series sans rapport avec le titre demandé
+            // présenté comme une diffusion de CE titre. Doctrine
+            // NormalizeDeepLinks : le prompt prévient, le serveur fait
+            // respecter — les filets correspondants (note dans le résultat,
+            // champ date_created, paramètre query sur epg_*) vivent côté
+            // GetEmbyInfoTool ; ces règles apprennent au modèle à les lire.
+            sb.AppendLine("RÈGLES DE FIABILITÉ FACTUELLE :");
+            sb.AppendLine("- N'utilise QUE les paramètres documentés dans le schéma d'un outil : un paramètre absent du schéma est ignoré silencieusement par le serveur — ne présume jamais qu'il a été appliqué.");
+            sb.AppendLine("- Un champ « note » dans un résultat d'outil est un fait du serveur : transmets-le tel quel à l'usager, ne le contourne jamais.");
+            sb.AppendLine("- Si les résultats d'un outil ne contiennent PAS l'information demandée (titre introuvable, liste vide, note d'indisponibilité), réponds exactement cela — ne remplace JAMAIS le contenu manquant par un autre résultat sans le signaler clairement.");
+            sb.AppendLine("- Ancre chaque affirmation (titre, chaîne, horaire, saison, « déjà vu », « à venir ») sur un champ présent dans les résultats d'outils : une donnée absente est « information non disponible » — tu ne la devines pas, tu ne l'extrapoles pas.");
+            sb.AppendLine("- Réponds à la question posée, pas à une question adjacente : « prochaine saison de X ? » s'intéresse à l'état des saisons à venir, pas au programme du jour.");
+            sb.AppendLine("- Réponses conversationnelles (chat) : texte plat, listes et **gras** uniquement — les titres Markdown ### ne sont pas rendus par le client.");
             sb.AppendLine();
             }
             if (!string.IsNullOrWhiteSpace(workflow))
@@ -1072,6 +1184,10 @@ namespace LLM_AI
             // "tmdb\t_lookup". System.Text.Json est strict et rejette alors
             // TOUT le tableau, qu'on prendrait à tort pour une réponse finale.
             // On assainit en échappant ces contrôles avant désérialisation.
+            // v2.20.3 : texte brut du tableau principal capturé AVANT
+            // assainissement — le seul localisable tel quel dans la réponse
+            // (cf. MergeFurtherToolCalls).
+            var rawArray = arr;
             arr = SanitizeJsonControlChars(arr);
 
             var opts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -1079,7 +1195,7 @@ namespace LLM_AI
             {
                 var calls = JsonSerializer.Deserialize<List<ToolCall>>(arr, opts);
                 if (calls != null && calls.Count > 0 && !calls.Any(c => string.IsNullOrWhiteSpace(c.Tool)))
-                    return new ToolCallParse { Calls = calls };
+                    return new ToolCallParse { Calls = MergeFurtherToolCalls(reply, rawArray, calls, opts, _logger) };
             }
             catch (Exception ex)
             {
@@ -1104,7 +1220,7 @@ namespace LLM_AI
                                 !fixedCalls.Any(c => string.IsNullOrWhiteSpace(c.Tool)))
                             {
                                 _logger?.Info("[LLM_AI] Appels d'outils réparés (guillemets non échappés) — {0} appel(s).", fixedCalls.Count);
-                                return new ToolCallParse { Calls = fixedCalls };
+                                return new ToolCallParse { Calls = MergeFurtherToolCalls(reply, rawArray, fixedCalls, opts, _logger) };
                             }
                         }
                         catch
@@ -1120,6 +1236,119 @@ namespace LLM_AI
             }
             // Tableau désérialisé mais sans champ « tool » non vide → réponse finale.
             return new ToolCallParse();
+        }
+
+        // ------------------------------------------------------------------
+        //  v2.20.3 — réponse MULTI-TABLEAUX : récupération des appels perdus
+        // ------------------------------------------------------------------
+
+        /// <summary>Borne du scan multi-tableaux (anti-modèle pathologique :
+        /// répétition en boucle) — au-delà, les tableaux restants sont ignorés
+        /// (le modèle peut réémettre au tour suivant).</summary>
+        private const int MaxFurtherToolArrays = 5;
+
+        /// <summary>
+        /// v2.20.3 — réponse MULTI-TABLEAUX : fusionne aux appels du tableau
+        /// principal ceux des tableaux SUPPLÉMENTAIRES de la même réponse.
+        /// <para><b>Vécu prod 2026-11-13</b> (gemma4:latest local, chat
+        /// externe, « Aller simple: survivre ») : le modèle a émis DEUX
+        /// tableaux d'appels dans UNE même réponse — find, puis (après une
+        /// auto-correction) un record_program complet et valide.
+        /// <see cref="ExtractJsonArray"/> ne retourne que le PREMIER : le
+        /// second était JETÉ EN SILENCE — aucun « Appel outil », la boucle
+        /// poursuivait sur le seul résultat du find, et le modèle annonçait
+        /// l'action du second comme FAITE (« La réservation est en cours de
+        /// préparation… saisissez le code qui vient d'apparaître à l'écran »)
+        /// alors que RIEN n'avait été déposé : réservation fantôme, code
+        /// jamais affiché, refus de code sur une prémisse fausse au tour
+        /// suivant.</para>
+        /// <para>Le filet scanne les groupes équilibrés APRÈS le tableau
+        /// principal, ne retient que ceux qui portent « tool », les
+        /// désérialise avec les MÊMES béquilles
+        /// (<see cref="SanitizeJsonControlChars"/>) et les ajoute au lot du
+        /// premier tableau — la boucle exécute déjà un lot multi-appels d'un
+        /// seul tableau, même sémantique. Groupes illisibles ou sans appel
+        /// valide : ignorés avec un Warn (jamais un échec — le modèle peut
+        /// réémettre). Dédoublonnés par (outil, arguments bruts) contre les
+        /// appels déjà retenus : un appel répété n'est pas exécuté deux fois.
+        /// Fail-soft total.</para>
+        /// </summary>
+        /// <param name="reply">Réponse brute du modèle.</param>
+        /// <param name="primaryRaw">Texte BRUT du tableau principal AVANT
+        /// assainissement (le seul localisable tel quel dans
+        /// <paramref name="reply"/> ; introuvable → pas de scan — tableau
+        /// réparé/tronqué, rien de fiable après).</param>
+        /// <param name="primaryCalls">Appels du tableau principal (retournés
+        /// tels quels si rien n'est récupéré).</param>
+        /// <param name="opts">Options de désérialisation du chemin principal.</param>
+        /// <param name="logger">Logger (peut être null).</param>
+        private static List<ToolCall> MergeFurtherToolCalls(string reply, string primaryRaw,
+            List<ToolCall> primaryCalls, System.Text.Json.JsonSerializerOptions opts, ILogger logger)
+        {
+            if (string.IsNullOrEmpty(reply) || string.IsNullOrEmpty(primaryRaw)) return primaryCalls;
+
+            int primaryIdx = reply.IndexOf(primaryRaw, StringComparison.Ordinal);
+            if (primaryIdx < 0) return primaryCalls;   // réparé/tronqué : pas de suite à scanner
+            int start = reply.IndexOf('[', primaryIdx + primaryRaw.Length);
+            if (start < 0) return primaryCalls;
+
+            // Dédoublonnage : clé (outil + arguments bruts), amorcée par les
+            // appels déjà retenus (tableau principal).
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var c in primaryCalls)
+                seen.Add(ToolCallKey(c));
+
+            var recovered = new List<ToolCall>();
+            int toolGroups = 0;
+            while (start >= 0 && toolGroups < MaxFurtherToolArrays)
+            {
+                var group = ScanBalancedArray(reply, start, out int endExclusive);
+                if (group == null)
+                {
+                    if (endExclusive >= reply.Length) break;   // tronqué : fin de réponse
+                    start = reply.IndexOf('[', endExclusive);
+                    continue;
+                }
+                start = reply.IndexOf('[', endExclusive);
+                if (group.IndexOf("\"tool\"", StringComparison.Ordinal) < 0)
+                    continue;     // groupe non-outil (lien markdown, recos finales…) : ignoré
+                toolGroups++;
+                try
+                {
+                    var more = JsonSerializer.Deserialize<List<ToolCall>>(
+                        SanitizeJsonControlChars(group), opts);
+                    if (more == null || more.Count == 0 || more.Any(c => string.IsNullOrWhiteSpace(c.Tool)))
+                    {
+                        logger?.Warn("[LLM_AI] Tableau d'appels supplémentaire ignoré (aucun appel valide) : {0}",
+                            Truncate(group, 200));
+                        continue;
+                    }
+                    foreach (var c in more)
+                        if (seen.Add(ToolCallKey(c)))
+                            recovered.Add(c);
+                }
+                catch (Exception ex)
+                {
+                    logger?.Warn("[LLM_AI] Tableau d'appels supplémentaire illisible — ignoré (le modèle peut réémettre) : {0}",
+                        ex.Message);
+                }
+            }
+
+            if (recovered.Count == 0) return primaryCalls;
+            logger?.Info("[LLM_AI] Réponse multi-tableaux : {0} appel(s) d'outil supplémentaire(s) récupéré(s) — perdus en silence avant v2.20.3 (vécu 2026-11-13 : record_program fantôme).",
+                recovered.Count);
+            var merged = new List<ToolCall>(primaryCalls);
+            merged.AddRange(recovered);
+            return merged;
+        }
+
+        /// <summary>Clé de dédoublonnage d'un appel (outil + arguments
+        /// bruts) — ne lève jamais (un appel sans arguments reste
+        /// dédoublonnable par son nom seul).</summary>
+        private static string ToolCallKey(ToolCall c)
+        {
+            try { return (c.Tool ?? string.Empty) + "\u0001" + c.Arguments.ToString(); }
+            catch { return (c.Tool ?? string.Empty) + "\u0001"; }
         }
 
         /// <summary>

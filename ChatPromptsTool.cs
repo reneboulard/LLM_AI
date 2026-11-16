@@ -177,6 +177,20 @@ namespace LLM_AI
                             detail = "text dépasse " + MaxPromptChars + " caractères (" + text.Length +
                                      ") — condensez la proposition." }));
 
+                    // v2.20.15 — proposition sans changement (question usager
+                    // 2026-11-14 : « pas de diff → pas de boîte ») : un texte
+                    // matériellement identique au courant n'a rien à faire
+                    // relire — pas de carte, réponse honnête au LLM pour qu'il
+                    // le dise à l'usager au lieu d'annoncer une fausse
+                    // révision en attente.
+                    if (IsMateriallyIdentical(text, GetPrompt(_cfg, field) ?? ""))
+                    {
+                        _logger?.Info("[LLM_AI] Chat prompts : proposition identique au texte courant — ignorée (champ {0}).", field);
+                        return Task.FromResult(Json(new { status = "refused",
+                            detail = "Aucun changement : le texte proposé est identique au prompt courant. " +
+                                     "Rien à approuver — dites simplement à l'usager que le prompt est déjà conforme." }));
+                    }
+
                     // Avertissement de divergence (non bloquant, affiché sur
                     // la carte) : un texte qui ne recouvre presque pas le
                     // texte courant n'est probablement pas une révision du
@@ -300,8 +314,29 @@ namespace LLM_AI
         /// <summary>Recouvrement lexical entre deux textes : mots
         /// (≥ 2 caractères, minuscules) communs rapportés au plus petit des
         /// deux ensembles. Approximation volontairement simple et
-        /// déterministe — elle ne sert qu'à l'avertissement de la carte,
-        /// jamais à refuser.</summary>
+        /// déterministe — elle ne sert qu'à l'avertissement de la carte
+        /// (jamais à refuser) et, depuis v2.20.11, au flag « ressemble à une
+        /// révision » du bouton de secours de la page chat.</summary>
+        internal static double WordOverlapPublic(string a, string b) => WordOverlap(a, b);
+
+        /// <summary>Comparaison « matériellement identique » (v2.20.15) :
+        /// deux textes ne diffèrent PAS si seuls changent les fins de ligne
+        /// (CRLF/CR/LF), les espaces de fin de ligne ou les blancs en
+        /// tête/queue du texte entier — tout cela est invisible à la
+        /// relecture et ne doit pas produire une carte de diff dont
+        /// l'approbation serait une écriture no-op.</summary>
+        internal static bool IsMateriallyIdentical(string a, string b)
+        {
+            string N(string s)
+            {
+                var t = (s ?? "").Replace("\r\n", "\n").Replace("\r", "\n").Trim();
+                var parts = t.Split('\n');
+                for (int i = 0; i < parts.Length; i++) parts[i] = parts[i].TrimEnd();
+                return string.Join("\n", parts);
+            }
+            return string.Equals(N(a), N(b), StringComparison.Ordinal);
+        }
+
         private static double WordOverlap(string a, string b)
         {
             var sa = Tokens(a);

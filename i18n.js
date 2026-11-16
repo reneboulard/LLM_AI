@@ -446,7 +446,7 @@ define([], function () {
             "cfg.extchat.perDay": "Quota (messages/24 h)",
             "cfg.extchat.perDay.desc": "Nombre maximal de messages par usager sur 24 h (fenêtre glissante). 0 = illimité. Défaut 150 (compteur en mémoire : un redémarrage d'Emby le remet à zéro).",
             "cfg.extchat.rec.enabled": "Enregistrements à la voix (confirmation par code)",
-            "cfg.extchat.rec.desc": "Une demande d'enregistrement ne s'exécute jamais du premier coup : elle est mise en réserve et un code à 4 chiffres s'affiche à l'écran de l'app (le LLM ne le voit jamais) ; l'usager donne ensuite ce code dans son message, et seul le code exact crée le timer. 3 codes erronés = outil verrouillé 15 min pour l'usager ; le quota journalier ne compte que les enregistrements réellement créés ; le contrôle parental s'applique toujours. Exige à la fois : la case cochée ici, l'usager listé ci-dessous et le droit Emby d'enregistrer la TV en direct.",
+            "cfg.extchat.rec.desc": "Une demande d'enregistrement ne s'exécute jamais du premier coup : elle est mise en réserve et un code à 4 chiffres s'affiche à l'écran de l'app (le LLM ne le voit jamais) ; l'usager donne ensuite ce code dans son message, et seul le code exact crée le timer. 3 codes erronés = outil verrouillé 15 min pour l'usager ; le quota journalier ne compte que les enregistrements réellement créés ; le contrôle parental s'applique toujours. Exige à la fois : la case cochée ici, l'usager listé ci-dessous et le droit Emby d'enregistrer la TV en direct. Si l'une des conditions manque, l'usager reçoit un message explicite indiquant laquelle.",
             "cfg.extchat.rec.users": "Usagers autorisés à enregistrer (un nom d'usager Emby par ligne)",
             "cfg.extchat.rec.users.desc": "Vide = personne autorisée. En plus du droit Emby (Gérer l'enregistrement TV) et de la case cochée ci-dessus.",
             "cfg.extchat.rec.perDay": "Quota (enregistrements créés/24 h)",
@@ -471,10 +471,15 @@ define([], function () {
             // toute interface (corrigé v1.17.1.2, renommé « Éditer — Atelier
             // de langues »).
             "chat.ctx.i18n_edit": "Éditer — Atelier de langues",
+            // v2.20.11 : zone d'affichage du texte actuel du prompt à la
+            // sélection d'un mode d'édition (servi par ChatContexts).
+            "chat.ctx.current.title": "Texte actuel du prompt (cliquez pour déplier)",
+            "chat.ctx.current.empty": "vide — aucune directive actuellement enregistrée",
             // Annonce automatique au changement de mode (tour « Vous » du
             // fil — visible par l'usager ET relue par le LLM) + erreurs
             // d'envoi (timeout / connexion) : suivent la langue de la page.
-            "chat.mode.selected": "[Admin] J'ai sélectionné le mode « {0} ». Avant toute chose : indique clairement sur quel prompt tu travailles (champ concerné) et affiche le texte actuel que tu vas modifier.",
+            "chat.mode.selected": "[Admin] J'ai sélectionné le mode « {0} ». Le texte actuel du prompt est affiché ci-dessus et injecté dans ton contexte : travaille dessus (read-modify-write), ne régénère rien de mémoire.",
+            "chat.mode.selected.i18n": "[Admin] J'ai sélectionné le mode « {0} ». Le guide de l'atelier de langues est injecté dans ton contexte : il n'y a PAS de prompt à éditer dans ce mode — les corrections de chaînes d'interface se déposent par l'outil i18n_set_key (dépôt deux phases : la carte « Approuver / Refuser » de la page porte l'écriture).",
             "chat.err.timeout": "Requête trop longue — le LLM n'a pas répondu dans le délai imparti. Réessayez.",
             "chat.err.network": "Serveur injoignable (connexion interrompue).",
             // Notes [Admin] poussées dans le fil après un clic
@@ -1025,7 +1030,7 @@ define([], function () {
             "cfg.extchat.perDay": "Quota (messages/24 h)",
             "cfg.extchat.perDay.desc": "Max messages per user over 24 h (sliding window). 0 = unlimited. Default 150 (in-memory counter: an Emby restart resets it).",
             "cfg.extchat.rec.enabled": "Voice recordings (PIN confirmation)",
-            "cfg.extchat.rec.desc": "A record request never executes on the first try: it is held as a reservation and a 4-digit PIN appears on the app's screen (the LLM never sees it); the user then gives that PIN in their message, and only the exact PIN creates the timer. 3 wrong PINs = tool locked for 15 min for that user; the daily quota only counts recordings actually created; parental control always applies. Requires all of: the checkbox here, the user listed below, and the Emby right to record live TV.",
+            "cfg.extchat.rec.desc": "A record request never executes on the first try: it is held as a reservation and a 4-digit PIN appears on the app's screen (the LLM never sees it); the user then gives that PIN in their message, and only the exact PIN creates the timer. 3 wrong PINs = tool locked for 15 min for that user; the daily quota only counts recordings actually created; parental control always applies. Requires all of: the checkbox here, the user listed below, and the Emby right to record live TV. If any of these is missing, the user gets an explicit message naming which one.",
             "cfg.extchat.rec.users": "Users allowed to record (one Emby username per line)",
             "cfg.extchat.rec.users.desc": "Empty = nobody allowed. On top of the Emby right (Manage Live TV recordings) and the checkbox above.",
             "cfg.extchat.rec.perDay": "Quota (recordings created/24 h)",
@@ -1050,10 +1055,15 @@ define([], function () {
             // on any interface (fixed v1.17.1.2, renamed "Edit — Language
             // workshop").
             "chat.ctx.i18n_edit": "Edit — Language workshop",
+            // v2.20.11: current prompt text display on mode selection
+            // (served by ChatContexts).
+            "chat.ctx.current.title": "Current prompt text (click to expand)",
+            "chat.ctx.current.empty": "empty — no directive currently saved",
             // Automatic announcement on mode change (the \"You\" turn of
             // the thread — seen by the user AND re-read by the LLM) +
             // send errors (timeout / connection): follow the page language.
-            "chat.mode.selected": "[Admin] I selected the mode \"{0}\". First of all: clearly state which prompt you are working on (the field concerned) and show the current text you are about to modify.",
+            "chat.mode.selected": "[Admin] I selected the mode \"{0}\". The current prompt text is shown above and injected into your context: work on it (read-modify-write), never regenerate from memory.",
+            "chat.mode.selected.i18n": "[Admin] I selected the mode \"{0}\". The language workshop guide is injected into your context: there is NO prompt to edit in this mode — interface string corrections are deposited with the i18n_set_key tool (two-phase deposit: the page's Approve/Refuse card carries the write).",
             "chat.err.timeout": "Request took too long — the LLM did not respond within the allotted time. Try again.",
             "chat.err.network": "Server unreachable (connection interrupted).",
             // [Admin] notes pushed into the thread after an Approve/Refuse

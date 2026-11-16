@@ -139,6 +139,15 @@ namespace LLM_AI
             /// carte Approuver/Refuser de l'atelier ; l'écriture passe par les
             /// endpoints I18nKey, jamais par le LLM. Null si aucune.</summary>
             public PendingI18nInfo PendingI18n { get; set; }
+            /// <summary>v2.20.11 : vrai quand la réponse du tour, en mode
+            /// d'édition de prompt, ressemble à une RÉVISION du texte
+            /// actuel (recouvrement lexical suffisant avec le prompt courant)
+            /// sans contenir de bloc clôturé — la page affiche alors le
+            /// bouton de secours « Préparer la sauvegarde » sous la réponse.
+            /// Faux sinon (annonce, question, prose sans rapport) : aucun
+            /// bouton, pour ne pas suggérer une sauvegarde qui n'existe pas.
+            /// Null hors mode d'édition.</summary>
+            public bool? LooksLikeRevision { get; set; }
         }
 
         /// <summary>
@@ -314,6 +323,20 @@ namespace LLM_AI
             // une invitation à la dérive. La consultation reste : get_emby_info
             // et l'audit sont fournis par la base du runner (lecture seule).
             bool editMode = ChatContexts.Find(contextId) != null;
+            // v2.20.16 : les mécanismes du canal bloc ```text (nudge
+            // d'itération, hint de réparation, filet prose, extraction
+            // serveur-side) ne concernent QUE les modes d'édition À CHAMP
+            // de prompt — le mode atelier de langues (GuideOnly, FieldFor
+            // vide) livre par l'OUTIL i18n_set_key. Vécu prod 2026-11-14
+            // (gemma4:31b cloud) : EditMode englobait l'atelier → le nudge
+            // v2.20.12 exigeait un bloc ```text dans un mode dont ce bloc
+            // n'est PAS le canal de livraison — le modèle lisait l'exigence
+            // comme une demande hors mode et REFUSAIT après un travail
+            // correct (bannière d'entrée, réponse i18n_get, résumé
+            // post-dépôt : 5 rappels tirés, 3 refus confus servis comme
+            // réponse FINALE — l'état complet de chat.mode.selected et le
+            // résumé du dépôt f40568db ont été REMPLACÉS par un refus).
+            bool promptEditMode = editMode && ChatContexts.FieldFor(contextId).Length > 0;
             ChatActions.BeginTurn(sessionId, Logger);
             List<ILlmTool> actionTools = null;
             string actionsWorkflow = null;
@@ -337,11 +360,19 @@ namespace LLM_AI
             // plugin_prompts (list/get/set two-phase) — l'écriture passe par
             // l'approbation, jamais par le LLM. Indépendant du budget
             // d'actions (une approbation n'est pas une action Emby).
-            if (cfg.ChatPromptsEnabled)
+            // v2.20.12 : le tool est AUSSI enregistré dès qu'un mode
+            // « Éditer — … » est actif, même si ChatPromptsEnabled est
+            // false — la sélection du mode dans le dropdown EST l'opt-in
+            // explicite de ce tour (vécu prod 2026-11-14 : checkbox
+            // décochée, aucun tool, le LLM bouclait sans jamais livrer).
+            // Le dépôt final reste de toute façon deux phases + serveur-side
+            // (bloc ```text extrait côté serveur, voir plus bas).
+            if (cfg.ChatPromptsEnabled || editMode)
             {
                 actionTools ??= new List<ILlmTool>();
                 actionTools.Add(new ChatPromptsTool(cfg, sessionId, userId, contextId, lang, Logger));
-                Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts).");
+                Logger.Info("[LLM_AI] [CHAT] Édition de prompts active (plugin_prompts){0}.",
+                    editMode && !cfg.ChatPromptsEnabled ? " (mode actif, opt-in du dropdown)" : "");
             }
 
             // Atelier de langues (v1.17.0 T1d ; mode déroulant v1.17.0.2) :
@@ -371,7 +402,8 @@ namespace LLM_AI
             {
                 reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
                     _sessions, _tasks, _notifications, ct, memoryBlock,
-                    actionTools, actionsWorkflow, contextBlock).ConfigureAwait(false);
+                    actionTools, actionsWorkflow, contextBlock,
+                    editMode: editMode, promptEditMode: promptEditMode).ConfigureAwait(false);
             }
             // Requête avortée (déconnexion client, timeout page) : répondre un
             // JSON propre au lieu de laisser l'OperationCanceledException
@@ -409,7 +441,7 @@ namespace LLM_AI
             //  une question posée à l'usager). Un set déjà soumis (proposition
             //  en attente) ou une réponse d'échec ne déclenchent pas le filet.
             //  ------------------------------------------------------------------
-            if (contextBlock.Length > 0 && ChatContexts.FieldFor(contextId).Length > 0
+            if (promptEditMode
                 && cfg.ChatPromptsEnabled
                 && !string.IsNullOrWhiteSpace(reply)
                 && !reply.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal)
@@ -433,7 +465,8 @@ namespace LLM_AI
                 {
                     string nudged = await runner.RunChatAsync(cfg, "CHAT-NUDGE", nudgedHistory,
                         nudge, _sessions, _tasks, _notifications, ct, memoryBlock,
-                        actionTools, actionsWorkflow, contextBlock).ConfigureAwait(false);
+                        actionTools, actionsWorkflow, contextBlock,
+                        editMode: editMode, promptEditMode: promptEditMode).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(nudged)
                         && !nudged.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal))
                     {
@@ -474,6 +507,70 @@ namespace LLM_AI
             // (plugin_prompts set) : la page rend la carte de diff.
             var pendingInfo = (PendingApprovalInfo)null;
             var pending = ChatPromptStore.TakePagePending(sessionId);
+
+            // v2.20.12 — dépôt DÉTERMINISTE côté serveur en mode édition :
+            // un petit LLM local (vécu prod 2026-11-14, gemma4:latest) ne
+            // parvient pas à appeler plugin_prompts set (boucle de
+            // réparations, aucun appel émis). Le serveur extrait donc
+            // LUI-MÊME le bloc clôturé ```text … ``` de la réponse finale
+            // (le SEUL canal de livraison documenté dans CommonRules) et
+            // dépose la proposition dans ChatPromptStore — comme le ferait
+            // le tool set, avec les mêmes validations (liste blanche,
+            // plafond, champ = mode actif, avertissement de divergence).
+            // Aucune écriture : le store n'est consommé que par le clic
+            // « Approuver » (endpoint dédié, C# déterministe).
+            if (pending == null && promptEditMode && !string.IsNullOrWhiteSpace(reply)
+                && reply.IndexOf("```", StringComparison.Ordinal) >= 0)
+            {
+                string field = ChatContexts.FieldFor(contextId);
+                string blockText = ExtractLastTextCodeBlock(reply);
+                if (field.Length > 0 && !string.IsNullOrWhiteSpace(blockText)
+                    && blockText.Trim().Length <= ChatPromptsTool.MaxPromptChars)
+                {
+                    string current = ChatContexts.Find(contextId)?.GetPrompt(cfg) ?? "";
+                    if (ChatPromptsTool.IsMateriallyIdentical(blockText.Trim(), current))
+                    {
+                        // v2.20.15 — pas de diff, pas de carte (question usager
+                        // 2026-11-14) : approuver un texte identique au courant
+                        // serait une écriture no-op. Ligne greppable : un bloc
+                        // livré sans carte doit toujours s'expliquer au log.
+                        Logger.Info("[LLM_AI] [CHAT] Bloc ```text identique au texte courant — aucun dépôt (champ {0}).", field);
+                    }
+                    else
+                    {
+                        string warn = null;
+                        if (current.Trim().Length > 0)
+                        {
+                            double overlap = ChatPromptsTool.WordOverlapPublic(blockText, current);
+                            if (overlap < ChatPromptsTool.WarnOverlapThreshold)
+                                warn = string.Format(CultureInfo.InvariantCulture,
+                                    I18n.S("chat.warn.divergence", lang),
+                                    Math.Round(overlap * 100),
+                                    ChatPromptsTool.LabelOfLocalized(field, lang));
+                        }
+                        pending = ChatPromptStore.Create(cfg, sessionId, userId, field,
+                            blockText.Trim(), ChatPromptsTool.LabelOfLocalized(field, lang), warn, Logger);
+                        if (pending != null)
+                        {
+                            // v2.20.14 — Create publie aussi la carte au canal page
+                            // (_pageNotified) ; ici on la sert par la valeur de
+                            // retour. Sans consommer le canal dans CE tour, le tour
+                            // SUIVANT relèverait cette carte périmée (jamais
+                            // approuvée) : re-service en doublon ET fermeture
+                            // silencieuse de ce dépôt (pending != null) — le bloc
+                            // ```text du tour suivant serait jeté sans un log
+                            // (vécu prod 2026-11-14 08:17-08:25 : dépôts un tour
+                            // sur deux). Symétrique du chemin tool : le canal est
+                            // relevé dans le tour même où il est posé.
+                            ChatPromptStore.TakePagePending(sessionId);
+                            Logger.Info("[LLM_AI] [CHAT] Bloc ```text extrait serveur-side en mode édition : " +
+                                "proposition déposée (action_id={0}, champ={1}, {2} caractères).",
+                                pending.ActionId, field, pending.NewText?.Length ?? 0);
+                        }
+                    }
+                }
+            }
+
             if (pending != null)
             {
                 pendingInfo = new PendingApprovalInfo
@@ -520,6 +617,27 @@ namespace LLM_AI
                     Warning = i18nPending.Warn
                 };
 
+            // v2.20.11 : le bouton de secours « Préparer la sauvegarde » (page)
+            // n'a de sens que si la réponse PROPOSE quelque chose : en mode
+            // d'édition, on n'active le flag que si la réponse recouvre
+            // lexicalement le prompt courant (c'est une révision en prose,
+            // pas une annonce/question). Sans bloc clôturé ni ressemblance,
+            // aucun bouton — vécu prod 2026-11-14 (gemma4:latest) : annonce
+            // « Je suis en mode Éditer — Prompt système » + bouton 💾 affiché
+            // sans aucune proposition.
+            bool? looksLikeRevision = null;
+            if (editMode && pending == null && !string.IsNullOrWhiteSpace(reply)
+                && reply.IndexOf("```", StringComparison.Ordinal) < 0)
+            {
+                string field = ChatContexts.FieldFor(contextId);
+                string current = field.Length > 0 ? (ChatContexts.Find(contextId)?.GetPrompt(cfg) ?? "") : "";
+                if (current.Trim().Length > 0)
+                    looksLikeRevision = ChatPromptsTool.WordOverlapPublic(reply, current)
+                        >= ChatPromptsTool.WarnOverlapThreshold;
+                else
+                    looksLikeRevision = false; // prompt vide : rien à réviser en prose
+            }
+
             return new ChatResponse
             {
                 Enabled = true,
@@ -529,7 +647,8 @@ namespace LLM_AI
                 Actions = turnActions.Count > 0 ? turnActions : null,
                 Pending = pendingInfo,
                 PendingActions = pendingActions,
-                PendingI18n = i18nInfo
+                PendingI18n = i18nInfo,
+                LooksLikeRevision = looksLikeRevision
             };
         }
 
@@ -668,6 +787,13 @@ namespace LLM_AI
         {
             public string Id { get; set; }
             public string Label { get; set; }
+            /// <summary>Texte actuel du prompt couvert par le mode (v2.20.11)
+            /// : la page l'affiche à l'écran dès la sélection du mode, pour
+            /// que l'admin voie CE qu'il va modifier sans attendre la
+            /// réponse du LLM. Null pour un mode sans prompt (atelier de
+            /// langues) et pour un prompt vide — la page affiche alors une
+            /// note « (vide) ».</summary>
+            public string CurrentText { get; set; }
         }
 
         public class ChatContextsResponse
@@ -690,7 +816,15 @@ namespace LLM_AI
 
             var list = new List<ChatContextInfo>();
             foreach (var c in ChatContexts.All)
-                list.Add(new ChatContextInfo { Id = c.Id, Label = c.Label });
+                list.Add(new ChatContextInfo
+                {
+                    Id = c.Id,
+                    Label = c.Label,
+                    // v2.20.11 : texte actuel servi avec la liste — la page
+                    // l'affiche à l'écran à la sélection du mode (un prompt
+                    // vide reste visible comme « (vide) », jamais absent).
+                    CurrentText = c.GuideOnly ? null : (c.GetPrompt(cfg) ?? "")
+                });
             return new ChatContextsResponse { Enabled = true, Contexts = list };
         }
 
@@ -1077,6 +1211,52 @@ namespace LLM_AI
                 return "";
             }
             catch { return ""; }
+        }
+
+        /// <summary>
+        /// v2.20.12 : extrait le contenu du DERNIER bloc de code d'une
+        /// réponse (```text … ``` ou ``` brut) — le canal de livraison
+        /// unique d'une révision de prompt en mode édition (CommonRules).
+        /// v2.20.13 : les lignes de fence ``` (début de ligne, indent
+        /// ≤ 3 espaces toléré) s'alternent ouvrante/clôture ; le DERNIER
+        /// bloc = entre l'avant-dernière et la dernière fence (paire
+        /// complète) ou après la dernière fence seule (bloc non fermé =
+        /// réponse tronquée, accepté). La première version prenait la
+        /// dernière fence comme ouvrante — un bloc CLÔTÉ (le cas normal)
+        /// donnait un corps vide et le dépôt était silently ignoré.
+        /// Null si aucune fence.
+        /// </summary>
+        private static string ExtractLastTextCodeBlock(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            var lines = text.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
+            var fences = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string t = lines[i].TrimStart();
+                if (t.StartsWith("```", StringComparison.Ordinal)) fences.Add(i);
+            }
+            if (fences.Count == 0) return null;
+
+            int open, close; // indexes de lignes
+            if (fences.Count % 2 == 1)
+            {
+                // bloc non fermé : tout ce qui suit la dernière fence
+                open = fences[fences.Count - 1];
+                close = lines.Length; // sentinelle : jusqu'à la fin
+            }
+            else
+            {
+                open = fences[fences.Count - 2];
+                close = fences[fences.Count - 1];
+            }
+            var sb = new System.Text.StringBuilder();
+            for (int i = open + 1; i < close; i++)
+            {
+                if (sb.Length > 0) sb.Append('\n');
+                sb.Append(lines[i]);
+            }
+            return sb.ToString().Trim('\n');
         }
 
         // ------------------------------------------------------------------

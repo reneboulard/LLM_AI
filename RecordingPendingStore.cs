@@ -347,6 +347,35 @@ namespace LLM_AI
             }
         }
 
+        /// <summary>v2.20.10 — Lecture seule : le budget du jour de l'usager
+        /// est-il déjà épuisé ? Pré-vérif au DÉPÔT d'une demande (phase 1)
+        /// pour refuser AVANT d'afficher un code : sans elle, l'usager
+        /// traversait toute la danse du code pour apprendre un refus déjà
+        /// certain (même classe de défaut que la pré-vérif dedup v2.20.5).
+        /// N'enregistre RIEN — la consommation reste à la confirmation (le
+        /// quota ne compte que les créations réelles, doctrine inchangée).
+        /// Même sémantique de borne que <see cref="TryConsumeCreation"/> :
+        /// maxPerDay&lt;=0 = illimité, jamais plein.</summary>
+        public static bool QuotaFull(string user, int maxPerDay, out string error,
+            string langKey = null)
+        {
+            lock (s_gate)
+            {
+                long now = DateTime.UtcNow.Ticks;
+                PruneCreated(user, now);
+                List<long> list;
+                if (maxPerDay > 0 && s_created.TryGetValue(user, out list)
+                    && list.Count >= maxPerDay)
+                {
+                    error = string.Format(CultureInfo.CurrentUICulture,
+                        I18n.S("rec.quota", langKey), maxPerDay);
+                    return true;
+                }
+                error = null;
+                return false;
+            }
+        }
+
         // ------------------------------------------------------------------
         //  Lecture (endpoint — canal hors bande du code)
         // ------------------------------------------------------------------

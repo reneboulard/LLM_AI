@@ -814,6 +814,27 @@ des titres québécois absents du catalogue TMDB/TVDB). Voir [Identification des
   échoue ; S3 extrait les ids **IMDb et TMDB** des URLs de résultats ; S2 accepte
   un id **TVDB** (séries), validé via `TMDB /find tvdb_id`.
 
+> 💡 **Recommandation (v2.20.17) — téléchargeurs de métadonnées natifs décochés sur
+> la bibliothèque DVR** : dans les réglages de la bibliothèque qui reçoit les
+> enregistrements, décochez les téléchargeurs natifs (TheTVDB, TheMovieDb, OMDb) —
+> **`LLM_AI` fait alors l'identification seul**, à partir de la vérité EPG figée à
+> la fin de l'enregistrement, au lieu d'avoir à **corriger Emby après le fait**
+> (retirer les ids d'une fiche erronée posée à l'import par un match de titre
+> approximatif — vécu : un documentaire rattaché à une série homonyme). Vérifié en
+> réel : plus aucune fiche erronée n'atterrit à l'import, et l'audit de fin
+> d'enregistrement reste en filet sur les ids que `EmbyTV` écrit au démarrage du
+> timer (choix du nom de dossier). L'identification est **excellente quand le
+> plugin a accès à toutes ses sources** : clé **TMDB** (recherche multilingue,
+> validation des ids, fiches), instance **SearXNG** (recherche web des titres
+> paraphrasés qu'aucun catalogue ne connaît), clé **TVDB** (recherche de séries —
+> aussi l'outil `tvdb_search` du chat) et au moins un **serveur LLM**
+> (propositions d'ids + juge de synopsis) — voir [Clés API](#clés-api) et
+> [Serveurs LLM](#serveurs-llm). Gardez les téléchargeurs natifs **cochés sur vos
+> bibliothèques permanentes** : au déplacement du dossier, le `.nfo` transmet les
+> ids validés et Emby enrichit par **id exact** (acteurs, saisons, épisodes) sans
+> jamais deviner par titre. Voir
+> [Identification des orphelins](#identification-des-enregistrements-orphelins).
+
 ### Régularisation cross-kind (file d'attente admin)
 
 Panneau **admin** de la page de configuration (v1.13.31, étendu v1.14.0) qui
@@ -1003,7 +1024,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 |---|---|---|
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Point d'entrée. Nom `LLM_AI`, Id `e7d3…2e60`. Enregistre les pages web (config, recommandations, i18n). Version pilotée par `<AssemblyVersion>` du `.csproj`. |
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | Toute la config persistée + serveurs multi-source. |
-| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie la notification « N nouvelles recos » (opt-out `NotifyRecommendationsEnabled`, v2.5.0) et la notification d'échec (admins, inconditionnelle). Délègue l'orchestration à `LlmRunner`. Défaut quotidien 3 h 10 ; passe par la porte `LlmTaskGate` autour de ses runs agent. |
+| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Tâche planifiée globale (admin) : produit les recos **Séries / Films** en parcourant l'EPG, applique le garde-fou « déjà possédé » (`EnrichWithLibrary` sur le payload fusionné), stocke dans `Recommendations`, envoie la cloche détaillée « N nouvelles recos » (liste titre/année/chaîne/raison LLM par item, v2.20.0 ; opt-out `NotifyRecommendationsEnabled`, v2.5.0) et la notification d'échec (admins, inconditionnelle). Délègue l'orchestration à `LlmRunner`. Défaut quotidien 3 h 10 ; passe par la porte `LlmTaskGate` autour de ses runs agent. |
 | `LlmTaskGate.cs` | `LlmTaskGate` (classe statique) | **Porte de concurrence des tâches LLM planifiées** (v2.2.1) : au plus `LlmMaxConcurrentTasks` runs simultanés (défaut 1) — une tâche qui arrive sur une porte pleine attend (réveil immédiat à la libération, pas de sondage) puis passe, aucun passage nocturne perdu ; un attendant annulé sort de la file sans consommer de slot. Hors porte : chat, Tonight, audit (interactifs — cascade timeout → serveur suivant). Capacité relue à chaque passage : changement de config sans redémarrage. Utilisée par `LlmScheduledTask`, `RecoAnalysisTask` et `MemoryTask`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | Endpoint HTTP **par usager à la demande** `GET /Plugins/LLMAI/Tonight`. Couche HTTP fine : résout l’usager puis délègue à `TonightService`. |
 | `TonightService.cs` | `TonightService` (interne) | **Génération partagée** « À regarder ce soir » : profil de goût, enregistrements non visionnés, **enregistrements à venir** (timers déjà programmés, bloc auto-descriptif « ne pas re-programmer », fenêtre identique à `epg_tonight`, v2.7.0), réserve bibliothèque, séries « prêtes à dévorer » (opt-in, gate anti-spam `BingeNotified`), run LLM, enrichissement, watched-guard (marque `watched=true` les rediffusions déjà visionnées — index per-usager `BuildWatchedIndex`), **cache par usager** (statique, partagé endpoint + login). **Single-flight** (v2.19.0) : au plus un run de production par usager — registre « en vol » in-memory (`GenerateTonightAsync` wrapper + `GenerateTonightCoreAsync`), le 2ᵉ déclencheur **joint** le résultat du run en cours (TTL 10 min ; `refresh=1` explicite inclus), sources logguées (`login`/`page`/`chat`/`planifié`). Utilisé par `TonightApiService`, `TonightLoginService`, `TonightPreProduceTask` et le tool chat `run_tonight_run` (directives de session éphémères + origin chat, v1.13). |
@@ -1134,6 +1155,18 @@ l'endpoint `TonightApiService`. Le LLM reçoit **trois sources** :
    courants) n'est recommandée que si ses épisodes se suffisent à eux-mêmes
    (magazine, documentaire, divertissement). Sans ces faits, le LLM recommandait
    « le dernier épisode » d'une série jamais commencée (vécu 2026-10-08 en prod).
+   Depuis la v2.20.1, les lignes peuvent aussi porter (quand la donnée existe) :
+   `recent_play=N (dernière : aaaa-mm-jj, complète|partielle)` — le nombre de
+   lectures récentes du titre **par l'usager du run**, lues à la volée dans le journal
+   de télémétrie du plugin (`playback.json`, 30 jours, champs figés à l'écriture —
+   pas de nouveau store). La donnée couvre ce que l'état « vu » d'Emby ignore :
+   lectures partielles, extraits, « regardé puis effacé/transféré » — `user_started=no`
+   + `recent_play=2` devient pour le modèle « une émission suivie chaque semaine sans
+   être commencée ». Et `genres=[…]` : les genres de l'œuvre en bibliothèque, complétés
+   quand la ligne d'enregistrement n'en porte pas en propre (vécu : « L'épicerie »,
+   où le modèle transplantait « comédie dramatique » du profil de goût faute d'ancre —
+   incident 2026-11-12 ; désormais le justificatif s'ancre sur les vrais genres et le
+   journal : « magazine documentaire, fait partie de vos habitudes »).
 
 **Réserve bibliothèque (fallback)** — `BuildLibraryFallbackPool` : items non visionnés
 pré-fetchés, injectés comme **réserve**, à utiliser **seulement si** le LLM produit
@@ -1719,6 +1752,26 @@ les titres de France ou originaux) : l'item finit **sans id IMDb/TMDB** — un
 > et accents tolérés) est ignoré sans aucun appel d'identification (S0/S1/S2/S3)
 > ni étiquette, et chaque exclusion est logée nominativement. Voir
 > [Configuration](#identification-des-enregistrements-orphelins).
+
+> 💡 **Téléchargeurs natifs décochés sur la bibliothèque DVR (recommandé,
+> v2.20.17)** : la source des fausses fiches d'Emby est **éliminée à l'origine** —
+> sans téléchargeurs cochés sur la bibliothèque d'enregistrements, `MetadataService`
+> ne relance aucune recherche par titre après l'import ; c'est le plugin qui
+> identifie seul via la vérité EPG (audit de fin d'enregistrement + passe 04 h) et
+> pose la fiche (ids TMDB/TVDB/IMDb, synopsis, genres, affiche), les verrous et les
+> tags. Nuance vérifiée en réel : `EmbyTV` interroge quand même TVDB/TMDB **au
+> démarrage de l'enregistrement** pour nommer le dossier (« Titre (Année) ») et
+> écrire les premiers ids dans le `tvshow.nfo` — le filet d'audit du plugin couvre
+> ces ids-là ; en revanche **plus aucune fiche erronée n'est posée à l'import** (le
+> scénario qui motivait la correction après coup ne se produit plus). Sur les
+> bibliothèques permanentes, gardez les téléchargeurs natifs cochés : le `.nfo`
+> transmet les ids validés par le plugin et l'enrichissement se fait par id exact.
+> Le plein rendement suppose toutes les sources branchées : clé **TMDB** (recherche
+> multilingue S1, validation S2/S3, fiches), instance **SearXNG** (S3), clé
+> **TVDB** (ids de séries proposés en S2 et validés via `TMDB /find tvdb_id` ;
+> l'outil `tvdb_search` du chat pour enquêter sur les cas têtus) et serveurs
+> **LLM** (propositions S2 + juge de synopsis) — voir [Clés API](#clés-api) et
+> [Serveurs LLM](#serveurs-llm).
 
 ### Flux (trois stages)
 

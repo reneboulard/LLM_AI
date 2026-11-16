@@ -453,7 +453,10 @@ namespace LLM_AI
 
             // Tool d'enregistrement (v1.13.23) : portes CUMULATIVES — opt-in +
             // liste DÉDIÉE d'usagers + droit natif d'enregistrer. Absent du
-            // chemin : le chat reste lecture seule (inchangé).
+            // chemin : le chat reste lecture seule — MAIS v2.20.9 : le refus
+            // n'est plus muet. Une note DÉDIÉE (raison exacte par cas) est
+            // injectée au flux de travail du tour : le modèle relaye la
+            // raison au lieu d'improviser « je ne peux pas ».
             List<ILlmTool> extraTools = null;
             if (cfg.ExternalChatRecordingsEnabled
                 && UserListedFor(cfg.ExternalChatRecordingUsers, user.Name)
@@ -465,6 +468,34 @@ namespace LLM_AI
                 extraWorkflow += ExternalRecordingBlock;
                 Logger.Info("[LLM_AI] [CHAT-EXT] Tool d'enregistrement activé (confirm. à deux phases) — usager {0}.",
                     user.Name);
+            }
+            else
+            {
+                // v2.20.9 — raison évaluée dans l'ORDRE de la chaîne de
+                // privilège (case → liste → droit natif) : le message nomme
+                // la PREMIÈRE porte qui manque. Cas « listé mais sans droit
+                // Emby » : DÉSAJUSTEMENT de config (l'admin a manifesté
+                // l'intention d'autoriser, le droit natif manque) → Warn
+                // greppable pour l'admin, en plus du message usager. Le
+                // refus reste fail-closed : l'outil n'est pas construit et
+                // l'interception du code re-vérifie les trois portes.
+                string reason;
+                if (!cfg.ExternalChatRecordingsEnabled)
+                    reason = "la fonction n'est pas activée sur ce serveur";
+                else if (!UserListedFor(cfg.ExternalChatRecordingUsers, user.Name))
+                    reason = "son profil n'a pas accès à l'enregistrement par le chat";
+                else
+                {
+                    reason = "son profil Emby n'a pas le droit d'enregistrer la TV en direct (à activer dans le tableau de bord Emby)";
+                    Logger.Warn("[LLM_AI] [CHAT-EXT] Usager {0} listé pour l'enregistrement mais SANS le droit Emby (EnableLiveTvManagement) — à corriger au tableau de bord Emby.",
+                        user.Name);
+                }
+                extraWorkflow += "\n### ENREGISTREMENTS TV (CHAT EXTERNE)\n" +
+                    "Les enregistrements TV ne sont PAS disponibles ici : " + reason +
+                    ". Si l'usager demande d'enregistrer ou de programmer une " +
+                    "émission, rapporte-lui exactement cette raison — n'annonce " +
+                    "JAMAIS un enregistrement, n'improvise pas d'alternative et " +
+                    "ne promets pas de le faire plus tard.";
             }
 
             if (req.Tts)

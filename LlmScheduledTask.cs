@@ -134,6 +134,13 @@ namespace LLM_AI
             "high/medium/low selon l'intérêt. Reprends title/channel/start tels quels depuis " +
             "les résultats pour permettre la programmation.";
 
+        // Cloche « recommandations » (v2.20.0) : plafond d'items détaillés dans
+        // la description et troncature de la raison LLM — la description part
+        // par courriel/webhook (canaux qui rendent Title + Description seuls),
+        // elle doit rester lisible.
+        private const int BellDetailCap = 8;
+        private const int BellReasonMax = 200;
+
         public async Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
         {
             var cfg = Plugin.Instance?.Configuration;
@@ -768,6 +775,11 @@ namespace LLM_AI
         /// Envoie une notification Emby (cloche) à tous les utilisateurs :
         /// « N nouvelles recommandations ». Pointe vers la racine Emby
         /// (la page « Recommandations LLM AI » est atteignable via le menu).
+        /// <para>v2.20.0 (format A, décision usager 2026-11-12) : la
+        /// description liste désormais chaque recommandation (titre, année,
+        /// date, chaîne, disponibilité, raison LLM tronquée) au lieu d'un
+        /// compteur seul — voir
+        /// <see cref="BuildRecommendationBellDescription"/>.</para>
         /// <para>l'API <c>INotificationManager.SendNotification</c> attend un
         /// <c>Emby.Notifications.NotificationRequest</c> qui porte un SEUL
         /// <c>User</c> — on boucle donc sur les utilisateurs pour notifier tout
@@ -789,11 +801,7 @@ namespace LLM_AI
             }
             if (users.Count == 0) return;
 
-            int count = LlmRunner.CountRecommendations(reply);
-            string desc = count > 0
-                ? string.Format(CultureInfo.InvariantCulture,
-                    "{0} nouvelles recommandations — voir la page « Recommandations LLM AI ».", count)
-                : "Recommandations mises à jour — voir la page « Recommandations LLM AI ».";
+            string desc = BuildRecommendationBellDescription(reply);
             // URL absolue pour le click-through de la notification : dérivée de
             // la config réseau d'Emby (IServerApplicationHost.GetLocalHostApiUrl
             // — lit les ports/schéma de system.xml + l'hôte local détecté), pas
@@ -813,7 +821,7 @@ namespace LLM_AI
                 {
                     var req = new NotificationRequest
                     {
-                        Title = "LLM AI",
+                        Title = "🤖 LLM AI — Recommandations d'enregistrement",
                         Description = desc,
                         Url = url,
                         Date = now,
@@ -830,6 +838,214 @@ namespace LLM_AI
             }
             _logger?.Info("[LLM_AI] Notification envoyée à {0}/{1} utilisateur(s).", sent, users.Count);
         }
+
+        // ------------------------------------------------------------------
+        //  Cloche « recommandations » : description détaillée (v2.20.0)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Description détaillée de la cloche « recommandations » (v2.20.0,
+        /// format A — décision usager 2026-11-12) : le payload persisté porte
+        /// déjà tous les champs que la page « Recommandations LLM AI » affiche
+        /// (title, kind, reason, channel, start, year, source…) — la cloche les
+        /// met en forme au lieu d'un compteur seul, au style de la cloche
+        /// « Enregistrement recommandé » (TonightRecordingService : la raison
+        /// LLM vit dans la cloche multi-lignes, jamais dans un toast).
+        /// <para>Structure : « N nouvelles recommandations (X séries, Y
+        /// films). » puis une section « 📺 Séries » et une section « 🎬 Films »
+        /// — un item = une ligne de détails « ▶ Titre (année) — 13/11 21:00 ·
+        /// CBFT-DT » (date/chaîne au format de la page ; source recording /
+        /// library → « 📼 déjà enregistré » / « 📚 déjà en bibliothèque »)
+        /// suivie de la raison LLM « 🤖 … » tronquée. Plafond
+        /// <see cref="BellDetailCap"/> items détaillés — le surplus devient
+        /// « … et N autres, sur la page ».</para>
+        /// <para>Fail-open : payload non-tableau (prose Markdown — compte 0),
+        /// illisible en cours de construction ou items sans titre → formes
+        /// raccourcies historiques ; jamais d'exception au-delà de cette
+        /// méthode.</para>
+        /// </summary>
+        private string BuildRecommendationBellDescription(string reply)
+        {
+            int count = LlmRunner.CountRecommendations(reply);
+            if (count <= 0)
+            {
+                // Payload non-tableau (prose Markdown) ou vide : le libellé
+                // générique historique reste le plus honnête.
+                return "Recommandations mises à jour — voir la page « Recommandations LLM AI ».";
+            }
+
+            // Un seul passage : total PAR TYPE sur tout le tableau (l'en-tête
+            // reste juste même au-delà du plafond), lignes détaillées
+            // plafonnées à BellDetailCap.
+            int totalSeries = 0, totalMovies = 0, listed = 0;
+            var series = new List<string>();
+            var movies = new List<string>();
+            try
+            {
+                using (var doc = JsonDocument.Parse(reply))
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        bool isMovie = BellKindIsMovie(el);
+                        if (isMovie) totalMovies++; else totalSeries++;
+                        if (listed >= BellDetailCap) continue; // compté, pas détaillé
+
+                        string lines = BellItemLines(el);
+                        if (lines == null) continue;           // sans titre : compté seulement
+                        (isMovie ? movies : series).Add(lines);
+                        listed++;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.ErrorException("[LLM_AI] Mise en forme de la cloche recommandations échouée : {0}", ex, ex.Message);
+                return SimpleBellLine(count);
+            }
+
+            if (listed == 0)
+                return SimpleBellLine(count);
+
+            var sb = new StringBuilder();
+            sb.Append(FrCount(count, "nouvelle recommandation", "nouvelles recommandations"));
+            var kinds = new List<string>();
+            if (totalSeries > 0) kinds.Add(FrCount(totalSeries, "série", "séries"));
+            if (totalMovies > 0) kinds.Add(FrCount(totalMovies, "film", "films"));
+            if (kinds.Count > 0) sb.Append(" (").Append(string.Join(", ", kinds)).Append(')');
+            sb.Append('.');
+
+            AppendBellSection(sb, "📺 Séries", series);
+            AppendBellSection(sb, "🎬 Films", movies);
+
+            sb.Append("\n— ");
+            int rest = count - listed;
+            if (rest > 0)
+                sb.Append("… et ").Append(FrCount(rest, "autre, sur la page", "autres, sur la page"));
+            else
+                sb.Append("liste complète et boutons sur la page");
+            sb.Append(" « Recommandations LLM AI ».");
+            return sb.ToString();
+        }
+
+        /// <summary>Un item de la cloche : « ▶ Titre (année) — 13/11 21:00 ·
+        /// CBFT-DT » puis, si le LLM en a produit une, la raison « 🤖 … »
+        /// (tronquée à <see cref="BellReasonMax"/>). Null si l'item n'a pas de
+        /// titre (il reste compté dans l'en-tête — la page gère de son côté ce
+        /// qu'elle veut de son payload).</summary>
+        private static string BellItemLines(JsonElement el)
+        {
+            if (!el.TryGetProperty("title", out var t) || t.ValueKind != JsonValueKind.String)
+                return null;
+            string title = Oneline(t.GetString());
+            if (string.IsNullOrWhiteSpace(title)) return null;
+
+            var sb = new StringBuilder("▶ ").Append(title);
+
+            // Année de production (champ enrichi côté tâche) : tolère nombre et
+            // "2024", ignore le bruit — mêmes bornes que la page (1900-2100).
+            if (TryBellYear(el, out int year))
+                sb.Append(" (").Append(year.ToString(CultureInfo.InvariantCulture)).Append(')');
+
+            // Disponibilité : source recording/library = déjà disponible, ni
+            // date ni chaîne (même convention que la méta-ligne de la page) ;
+            // sinon date de diffusion + chaîne du contrat LLM.
+            string source = el.TryGetProperty("source", out var src) && src.ValueKind == JsonValueKind.String
+                ? src.GetString() : null;
+            if (string.Equals(source, "recording", StringComparison.OrdinalIgnoreCase))
+                sb.Append(" — 📼 déjà enregistré");
+            else if (string.Equals(source, "library", StringComparison.OrdinalIgnoreCase))
+                sb.Append(" — 📚 déjà en bibliothèque");
+            else
+            {
+                var meta = new List<string>();
+                if (TryBellStart(el, out string startStr)) meta.Add(startStr);
+                string channel = el.TryGetProperty("channel", out var ch) && ch.ValueKind == JsonValueKind.String
+                    ? Oneline(ch.GetString()) : null;
+                if (!string.IsNullOrEmpty(channel)) meta.Add(channel);
+                if (meta.Count > 0)
+                    sb.Append(" — ").Append(string.Join(" · ", meta));
+            }
+
+            if (el.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String)
+            {
+                string reason = Oneline(r.GetString());
+                if (!string.IsNullOrWhiteSpace(reason))
+                    sb.Append("\n🤖 ").Append(Truncate(reason, BellReasonMax));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Type de l'item — même test que <c>kindIsMovie</c> côté page
+        /// (kind commençant par « movie » ou « film »).</summary>
+        private static bool BellKindIsMovie(JsonElement el)
+        {
+            if (!el.TryGetProperty("kind", out var k) || k.ValueKind != JsonValueKind.String)
+                return false;
+            string kind = k.GetString();
+            return kind != null &&
+                (kind.StartsWith("movie", StringComparison.OrdinalIgnoreCase) ||
+                 kind.StartsWith("film", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>Année de production de l'item : nombre ou chaîne numérique
+        /// entre 1900 et 2100 (mêmes bornes que la page — ignore le bruit).</summary>
+        private static bool TryBellYear(JsonElement el, out int year)
+        {
+            year = 0;
+            if (!el.TryGetProperty("year", out var y)) return false;
+            if (y.ValueKind == JsonValueKind.Number && y.TryGetInt32(out year))
+                return year > 1900 && year < 2100;
+            if (y.ValueKind == JsonValueKind.String &&
+                int.TryParse(y.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out year))
+                return year > 1900 && year < 2100;
+            return false;
+        }
+
+        /// <summary>Date de diffusion au format de la page (dd/MM HH:mm), heure
+        /// locale du serveur — même rendu que le toast d'enregistrement
+        /// (TonightRecordingService).</summary>
+        private static bool TryBellStart(JsonElement el, out string start)
+        {
+            start = null;
+            if (!el.TryGetProperty("start", out var s) || s.ValueKind != JsonValueKind.String)
+                return false;
+            if (!DateTimeOffset.TryParse(s.GetString(), CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out DateTimeOffset dto))
+                return false;
+            start = dto.LocalDateTime.ToString("dd/MM HH:mm", CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        /// <summary>Section « 📺 Séries » / « 🎬 Films » de la cloche : titre de
+        /// section puis une ligne d'items par item. LF uniquement (v2.4.5 :
+        /// les payloads webhook/courriel ne portent jamais de CR).</summary>
+        private static void AppendBellSection(StringBuilder sb, string heading, List<string> lines)
+        {
+            if (lines == null || lines.Count == 0) return;
+            sb.Append("\n\n").Append(heading);
+            foreach (var l in lines)
+                sb.Append("\n").Append(l);
+        }
+
+        /// <summary>Forme raccourcie historique (repli fail-open) : compteur
+        /// seul, accord pluriel correct.</summary>
+        private static string SimpleBellLine(int count) =>
+            string.Format(CultureInfo.InvariantCulture,
+                count == 1
+                    ? "{0} nouvelle recommandation — voir la page « Recommandations LLM AI »."
+                    : "{0} nouvelles recommandations — voir la page « Recommandations LLM AI ».",
+                count);
+
+        /// <summary>« 1 série » / « 3 séries » — accord pluriel FR, nombre en
+        /// culture invariante.</summary>
+        private static string FrCount(int n, string sing, string plur) =>
+            n.ToString(CultureInfo.InvariantCulture) + " " + (n == 1 ? sing : plur);
+
+        /// <summary>Cloche = LF uniquement : un CR/LF parasite dans un champ
+        /// LLM (titre, chaîne, raison) est aplati en espace (les payloads
+        /// webhook/courriel ne portent jamais de CR — v2.4.5).</summary>
+        private static string Oneline(string s) =>
+            string.IsNullOrWhiteSpace(s) ? s : s.Replace("\r", " ").Replace("\n", " ").Trim();
 
         /// <summary>
         /// Notification d'échec (cloche) aux administrateurs : la tâche

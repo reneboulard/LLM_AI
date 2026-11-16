@@ -5,6 +5,11 @@
 #
 set -euo pipefail
 
+# NuGet (dotnet build) exige HOME ou DOTNET_CLI_HOME — le shell de session
+# OpenCode (« ! ./deploy.sh ») n'en a pas (échec MSB4018 vécu 2026-11-13).
+# Repli /root ; no-op dans un terminal normal où HOME est déjà défini.
+export HOME="${HOME:-/root}"
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------

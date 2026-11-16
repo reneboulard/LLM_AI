@@ -789,6 +789,26 @@ TMDB/TVDB catalog). See [Orphan identification](#orphan-recording-identification
   TMDB** ids from result URLs; S2 accepts a **TVDB** id (series), validated via
   `TMDB /find tvdb_id`.
 
+> 💡 **Recommendation (v2.20.17) — native metadata fetchers unchecked on the DVR
+> library**: in the settings of the library that receives your recordings, uncheck
+> the native fetchers (TheTVDB, TheMovieDb, OMDb) — **`LLM_AI` then performs the
+> identification alone**, from the EPG truth frozen when the recording ends,
+> instead of having to **correct Emby after the fact** (removing the ids of a wrong
+> fiche planted at import by an approximate title match — lived case: a
+> documentary matched to a namesake series). Field-verified: no wrong fiche ever
+> lands at import, and the recording-end audit stays as the safety net over the
+> ids `EmbyTV` writes when the timer starts (the folder-name choice). The
+> identification is **excellent when the plugin has access to all its sources**:
+> a **TMDB** key (multi-language search, id validation, fiches), a **SearXNG**
+> instance (web search for paraphrased titles no catalog knows), a **TVDB** key
+> (series search — also the chat's `tvdb_search` tool) and at least one **LLM
+> server** (id proposals + synopsis judge) — see [API keys](#api-keys) and
+> [LLM backends](#llm-backends). Keep the
+> native fetchers **checked on your permanent libraries**: when you move the
+> folder, the `.nfo` carries the validated ids and Emby enriches by **exact id**
+> (cast, seasons, episodes) without ever guessing by title. See
+> [Orphan identification](#orphan-recording-identification).
+
 ### Cross-kind regularization queue (admin)
 
 **Admin** panel on the config page (v1.13.31, extended in v1.14.0) that
@@ -974,7 +994,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 |---|---|---|
 | `Plugin.cs` | `Plugin : BasePlugin<PluginConfiguration>, IHasWebPages, IHasThumbImage` | Entry point. Name `LLM_AI`, Id `e7d3…2e60`. Registers web pages (config, recommendations, i18n). Version driven by `<AssemblyVersion>` in the `.csproj`. |
 | `PluginConfiguration.cs` | `PluginConfiguration` (+ `LlmBackend`, `LlmProvider`) | All persisted config + multi-source backends. |
-| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Global (admin) scheduled task: produces **Series / Movies** recos by scanning the EPG, applies the already-owned guard (`EnrichWithLibrary` on the merged payload), stores them in `Recommendations`, sends the "N new recos" notification (opt-out `NotifyRecommendationsEnabled`, v2.5.0) and the failure notification (admins, unconditional). Delegates orchestration to `LlmRunner`. Daily default 3:10 AM; goes through the `LlmTaskGate` around its agent runs. |
+| `LlmScheduledTask.cs` | `LlmScheduledTask : IScheduledTask, IConfigurableScheduledTask` | Global (admin) scheduled task: produces **Series / Movies** recos by scanning the EPG, applies the already-owned guard (`EnrichWithLibrary` on the merged payload), stores them in `Recommendations`, sends the detailed "N new recos" bell (per-item title/year/channel/LLM reason list, v2.20.0; opt-out `NotifyRecommendationsEnabled`, v2.5.0) and the failure notification (admins, unconditional). Delegates orchestration to `LlmRunner`. Daily default 3:10 AM; goes through the `LlmTaskGate` around its agent runs. |
 | `LlmTaskGate.cs` | `LlmTaskGate` (static class) | **Concurrency gate for scheduled LLM tasks** (v2.2.1): at most `LlmMaxConcurrentTasks` simultaneous runs (default 1) — a task arriving at a full gate waits (instant wake on release, no polling) then proceeds, no nightly pass is lost; a cancelled waiter leaves the queue without consuming a slot. Outside the gate: chat, Tonight, audit (interactive — timeout → next-backend fallback chain). Capacity re-read on every pass: config changes apply without restarting. Used by `LlmScheduledTask`, `RecoAnalysisTask` and `MemoryTask`. |
 | `TonightApiService.cs` | `TonightApiService : BaseApiService` | **Per-user, on-demand** HTTP endpoint `GET /Plugins/LLMAI/Tonight`. Thin HTTP layer: resolves the user then delegates to `TonightService`. |
 | `TonightService.cs` | `TonightService` (internal) | **Shared generation** for "Watch tonight": taste profile, unwatched recordings, **upcoming recordings** (already-scheduled timers, self-describing "do not re-program" block, window identical to `epg_tonight`, v2.7.0), library reserve, binge-ready series (opt-in, `BingeNotified` anti-spam gate), LLM run, enrichment, watched-guard (marks already-watched reruns `watched=true` — per-user `BuildWatchedIndex`), **per-user cache** (static, shared by endpoint + login). **Single-flight** (v2.19.0): at most one production run per user — in-memory in-flight registry (`GenerateTonightAsync` wrapper + `GenerateTonightCoreAsync`), a second trigger **joins** the running result (10-min TTL; explicit `refresh=1` included), sources logged (`login`/`page`/`chat`/`scheduled`). Used by `TonightApiService`, `TonightLoginService`, `TonightPreProduceTask` and the chat tool `run_tonight_run` (ephemeral session directives + chat origin, v1.13). |
@@ -1103,6 +1123,17 @@ endpoint. The LLM receives **three sources**:
    episodes) is only recommended when its episodes stand alone (talk show,
    documentary, entertainment). Without these facts, the LLM recommended "the latest
    episode" of a never-started series (lived 2026-10-08 in production).
+   Since v2.20.1, the lines may also carry (when the data exists):
+   `recent_play=N (last: yyyy-mm-dd, complete|partial)` — the recent play count of the
+   title **for the run's user**, read on the fly from the plugin's telemetry journal
+   (`playback.json`, 30 days, fields frozen at write — no new store). The data covers
+   what Emby's "played" state ignores: partial plays, excerpts, "watched then
+   deleted/transferred" — `user_started=no` + `recent_play=2` reads to the model as
+   "a show followed weekly without being started". And `genres=[…]`: the library
+   edition's genres, filled in when the recording line carries none of its own (lived:
+   "L'épicerie", where the model transplanted "comedic drama" from the taste profile
+   for lack of an anchor — 2026-11-12 incident; the justification now anchors on the
+   real genres and the journal: "magazine documentary, part of your viewing habits").
 
 **Library reserve (fallback)** — `BuildLibraryFallbackPool`: pre-fetched unwatched items,
 injected as a **reserve**, used **only if** the LLM produces **fewer than
@@ -1673,6 +1704,24 @@ search → IMDb id) and **locks** the fields. The **`OrphanIdentifyTask`** sched
 > accents tolerated) is skipped with no identification calls (S0/S1/S2/S3) and
 > no tags, and every exclusion is logged by name. See
 > [Configuration](#orphan-recording-identification).
+
+> 💡 **Native fetchers unchecked on the DVR library (recommended, v2.20.17)**: the
+> source of Emby's wrong fiches is **eliminated at the origin** — with no fetchers
+> checked on the recordings library, `MetadataService` runs no post-import title
+> search; the plugin alone identifies via the EPG truth (recording-end audit + 4 AM
+> pass) and writes the fiche (TMDB/TVDB/IMDb ids, overview, genres, poster), the
+> locks and the tags. Field-verified nuance: `EmbyTV` still queries TVDB/TMDB
+> **when the recording starts** to name the folder ("Title (Year)") and write the
+> initial ids into the `tvshow.nfo` — the plugin's audit net covers those ids;
+> **no wrong fiche ever lands at import** anymore (the scenario that motivated the
+> after-the-fact correction no longer occurs). On permanent libraries, keep the
+> native fetchers checked: the `.nfo` carries the plugin-validated ids and
+> enrichment happens by exact id. Full performance assumes all sources are wired
+> in: a **TMDB** key (multi-language S1 search, S2/S3 validation, fiches), a
+> **SearXNG** instance (S3), a **TVDB** key (series ids proposed in S2 and
+> validated via `TMDB /find tvdb_id`; the chat's `tvdb_search` tool to investigate
+> stubborn cases) and **LLM** servers (S2 proposals + synopsis judge) — see
+> [API keys](#api-keys) and [LLM backends](#llm-backends).
 
 ### Flow (three stages)
 

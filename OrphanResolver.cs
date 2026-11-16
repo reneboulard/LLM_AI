@@ -230,7 +230,7 @@ namespace LLM_AI
             string effTmdb = metaLang ?? userTmdb;
             if (metaLang != null && !string.Equals(metaLang, userTmdb, StringComparison.OrdinalIgnoreCase))
                 _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — fiche recherchée en {1} (langue du contenu), langue usager {2}.",
-                    truth?.Title ?? itemName, metaLang, userTmdb);
+                    ResolveEpgTitle(item, truth, deferredTruth) ?? itemName, metaLang, userTmdb);
 
             // Audit des taggés « revenus avec ids » : Emby identifie parfois un
             // item APRÈS qu'il a été taggé introuvable/besoin-revue — parfois
@@ -240,7 +240,7 @@ namespace LLM_AI
             // uniquement : avec vérité EPG (RecordingWatcher), l'audit Emby à
             // juge synopsis ci-dessous reste la voie supérieure.
             if (truth == null && !orphan && (taggedReview || taggedNotFound) && cfg.OrphanAuditTaggedIds)
-                return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, effTmdb, verbose, ct).ConfigureAwait(false);
+                return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, effTmdb, verbose, ct, deferredTruth).ConfigureAwait(false);
 
             if (tagged) return Status.Skipped;
 
@@ -256,15 +256,17 @@ namespace LLM_AI
             // store) : la coalescence doit être tolérante aux espaces pour
             // que le repli item.Name garde l'item traitable — Skipped
             // seulement si les DEUX sont vides (aucun ancre de titre).
-            string epgTitle = string.IsNullOrWhiteSpace(truth?.Title) ? itemName : truth.Title;
+            string epgTitle = ResolveEpgTitle(item, truth, deferredTruth);
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
-            // Orphelin pur : S0 (Emby natif) puis S1→S2→S3.
+            // Orphelin pur : S0 (Emby natif) puis S1→S2→S3. La vérité
+            // différée y est transmise comme ANCRE de la porte d'acceptation
+            // (v2.20.17) — jamais comme vérité de la passe série (v2.16.3).
             var langs = BuildLangCascade(metaLang, userTmdb);
             bool allowS0 = cfg.OrphanEmbyFirstPass && _providers != null;
             var trace = new PipelineTrace();
             var meta = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
-                allowS0, langs, effTmdb, dry, trace, ct).ConfigureAwait(false);
+                allowS0, langs, effTmdb, dry, trace, ct, deferredTruth: deferredTruth).ConfigureAwait(false);
 
             // Repli de type « film importé comme série » : Emby type l'import
             // DVR d'après le guide — un film/documentaire diffusé avec des
@@ -304,7 +306,7 @@ namespace LLM_AI
                 // l'entrée différée est null par construction (titre
                 // d'épisode ≠ titre de série) — repli item.Name.
                 var movieTruth = deferredTruth ?? truth;
-                if (deferredTruth != null)
+                if (deferredTruth != null && (deferredTruth.Year.HasValue || !string.IsNullOrWhiteSpace(deferredTruth.Overview)))
                     _logger?.Info(
                         "[LLM_AI] OrphanIdentify : « {0} » — repli film avec vérité EPG différée du store (année={1}, synopsis={2}) ; la passe série reste volontairement sans vérité (année d'épisode ≠ année de série).",
                         epgTitle,
@@ -377,7 +379,7 @@ namespace LLM_AI
             }
 
             // 2) Langue du programme (synopsis du guide, titre en repli).
-            var det = I18n.DetectContentLangKey(truth?.Title ?? item?.Name, truth?.Overview ?? item?.Overview);
+            var det = I18n.DetectContentLangKey(ResolveEpgTitle(item, truth) ?? item?.Name, truth?.Overview ?? item?.Overview);
             return det == null ? null : I18n.ToTmdbLang(det);
         }
 
@@ -397,7 +399,7 @@ namespace LLM_AI
         private async Task<TmdbMeta> ResolvePipelineAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool allowS0,
             string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct,
-            bool crossKind = false)
+            bool crossKind = false, EpgTruth deferredTruth = null)
         {
             // t="" au store = programme creux au RecordingEnded (état
             // légitime et fréquent : Sahara vert, téléjournal, « De
@@ -411,7 +413,7 @@ namespace LLM_AI
             // 2026-11-10 : « Eleições 2026 » acceptée sur la seule année).
             // Tolérant aux espaces, comme la tête de l'audit
             // (IsNullOrWhiteSpace, l. ci-dessous) — repli item.Name.
-            string epgTitle = string.IsNullOrWhiteSpace(truth?.Title) ? item.Name : truth.Title;
+            string epgTitle = ResolveEpgTitle(item, truth, deferredTruth);
             // Année = ProductionYear UNIQUEMENT (date de DIFFUSION pour un DVR,
             // pas PremiereDate/DateCreated). La vérité EPG peut corriger.
             int? year = truth?.Year ?? item.ProductionYear;
@@ -448,6 +450,28 @@ namespace LLM_AI
             if (yearSoft)
                 _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — date Emby en fin de titre : année {1} indicative (soft), titre nettoyé pour la recherche.",
                     epgTitle, year.HasValue ? year.Value.ToString(CultureInfo.InvariantCulture) : "?");
+
+            // Ancre de prévention du retry 04 h (v2.20.17 — décision usager,
+            // étage « prévention seule » ; faux positif « De souche » du
+            // 2026-11-16 : tmdb 155980 « Immigrants de souche » accepté SANS
+            // juge au retry 04 h, sur l'année-artefact de l'item (2023, résidu
+            // de la fiche fautive posée à l'import) + la simple contenance
+            // lexicale — alors que la vérité figée y=2026 l'avait rejetée 2×
+            // la veille ; la SEULE variable qui avait changé entre les deux
+            // était la source de l'année). Quand le store porte une entrée
+            // vivante avec le titre-SÉRIE figé du guide (sn), l'acceptation
+            // d'une fiche exige la CLÉ EXACTE du titre figé + une année
+            // compatible avec l'ancre : la contenance lexicale et l'année
+            // d'item redeviennent de simples indices de recherche. La passe
+            // série 04 h reste SANS vérité injectée (doctrine v2.16.3 — année
+            // EPG d'un épisode = année de SAISON) : seule la contrainte
+            // d'acceptation change. Inactif ici si truth != null (chemin
+            // watcher, couches v2.19.2 propres) ou sans entrée/sn
+            // (comportement historique inchangé).
+            string retryAnchorTitle = (truth == null && !string.IsNullOrWhiteSpace(deferredTruth?.SeriesName))
+                ? deferredTruth.SeriesName
+                : null;
+            int? retryAnchorYear = retryAnchorTitle != null ? deferredTruth.Year : null;
 
             TmdbMeta meta = null;
             string stage = null;
@@ -489,6 +513,7 @@ namespace LLM_AI
             // preuve — un homonyme dont le titre diffère (inclus, traduit…)
             // ne passe pas.
             bool exactOnlyS1 = !searchYear.HasValue && !yearSoft;
+            bool exactKeyS1 = isSeries && !string.IsNullOrWhiteSpace(truth?.SeriesName);
             if (meta == null && (searchYear.HasValue || yearSoft || exactOnlyS1))
             {
                 try
@@ -505,7 +530,9 @@ namespace LLM_AI
                     bool s1Ok = exactOnlyS1
                         ? NormalizeTitle(cleanTitle).Length > 0
                           && NormalizeTitle(cleanTitle) == NormalizeTitle(s1?.Title)
-                        : TitleMatches(cleanTitle, s1?.Title, gateYear, s1?.Year);
+                        : exactKeyS1
+                            ? RetryAnchorAccepts(truth.SeriesName, truth.Year, s1?.Title, s1?.Year)
+                            : TitleMatches(cleanTitle, s1?.Title, gateYear, s1?.Year);
                     if (s1Ok)
                     {
                         // Garde « fiche déjà portée » : S1 n'appelle pas la
@@ -571,6 +598,25 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
+            // Point de contrôle du retry ancré (bloc ci-dessus) : un rejet
+            // laisse l'item en needs-review (visible, récupérable) et laisse
+            // le repli film de ResolveItemAsync tourner sur la vérité différée
+            // — jamais une identification terminale erronée silencieuse. S1
+            // accepte le premier résultat retenu sans juge (doctrine
+            // historique, intacte) : c'est ICI que la contrainte s'applique,
+            // couvrant d'un même coup SB/S0/S1/S2/S3.
+            if (meta != null && !RetryAnchorAccepts(retryAnchorTitle, retryAnchorYear, meta.Title, meta.Year))
+            {
+                _logger?.Info(
+                    "[LLM_AI] OrphanIdentify : « {0} » — candidat « {1} » ({2}, {3}) rejeté : une entrée store vivante ancre le titre-SÉRIE du guide sur « {4} » — clé exacte + année compatible avec l'ancre exigées (contenance et année d'item = indices de recherche seulement).",
+                    epgTitle, meta.Title,
+                    meta.Year.HasValue ? meta.Year.Value.ToString(CultureInfo.InvariantCulture) : "?",
+                    stage, retryAnchorTitle);
+                trace.SawCandidates = true; // candidat vu et rejeté = needs-review, pas introuvable
+                meta = null;
+                stage = null;
+            }
+
             if (meta == null || meta.TmdbId <= 0)
             {
                 // Deux échecs de nature différente : aucun candidat vu dans
@@ -617,7 +663,7 @@ namespace LLM_AI
             PluginConfiguration cfg, string kind, bool isSeries, bool dry,
             string userTmdb, string metaLang, CancellationToken ct)
         {
-            string epgTitle = string.IsNullOrWhiteSpace(truth.Title) ? item.Name : truth.Title;
+            string epgTitle = ResolveEpgTitle(item, truth);
             string epgSynopsis = truth.Overview;
 
             if (string.IsNullOrWhiteSpace(epgSynopsis))
@@ -666,6 +712,21 @@ namespace LLM_AI
             {
                 _logger?.Info("[LLM_AI] Recording : « {0} » — fiche TMDB illisible pour l'id d'Emby, audit reporté.", epgTitle);
                 return Status.Skipped;
+            }
+
+            // Repli synopsis en-US (parité avec TmdbLookupTool.ExecuteAsync /
+            // LookupMetaMultiLangAsync) : une fiche TMDB muette en fr-FR
+            // (ex. tmdb 155980 « Immigrants de souche ») porte souvent un
+            // overview renseigné en en-US ; sans ce repli, un faux match
+            // Emby dans la même fenêtre d'année resterait reporté au lieu
+            // d'être réfuté par le juge. Le titre reste celui de userTmdb.
+            if (meta.TmdbId > 0 && string.IsNullOrWhiteSpace(meta.Overview)
+                && !string.Equals(userTmdb, "en-US", StringComparison.OrdinalIgnoreCase))
+            {
+                string fetchKind = crossRead ? (isSeries ? "movie" : "series") : kind;
+                var enMeta = await _tmdb.LookupMetaByIdAsync(meta.TmdbId, fetchKind, "en-US", ct).ConfigureAwait(false);
+                if (enMeta != null && !string.IsNullOrWhiteSpace(enMeta.Overview))
+                    meta.Overview = enMeta.Overview;
             }
 
             // v2.19.2 — classement AVANT le juge (séries uniquement, fiche du
@@ -753,7 +814,12 @@ namespace LLM_AI
                     epgTitle, dry, proof, ct).ConfigureAwait(false);
             }
 
-            var verdict = await _runner.JudgeSynopsisMatchAsync(cfg, epgTitle, truth.Year, epgSynopsis,
+            string judgeTitle = (isSeries && !string.IsNullOrWhiteSpace(seriesAnchor)
+                && !string.IsNullOrWhiteSpace(truth.Title)
+                && SameTitleKey(truth.Title) != SameTitleKey(seriesAnchor))
+                ? seriesAnchor + " (" + truth.Title + ")"
+                : epgTitle;
+            var verdict = await _runner.JudgeSynopsisMatchAsync(cfg, judgeTitle, truth.Year, epgSynopsis,
                 meta.Title, meta.Year, meta.Overview, ct).ConfigureAwait(false);
 
             if (!verdict.IsValid)
@@ -1001,7 +1067,8 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         private async Task<Status> AuditTaggedIdsAsync(BaseItem item, PluginConfiguration cfg,
-            string kind, bool isSeries, bool dry, string userTmdb, bool verbose, CancellationToken ct)
+            string kind, bool isSeries, bool dry, string userTmdb, bool verbose, CancellationToken ct,
+            EpgTruth deferredTruth = null)
         {
             string itemName = item.Name;
             string cleanName = TmdbLookupTool.CleanEpgTitle(itemName);
@@ -1047,7 +1114,8 @@ namespace LLM_AI
                 return Status.Skipped;
             }
 
-            if (TitleMatches(cleanName, meta.Title, null, null))
+            if (AuditTaggedTitleAccepted(cleanName, deferredTruth?.SeriesName, deferredTruth?.Year,
+                isSeries, crossRead, meta.Title, meta.Year))
             {
                 if (dry)
                 {
@@ -1119,6 +1187,26 @@ namespace LLM_AI
                 item.Overview = string.Empty; // synopsis d'Emby (faux) : vidé pour re-remplissage
 
             item.Genres = Array.Empty<string>(); // genres d'Emby (faux) : vidés
+            // Effacer l'année posée par la fiche erronée d'Emby (ex. 2022 de
+            // tmdb 155980) pour qu'elle ne reste pas sur l'item après expiration
+            // de la rétention du store. Pour une série, truth.Year est l'année
+            // de diffusion de l'épisode (pas de la série) → null ; pour un film,
+            // restaurer l'année du guide si valide.
+            bool isSeriesItem = item is Series
+                || (item != null && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0);
+            item.ProductionYear = isSeriesItem
+                ? (int?)null
+                : (truth.Year.HasValue && truth.Year.Value >= 1900 ? truth.Year : (int?)null);
+
+            string guideTitle = (isSeriesItem && !string.IsNullOrWhiteSpace(truth.SeriesName))
+                ? truth.SeriesName
+                : (!string.IsNullOrWhiteSpace(truth.Title) ? truth.Title : null);
+            if (!string.IsNullOrWhiteSpace(guideTitle) && SameTitleKey(item.Name) != SameTitleKey(guideTitle))
+            {
+                _logger?.Info("[LLM_AI] Recording : nom de l'item « {0} » restauré vers le titre du guide « {1} » avant verrouillage.",
+                    item.Name, guideTitle);
+                item.Name = guideTitle;
+            }
 
             AddLock(item, MetadataFields.Name);
             AddTag(item, OrphanIdentifyTask.TagNeedsReview);
@@ -2280,6 +2368,64 @@ namespace LLM_AI
             if (!expected.HasValue || expected.Value < 1900) return true;
             if (!actual.HasValue || actual.Value < 1900) return true;
             return expected.Value >= actual.Value - 1;
+        }
+
+        /// <summary>Porte d'acceptation du retry 04 h ancré (v2.20.17, cas
+        /// « De souche » — voir le point de contrôle de ResolvePipelineAsync).
+        /// Sans ancre (titre nul/vide) la porte est INACTIVE : comportement
+        /// historique inchangé. Avec ancre : clé de titre EXACTE (jamais la
+        /// contenance) + année compatible avec l'ancre — une fiche peut dater
+        /// d'avant la saison enregistrée (longues séries), mais une fiche
+        /// POSTÉRIEURE à l'ancre désigne une autre œuvre. Un titre de fiche
+        /// vide ne peut pas prouver la clé → rejet.</summary>
+        internal static bool RetryAnchorAccepts(string anchorTitle, int? anchorYear, string ficheTitle, int? ficheYear)
+        {
+            if (string.IsNullOrWhiteSpace(anchorTitle)) return true;
+            string key = SameTitleKey(anchorTitle);
+            return key.Length > 0
+                && key == SameTitleKey(ficheTitle)
+                && AnchorSeriesYearCompatible(anchorYear, ficheYear);
+        }
+
+        /// <summary>Titre EPG effectif d'un item : pour une série, le
+        /// titre-SÉRIE du guide (<c>SeriesName</c>) prime sur <c>Title</c>
+        /// (souvent un titre d'épisode — « Épisode 1 », « Multicolore » —
+        /// sur le relais épisode→série du RecordingWatcher), puis sur
+        /// <c>item.Name</c>. Films / SeriesName absent : <c>truth.Title</c>
+        /// puis <c>item.Name</c>.</summary>
+        internal static string ResolveEpgTitle(BaseItem item, EpgTruth truth, EpgTruth deferredTruth = null)
+        {
+            bool isSeriesItem = item is Series
+                || (item != null && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0);
+            if (isSeriesItem)
+            {
+                if (!string.IsNullOrWhiteSpace(truth?.SeriesName)) return truth.SeriesName;
+                if (!string.IsNullOrWhiteSpace(deferredTruth?.SeriesName)) return deferredTruth.SeriesName;
+            }
+            if (!string.IsNullOrWhiteSpace(truth?.Title)) return truth.Title;
+            return item?.Name;
+        }
+
+        /// <summary>Porte d'acceptation de l'audit des taggés revenus avec des
+        /// ids Emby (<see cref="AuditTaggedIdsAsync"/>) : exige la clé de
+        /// titre EXACTE (jamais la simple contenance, qui validait « Immigrants
+        /// de souche » pour « De souche ») et respecte l'ancre store vivante
+        /// (série : clé exacte + année-série compatible ; fiche croisée film :
+        /// clé exacte + année compatible).</summary>
+        internal static bool AuditTaggedTitleAccepted(string cleanItemName, string anchorSeriesName,
+            int? anchorYear, bool isSeries, bool crossRead, string ficheTitle, int? ficheYear)
+        {
+            if (isSeries && !string.IsNullOrWhiteSpace(anchorSeriesName))
+            {
+                if (!crossRead)
+                    return RetryAnchorAccepts(anchorSeriesName, anchorYear, ficheTitle, ficheYear);
+                string aKey = SameTitleKey(anchorSeriesName);
+                return aKey.Length > 0
+                    && aKey == SameTitleKey(ficheTitle)
+                    && YearCompatible(anchorYear, ficheYear);
+            }
+            string key = SameTitleKey(cleanItemName);
+            return key.Length > 0 && key == SameTitleKey(ficheTitle);
         }
 
         private static string MimeFromUrl(string url) =>

@@ -1979,6 +1979,20 @@ namespace LLM_AI
                 var stockBySeries = new Dictionary<long, (string Start, int Unwatched)>();
                 var positionLog = new List<string>();
 
+                // v2.20.1 — habitudes de lecture récentes, lues à la volée
+                // dans le journal de télémétrie (playback.json, rétention
+                // DecisionStore.RetentionDays, figé à l'écriture v2.7.2) :
+                // les lectures partielles, les extraits et le « regardé puis
+                // effacé ou transféré » que l'état « vu » d'Emby ignore — la
+                // donnée qui manquait au justificatif « L'épicerie = comédie
+                // dramatique » (incident 2026-11-12 : le modèle a transplanté
+                // un genre absent de la ligne). Fail-safe : journal
+                // indisponible → dictionnaire vide, lignes sans champ,
+                // jamais d'échec du build du prompt.
+                var recentPlays = BuildRecentPlays(user, _logger);
+                var habitLog = new List<string>();
+                var fillLog = new List<string>();
+
                 foreach (var r in recs)
                 {
                     if (r == null) continue;
@@ -2025,7 +2039,12 @@ namespace LLM_AI
                     if (isSeries && !string.IsNullOrEmpty(r.EpisodeTitle) && r.EpisodeTitle != title)
                         line.Append($" | episode={r.EpisodeTitle}");
                     if (isSeries)
-                        AppendSeriesPosition(line, r, user, title, watchedIdx, stockBySeries, positionLog);
+                        AppendSeriesPosition(line, r, user, title, watchedIdx, stockBySeries, positionLog,
+                            genres.Length == 0, fillLog);
+                    // v2.20.1 — nombre de lectures récentes du titre par
+                    // l'usager (toutes sources : bibliothèque, carte .strm) —
+                    // le « touché » qu'IsPlayed ne connaît pas.
+                    AppendRecentPlay(line, recentPlays, title, habitLog);
                     lines.Add(line.ToString());
                     // Titre normalisé de la ligne ÉMISE → set de déduplication
                     // menu ↔ réserve (consommé par BuildLibraryFallbackPool).
@@ -2071,6 +2090,30 @@ namespace LLM_AI
                                       "et que seuls ces épisodes sont disponibles.");
                         _logger?.Info("[LLM_AI] Tonight enregistrements : position annotée — {0}.",
                             string.Join(" ; ", positionLog));
+                    }
+
+                    // v2.20.1 — légendes des nouveaux champs, émises seulement
+                    // quand le champ apparaît réellement sur une ligne de ce
+                    // bloc (pas de bruit sinon).
+                    if (habitLog.Count > 0)
+                    {
+                        sb.AppendLine("Lignes des enregistrements : « recent_play=N » est le nombre de " +
+                                      "LECTURES du titre par l'usager dans les " +
+                                      DecisionStore.RetentionDays.ToString(CultureInfo.InvariantCulture) +
+                                      " derniers jours d'après le journal de lecture du serveur (avec la date " +
+                                      "de la dernière ; « partielle » = lecture interrompue). Un titre sans " +
+                                      "« recent_play » : aucune lecture répertoriée dans la période. Une " +
+                                      "lecture partielle ne marque PAS la série « débutée » — recent_play " +
+                                      "sert à reconnaître une émission qui fait partie de ses habitudes de " +
+                                      "visionnage.");
+                        if (fillLog.Count > 0)
+                            sb.AppendLine("« genres=[…] » : genres de l'œuvre dans la bibliothèque — la " +
+                                          "ligne d'enregistrement elle-même n'en porte pas toujours en propre.");
+                        _logger?.Info("[LLM_AI] Tonight enregistrements : habitudes annotées — {0}.",
+                            string.Join(" ; ", habitLog));
+                        if (fillLog.Count > 0)
+                            _logger?.Info("[LLM_AI] Tonight enregistrements : genres bibliothèque complétés — {0}.",
+                                string.Join(" ; ", fillLog));
                     }
                 }
                 else
@@ -2215,7 +2258,7 @@ namespace LLM_AI
         /// </summary>
         private void AppendSeriesPosition(StringBuilder line, BaseItemDto r, User user, string title,
             WatchedIndex watchedIdx, Dictionary<long, (string Start, int Unwatched)> stockBySeries,
-            List<string> positionLog)
+            List<string> positionLog, bool dtoGenresEmpty, List<string> fillLog)
         {
             try
             {
@@ -2257,8 +2300,103 @@ namespace LLM_AI
                     positionLog.Add("« " + title + " » start=" + stock.Start
                         + " non-vus=" + stock.Unwatched);
                 }
+
+                // v2.20.1 — les DTO d'enregistrement portent rarement des
+                // genres en propre (forme série-level sans Genres : vécu
+                // « L'épicerie », prod 2026-11-12) : on complète depuis
+                // l'œuvre bibliothèque résolue ci-dessus — zéro I/O en plus
+                // (la série est déjà extraite pour la position). Champ sans
+                // légende quand le DTO porte déjà ses genres (comportement
+                // v2.20.0 conservé).
+                if (dtoGenresEmpty && series.Genres != null)
+                {
+                    var parts = new List<string>();
+                    foreach (var g in series.Genres)
+                        if (!string.IsNullOrWhiteSpace(g)) parts.Add(g);
+                    if (parts.Count > 0)
+                    {
+                        line.Append(" | genres=[" + string.Join(", ", parts) + "]");
+                        fillLog?.Add("« " + title + " » [" + string.Join(", ", parts) + "]");
+                    }
+                }
             }
             catch { /* annotation best-effort : ligne sans position */ }
+        }
+
+        /// <summary>
+        /// Habitudes de lecture récentes de l'usager (v2.20.1) : agrège le
+        /// journal de télémétrie <c>playback.json</c>
+        /// (<see cref="DecisionStore.ParseAllPlayback"/>, rétention
+        /// <see cref="DecisionStore.RetentionDays"/>) par titre d'œuvre
+        /// normalisé — clé = nom de série figé, sinon titre figé (toutes
+        /// sources : bibliothèque, carte .strm ; les sessions direct sont
+        /// sautées d'elles-mêmes : titre figé non nommé). Compte chaque fin
+        /// de lecture et retient la plus récente avec sa catégorie.
+        /// <para>La donnée couvre ce que l'état « vu » d'Emby ignore
+        /// (lectures partielles, extraits, regardé puis effacé ou transféré)
+        /// et survit aux dossiers éphémères du foyer car les champs sont
+        /// figés à l'écriture (v2.7.2). Lecture fail-safe : toute erreur →
+        /// dictionnaire vide (lignes sans champ, prompt jamais cassé).</para>
+        /// </summary>
+        private static Dictionary<string, (int Count, DateTimeOffset Last, bool Complete)>
+            BuildRecentPlays(User user, ILogger logger)
+        {
+            var map = new Dictionary<string, (int Count, DateTimeOffset Last, bool Complete)>(StringComparer.Ordinal);
+            try
+            {
+                if (user?.Id == null) return map;
+                var uidD = user.Id.ToString("D");
+                var uidN = user.Id.ToString("N");
+                var cutoff = DateTimeOffset.UtcNow.AddDays(-DecisionStore.RetentionDays);
+                foreach (var pl in DecisionStore.ParseAllPlayback())
+                {
+                    if (pl == null) continue;
+                    var u = pl.User ?? "";
+                    if (!u.Equals(uidD, StringComparison.OrdinalIgnoreCase)
+                        && !u.Equals(uidN, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (pl.Date < cutoff) continue;
+                    var key = LlmRunner.NormTitle(
+                        !string.IsNullOrEmpty(pl.SeriesName) ? pl.SeriesName : pl.Title);
+                    if (string.IsNullOrEmpty(key)) continue; // direct : titre non nommé
+                    if (map.TryGetValue(key, out var cur))
+                    {
+                        // Une lecture PLUS RÉCENTE remplace la catégorie affichée.
+                        map[key] = pl.Date > cur.Last ? (cur.Count + 1, pl.Date, pl.Completed)
+                                                      : (cur.Count + 1, cur.Last, cur.Complete);
+                    }
+                    else
+                    {
+                        map[key] = (1, pl.Date, pl.Completed);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Info("[LLM_AI] Tonight recent_play : journal de lecture indisponible ({0}) — lignes sans champ.",
+                    ex.Message);
+            }
+            return map;
+        }
+
+        /// <summary>
+        /// Ajoute à une ligne d'enregistrement le champ
+        /// <c>recent_play=N (dernière : aaaa-mm-jj, complète|partielle)</c>
+        /// quand le titre a été lu récemment par l'usager (v2.20.1). Date en
+        /// HEURE LOCALE du serveur (le journal est écrit en UTC — la date de
+        /// journal d'une soirée locale peut être le lendemain).
+        /// No-op sans lecture récente (champ absent, légende le documente).
+        /// </summary>
+        private static void AppendRecentPlay(StringBuilder line,
+            Dictionary<string, (int Count, DateTimeOffset Last, bool Complete)> recentPlays,
+            string title, List<string> habitLog)
+        {
+            if (recentPlays == null || recentPlays.Count == 0) return;
+            var key = LlmRunner.NormTitle(title);
+            if (string.IsNullOrEmpty(key) || !recentPlays.TryGetValue(key, out var rp)) return;
+            line.Append(" | recent_play=" + rp.Count.ToString(CultureInfo.InvariantCulture)
+                + " (dernière : " + rp.Last.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                + ", " + (rp.Complete ? "complète" : "partielle") + ")");
+            habitLog?.Add("« " + title + " » recent_play=" + rp.Count.ToString(CultureInfo.InvariantCulture));
         }
 
         /// <summary>

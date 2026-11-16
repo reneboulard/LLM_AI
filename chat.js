@@ -227,6 +227,26 @@ define([], function () {
             var chatSendBtn = pane.querySelector("#btnSendChat");
             var chatClearBtn = pane.querySelector("#btnClearChat");
             var chatContextSel = pane.querySelector("#selChatContext");
+            var chatContextCurrent = pane.querySelector("#chatContextCurrent");
+            var chatContextCurrentText = pane.querySelector("#chatContextCurrentText");
+
+            // v2.20.11 : à la sélection d'un mode d'édition, le texte actuel
+            // du prompt (servi avec la liste des contextes) est affiché à
+            // l'écran — l'admin voit CE qu'il modifie sans attendre la
+            // réponse du LLM (un prompt vide s'affiche « (vide) »).
+            var chatContextTexts = {};
+            function showContextCurrent() {
+                if (!chatContextSel || !chatContextCurrent || !chatContextCurrentText) return;
+                var id = chatContextSel.value || "";
+                if (!id || !(id in chatContextTexts)) {
+                    chatContextCurrent.hidden = true;
+                    return;
+                }
+                var t = chatContextTexts[id];
+                chatContextCurrentText.textContent =
+                    (t == null || t.length === 0) ? ("(" + i18n.t("chat.ctx.current.empty") + ")") : t;
+                chatContextCurrent.hidden = false;
+            }
 
                 // ----------------------------------------------------------------
                 //  Blocs de code des réponses (v1.13.9.5) : Copier (repli
@@ -309,6 +329,10 @@ define([], function () {
                         if (data.Error || data.Enabled === false || !data.Contexts) return;
                         data.Contexts.forEach(function (c) {
                             if (!c || !c.Id) return;
+                            // v2.20.11 : le texte actuel du prompt est mémorisé
+                            // pour l'affichage à la sélection du mode (null =
+                            // mode sans prompt, ex. atelier de langues).
+                            if ("CurrentText" in c) chatContextTexts[c.Id] = c.CurrentText;
                             var opt = document.createElement("option");
                             opt.value = c.Id;
                             // Libellé traduit par clé d'id (dictionnaire
@@ -323,6 +347,7 @@ define([], function () {
                                 : (c.Label || c.Id);
                             chatContextSel.appendChild(opt);
                         });
+                        showContextCurrent();
                     }, function () { /* indisponible : chat sans modes (fail-open) */ });
                 }
 
@@ -474,9 +499,13 @@ define([], function () {
                         // réponse permet de demander l'enregistrement sans
                         // taper. Exactement un chemin de sauvegarde visible
                         // par tour : bloc 💾 si clôturé, sinon bouton de tour.
+                        // v2.20.11 : le bouton de tour n'est proposé que si le
+                        // serveur juge la réponse ressemblante à une révision
+                        // (LooksLikeRevision) — une simple annonce du mode ne
+                        // doit PAS afficher 💾 (vécu prod 2026-11-14).
                         var bodyHtml = renderMarkdown(reply, !!(chatContextSel && chatContextSel.value)) + actionsHtml;
                         if (chatContextSel && chatContextSel.value && !data.Pending &&
-                            reply.indexOf("```") === -1) {
+                            reply.indexOf("```") === -1 && data.LooksLikeRevision === true) {
                             bodyHtml += '<div class="chatSaveTurnRow">' +
                                 '<button type="button" class="chatCodeBtn chatCodeSave" title="' +
                                 esc(i18n.t("chat.code.save_turn")) + '">💾 ' +
@@ -538,13 +567,25 @@ define([], function () {
                 if (chatContextSel) {
                     once(chatContextSel, "change", function () {
                         var mode = chatContextSel.value || "";
+                        showContextCurrent();
                         if (!mode || chatBusy) return;
                         var opt = chatContextSel.options[chatContextSel.selectedIndex];
                         var labelTxt = (opt && opt.textContent) || mode;
                         // v1.15.0.1 : message prérédigé traduit (il s'affiche
                         // comme tour « Vous » du fil ET est relu par le LLM) —
                         // il suivait la langue de personne (FR codé en dur).
-                        sendChatText(i18n.t("chat.mode.selected", labelTxt));
+                        // v2.20.16 : banner DÉDIÉ au mode atelier — l'ancien
+                        // texte affirmait « Le texte actuel du prompt est
+                        // affiché ci-dessus », FAUX pour ce mode sans prompt
+                        // (GuideOnly : ni prompt injecté ni accordéon) — un
+                        // modèle docile partait chercher un prompt à réviser
+                        // au lieu d'ouvrir l'atelier (vécu prod 2026-11-14 :
+                        // la bannière atelier a déclenché deux refus
+                        // d'affilée via le nudge ```text hors canal).
+                        var bannerKey = mode === "i18n_edit"
+                            ? "chat.mode.selected.i18n"
+                            : "chat.mode.selected";
+                        sendChatText(i18n.t(bannerKey, labelTxt));
                     });
                 }
 
