@@ -243,6 +243,15 @@ namespace LLM_AI
             bool dry = cfg.OrphanIdentifyDryRun;
             bool verbose = cfg.DebugVerbose;
 
+            // Exclusions par titre (v2.20.20) : mêmes liste et matching que
+            // la passe 04 h (chargement partagé). La garde vit aux deux
+            // branches ci-dessous (relais épisode→série et branche directe)
+            // — le filet d'import et le figeage de la vérité EPG restent
+            // volontairement actifs : la vérité différée survit au store
+            // (doctrine v2.17.0), donc une entrée retirée de la liste
+            // redevient identifiable à la passe 04 h suivante.
+            var excludedTitles = OrphanIdentifyTask.ParseExcludedTitles(cfg);
+
             // Une seule requête bibliothèque par cycle, filtrage par chemin en mémoire.
             BaseItem[] items = null;
             try
@@ -295,6 +304,26 @@ namespace LLM_AI
                 if (item.GetType().Name.IndexOf("Episode", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     var series = TryResolveParentSeries(item);
+
+                    // Exclusion par titre (v2.20.20) : même contrat que la
+                    // passe 04 h — aucun appel d'identification, aucune
+                    // étiquette. Le titre testé est celui de la SÉRIE
+                    // (l'item audité par le relais), pas celui de
+                    // l'épisode ; sans série résoluble l'audit n'a de toute
+                    // façon pas lieu. Gel (pas de retrait) : la vérité
+                    // différée survit pour la passe 04 h si l'entrée est
+                    // retirée de la liste un jour.
+                    var seriesExcludedBy = series != null
+                        ? OrphanIdentifyTask.MatchExcludedTitle(series.Name, excludedTitles)
+                        : null;
+                    if (seriesExcludedBy != null)
+                    {
+                        entry.Attempts = RecordingValidateStore.MaxAttempts;
+                        RecordingValidateStore.Upsert(entry);
+                        _logger?.Info("[LLM_AI] Recording : série « {0} » exclue par la liste (entrée « {1} ») → aucun appel d'identification ni étiquette ; entrée gelée (vérité différée conservée).",
+                            series.Name, seriesExcludedBy);
+                        continue;
+                    }
 
                     // Sauvetage (v2.18.0) : les ids d'Emby ne sont PAS une
                     // preuve d'audit — une série fichée à tort « a des ids ».
@@ -365,6 +394,21 @@ namespace LLM_AI
                     else
                         _logger?.Info("[LLM_AI] Recording : épisode « {0} » — audit de la série « {1} » non exécuté (erreur, voir Warn) ; entrée gelée.",
                             item.Name, series.Name);
+                    continue;
+                }
+
+                // Exclusion par titre (v2.20.20) : même contrat que la passe
+                // 04 h — aucun appel d'identification (S0/S1/S2/S3, LLM,
+                // web), aucune étiquette. Gel (pas de retrait) : la vérité
+                // différée survit 7 j pour la passe 04 h si l'entrée est
+                // retirée de la liste un jour.
+                var excludedBy = OrphanIdentifyTask.MatchExcludedTitle(item.Name, excludedTitles);
+                if (excludedBy != null)
+                {
+                    entry.Attempts = RecordingValidateStore.MaxAttempts;
+                    RecordingValidateStore.Upsert(entry);
+                    _logger?.Info("[LLM_AI] Recording : « {0} » exclu par la liste (entrée « {1} ») → aucun appel d'identification ni étiquette ; entrée gelée (vérité différée conservée).",
+                        item.Name, excludedBy);
                     continue;
                 }
 

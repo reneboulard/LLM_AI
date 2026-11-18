@@ -147,6 +147,26 @@ namespace LLM_AI
         public string TmdbLanguage { get; set; } = "fr-FR";
 
         /// <summary>
+        /// Priorité des langues du <b>synopsis</b> des fiches TMDB (identification
+        /// d'orphelins + audit des enregistrements) : codes séparés par des
+        /// virgules, ex. « fr-CA, fr-FR, en-US ». <b>Vide (défaut) = comportement
+        /// historique inchangé</b> (aucune lecture <c>translations</c>, ordre
+        /// bibliothèque→contenu, cascade historique). Non vide = le
+        /// <b>contenu d'abord</b> : la langue du synopsis EPG figé met SA famille
+        /// en tête de la liste, la fiche est lise UNE fois avec
+        /// <c>append_to_response=translations</c> et le synopsis est pris dans la
+        /// première langue disponible de la liste (fr-CA avant fr-FR — sans ce
+        /// champ, fr-CA est structurellement inatteignable : <c>ToTmdbLang</c> ne
+        /// connaît que fr-FR, et TMDB ne fait AUCUN repli croisé fr-FR↔fr-CA) ;
+        /// le TITRE reste lu dans la langue du contenu (doctrine portes
+        /// lexicales 2026-10-01) ; le dernier rang de la liste = repli final.
+        /// Codes à deux lettres acceptés (fr → fr-FR, en → en-US…), familles
+        /// inconnues gardées telles quelles (bg, nl…), entrée invalide
+        /// ignorée (loguée). Config vivante, sans restart.
+        /// </summary>
+        public string TmdbLangPriority { get; set; } = "";
+
+        /// <summary>
         /// Clé API TheTVDB.com (v4) pour l'outil <c>tvdb_search</c> (enrichissement
         /// synopsis/statut des séries — portage de l'outil PHP qui fonctionne avec
         /// le LLM). Repli sur la variable d'environnement <c>TVDB_API_KEY</c> si

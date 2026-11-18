@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using MediaBrowser.Controller;
@@ -270,6 +271,80 @@ namespace LLM_AI
             "pt" => "pt-PT",
             _ => "en-US"
         };
+
+        /// <summary>
+        /// Famille (préfixe avant « - », minuscules) d'un code langue TMDB :
+        /// « fr-CA »→« fr », « en-US »→« en », « bg »→« bg ». Null si vide.
+        /// Sert à ordonner la liste de priorité par famille de langue du
+        /// contenu (fix #6) et à apparier les entrées de la table
+        /// <c>translations</c> de TMDB.
+        /// </summary>
+        internal static string TmdbLangFamily(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return null;
+            string s = code.Trim();
+            int i = s.IndexOf('-');
+            return (i > 0 ? s.Substring(0, i) : s).ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Parse le champ <see cref="PluginConfiguration.TmdbLangPriority"/>
+        /// (codes séparés par des virgules, ex. « fr-CA, fr-FR, en-US ») en
+        /// liste ordonnée de codes TMDB : ordre préservé, dédoublonné
+        /// (casse ignorée). Parsing doux : « fr » s'étend en « fr-FR » via
+        /// <see cref="ToTmdbLang"/> (familles connues seulement — une famille
+        /// inconnue comme « bg » reste telle quelle : code TMDB valide,
+        /// l'étendre en en-US serait une corruption silencieuse) ; « xx-XX »
+        /// est normalisé (séparateur « _ » accepté, région en majuscules) ;
+        /// une entrée non valide est IGNORÉE et retournée dans
+        /// <paramref name="rejected"/> (l'appelant la journalise — jamais de
+        /// fail silencieux d'une config fautive). Liste vide si le champ est
+        /// vide (feature off).
+        /// </summary>
+        internal static List<string> ParseTmdbLangPriority(string raw, out string[] rejected)
+        {
+            var parsed = new List<string>();
+            var rej = new List<string>();
+            if (!string.IsNullOrWhiteSpace(raw))
+            {
+                foreach (string tok in raw.Split(','))
+                {
+                    string t = tok?.Trim().Replace('_', '-');
+                    if (string.IsNullOrEmpty(t)) continue;
+                    // Région ? « fr-CA » : famille 2 lettres + région 2-3
+                    // alphanumériques, sinon l'entrée est rejetée (pas de
+                    // code inventé : ce qui part à TMDB doit être ce que
+                    // l'usager a tapé ou son expansion canonique).
+                    int i = t.IndexOf('-');
+                    string code;
+                    if (i > 0)
+                    {
+                        string fam = t.Substring(0, i).ToLowerInvariant();
+                        string reg = t.Substring(i + 1).ToUpperInvariant();
+                        // Région TMDB = ISO 3166 (lettres, 2 caractères,
+                        // tolérance 3) : « fr-123 » est rejeté, pas envoyé.
+                        code = (fam.Length == 2 && reg.Length >= 2 && reg.Length <= 3 && reg.All(char.IsLetter))
+                            ? fam + "-" + reg
+                            : null;
+                    }
+                    else
+                    {
+                        // Code nu « fr » : expansion canonique pour les
+                        // familles connues de ToTmdbLang, tel quel sinon
+                        // (TMDB accepte les codes ISO 639-1 bruts).
+                        string fam = t.ToLowerInvariant();
+                        if (fam.Length != 2) code = null;
+                        else if (fam == "fr" || fam == "en" || fam == "es" || fam == "de" || fam == "it" || fam == "pt")
+                            code = ToTmdbLang(fam);
+                        else code = fam;
+                    }
+                    if (code == null) { rej.Add(tok.Trim()); continue; }
+                    if (!parsed.Contains(code, StringComparer.OrdinalIgnoreCase)) parsed.Add(code);
+                }
+            }
+            rejected = rej.ToArray();
+            return parsed;
+        }
 
         /// <summary>
         /// Clé 2 lettres → nom humain de la langue, pour la cible de traduction LLM
@@ -616,6 +691,8 @@ namespace LLM_AI
                     ["act.label.stop.idle"] = "Arrêt de la session de {0} (aucune lecture en cours)",
                     ["act.label.task"] = "Déclenchement de la tâche « {0} »",
                     ["act.label.msg"] = "Message Emby à {0} ({1}) : {2} — {3}",
+                    ["act.label.identify"] = "Identifier « {0} » → {1} (tmdb={2})",
+                    ["act.label.identify.undo"] = "Annuler l'identification de « {0} »",
                     ["act.user.fallback"] = "un usager",
                     ["act.toast.record"] = "Chat : timer programmé pour « {0} »",
                     ["act.toast.card"] = "Chat : carte .strm « {0} » créée",
@@ -629,6 +706,8 @@ namespace LLM_AI
                     ["act.toast.stop"] = "Chat : lecture arrêtée pour {0} (« {1} »)",
                     ["act.toast.task"] = "Chat : tâche « {0} » déclenchée",
                     ["act.toast.msg"] = "Chat : message ({0}) envoyé à {1}",
+                    ["act.toast.identify"] = "Chat : « {0} » identifié (tmdb={1})",
+                    ["act.toast.identify.undo"] = "Chat : identification annulée pour « {0} »",
                     ["act.ok.record"] = "Enregistrement programmé : {0}",
                     ["act.ok.card"] = "Carte créée dans la bibliothèque « AI Suggestions » : {0}",
                     ["act.ok.tag"] = "{0} item(s) étiqueté(s) « {1} ».",
@@ -644,6 +723,16 @@ namespace LLM_AI
                     ["act.ok.task"] = "Tâche « {0} » mise en file d'exécution.",
                     ["act.ok.msg.osd"] = "Message à l'écran : {0} session(s) atteinte(s) sur {1} destinataire(s).{2}",
                     ["act.ok.msg.notif"] = "Notification envoyée à {0} ({1}/{2}).",
+                    ["act.ok.identify"] = "« {0} » identifié → « {1} » (tmdb={2}), verrous et tag llmai-identified posés.",
+                    ["act.ok.identify.undo"] = "Identification retirée sur « {0} » ({1}).",
+                    ["act.ok.refresh_meta"] = "Actualisation des métadonnées manquantes (sans images) mise en file pour « {0} ».",
+                    ["act.ref.refresh.notfound"] = "Item introuvable pour l'actualisation.",
+                    ["act.ref.refresh.crosskind"] = "Actualisation Emby ignorée sur fiche croisée (Emby lirait le mauvais catalogue).",
+                    ["act.ref.refresh.unavailable"] = "Service d'actualisation des métadonnées indisponible.",
+                    ["act.ref.identify.invalid"] = "Paramètres d'identification invalides.",
+                    ["act.ref.identify.notfound"] = "Item introuvable ({0}).",
+                    ["act.ref.identify.changed"] = "L'item « {0} » a été modifié depuis la proposition — relancez identify_resolve.",
+                    ["act.ref.identify.tmdbfail"] = "Impossible de relire la fiche TMDB tmdb={0}.",
                     // Refus ATTEIGNABLES à l'approbation (le détail s'affiche
                     // sur la carte en erreur) — les refus défensifs de
                     // re-validation (doublons de la phase de dépôt, lus par
@@ -862,6 +951,8 @@ namespace LLM_AI
                     ["act.label.stop.idle"] = "Stop {0}'s session (nothing playing)",
                     ["act.label.task"] = "Trigger the task \"{0}\"",
                     ["act.label.msg"] = "Emby message to {0} ({1}): {2} — {3}",
+                    ["act.label.identify"] = "Identify \"{0}\" → {1} (tmdb={2})",
+                    ["act.label.identify.undo"] = "Undo identification for \"{0}\"",
                     ["act.user.fallback"] = "a user",
                     ["act.toast.record"] = "Chat: timer scheduled for \"{0}\"",
                     ["act.toast.card"] = "Chat: .strm card \"{0}\" created",
@@ -875,6 +966,8 @@ namespace LLM_AI
                     ["act.toast.stop"] = "Chat: playback stopped for {0} (\"{1}\")",
                     ["act.toast.task"] = "Chat: task \"{0}\" triggered",
                     ["act.toast.msg"] = "Chat: message ({0}) sent to {1}",
+                    ["act.toast.identify"] = "Chat: \"{0}\" identified (tmdb={1})",
+                    ["act.toast.identify.undo"] = "Chat: identification undone for \"{0}\"",
                     ["act.ok.record"] = "Recording scheduled: {0}",
                     ["act.ok.card"] = "Card created in the \"AI Suggestions\" library: {0}",
                     ["act.ok.tag"] = "{0} item(s) tagged \"{1}\".",
@@ -890,6 +983,16 @@ namespace LLM_AI
                     ["act.ok.task"] = "Task \"{0}\" queued for execution.",
                     ["act.ok.msg.osd"] = "On-screen message: {0} session(s) reached out of {1} recipient(s).{2}",
                     ["act.ok.msg.notif"] = "Notification sent to {0} ({1}/{2}).",
+                    ["act.ok.identify"] = "\"{0}\" identified → \"{1}\" (tmdb={2}), locks and llmai-identified tag applied.",
+                    ["act.ok.identify.undo"] = "Identification removed from \"{0}\" ({1}).",
+                    ["act.ok.refresh_meta"] = "Missing-metadata refresh (excluding images) queued for \"{0}\".",
+                    ["act.ref.refresh.notfound"] = "Item not found for refresh.",
+                    ["act.ref.refresh.crosskind"] = "Emby refresh skipped on cross-kind item (Emby would query the wrong catalog).",
+                    ["act.ref.refresh.unavailable"] = "Metadata refresh service unavailable.",
+                    ["act.ref.identify.invalid"] = "Invalid identification parameters.",
+                    ["act.ref.identify.notfound"] = "Item not found ({0}).",
+                    ["act.ref.identify.changed"] = "Item \"{0}\" was modified since the proposal — run identify_resolve again.",
+                    ["act.ref.identify.tmdbfail"] = "Could not re-fetch TMDB entry tmdb={0}.",
                     // Refusals REACHABLE at approval (the detail is shown on
                     // the card as an error) — defensive re-validation
                     // refusals (twins of the deposit phase, read by the LLM)

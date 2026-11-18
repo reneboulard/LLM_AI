@@ -1156,6 +1156,7 @@ define(["loading"], function (loading) {
         view.querySelector("#selResponseLanguage").value = cfg.ResponseLanguage || "";
         view.querySelector("#txtTmdbApiKey").value = cfg.TmdbApiKey || "";
         view.querySelector("#txtTmdbLanguage").value = cfg.TmdbLanguage || "";
+        view.querySelector("#txtTmdbLangPriority").value = cfg.TmdbLangPriority || "";
         view.querySelector("#txtTvdbApiKey").value = cfg.TvdbApiKey || "";
         view.querySelector("#txtOllamaApiKey").value = cfg.OllamaApiKey || "";
         view.querySelector("#txtSearXngUrl").value = cfg.SearXngUrl || "";
@@ -1318,6 +1319,7 @@ define(["loading"], function (loading) {
             ResponseLanguage: view.querySelector("#selResponseLanguage").value,
             TmdbApiKey: view.querySelector("#txtTmdbApiKey").value,
             TmdbLanguage: view.querySelector("#txtTmdbLanguage").value,
+            TmdbLangPriority: view.querySelector("#txtTmdbLangPriority").value.trim(),
             TvdbApiKey: view.querySelector("#txtTvdbApiKey").value,
             OllamaApiKey: view.querySelector("#txtOllamaApiKey").value,
             SearXngUrl: view.querySelector("#txtSearXngUrl").value.trim(),

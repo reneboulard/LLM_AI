@@ -211,20 +211,9 @@ namespace LLM_AI
             // chaque passe y brûlait S1+S2 (LLM) + S3 pour rien. L'entrée
             // matche le titre exact OU un préfixe suivi d'une frontière de
             // mot (casse/accents tolérés — voir MatchExcludedTitle).
-            var excludedTitles = new List<KeyValuePair<string, string>>(); // clé = titre normalisé, valeur = entrée saisie
-            try
-            {
-                foreach (var line in (cfg.OrphanExcludedTitles ?? string.Empty).Split('\n'))
-                {
-                    var rawEntry = line?.Trim();
-                    if (string.IsNullOrEmpty(rawEntry)) continue;
-                    var norm = NormExcludedTitle(rawEntry);
-                    if (norm.Length == 0) continue;
-                    if (!excludedTitles.Any(kv => kv.Key.Equals(norm, StringComparison.Ordinal)))
-                        excludedTitles.Add(new KeyValuePair<string, string>(norm, rawEntry));
-                }
-            }
-            catch { /* tolérant : liste vide */ }
+            // Chargement partagé avec le RecordingWatcher (v2.20.20) :
+            // même liste, même contrat des deux côtés.
+            var excludedTitles = ParseExcludedTitles(cfg); // clé = titre normalisé, valeur = entrée saisie
             if (excludedTitles.Count > 0)
                 _logger?.Info("[LLM_AI] OrphanIdentify : liste d'exclusion chargée — {0} entrée(s) : {1}.",
                     excludedTitles.Count, string.Join(" | ", excludedTitles.Select(kv => kv.Value)));
@@ -367,7 +356,7 @@ namespace LLM_AI
         /// synopsis comptent (sans preuve à injecter, le relais est un no-op).
         /// Null si aucune.
         /// </summary>
-        private static RecordingValidateStore.Entry MostRecentDeferredTruth(
+        internal static RecordingValidateStore.Entry MostRecentDeferredTruth(
             List<RecordingValidateStore.Entry> entries, string folderPath)
         {
             string folder = (folderPath ?? string.Empty).TrimEnd('\\', '/');
@@ -386,6 +375,32 @@ namespace LLM_AI
                 if (best == null || e.Updated > best.Updated) best = e;
             }
             return best;
+        }
+
+        /// <summary>Charge la liste d'exclusion
+        /// <see cref="PluginConfiguration.OrphanExcludedTitles"/> : une entrée
+        /// par ligne, trim, doublons normalisés éliminés. Clé = titre
+        /// normalisé (<see cref="NormExcludedTitle"/>), valeur = entrée
+        /// saisie. Tolérant : liste vide en cas d'échec. Partagé entre la
+        /// passe 04 h et le <see cref="RecordingWatcher"/> (v2.20.20) —
+        /// même liste, même contrat des deux côtés.</summary>
+        internal static List<KeyValuePair<string, string>> ParseExcludedTitles(PluginConfiguration cfg)
+        {
+            var list = new List<KeyValuePair<string, string>>();
+            try
+            {
+                foreach (var line in ((cfg?.OrphanExcludedTitles) ?? string.Empty).Split('\n'))
+                {
+                    var rawEntry = line?.Trim();
+                    if (string.IsNullOrEmpty(rawEntry)) continue;
+                    var norm = NormExcludedTitle(rawEntry);
+                    if (norm.Length == 0) continue;
+                    if (!list.Any(kv => kv.Key.Equals(norm, StringComparison.Ordinal)))
+                        list.Add(new KeyValuePair<string, string>(norm, rawEntry));
+                }
+            }
+            catch { /* tolérant : liste vide */ }
+            return list;
         }
 
         /// <summary>Normalise un titre pour la liste d'exclusion

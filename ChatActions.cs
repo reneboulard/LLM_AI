@@ -96,6 +96,13 @@ namespace LLM_AI
             public int ConvUsed;
             /// <summary>Runs Tonight déclenchés (≤ 2 par conversation).</summary>
             public int RunCount;
+            /// <summary>Résolutions d'identification lancées (≤ 10 par conversation).</summary>
+            public int ResolveCount;
+            /// <summary>Instantanés de preuves calculées par identify_resolve
+            /// (clé = itemId|tmdbId) pour que identify_propose reflète la
+            /// preuve serveur exacte sans jamais se fier au texte LLM.</summary>
+            public readonly Dictionary<string, ChatIdentifyTools.ResolveSnapshot> ResolveCache =
+                new Dictionary<string, ChatIdentifyTools.ResolveSnapshot>(StringComparer.OrdinalIgnoreCase);
             public DateTimeOffset LastSeen;
             /// <summary>Ids items (InternalId normalisés) ajoutés par le chat
             /// à la playlist/collection durant cette conversation — seuls
@@ -208,6 +215,45 @@ namespace LLM_AI
         public static void EndRun()
             => Interlocked.Exchange(ref _runGate, 0);
 
+        internal const int MaxResolvesPerConversation = 10;
+
+        internal static bool TryConsumeResolveQuota(string sessionId)
+        {
+            var st = For(sessionId);
+            lock (st)
+            {
+                if (st.ResolveCount >= MaxResolvesPerConversation) return false;
+                st.ResolveCount++;
+                st.LastSeen = DateTimeOffset.UtcNow;
+                return true;
+            }
+        }
+
+        internal static void SaveResolveSnapshot(string sessionId, string itemId, int tmdbId,
+            ChatIdentifyTools.ResolveSnapshot snapshot)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || tmdbId <= 0 || snapshot == null) return;
+            var st = For(sessionId);
+            lock (st)
+            {
+                st.ResolveCache[itemId + "|" + tmdbId.ToString(CultureInfo.InvariantCulture)] = snapshot;
+                st.LastSeen = DateTimeOffset.UtcNow;
+            }
+        }
+
+        internal static ChatIdentifyTools.ResolveSnapshot GetResolveSnapshot(string sessionId, string itemId, int tmdbId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId) || tmdbId <= 0) return null;
+            var st = For(sessionId);
+            lock (st)
+            {
+                return st.ResolveCache.TryGetValue(
+                    itemId + "|" + tmdbId.ToString(CultureInfo.InvariantCulture), out var snap)
+                    ? snap
+                    : null;
+            }
+        }
+
         /// <summary>Énumération compacte des tâches non cachées pour le
         /// détail d'un refus de résolution : nom, clé et id COMPLET. Un id
         /// tronqué dans l'appel du LLM (abrégé « avec des … ») est exactement
@@ -243,12 +289,13 @@ namespace LLM_AI
         /// exactement sur ce dépôt (anti-TOCTOU). <paramref name="label"/>
         /// est le texte de la carte côté page (français, ton des toasts).</summary>
         internal static string CreatePending(string sessionId, string userId,
-            string toolKey, JsonElement args, string label)
+            string toolKey, JsonElement args, string label,
+            ChatApiService.ChatActionDiffInfo diff = null)
         {
             string argsJson;
             try { argsJson = JsonSerializer.Serialize(args); }
             catch { argsJson = "{}"; }
-            var a = ChatActionStore.Create(sessionId, userId, toolKey, argsJson, label);
+            var a = ChatActionStore.Create(sessionId, userId, toolKey, argsJson, label, diff);
             if (a == null)
                 return Json(new { status = "refused",
                     detail = "Trop de propositions en attente (10 maximum) — l'admin doit d'abord trancher les cartes existantes." });
@@ -302,6 +349,10 @@ namespace LLM_AI
                     return new TriggerTaskTool(cfg, sessionId, adminUserId, tasks, logger);
                 case "send_message":
                     return new SendMessageTool(cfg, sessionId, adminUserId, sessions, users, notifications, logger);
+                case "identify_propose":
+                    return new ChatIdentifyTools.IdentifyProposeTool(cfg, sessionId, adminUserId, library, users, liveTv, host, json, logger);
+                case "identify_undo":
+                    return new ChatIdentifyTools.IdentifyUndoTool(cfg, sessionId, adminUserId, library, users, liveTv, host, json, logger);
                 default:
                     return null;
             }
@@ -324,6 +375,7 @@ namespace LLM_AI
             b.Append("Vous pouvez agir sur les surfaces Emby du plugin via des outils d'action ");
             b.Append("(record_program, create_card, tag_ai_tonight, collection_add, collection_remove, ");
             b.Append("playlist_add, playlist_remove, stop_session, trigger_task, send_message, ");
+            b.Append("identify_propose, identify_undo, ");
             b.Append("run_tonight_run — ce dernier requiert le module « À regarder ce soir » activé).\n");
             b.Append("Budget d'actions : ").Append(Budget(cfg)).Append(" par tour, ")
               .Append(Cap(cfg)).Append(" pour toute la conversation — au-delà, les outils refuseront. ");
@@ -392,6 +444,8 @@ namespace LLM_AI
                 // remplace ChatTonightRunEnabled) ; l'exécution refuse si le
                 // module « À regarder ce soir » est désactivé (gate dure).
                 new RunTonightTool(cfg, sessionId, adminUser, userId, users, json, library, liveTv, host, logger),
+                new ChatIdentifyTools.IdentifyProposeTool(cfg, sessionId, userId, library, users, liveTv, host, json, logger),
+                new ChatIdentifyTools.IdentifyUndoTool(cfg, sessionId, userId, library, users, liveTv, host, json, logger),
             };
             return tools;
         }
@@ -479,7 +533,7 @@ namespace LLM_AI
         //  Helpers JSON (arguments, réponses)
         // ------------------------------------------------------------------
 
-        private static string ArgString(JsonElement args, string name)
+        internal static string ArgString(JsonElement args, string name)
         {
             try
             {
@@ -516,7 +570,7 @@ namespace LLM_AI
             catch { return null; }
         }
 
-        private static string Json(object o)
+        internal static string Json(object o)
         {
             try { return JsonSerializer.Serialize(o); }
             catch { return "{\"status\":\"failed\",\"detail\":\"sérialisation\"}"; }

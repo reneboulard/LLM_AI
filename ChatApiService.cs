@@ -15,7 +15,9 @@ using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Notifications;
 using MediaBrowser.Controller.Playlists;
+using MediaBrowser.Controller.Providers;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Logging;
 using MediaBrowser.Model.Serialization;
 using MediaBrowser.Model.Services;
@@ -164,6 +166,34 @@ namespace LLM_AI
             /// <summary>Libellé français de la proposition (ton des toasts
             /// de traçabilité).</summary>
             public string Label { get; set; }
+            /// <summary>Diff visuel optionnel (identification / annulation) —
+            /// null pour les autres actions.</summary>
+            public ChatActionDiffInfo Diff { get; set; }
+        }
+
+        public class ChatActionDiffInfo
+        {
+            public string Kind { get; set; }
+            public bool CrossKind { get; set; }
+            public string ItemId { get; set; }
+            public string ItemName { get; set; }
+            public string ItemPath { get; set; }
+            public string ItemImageUrl { get; set; }
+            public string ItemLink { get; set; }
+            public string CandidateTitle { get; set; }
+            public string CandidateOriginalTitle { get; set; }
+            public int? CandidateYear { get; set; }
+            public string CandidateOverview { get; set; }
+            public string CandidatePosterUrl { get; set; }
+            public string CandidateTmdbLink { get; set; }
+            public string ProofLevel { get; set; }
+            public string ProofSource { get; set; }
+            public string ProofEvidence { get; set; }
+            public string TruthSource { get; set; }
+            public List<string> Changes { get; set; }
+            public List<string> Hints { get; set; }
+            public List<string> Rejected { get; set; }
+            public string Warning { get; set; }
         }
 
         /// <summary>
@@ -354,6 +384,19 @@ namespace LLM_AI
             {
                 Logger.Info("[LLM_AI] [CHAT] Mode édition « {0} » : couche d'action Emby coupée " +
                     "(édition = dépôt deux phases, aucune action Emby dans ce mode).", contextId);
+            }
+
+            // Outils d'identification assistée (lecture seule : identify_list,
+            // identify_resolve) — disponibles hors mode édition même si le
+            // budget d'actions est à 0 ; les écritures (identify_propose,
+            // identify_undo) vivent dans ChatActions et exigent le budget.
+            if (!editMode)
+            {
+                actionTools ??= new List<ILlmTool>();
+                actionTools.AddRange(ChatIdentifyTools.BuildReadTools(cfg, sessionId,
+                    LibraryManager, UserManager, _liveTv, ApplicationHost, _json, Logger));
+                actionsWorkflow = (actionsWorkflow ?? string.Empty)
+                    + ChatIdentifyTools.BuildWorkflowBlock(cfg.ChatActionBudget > 0);
             }
 
             // Édition de prompts par le chat (v1.13.8, opt-in) : le tool
@@ -595,7 +638,8 @@ namespace LLM_AI
                     {
                         ActionId = a.ActionId,
                         Tool = a.Tool,
-                        Label = a.Label
+                        Label = a.Label,
+                        Diff = a.Diff
                     }).ToList()
                 : null;
 
@@ -1187,6 +1231,69 @@ namespace LLM_AI
 
             ChatActionStore.Discard(req?.ActionId);
             return new ChatActionDecisionResponse { Ok = true };
+        }
+
+        /// <summary>
+        /// <c>POST /Plugins/LLMAI/ChatAction/RefreshMetadata</c> — met en file
+        /// une actualisation des métadonnées manquantes d'un item tout en
+        /// excluant les images (<c>MetadataRefreshMode.FullRefresh</c> +
+        /// <c>ReplaceAllMetadata=false</c>, <c>ImageRefreshMode.ValidationOnly</c>,
+        /// <c>ReplaceAllImages=false</c>). Déclenchée manuellement par le bouton
+        /// post-approbation de la carte d'identification (hors fiches croisées).
+        /// Réservé aux administrateurs.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatAction/RefreshMetadata", "POST")]
+        public class ChatActionRefreshRequest : IReturn<object>
+        {
+            public string ItemId { get; set; }
+        }
+
+        public object Post(ChatActionRefreshRequest req)
+        {
+            string lang = I18n.ResolveDisplayLangKey(ApplicationHost);
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatActionDecisionResponse { Error = I18n.S("err.admin", lang) };
+
+            var item = ItemIdResolver.Resolve(LibraryManager, req?.ItemId);
+            if (item == null || OrphanResolver.IsStrmCard(item))
+                return new ChatActionDecisionResponse { Error = I18n.S("act.ref.refresh.notfound", lang) };
+
+            if (OrphanResolver.HasTag(item, OrphanIdentifyTask.TagCrossKind))
+                return new ChatActionDecisionResponse { Error = I18n.S("act.ref.refresh.crosskind", lang) };
+
+            var providers = ApplicationHost?.TryResolve<IProviderManager>();
+            var fs = ApplicationHost?.TryResolve<IFileSystem>();
+            if (providers == null || fs == null)
+                return new ChatActionDecisionResponse { Error = I18n.S("act.ref.refresh.unavailable", lang) };
+
+            try
+            {
+                var dirSvc = new DirectoryService(fs);
+                var opts = new MetadataRefreshOptions(dirSvc)
+                {
+                    MetadataRefreshMode = MetadataRefreshMode.FullRefresh,
+                    ReplaceAllMetadata = false,
+                    ImageRefreshMode = MetadataRefreshMode.ValidationOnly,
+                    ReplaceAllImages = false,
+                    ReplaceThumbnailImages = false,
+                    Recursive = true
+                };
+                providers.QueueRefresh(item.InternalId, opts, RefreshPriority.High);
+                Logger.Info("[LLM_AI] Chat action RefreshMetadata : « {0} » (id={1}) mis en file (métadonnées manquantes, sans images ; usager={2}).",
+                    item.Name, item.InternalId, admin.Name);
+                return new ChatActionDecisionResponse
+                {
+                    Ok = true,
+                    Detail = string.Format(CultureInfo.InvariantCulture, I18n.S("act.ok.refresh_meta", lang), item.Name ?? "?")
+                };
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn("[LLM_AI] Chat action RefreshMetadata : échec sur « {0} » ({1}).", item.Name, ex.Message);
+                return new ChatActionDecisionResponse { Error = ex.Message };
+            }
         }
 
         /// <summary>Indice de session pour la consommation d'un pending :

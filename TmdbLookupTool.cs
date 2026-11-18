@@ -111,7 +111,8 @@ namespace LLM_AI
         /// puis « en-US ». La clé de cache inclut la langue : deux langues distinctes
         /// pour un même titre sont mises en cache séparément.</para>
         /// </summary>
-        internal async Task<string> FetchWithCacheAsync(string query, string kind, int? year, string lang, CancellationToken ct)
+        internal async Task<string> FetchWithCacheAsync(string query, string kind, int? year, string lang, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             var cfg = Plugin.Instance?.Configuration;
             if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey))
@@ -134,8 +135,8 @@ namespace LLM_AI
             }
 
             string result = kind == "movie"
-                ? await LookupMovieAsync(key, lang, query, year, ct).ConfigureAwait(false)
-                : await LookupSeriesAsync(key, lang, query, year, ct).ConfigureAwait(false);
+                ? await LookupMovieAsync(key, lang, query, year, ct, overviewChain).ConfigureAwait(false)
+                : await LookupSeriesAsync(key, lang, query, year, ct, overviewChain).ConfigureAwait(false);
 
             // Ne cache QUE les résultats valides (pas les erreurs / « aucune
             // série »), comme web_search.
@@ -163,10 +164,11 @@ namespace LLM_AI
         /// l'appelant via <see cref="I18n.ToTmdbLang"/>). Vide/null → repli legacy
         /// <see cref="PluginConfiguration.TmdbLanguage"/> / en-US.</para>
         /// </summary>
-        internal async Task<TmdbMeta> LookupMetaAsync(string query, string kind, int? year, string lang, CancellationToken ct)
+        internal async Task<TmdbMeta> LookupMetaAsync(string query, string kind, int? year, string lang, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             if (string.IsNullOrWhiteSpace(query)) return null;
-            string json = await FetchWithCacheAsync(query, kind ?? "series", year, lang, ct).ConfigureAwait(false);
+            string json = await FetchWithCacheAsync(query, kind ?? "series", year, lang, ct, overviewChain).ConfigureAwait(false);
             return ParseMeta(json);
         }
 
@@ -229,7 +231,8 @@ namespace LLM_AI
         //  Recherche série : /search/tv puis /tv/{id} (détails + statut)
         // ------------------------------------------------------------------
 
-        private async Task<string> LookupSeriesAsync(string key, string lang, string query, int? year, CancellationToken ct)
+        private async Task<string> LookupSeriesAsync(string key, string lang, string query, int? year, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             var sb = new StringBuilder("https://api.themoviedb.org/3/search/tv?api_key=").Append(UrlEnc(key));
             sb.Append("&language=").Append(UrlEnc(lang));
@@ -243,14 +246,15 @@ namespace LLM_AI
             int id = first.Value.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number ? idp.GetInt32() : 0;
             if (id == 0) return Err("réponse TMDB sans id");
 
-            return await FetchDetailAsync(key, id, "series", lang, ct).ConfigureAwait(false);
+            return await FetchDetailAsync(key, id, "series", lang, ct, overviewChain).ConfigureAwait(false);
         }
 
         // ------------------------------------------------------------------
         //  Recherche film : /search/movie puis /movie/{id} (genres)
         // ------------------------------------------------------------------
 
-        private async Task<string> LookupMovieAsync(string key, string lang, string query, int? year, CancellationToken ct)
+        private async Task<string> LookupMovieAsync(string key, string lang, string query, int? year, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             var sb = new StringBuilder("https://api.themoviedb.org/3/search/movie?api_key=").Append(UrlEnc(key));
             sb.Append("&language=").Append(UrlEnc(lang));
@@ -264,7 +268,7 @@ namespace LLM_AI
             int id = first.Value.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number ? idp.GetInt32() : 0;
             if (id == 0) return Err("réponse TMDB sans id");
 
-            return await FetchDetailAsync(key, id, "movie", lang, ct).ConfigureAwait(false);
+            return await FetchDetailAsync(key, id, "movie", lang, ct, overviewChain).ConfigureAwait(false);
         }
 
         // ------------------------------------------------------------------
@@ -272,15 +276,38 @@ namespace LLM_AI
         //  de la recherche par titre (LookupMovie/SeriesAsync) et de la
         //  résolution par id externe (FindByExternalIdAsync). Non mis en cache
         //  (le cache est géré par FetchWithCacheAsync au niveau recherche).
+        //  overviewChain (fix #6, champ TmdbLangPriority) : liste de priorité
+        //  des langues du SYNOPSIS — non vide = la fiche est lise UNE fois avec
+        //  append_to_response=translations et le synopsis est sélectionné dans
+        //  la première langue disponible de la liste (fr-CA avant fr-FR : TMDB
+        //  ne fait AUCUN repli croisé, et la langue= du fetch ne peut pas
+        //  l'exprimer). Null = comportement historique au bit près (aucune
+        //  lecture translations). Le TITRE suit toujours la langue= du fetch
+        //  (doctrine portes lexicales : titre comparable au titre du guide).
         // ------------------------------------------------------------------
 
-        private async Task<string> FetchDetailAsync(string key, int id, string kind, string lang, CancellationToken ct)
+        private async Task<string> FetchDetailAsync(string key, int id, string kind, string lang, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             string path = kind == "movie" ? "movie" : "tv";
+            bool chained = overviewChain != null && overviewChain.Count > 0;
             var det = await GetJsonAsync(
-                $"https://api.themoviedb.org/3/{path}/{id}?api_key={UrlEnc(key)}&language={UrlEnc(lang)}&append_to_response=external_ids", ct)
+                $"https://api.themoviedb.org/3/{path}/{id}?api_key={UrlEnc(key)}&language={UrlEnc(lang)}&append_to_response=external_ids{(chained ? ",translations" : "")}", ct)
                 .ConfigureAwait(false);
             var d = det.RootElement;
+
+            // Fix #6 : sélection du synopsis dans la table translations
+            // (UNE lecture, en mémoire). Rang retenu ≠ langue du fetch →
+            // ligne greppable (validation terrain : la substitution doit
+            // se lire au journal).
+            string overview = Str(d, "overview");
+            if (chained)
+            {
+                overview = SelectChainedOverview(d, overviewChain, overview, out string selLang);
+                if (selLang != null && !string.Equals(selLang, lang, StringComparison.OrdinalIgnoreCase))
+                    _logger?.Info("[LLM_AI] tmdb détail {0} : synopsis substitué en {1} (rang prioritaire ; fetch en {2} — priorité : {3}).",
+                        id, selLang, lang, string.Join(", ", overviewChain));
+            }
 
             if (kind == "movie")
             {
@@ -290,7 +317,7 @@ namespace LLM_AI
                     tmdb_id = id,
                     imdb_id = ExtId(d, "imdb_id"),
                     title = Str(d, "title"),
-                    overview = Str(d, "overview"),
+                    overview = overview,
                     year = YearOf(Str(d, "release_date")),
                     rating = Num(d, "vote_average"),
                     status = Str(d, "status"),
@@ -306,7 +333,7 @@ namespace LLM_AI
                 imdb_id = ExtId(d, "imdb_id"),
                 tvdb_id = ExtId(d, "tvdb_id"),
                 title = Str(d, "name"),
-                overview = Str(d, "overview"),
+                overview = overview,
                 year = YearOf(Str(d, "first_air_date")),
                 rating = Num(d, "vote_average"),
                 status = Str(d, "status"),
@@ -314,6 +341,54 @@ namespace LLM_AI
                 genres = GenreNames(d),
                 poster_url = Poster(Str(d, "poster_path"))
             }, s_json);
+        }
+
+        /// <summary>
+        /// Sélectionne le synopsis d'une fiche TMDB dans la première langue
+        /// disponible de la chaîne de priorité (fix #6), depuis la table
+        /// <c>translations</c> déjà lue par le fetch (zéro requête
+        /// supplémentaire). Une entrée de la table porte
+        /// <c>iso_639_1</c>/<c>iso_3166_1</c> (famille + région — TMDB y
+        /// scinde le français : fr-FR et fr-CA sont des entrées distinctes)
+        /// et le texte dans <c>data.overview</c> ; un code nu de la chaîne
+        /// (« bg ») apparie toute entrée de la famille, un code régional
+        /// (« fr-CA ») exige la région exacte. Rangs muets → rang suivant ;
+        /// dernier rang = repli final (convention usager : en-US). Aucun
+        /// rang rempli → l'overview brut du fetch (fiche muette, la
+        /// mécanique aval « fiche muette » prend le relais).
+        /// <paramref name="selLang"/> reçoit le rang retenu (null = rien
+        /// trouvé). Ne lève jamais.
+        /// </summary>
+        private static string SelectChainedOverview(JsonElement d, IReadOnlyList<string> chain,
+            string rawOverview, out string selLang)
+        {
+            selLang = null;
+            try
+            {
+                if (!d.TryGetProperty("translations", out var tw) || tw.ValueKind != JsonValueKind.Object) return rawOverview;
+                if (!tw.TryGetProperty("translations", out var arr) || arr.ValueKind != JsonValueKind.Array) return rawOverview;
+                foreach (var lang in chain)
+                {
+                    if (string.IsNullOrWhiteSpace(lang)) continue;
+                    string fam = I18n.TmdbLangFamily(lang);
+                    int i = lang.IndexOf('-');
+                    string region = i > 0 ? lang.Substring(i + 1) : null;
+                    foreach (var t in arr.EnumerateArray())
+                    {
+                        if (t.ValueKind != JsonValueKind.Object) continue;
+                        if (!string.Equals(Str(t, "iso_639_1"), fam, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (region != null && !string.Equals(Str(t, "iso_3166_1"), region, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (t.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object)
+                        {
+                            string ov = Str(data, "overview");
+                            if (!string.IsNullOrWhiteSpace(ov)) { selLang = lang; return ov; }
+                        }
+                        if (region != null) break; // variante exacte muette → rang suivant
+                    }
+                }
+            }
+            catch { /* table illisible → overview brut du fetch */ }
+            return rawOverview;
         }
 
         // ------------------------------------------------------------------
@@ -324,7 +399,8 @@ namespace LLM_AI
         //  null si aucun. Ne lève pas (erreurs loguées + null).
         // ------------------------------------------------------------------
 
-        internal async Task<TmdbMeta> FindByExternalIdAsync(string externalId, string source, string kind, string lang, CancellationToken ct)
+        internal async Task<TmdbMeta> FindByExternalIdAsync(string externalId, string source, string kind, string lang,
+            CancellationToken ct, IReadOnlyList<string> overviewChain = null)
         {
             var cfg = Plugin.Instance?.Configuration;
             if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey) || string.IsNullOrWhiteSpace(externalId) || string.IsNullOrWhiteSpace(source))
@@ -355,7 +431,7 @@ namespace LLM_AI
                     {
                         try
                         {
-                            string json = await FetchDetailAsync(key, id, kind, lang, ct).ConfigureAwait(false);
+                            string json = await FetchDetailAsync(key, id, kind, lang, ct, overviewChain).ConfigureAwait(false);
                             var meta = ParseMeta(json);
                             if (meta != null) return meta;
                         }
@@ -376,7 +452,8 @@ namespace LLM_AI
         //  privilégiant celui qui a un synopsis. Null si aucun match.
         // ------------------------------------------------------------------
 
-        internal async Task<TmdbMeta> LookupMetaMultiLangAsync(string query, string kind, int? year, IEnumerable<string> langs, CancellationToken ct)
+        internal async Task<TmdbMeta> LookupMetaMultiLangAsync(string query, string kind, int? year, IEnumerable<string> langs,
+            CancellationToken ct, IReadOnlyList<string> overviewChain = null)
         {
             if (string.IsNullOrWhiteSpace(query)) return null;
             TmdbMeta best = null;
@@ -384,7 +461,7 @@ namespace LLM_AI
             {
                 ct.ThrowIfCancellationRequested();
                 TmdbMeta m = null;
-                try { m = await LookupMetaAsync(query, kind, year, lang, ct).ConfigureAwait(false); }
+                try { m = await LookupMetaAsync(query, kind, year, lang, ct, overviewChain).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] tmdb multi-lang « {0} » ({1}) échoué ({2}).", query, lang, ex.Message); }
 
@@ -404,14 +481,15 @@ namespace LLM_AI
         //  ou id invalide. Ne lève pas.
         // ------------------------------------------------------------------
 
-        internal async Task<TmdbMeta> LookupMetaByIdAsync(int tmdbId, string kind, string lang, CancellationToken ct)
+        internal async Task<TmdbMeta> LookupMetaByIdAsync(int tmdbId, string kind, string lang, CancellationToken ct,
+            IReadOnlyList<string> overviewChain = null)
         {
             if (tmdbId <= 0) return null;
             var cfg = Plugin.Instance?.Configuration;
             if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey)) return null;
             try
             {
-                string json = await FetchDetailAsync(cfg.TmdbApiKey, tmdbId, kind, lang, ct).ConfigureAwait(false);
+                string json = await FetchDetailAsync(cfg.TmdbApiKey, tmdbId, kind, lang, ct, overviewChain).ConfigureAwait(false);
                 return ParseMeta(json);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

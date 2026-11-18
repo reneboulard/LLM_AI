@@ -514,6 +514,109 @@
                 font-size: 0.95em;
                 margin-top: 0.4em;
             }
+            .LLMAIConfigPage .chatPane .chatIdentifyDiff {
+                margin-top: 0.5em;
+                color: #222;
+                font-size: 0.88em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyPath {
+                font-family: monospace;
+                font-size: 0.86em;
+                color: #555;
+                word-break: break-all;
+                margin-bottom: 0.45em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyLinks {
+                display: flex;
+                gap: 0.9em;
+                flex-wrap: wrap;
+                margin: 0.35em 0 0.5em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyLinks a {
+                color: #1565c0;
+                text-decoration: underline;
+                font-weight: 600;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyVisuals {
+                display: flex;
+                gap: 0.9em;
+                flex-wrap: wrap;
+                margin: 0.4em 0 0.6em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyPosterBox {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                width: 126px;
+                background: #fff;
+                border: 1px solid #e0d39a;
+                border-radius: 5px;
+                padding: 0.35em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyPoster {
+                width: 112px;
+                height: 168px;
+                object-fit: cover;
+                border-radius: 3px;
+                background: #eee;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyPosterEmpty {
+                width: 112px;
+                height: 168px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                color: #777;
+                font-size: 0.82em;
+                background: #f2f2f2;
+                border-radius: 3px;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyPosterCap {
+                margin-top: 0.3em;
+                font-size: 0.8em;
+                color: #444;
+                text-align: center;
+                line-height: 1.25;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyProof {
+                background: #fff;
+                border: 1px solid #e8d89a;
+                border-radius: 4px;
+                padding: 0.4em 0.55em;
+                margin: 0.35em 0;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyBadge {
+                display: inline-block;
+                padding: 0.08em 0.45em;
+                border-radius: 3px;
+                font-size: 0.85em;
+                font-weight: 700;
+                margin-right: 0.35em;
+                background: #e3f2fd;
+                color: #0d47a1;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyOverview {
+                color: #333;
+                margin: 0.35em 0;
+                line-height: 1.35;
+                font-style: italic;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyList {
+                margin: 0.3em 0 0.2em;
+                padding-left: 1.2em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyList li {
+                margin: 0.12em 0;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyRefreshRow {
+                margin-top: 0.55em;
+            }
+            .LLMAIConfigPage .chatPane .chatIdentifyRefreshNote {
+                margin-top: 0.35em;
+                font-size: 0.88em;
+                color: #2e7d32;
+            }
         </style>
 
         <div data-role="content">
@@ -711,6 +814,14 @@
                                    data-i18n-label="cfg.tmdblang.label"
                                    placeholder="fr-FR" />
                             <div class="fieldDescription" data-i18n-html="cfg.tmdblang.desc">Ne sert que si « Langue de réponse du LLM » est sur Auto : langue utilisée pour interroger TMDB (ex. fr-FR, en-US). Quand une langue de réponse est choisie, c'est elle qui pilote TMDB.</div>
+                        </div>
+
+                        <div class="inputContainer">
+                            <input is="emby-input" type="text" id="txtTmdbLangPriority"
+                                   label="Priorité des langues TMDB"
+                                   data-i18n-label="cfg.tmdbprio.label"
+                                   placeholder="fr-CA, fr-FR, en-US" />
+                            <div class="fieldDescription" data-i18n-html="cfg.tmdbprio.desc">Codes séparés par des virgules, par ordre de préférence (ex. fr-CA, fr-FR, en-US). Priorité du SYNOPSIS des fiches lors de l'identification des enregistrements : la langue du contenu (guide) passe en tête de sa famille, la fiche est lue une seule fois et le synopsis est pris dans la première langue disponible de la liste ; le dernier rang sert de repli. Vide = comportement par défaut (fr-CA n'est alors jamais essayé).</div>
                         </div>
 
                         <div class="inputContainer">
@@ -1500,7 +1611,8 @@
                                   label="Titres exclus (un titre par ligne)"
                                   data-i18n-label="cfg.orphan.excluded"></textarea>
                         <div class="fieldDescription" data-i18n-html="cfg.orphan.excluded.desc">
-                            Items que la passe ne doit jamais tenter d'identifier : une entrée
+                            Items que ni la validation de fin d'enregistrement ni la passe
+                            d'identification ne doivent jamais tenter d'identifier : une entrée
                             correspond au titre exact, ou à un préfixe suivi d'une frontière de mot
                             (« Le téléjournal » attrape « Le téléjournal avec Claudine Bourbonnais »,
                             jamais « Le téléjournaliste ») ; casse et accents tolérés. Un item exclu

@@ -850,6 +850,103 @@ define([], function () {
                 //  arguments restent côté serveur : le clic n'envoie que
                 //  l'ActionId (comme la carte de prompt).
                 // ------------------------------------------------------------------
+                function safeUrl(u, allowExternal) {
+                    if (!u) return "";
+                    var s = String(u).trim();
+                    if (s.indexOf("/web/") === 0 || s.indexOf("/emby/") === 0 || s.indexOf("/Items/") === 0)
+                        return s;
+                    if (allowExternal && (s.indexOf("https://") === 0 || s.indexOf("http://") === 0))
+                        return s;
+                    return "";
+                }
+
+                function renderIdentifyDiff(diff) {
+                    if (!diff) return "";
+                    var h = '<div class="chatIdentifyDiff">';
+                    if (diff.ItemPath)
+                        h += '<div class="chatIdentifyPath">' + esc(diff.ItemPath) + '</div>';
+
+                    var embyHref = safeUrl(diff.ItemLink, false);
+                    var tmdbHref = safeUrl(diff.CandidateTmdbLink, true);
+                    if (embyHref || tmdbHref) {
+                        h += '<div class="chatIdentifyLinks">';
+                        if (embyHref)
+                            h += '<a href="' + esc(embyHref) + '" target="_blank" rel="noopener noreferrer">' + esc(i18n.t("chat.identify.emby_link")) + '</a>';
+                        if (tmdbHref)
+                            h += '<a href="' + esc(tmdbHref) + '" target="_blank" rel="noopener noreferrer">' + esc(i18n.t("chat.identify.tmdb_link")) + '</a>';
+                        h += '</div>';
+                    }
+
+                    var itemImg = safeUrl(diff.ItemImageUrl, false);
+                    var candImg = safeUrl(diff.CandidatePosterUrl, true);
+                    if (itemImg || candImg || diff.Kind === "identify") {
+                        h += '<div class="chatIdentifyVisuals">';
+                        h += '<div class="chatIdentifyPosterBox">';
+                        if (itemImg) {
+                            h += '<img class="chatIdentifyPoster" loading="lazy" src="' + esc(itemImg) + '" alt="" onerror="this.style.display=\'none\'">';
+                        } else {
+                            h += '<div class="chatIdentifyPosterEmpty">' + esc(i18n.t("chat.identify.no_img")) + '</div>';
+                        }
+                        h += '<div class="chatIdentifyPosterCap">' + esc(i18n.t("chat.identify.current_img")) + '</div></div>';
+
+                        if (diff.Kind === "identify") {
+                            var candCap = (diff.CandidateTitle || "?") + (diff.CandidateYear ? " (" + diff.CandidateYear + ")" : "");
+                            h += '<div class="chatIdentifyPosterBox">';
+                            if (candImg) {
+                                h += '<img class="chatIdentifyPoster" loading="lazy" src="' + esc(candImg) + '" alt="" onerror="this.style.display=\'none\'">';
+                            } else {
+                                h += '<div class="chatIdentifyPosterEmpty">' + esc(i18n.t("chat.identify.no_img")) + '</div>';
+                            }
+                            h += '<div class="chatIdentifyPosterCap">' + esc(candCap) + '</div></div>';
+                        }
+                        h += '</div>';
+                    }
+
+                    if (diff.Warning)
+                        h += '<div class="chatPendingWarn">⚠️ ' + esc(diff.Warning) + '</div>';
+
+                    if (diff.ProofLevel || diff.ProofSource || diff.ProofEvidence || diff.TruthSource) {
+                        h += '<div class="chatIdentifyProof">';
+                        if (diff.ProofLevel || diff.ProofSource) {
+                            h += '<div><span class="chatIdentifyBadge">' + esc(diff.ProofLevel || "?") + '</span>';
+                            if (diff.ProofSource) h += '<strong>' + esc(diff.ProofSource) + '</strong>';
+                            h += '</div>';
+                        }
+                        if (diff.ProofEvidence)
+                            h += '<div>' + esc(i18n.t("chat.identify.proof")) + ' : ' + esc(diff.ProofEvidence) + '</div>';
+                        if (diff.TruthSource)
+                            h += '<div>' + esc(i18n.t("chat.identify.truth")) + ' : ' + esc(diff.TruthSource) + '</div>';
+                        h += '</div>';
+                    }
+
+                    if (diff.CandidateOverview)
+                        h += '<div class="chatIdentifyOverview">' + esc(diff.CandidateOverview) + '</div>';
+
+                    if (diff.Changes && diff.Changes.length) {
+                        h += '<div><strong>' + esc(i18n.t("chat.identify.changes")) + ' :</strong><ul class="chatIdentifyList">';
+                        for (var ci = 0; ci < diff.Changes.length; ci++)
+                            h += '<li>' + esc(diff.Changes[ci]) + '</li>';
+                        h += '</ul></div>';
+                    }
+
+                    if (diff.Hints && diff.Hints.length) {
+                        h += '<div><strong>' + esc(i18n.t("chat.identify.hints")) + ' :</strong><ul class="chatIdentifyList">';
+                        for (var hi = 0; hi < diff.Hints.length; hi++)
+                            h += '<li>' + esc(diff.Hints[hi]) + '</li>';
+                        h += '</ul></div>';
+                    }
+
+                    if (diff.Rejected && diff.Rejected.length) {
+                        h += '<div><strong>' + esc(i18n.t("chat.identify.rejected")) + ' :</strong><ul class="chatIdentifyList">';
+                        for (var ri = 0; ri < diff.Rejected.length; ri++)
+                            h += '<li>' + esc(diff.Rejected[ri]) + '</li>';
+                        h += '</ul></div>';
+                    }
+
+                    h += '</div>';
+                    return h;
+                }
+
                 function appendActionCard(pending) {
                     // Une seule carte active par proposition : un second
                     // dépôt identique dans la même session est supplanté
@@ -860,6 +957,7 @@ define([], function () {
                     card.innerHTML =
                         '<div class="chatPendingTitle">⚡ ' + esc(i18n.t("chat.action.pending.title")) + '</div>' +
                         '<div class="chatPendingLabel">' + esc(pending.Label || "?") + '</div>' +
+                        renderIdentifyDiff(pending.Diff) +
                         '<div class="chatPendingButtons">' +
                             '<button is="emby-button" type="button" class="raised btnApproveAction" data-i18n="chat.action.approve">Approuver</button>' +
                             '<button is="emby-button" type="button" class="raised btnRefuseAction" data-i18n="chat.action.refuse">Refuser</button>' +
@@ -870,7 +968,7 @@ define([], function () {
 
                     var actionId = String(pending.ActionId || "");
                     var actionLabel = String(pending.Label || "");
-                    function decideAction(url, doneText, makeNote) {
+                    function decideAction(url, doneText, makeNote, isApprove) {
                         ApiClient.ajax({
                             url: ApiClient.getUrl(url, { session: chatSessionId || "" }),
                             type: "POST",
@@ -891,6 +989,53 @@ define([], function () {
                                     res.style.color = "#e57373";
                                 }
                                 res.hidden = false;
+                            }
+                            if (isApprove && resp.Ok && pending.Diff && pending.Diff.Kind === "identify"
+                                && pending.Diff.ItemId && !pending.Diff.CrossKind) {
+                                var refreshRow = document.createElement("div");
+                                refreshRow.className = "chatIdentifyRefreshRow";
+                                var refreshBtn = document.createElement("button");
+                                refreshBtn.setAttribute("is", "emby-button");
+                                refreshBtn.type = "button";
+                                refreshBtn.className = "raised btnRefreshMeta";
+                                refreshBtn.textContent = i18n.t("chat.identify.refresh_btn");
+                                var refreshNote = document.createElement("div");
+                                refreshNote.className = "chatIdentifyRefreshNote";
+                                refreshNote.hidden = true;
+                                refreshBtn.addEventListener("click", function () {
+                                    refreshBtn.disabled = true;
+                                    refreshBtn.textContent = i18n.t("chat.identify.refreshing");
+                                    ApiClient.ajax({
+                                        url: ApiClient.getUrl("Plugins/LLMAI/ChatAction/RefreshMetadata"),
+                                        type: "POST",
+                                        data: JSON.stringify({ ItemId: String(pending.Diff.ItemId) }),
+                                        contentType: "application/json",
+                                        dataType: "json"
+                                    }).then(function (r) {
+                                        r = r || {};
+                                        if (r.Ok) {
+                                            refreshBtn.hidden = true;
+                                            refreshNote.textContent = r.Detail || i18n.t("chat.identify.refreshed");
+                                            refreshNote.style.color = "";
+                                            refreshNote.hidden = false;
+                                        } else {
+                                            refreshBtn.disabled = false;
+                                            refreshBtn.textContent = i18n.t("chat.identify.refresh_btn");
+                                            refreshNote.textContent = i18n.t("chat.identify.refresh_err") + " : " + (r.Error || "?");
+                                            refreshNote.style.color = "#e57373";
+                                            refreshNote.hidden = false;
+                                        }
+                                    }, function (err) {
+                                        refreshBtn.disabled = false;
+                                        refreshBtn.textContent = i18n.t("chat.identify.refresh_btn");
+                                        refreshNote.textContent = i18n.t("chat.identify.refresh_err") + " : " + (err && err.status ? "HTTP " + err.status : "?");
+                                        refreshNote.style.color = "#e57373";
+                                        refreshNote.hidden = false;
+                                    });
+                                });
+                                refreshRow.appendChild(refreshBtn);
+                                refreshRow.appendChild(refreshNote);
+                                card.appendChild(refreshRow);
                             }
                             // Note au LLM dans le fil (re-postée à chaque
                             // tour) : le résultat d'exécution réel — le
@@ -924,7 +1069,7 @@ define([], function () {
                                             : i18n.t("chat.note.action.executed"))
                                         : i18n.t("chat.note.action.failed",
                                             (resp && resp.Error ? resp.Error : "?"))));
-                            });
+                            }, true);
                     });
                     if (refuseBtn) refuseBtn.addEventListener("click", function () {
                         if (chatBusy) return;

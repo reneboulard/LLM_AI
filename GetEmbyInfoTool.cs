@@ -60,7 +60,10 @@ namespace LLM_AI
             // l'usager du run (le foyer ne se dévoile pas) — l'enseigner
             // évite au modèle des demandes d'autres usagers vouées au refus.
             "Depuis le chat externe, genre_stats ne projette que les statistiques de l'usager du " +
-            "run (tout autre nom demandé est refusé).";
+            "run (tout autre nom demandé est refusé)." +
+            (ParentalUser == null
+                ? " item_details (admin) expose aussi path, provider_ids (tmdb/imdb/tvdb), tags et locked_fields."
+                : "");
 
         // Le schéma est injecté dans le system prompt (bloc AVAILABLE TOOLS).
         public string ArgumentsSchema => @"{
@@ -380,6 +383,25 @@ namespace LLM_AI
                 PermissionGate.IsParentallyAllowed(ParentalUser, item) != PermissionGate.ParentalVerdict.Allowed)
                 return Err($"item indisponible pour cet usager : {item.Name ?? idStr}");
 
+            Dictionary<string, string> providerIds = null;
+            string[] tags = null;
+            string[] lockedFields = null;
+            if (ParentalUser == null)
+            {
+                if (item.ProviderIds != null && item.ProviderIds.Count > 0)
+                {
+                    var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var kv in item.ProviderIds)
+                        if (!string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+                            dict[kv.Key] = kv.Value;
+                    if (dict.Count > 0) providerIds = dict;
+                }
+                if (item.Tags != null && item.Tags.Length > 0)
+                    tags = item.Tags;
+                if (item.LockedFields != null && item.LockedFields.Length > 0)
+                    lockedFields = item.LockedFields.Select(f => f.ToString()).ToArray();
+            }
+
             var result = new
             {
                 id = item.InternalId.ToString(),
@@ -390,9 +412,13 @@ namespace LLM_AI
                 genres = item.Genres,
                 overview = item.Overview,
                 official_rating = item.OfficialRating,
-                // Chat externe : le chemin disque n'est pas projeté à un
-                // client non-admin (le chat admin en reste pourvu, lui).
+                // Chat externe : le chemin disque, les ids provider, les tags
+                // et les verrous ne sont pas projetés à un client non-admin
+                // (le chat admin en reste pourvu, lui).
                 path = ParentalUser != null ? null : item.Path,
+                provider_ids = providerIds,
+                tags = tags,
+                locked_fields = lockedFields,
                 date_created = item.DateCreated,
                 image_url = ImageUrl(item.InternalId)
             };

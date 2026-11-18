@@ -44,6 +44,9 @@ namespace LLM_AI
         public string Label { get; set; }
         /// <summary>Arguments figés de l'appel (JSON brut).</summary>
         public string ArgsJson { get; set; }
+        /// <summary>Diff structuré optionnel (identification / annulation)
+        /// rendu sur la carte côté page — null pour les autres actions.</summary>
+        public ChatApiService.ChatActionDiffInfo Diff { get; set; }
         public DateTimeOffset Created { get; set; }
     }
 
@@ -83,7 +86,8 @@ namespace LLM_AI
         /// plafond de la session est atteint (aucune proposition n'est
         /// alors créée).</summary>
         internal static ChatPendingEmbyAction Create(string sessionId, string userId,
-            string tool, string argsJson, string label)
+            string tool, string argsJson, string label,
+            ChatApiService.ChatActionDiffInfo diff = null)
         {
             if (string.IsNullOrWhiteSpace(tool) || argsJson == null) return null;
             var action = new ChatPendingEmbyAction
@@ -94,6 +98,7 @@ namespace LLM_AI
                 Tool = tool.Trim(),
                 Label = label ?? "",
                 ArgsJson = argsJson,
+                Diff = diff,
                 Created = DateTimeOffset.UtcNow
             };
             lock (_lock)
