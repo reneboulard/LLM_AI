@@ -55,6 +55,9 @@ namespace LLM_AI
             public List<string> RejectedSummary = new List<string>();
         }
 
+        /// <summary>Plafond serveur de cartes identify_propose concurrentes par item.</summary>
+        internal const int MaxCandidateCardsPerItem = 3;
+
         public static List<ILlmTool> BuildReadTools(PluginConfiguration cfg, string sessionId,
             ILibraryManager library, IUserManager users, ILiveTvManager liveTv,
             IServerApplicationHost host, IJsonSerializer json, ILogger logger)
@@ -85,6 +88,24 @@ namespace LLM_AI
                          "avec item_id et tmdb_id (et kind si différent). La carte affiche les posters côte à côte, " +
                          "la preuve et le diff — l'admin tranche au clic. Ne dépose PAS de carte si status=\"already_identified\" " +
                          "(dis simplement que l'item est déjà identifié), sauf demande explicite de correction.\n");
+                b.Append("- LA CARTE EST L'APERÇU : l'admin ne voit NI poster NI synopsis avant le dépôt d'une carte, et " +
+                         "la carte n'exécute rien avant son clic « Approuver ». Ne demande donc JAMAIS la permission de " +
+                         "déposer une carte et ne propose pas de « recherches supplémentaires » à la place : dès que " +
+                         "identify_resolve expose un candidat (status resolvable OU needs_review, preuve forte, faible " +
+                         "ou écart de durée compris), DÉPOSE la carte, puis résume en une phrase la preuve et les " +
+                         "réserves (écart de durée, homonyme, preuve faible) pour guider le coup d'œil de l'admin. " +
+                         "N'écarte jamais toi-même un candidat sur un titre ou une durée : l'admin juge sur l'affiche.\n");
+                b.Append("- HOMONYMES DANS LA BIBLIOTHÈQUE : si get_emby_info find renvoie plusieurs items au même titre, " +
+                         "ne te contente pas de les nommer — pour chacun donne année, chemin et si une fiche (ids) est " +
+                         "déjà posée ; un item sans année ni ids est presque toujours celui à identifier (privilégie-le " +
+                         "et dis-le), les autres sont déjà identifiés.\n");
+                b.Append("- MULTI-CANDIDATS : si identify_resolve expose plusieurs candidats plausibles que la " +
+                         "preuve ne départage pas (homonymes, fiches croisées, années proches), dépose UNE carte " +
+                         "identify_propose PAR candidat (plafond 3), du plus probable au moins probable, EN UN SEUL " +
+                         "TOUR — l'admin compare les affiches et approuve la bonne ; dis-lui de refuser les cartes " +
+                         "non retenues (elles restent en attente). Une preuve forte (juge synopsis, titre exact) " +
+                         "départage déjà : une seule carte. Le serveur plafonne à 3 cartes par item et retire " +
+                         "les cartes sœurs dès qu'une est approuvée (inutile de demander de les refuser).\n");
                 b.Append("- Pour retirer une identification / remettre un item à zéro : appelle identify_undo.\n");
             }
             if (MccClient.IsEnabledForInstall)
@@ -93,6 +114,10 @@ namespace LLM_AI
                          "consulte-le AVANT de trancher : il donne la v.o. (relance tmdb_lookup avec), l'année, le genre " +
                          "et le synopsis de chaque fiche MCC. La carte identify affiche en plus la concordance MCC " +
                          "calculée côté serveur.\n");
+            b.Append("- INDICE ADMIN : si l'admin fournit lui-même un id IMDb/TMDB, un titre original ou une année, " +
+                     "passe-les à identify_resolve via hint_imdb_id / hint_tmdb_id / hint_title / hint_year " +
+                     "(recopiés tels quels, jamais déduits ni inventés). Le serveur relit la fiche sur TMDB et la " +
+                     "présente comme candidat « indice admin » NON corroboré — jamais une preuve : valide-la visuellement.\n");
             b.Append("- N'invente JAMAIS un tmdb_id ni une preuve : les preuves sur la carte sont recalculées côté serveur.\n");
             return b.ToString();
         }
@@ -351,11 +376,15 @@ namespace LLM_AI
             public string Name => "identify_resolve";
             public string Description =>
                 "Exécute la cascade d'identification (SB/S0/S1/S2/S3 + juge synopsis + juge web) en mode " +
-                "dry-run (aucune écriture) sur UN item désigné, et retourne le candidat retenu avec sa " +
+                "dry-run (aucune écriture) sur UN item désigné (indices admin optionnels hint_*), et retourne le candidat retenu avec sa " +
                 "preuve, les candidats rejetés avec leurs raisons, et l'état actuel de l'item.";
             public string ArgumentsSchema =>
                 "{\"type\":\"object\",\"properties\":{" +
-                "\"item_id\":{\"type\":\"string\",\"description\":\"Identifiant de l'item (id renvoyé par find ou identify_list)\"}}," +
+                "\"item_id\":{\"type\":\"string\",\"description\":\"Identifiant de l'item (id renvoyé par find ou identify_list)\"}," +
+                "\"hint_imdb_id\":{\"type\":\"string\",\"description\":\"Indice de l'admin : id IMDb (tt…) — optionnel, JAMAIS inventé\"}," +
+                "\"hint_tmdb_id\":{\"type\":\"integer\",\"description\":\"Indice de l'admin : id TMDB — optionnel, JAMAIS inventé\"}," +
+                "\"hint_title\":{\"type\":\"string\",\"description\":\"Indice de l'admin : titre (ex. titre original) à chercher sur TMDB — optionnel\"}," +
+                "\"hint_year\":{\"type\":\"integer\",\"description\":\"Année associée à hint_title — optionnel\"}}," +
                 "\"required\":[\"item_id\"]}";
 
             public async Task<string> ExecuteAsync(JsonElement args, CancellationToken ct)
@@ -376,11 +405,38 @@ namespace LLM_AI
 
                 var resolver = CreateResolver(_logger, _json, _library, _users, _liveTv, _host);
                 string userTmdb = ResolveUserTmdb(_cfg, _host);
-                var report = await resolver.ResolveForChatAsync(item, _cfg, userTmdb, ct).ConfigureAwait(false);
+                var hint = new OrphanResolver.ChatHint
+                {
+                    ImdbId = ChatActions.ArgString(args, "hint_imdb_id"),
+                    Title = ChatActions.ArgString(args, "hint_title")
+                };
+                if (args.ValueKind == JsonValueKind.Object)
+                {
+                    if (args.TryGetProperty("hint_tmdb_id", out var htEl))
+                    {
+                        int ht = 0;
+                        if (htEl.ValueKind == JsonValueKind.Number) htEl.TryGetInt32(out ht);
+                        else if (htEl.ValueKind == JsonValueKind.String) int.TryParse(htEl.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ht);
+                        hint.TmdbId = ht;
+                    }
+                    if (args.TryGetProperty("hint_year", out var hyEl))
+                    {
+                        int hy = 0;
+                        if (hyEl.ValueKind == JsonValueKind.Number) hyEl.TryGetInt32(out hy);
+                        else if (hyEl.ValueKind == JsonValueKind.String) int.TryParse(hyEl.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out hy);
+                        if (hy >= 1888 && hy <= 2100) hint.Year = hy;
+                    }
+                }
+                var report = await resolver.ResolveForChatAsync(item, _cfg, userTmdb, ct, hint.IsEmpty ? null : hint).ConfigureAwait(false);
 
                 string normItemId = item.InternalId.ToString(CultureInfo.InvariantCulture);
-                var rejectedList = report.Candidates
+                // Liste des écartés PAR candidat : la fiche proposée sur une carte
+                // n'est jamais listée parmi ses propres « candidats écartés ».
+                var rejectedAll = report.Candidates
                     .Where(c => !c.Accepted && c.Meta != null)
+                    .ToList();
+                List<string> RejectedFor(int tmdbId) => rejectedAll
+                    .Where(c => c.Meta.TmdbId != tmdbId)
                     .Take(5)
                     .Select(c => (c.Meta.Title ?? "?") + " (tmdb=" + c.Meta.TmdbId + ", " + c.Stage + ") — " + (c.Reason ?? "rejeté"))
                     .ToList();
@@ -398,7 +454,7 @@ namespace LLM_AI
                         TruthSource = report.TruthSource,
                         Accepted = c.Accepted,
                         VerdictReason = c.Reason,
-                        RejectedSummary = rejectedList
+                        RejectedSummary = RejectedFor(c.Meta.TmdbId)
                     });
                 }
 
@@ -767,7 +823,10 @@ namespace LLM_AI
                     item.Name ?? normItemId,
                     (meta.Title ?? newTmdbStr) + (meta.Year.HasValue ? " (" + meta.Year.Value + ")" : ""),
                     newTmdbStr);
-                return ChatActions.CreatePending(_sessionId, _adminUserId, ToolKey, frozenArgs, label, diff);
+                // Plafond serveur des candidats concurrents d'un même item (3) +
+                // exclusion mutuelle à l'approbation (ChatActionStore.Consume).
+                return ChatActions.CreatePending(_sessionId, _adminUserId, ToolKey, frozenArgs, label, diff,
+                    group: "identify:" + normItemId, maxPerGroup: MaxCandidateCardsPerItem);
             }
 
             public async Task<string> ExecuteCoreAsync(JsonElement args, CancellationToken ct)

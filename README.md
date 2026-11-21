@@ -806,11 +806,19 @@ ouvre le dialogue, le plugin alimente la liste, l'humain choisit.
   corroborée (titre exact du guide OU année concordante saisie), jamais appliquée
   sur la foi du LLM. Quand même rien d'exact, un **renfort web** (miroir S3 :
   SearXNG auto-hébergée, ids IMDb/TMDB extraits des résultats web, plafond
-  3 relectures TMDB, budget 8 s) prend le relais avec les mêmes portes de
-  corroboration — sans `SearXngUrl`, la phase saute silencieusement. Poster w500
-  servis sur les cartes ; résultats cache 24 h.
-- **Rangement** : id saisi / titre exact d'abord, année concordante ensuite, ordre de
-  pertinence TMDB ensuite.
+  3 relectures TMDB, budget 8 s) prend le relais — sans `SearXngUrl`, la phase
+  saute silencieusement. Deux règles (v2.23.1) : **l'ancrage web est une
+  preuve** — un résultat web portant le titre du guide (clé exacte, l'ancrage
+  S3) fait servir sa fiche même quand le titre de l'œuvre diffère (cas « La
+  dernière séance de Freud » : le titre québécois n'existe dans aucune base
+  interrogeable — TMDB search = 0 dans toutes les langues, MCC en v.o. seule ;
+  seul l'IMDb fr-ca et les pages médias québécoises portent l'équivalence) ;
+  **sans ancrage, la fiche web est servie en queue** (jamais jetée — le
+  dialogue est une liste à choisir ; le bras LLM reste lui strict). Poster
+  w500 servis sur les cartes ; résultats cache 24 h (l'ancrage y survit).
+- **Rangement** : id saisi / titre exact d'abord, **ancrage web** ensuite,
+  année concordante ensuite, ordre TMDB brut / fiche web sans preuve en
+  dernier.
 - **Le fournisseur ne pose rien** : la fiche choisie est appliquée par le geste
   standard d'Emby (pose des ids + rafraîchissement complet ; Emby lève les verrous
   de l'item — comportement natif, l'usager est autoritaire). L'audit aval reste le
@@ -1177,7 +1185,7 @@ Trois flags opt-in (voir [Mémoire réflexive](#mémoire-réflexive)) :
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (statique) | Pose une image par défaut standardisée (ressource embedded) : `default_poster.jpg` (400×600 portrait) sur la collection `AI Tonight` (BoxSet) et sur les playlists « AI Tonight » (publique + privées par usager), `default_library.jpg` (640×360 16:9) sur la racine de la bibliothèque `.strm` (CollectionFolder). Idempotent (seulement si pas d'image `Primary`). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | Badges **au moment du service** sur les images EPG (overlay — l'artwork stocké n'est jamais modifié) : puce **verte + étincelle** pour les suggestions IA du record bucket, puce **jaune sans icône** pour le **déjà possédé** — film par nom, épisode de série **au niveau de l'épisode** (n° saison/épisode, puis titre d'épisode ; posséder la série ne badge pas toutes ses diffusions, repli conservateur au niveau série quand l'EPG n'a pas de numérotation). Matching `Norm` réutilisé, index noms + clés d'épisodes biblio (cache 10 min). Dessin SkiaSharp (livré avec Emby), **clé de cache par état ET par item** (les épisodes partagent la pochette du guide de leur série — le badge d'un épisode ne doit pas fuiter sur les autres), repli copie de l'original, ne lève jamais. Auto-découvert par le scan d'assembly. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (statique) | Registre des programmes suggérés par la tâche nocturne : remplacé à chaque run (`ApplyRecos`, filtres record bucket), persisté `AiBadgeProgramIds`, rechargement paresseux au 1er `Supports` (le constructeur du plugin ne touche jamais `Configuration` — `AssemblyFilePath` n'est posé qu'après construction). |
-| `AiIdentifySearchProvider.cs` | `AiIdentifyMovieSearchProvider` / `AiIdentifySeriesSearchProvider` (+ `AiIdentifySearchCore`, `AiIdentifyLibraryArmer : IServerEntryPoint`) | **Recherche « Identifier » assistée** (v2.23.0) : deux fournisseurs branchés sur le dialogue natif **Identifier** d'Emby (film + série, `POST /Items/RemoteSearch/Movie|Series`) — phase A0 ids saisis résolus par TMDB en tête, phase A recherche-liste TMDB **sans filtre d'année** (doctrine v2.4.4 ; arrêt au titre exact) avec pont MCC via `LookupMetaMultiLangAsync`, phase B renfort `LlmRunner.ResolveIdsAsync` miroir S2 corrélé (budget 25 s, ≤ 2 relectures — titre exact du guide OU année saisie corroborée, l'année du LLM seule ne vaut rien), phase C renfort web miroir S3 (SearXNG → ids extraits des résultats → relecture TMDB plafonnée 3, budget 8 s, mêmes portes ; sans `SearXngUrl` : saut silencieux), rangement par preuve (exact > année > ordre TMDB), cache 24 h. Fournisseur volontairement **inert** en métadonnées automatiques (`GetMetadata` vide — exigé par l'énumération du serveur, jamais consulté). Armeur `AiIdentifyLibraryArmer` : le dialogue d'un item existant ne consulte que les fournisseurs activés dans sa bibliothèque — « LLM_AI » est armé idempotent dans chaque bibliothèque (TypeOptions Movie/Series, `CollectionFolder.UpdateLibraryOptions` natif) au démarrage (+2 min) et sur `ItemAdded` (borné 10 min), désarmé si toggle/clé disparaissent. Ne pose rien : l'Apply natif d'Emby écrit ids + refresh (lève le verrou du titre — comportement natif, l'usager autoritaire). Voir [Recherche « Identifier » assistée](#recherche--identifier--assistée-dialogue-identifier-demby). |
+| `AiIdentifySearchProvider.cs` | `AiIdentifyMovieSearchProvider` / `AiIdentifySeriesSearchProvider` (+ `AiIdentifySearchCore`, `AiIdentifyLibraryArmer : IServerEntryPoint`) | **Recherche « Identifier » assistée** (v2.23.0) : deux fournisseurs branchés sur le dialogue natif **Identifier** d'Emby (film + série, `POST /Items/RemoteSearch/Movie|Series`) — phase A0 ids saisis résolus par TMDB en tête, phase A recherche-liste TMDB **sans filtre d'année** (doctrine v2.4.4 ; arrêt au titre exact) avec pont MCC via `LookupMetaMultiLangAsync`, phase B renfort `LlmRunner.ResolveIdsAsync` miroir S2 corrélé (budget 25 s, ≤ 2 relectures — titre exact du guide OU année saisie corroborée, l'année du LLM seule ne vaut rien), phase C renfort web miroir S3 (SearXNG → ids extraits des résultats → relecture TMDB plafonnée 3, budget 8 s ; **ancrage web = preuve (v2.23.1)** — un résultat portant le titre du guide (clé exacte S3) fait servir sa fiche même quand le titre de l'œuvre diffère — cas « La dernière séance de Freud » : aucune base interrogeable ne porte le titre québécois ; fiches web non ancrées servies **sans preuve en queue** au lieu d'être jetées ; bras LLM reste strict ; sans `SearXngUrl` : saut silencieux), rangement par preuve (exact > ancrage web > année > ordre TMDB/fiche sans preuve), cache 24 h (ancrage préservé). Fournisseur volontairement **inert** en métadonnées automatiques (`GetMetadata` vide — exigé par l'énumération du serveur, jamais consulté). Armeur `AiIdentifyLibraryArmer` : le dialogue d'un item existant ne consulte que les fournisseurs activés dans sa bibliothèque — « LLM_AI » est armé idempotent dans chaque bibliothèque (TypeOptions Movie/Series, `CollectionFolder.UpdateLibraryOptions` natif) au démarrage (+2 min) et sur `ItemAdded` (borné 10 min), désarmé si toggle/clé disparaissent. Ne pose rien : l'Apply natif d'Emby écrit ids + refresh (lève le verrou du titre — comportement natif, l'usager autoritaire). Voir [Recherche « Identifier » assistée](#recherche--identifier--assistée-dialogue-identifier-demby). |
 | `I18n.cs` | `I18n` (statique) | i18n côté serveur (C#) : dictionnaires inline FR/EN + résolution de langue (`ResolveMetaLangKey` métadonnées / `ResolveDisplayLangKey` interface) + `ToTmdbLang`/`ToLangName`. Localise les tâches planifiées et, depuis v1.15.0.2, les chaînes affichées du chat admin et de la page de configuration (cartes, détails, erreurs des endpoints). |
 | `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (statique interne) | Chargeur de l'**overlay communautaire** (v1.16.0, fichier `LLM_AI_i18n.json` — relecture throttle mtime, sans restart) : familles `server`/`ext` validées **par clé** (multiset placeholders `{n}` + balises HTML vs natives EN ; `ext` = texte brut, {n} seul) + slice `web` servie brute (validée côté client au merge) ; snapshot immuable échangé par référence, patch fr/en autoritaire, clés inconnues/invalide sautées + log, résumé de chargement. |
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | Endpoints i18n pour traducteurs (v1.16.0) : `GET /Plugins/LLMAI/I18n` (slices de l'overlay, fail-open), `?base=1` (base EN native à chaud — web extraite du i18n.js embarqué sans eval, server + ext direct), `?missing=1&lang=xx` (diff des clés restant à traduire, sortie RAW collable). |
@@ -2018,6 +2026,14 @@ dupliquer le filtre natif « Doublons » d'Emby :
    synopsis à arbitrer est rejeté (reboot/homonyme). Rejet → la chaîne S0→S1→S2→S3
    suit son cours. Fiche du frère illisible dans le type de la passe (fiche
    croisée) : pas d'ancrage — le repli de type s'en charge.
+   **Porte de durée (films seulement, v2.23.2)** : après chaque étape (SB, S0,
+   S1, S2, S3), une fiche film dont le ratio durée du fichier / durée TMDB sort
+   de la bande **0,70–1,60** est rejetée à l'étape qui l'a trouvée (log avec les
+   deux durées) et la chaîne continue — un homonyme en bibliothèque de 43 min ne
+   « prouve » plus un fichier de 124 min. Bande large à dessein : la durée d'un
+   enregistrement varie (pubs incluses, version télé coupée, marges DVR). Séries
+   exclues ; durée inconnue d'un côté → pas de rejet. Valable pour la passe
+   nocturne ET le chat.
 2. **Garde « fiche déjà portée »** : à la porte d'acceptation, pour **tout
    candidat de toute voie** (SB/S0/S1/S2/S3), avant d'écrire — qui d'autre dans
    la bibliothèque porte déjà ce tmdb/tvdb/imdb (requête indexée par id
@@ -2596,6 +2612,17 @@ sur carte (`ChatIdentifyTools.cs`) :
   + TMDB, extrait de synopsis, **diff exact avant/après** (ids, tag, verrous),
   indices non bloquants (comparaison durée fichier/fiche, synopsis muet, fiche
   croisée, porteurs/conflits en bibliothèque) et résumé des candidats écartés.
+  Quand la preuve ne départage pas plusieurs candidats plausibles, le workflow
+  enseigne au LLM de déposer **une carte par candidat** (plafond 3, un seul tour,
+  du plus probable au moins probable — v2.23.2) : l'admin compare les affiches et
+  approuve la bonne ; le serveur impose le plafond (3 par item) et retire les cartes
+  sœurs dès qu'une est approuvée. `identify_resolve` accepte aussi des indices admin
+  optionnels (`hint_imdb_id`, `hint_tmdb_id`, `hint_title`, `hint_year`) : la fiche
+  est relue sur TMDB et présentée comme candidat « indice admin », jamais comme preuve.
+  La carte est l'aperçu : le modèle la dépose dès qu'un candidat existe (même
+  faible), sans demander la permission — rien ne s'exécute avant le clic. L'action
+  `find` de `get_emby_info` expose `path` et `provider_ids` au chat admin pour
+  départager des homonymes (enregistrement DVR vs bibliothèque, fichée vs vierge).
   À l'approbation : re-validation **anti-TOCTOU** (ids de fiche figés
   `tmdb`/`imdb`/`tvdb` dans la proposition — refus si l'item a changé
   entre-temps), consommation du budget, puis application en mode

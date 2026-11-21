@@ -782,11 +782,18 @@ plugin feeds the list, the human picks.
   (exact guide title OR the typed matching year), never applied on the LLM's
   word. When still nothing exact, an **web backup** (S3 mirror: self-hosted
   SearXNG, IMDb/TMDB ids extracted from the web results, 3 TMDB re-reads cap,
-  8 s budget) takes over under the same corroboration gates — without
-  `SearXngUrl`, the phase silently skips. w500 posters served on cards; 24 h
-  result cache.
-- **Ranking**: typed id / exact title first, matching year next, TMDB relevance
-  order next.
+  8 s budget) takes over — without `SearXngUrl`, the phase silently skips.
+  Two rules (v2.23.1): **a web anchor is proof** — a web result carrying the
+  guide's title (exact key, the S3 anchor) serves its fiche even when the
+  work's title differs (the "La dernière séance de Freud" case: the Quebec
+  title exists in no queryable database — TMDB search = 0 in every language,
+  MCC v.o.-only; only IMDb fr-ca and Quebec media pages carry the
+  equivalence); **without an anchor the web fiche is served at the tail**
+  (never dropped — the dialog is a list to pick from; the LLM arm stays
+  strict). w500 posters served on cards; 24 h result cache (the anchor
+  survives it).
+- **Ranking**: typed id / exact title first, **web anchor** next, matching year
+  next, raw TMDB order / unproven web fiche last.
 - **The provider writes nothing**: the picked fiche is applied by Emby's
   standard gesture (ids + full refresh; Emby lifts the item's locks — native
   behavior, the user is authoritative). The downstream audit stays the net: on
@@ -1143,7 +1150,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default image (embedded resource): `default_poster.jpg` (400×600 portrait) on the `AI Tonight` collection (BoxSet) and on the "AI Tonight" playlists (public + per-user private), `default_library.jpg` (640×360 16:9) on the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
-| `AiIdentifySearchProvider.cs` | `AiIdentifyMovieSearchProvider` / `AiIdentifySeriesSearchProvider` (+ `AiIdentifySearchCore`, `AiIdentifyLibraryArmer : IServerEntryPoint`) | **Assisted "Identify" search** (v2.23.0): two providers wired to Emby's native **Identify** dialog (movie + series, `POST /Items/RemoteSearch/Movie|Series`) — phase A0 typed ids resolved by TMDB to the top, phase A TMDB list search **without a year filter** (v2.4.4 doctrine; stops at the exact title) with the MCC bridge via `LookupMetaMultiLangAsync`, phase B S2-mirrored `LlmRunner.ResolveIdsAsync` backup (25 s budget, ≤ 2 re-reads — exact guide title OR corroborated typed year; the LLM's year alone is worthless), phase C S3-mirrored web backup (SearXNG → ids extracted from web results → capped TMDB re-reads (3), 8 s budget, same gates; without `SearXngUrl`: silent skip), evidence ranking (exact > year > TMDB order), 24 h cache. Provider deliberately **inert for automatic metadata** (empty `GetMetadata` — required by the server enumeration, never consulted). Armer `AiIdentifyLibraryArmer`: the dialog of an existing item only consults providers enabled in its library — "LLM_AI" is idempotently armed in every library (Movie/Series TypeOptions, native `CollectionFolder.UpdateLibraryOptions`) at startup (+2 min) and on `ItemAdded` (10-min bound), disarmed when the toggle/key disappears. Writes nothing: Emby's native Apply writes ids + refresh (lifting the locks — native behavior, the user is authoritative). See [Assisted "Identify" search](#assisted-identify-search-emby-identify-dialog). |
+| `AiIdentifySearchProvider.cs` | `AiIdentifyMovieSearchProvider` / `AiIdentifySeriesSearchProvider` (+ `AiIdentifySearchCore`, `AiIdentifyLibraryArmer : IServerEntryPoint`) | **Assisted "Identify" search** (v2.23.0): two providers wired to Emby's native **Identify** dialog (movie + series, `POST /Items/RemoteSearch/Movie|Series`) — phase A0 typed ids resolved by TMDB to the top, phase A TMDB list search **without a year filter** (v2.4.4 doctrine; stops at the exact title) with the MCC bridge via `LookupMetaMultiLangAsync`, phase B S2-mirrored `LlmRunner.ResolveIdsAsync` backup (25 s budget, ≤ 2 re-reads — exact guide title OR corroborated typed year; the LLM's year alone is worthless), phase C S3-mirrored web backup (SearXNG → ids extracted from web results → capped TMDB re-reads (3), 8 s budget; **web anchoring = proof (v2.23.1)** — a result carrying the guide's title (exact S3 key) serves its fiche even when the work's title differs — the "La dernière séance de Freud" case: no queryable database carries the Quebec title; unanchored web fiches are served unproven AT THE TAIL instead of dropped; the LLM arm stays strict; without `SearXngUrl`: silent skip), evidence ranking (exact > web anchor > year > TMDB order/unproven web), 24 h cache (anchor preserved). Provider deliberately **inert for automatic metadata** (empty `GetMetadata` — required by the server enumeration, never consulted). Armer `AiIdentifyLibraryArmer`: the dialog of an existing item only consults providers enabled in its library — "LLM_AI" is idempotently armed in every library (Movie/Series TypeOptions, native `CollectionFolder.UpdateLibraryOptions`) at startup (+2 min) and on `ItemAdded` (10-min bound), disarmed when the toggle/key disappears. Writes nothing: Emby's native Apply writes ids + refresh (lifting the locks — native behavior, the user is authoritative). See [Assisted "Identify" search](#assisted-identify-search-emby-identify-dialog). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks and, since v1.15.0.2, the strings shown in the admin chat and the configuration page (cards, details, endpoint errors). |
 | `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (internal static) | **Community overlay** loader (v1.16.0, file `LLM_AI_i18n.json` — mtime-throttled re-read, no restart): `server`/`ext` families validated **per key** (placeholder `{n}` + HTML tag multiset vs EN natives; `ext` = plain text, `{n}` rules only) + the `web` slice served raw (validated client-side at merge); immutable snapshot swapped by reference, authoritative fr/en patches, unknown/invalid keys skipped + logged, load summary. |
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | i18n endpoints for translators (v1.16.0): `GET /Plugins/LLMAI/I18n` (overlay slices, fail-open), `?base=1` (hot EN native base — web extracted from the embedded i18n.js without eval, server + ext direct), `?missing=1&lang=xx` (diff of keys still to translate, paste-ready RAW output). |
@@ -1959,6 +1966,13 @@ source**, without scanning the library and without duplicating Emby's native
    (reboot/homonym). On rejection the S0→S1→S2→S3 chain runs as usual. A
    sibling card unreadable under the pass kind (cross-kind card): no
    anchoring — the kind replay handles it.
+   **Runtime gate (movies only, v2.23.2)**: after each stage (SB, S0, S1, S2,
+   S3), a movie fiche whose file-runtime / TMDB-runtime ratio falls outside the
+   **0.70–1.60** band is rejected at the stage that found it (logged with both
+   durations) and the chain continues — a 43-min library homonym no longer
+   "proves" a 124-min file. Deliberately wide band: a recording's runtime varies
+   (ads included, TV-cut version, DVR padding). Series excluded; runtime unknown
+   on either side → no rejection. Applies to the nightly pass AND the chat.
 2. **"Card already carried" gate**: at the acceptance gate, for **every
    candidate from every path** (SB/S0/S1/S2/S3), before writing — who else in
    the library already carries this tmdb/tvdb/imdb (indexed provider-id
@@ -2511,6 +2525,17 @@ orchestrates, the server computes the proof, the human approves on a card
   links, overview excerpt, **exact before/after diff** (ids, tag, locks),
   non-blocking hints (file-runtime vs fiche comparison, mute overview,
   cross-kind, library carriers/conflicts) and a rejected-candidates summary.
+   When the proof cannot separate several plausible candidates, the workflow
+   teaches the LLM to deposit **one card per candidate** (cap 3, a single turn,
+   most probable first — v2.23.2): the admin compares the posters and approves
+   the right one; the server enforces the cap (3 per item) and drops the sibling
+   cards as soon as one is approved. `identify_resolve` also accepts optional
+   admin hints (`hint_imdb_id`, `hint_tmdb_id`, `hint_title`, `hint_year`): the
+   fiche is re-read on TMDB and shown as an "admin hint" candidate, never as proof.
+   The card is the preview: the model deposits it as soon as a candidate exists
+   (even a weak one), without asking permission — nothing runs before the click.
+   The `find` action of `get_emby_info` exposes `path` and `provider_ids` to the
+   admin chat to tell homonyms apart (DVR recording vs library, matched vs blank).
   On approval: **anti-TOCTOU** re-validation (fiche ids frozen
   `tmdb`/`imdb`/`tvdb` in the proposal — refused if the item changed in the
   meantime), budget consumption, then a replace-mode application (clears

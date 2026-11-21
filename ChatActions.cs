@@ -290,15 +290,18 @@ namespace LLM_AI
         /// est le texte de la carte côté page (français, ton des toasts).</summary>
         internal static string CreatePending(string sessionId, string userId,
             string toolKey, JsonElement args, string label,
-            ChatApiService.ChatActionDiffInfo diff = null)
+            ChatApiService.ChatActionDiffInfo diff = null, string group = null, int maxPerGroup = 0)
         {
             string argsJson;
             try { argsJson = JsonSerializer.Serialize(args); }
             catch { argsJson = "{}"; }
-            var a = ChatActionStore.Create(sessionId, userId, toolKey, argsJson, label, diff);
+            var a = ChatActionStore.Create(sessionId, userId, toolKey, argsJson, label, diff, group, maxPerGroup);
             if (a == null)
                 return Json(new { status = "refused",
-                    detail = "Trop de propositions en attente (10 maximum) — l'admin doit d'abord trancher les cartes existantes." });
+                    detail = (group != null && maxPerGroup > 0
+                        ? "Plafond de " + maxPerGroup + " propositions concurrentes par item, ou trop de propositions en attente (10 maximum)"
+                        : "Trop de propositions en attente (10 maximum)")
+                        + " — l'admin doit d'abord trancher les cartes existantes." });
             return Json(new { status = "awaiting_approval", action_id = a.ActionId,
                 detail = "Proposition déposée (aucune exécution). L'admin approuve en cliquant la carte " +
                          "« Approuver » de la page — le résultat d'exécution arrivera ensuite dans la " +

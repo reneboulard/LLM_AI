@@ -166,6 +166,18 @@ namespace LLM_AI
                 p.Tags ?? Array.Empty<string>(), out _) == PermissionGate.ParentalVerdict.Allowed;
         }
 
+        /// <summary>ids provider non vides d'un item (find, chat admin) ; null
+        /// si aucun — absent du JSON (WhenWritingNull).</summary>
+        private static Dictionary<string, string> FindProviderIds(BaseItem i)
+        {
+            if (i?.ProviderIds == null || i.ProviderIds.Count == 0) return null;
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in i.ProviderIds)
+                if (!string.IsNullOrWhiteSpace(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+                    dict[kv.Key] = kv.Value;
+            return dict.Count > 0 ? dict : null;
+        }
+
         /// <summary>URL publique Emby pour construire les image_url.</summary>
         private string EmbyUrl => Plugin.Instance?.Configuration?.EmbyPublicUrl;
 
@@ -946,6 +958,12 @@ namespace LLM_AI
                         // Classification canonique Classification Mapper.
                         classification = ClassificationMap.Normalize(i.OfficialRating),
                         overview = Truncate(i.Overview, 150),
+                        // v2.23.2 : départage des homonymes (chat ADMIN seulement,
+                        // même garde que le détail d'item : jamais projetés à un
+                        // client non-admin). path = DVR vs bibliothèque
+                        // permanente ; provider_ids = déjà fichée ou vierge.
+                        path = ParentalUser != null ? null : i.Path,
+                        provider_ids = ParentalUser != null ? null : FindProviderIds(i),
                         image_url = ImageUrl(i.InternalId),
                         date_created = i.DateCreated
                     });

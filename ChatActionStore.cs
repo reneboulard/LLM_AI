@@ -48,6 +48,10 @@ namespace LLM_AI
         /// rendu sur la carte côté page — null pour les autres actions.</summary>
         public ChatApiService.ChatActionDiffInfo Diff { get; set; }
         public DateTimeOffset Created { get; set; }
+        /// <summary>Clé de groupe optionnelle (v2.23.2) : les cartes d'un même
+        /// groupe (ex. candidats concurrents d'un même item) sont plafonnées
+        /// et s'excluent mutuellement — approuver l'une retire les autres.</summary>
+        public string Group { get; set; }
     }
 
     internal static class ChatActionStore
@@ -87,7 +91,7 @@ namespace LLM_AI
         /// alors créée).</summary>
         internal static ChatPendingEmbyAction Create(string sessionId, string userId,
             string tool, string argsJson, string label,
-            ChatApiService.ChatActionDiffInfo diff = null)
+            ChatApiService.ChatActionDiffInfo diff = null, string group = null, int maxPerGroup = 0)
         {
             if (string.IsNullOrWhiteSpace(tool) || argsJson == null) return null;
             var action = new ChatPendingEmbyAction
@@ -99,12 +103,21 @@ namespace LLM_AI
                 Label = label ?? "",
                 ArgsJson = argsJson,
                 Diff = diff,
+                Group = string.IsNullOrWhiteSpace(group) ? null : group.Trim(),
                 Created = DateTimeOffset.UtcNow
             };
             lock (_lock)
             {
                 var list = _store.GetOrAdd(action.Session, _ => new List<ChatPendingEmbyAction>());
                 Prune(list);
+                if (action.Group != null && maxPerGroup > 0
+                    && list.Count(a => a != null && a.Group == action.Group
+                        && string.Equals(a.Tool, action.Tool, StringComparison.Ordinal)) >= maxPerGroup)
+                {
+                    SecurityMonitor.Record("ACTION_DEPOT_REFUSE",
+                        tool + " [session " + action.Session + "] — plafond de groupe " + maxPerGroup + " atteint");
+                    return null;
+                }
                 if (list.Count >= MaxPerSession)
                 {
                     // Plafond atteint : refuse le dépôt (anti-inondation) —
@@ -179,6 +192,20 @@ namespace LLM_AI
                         return null; // pas le propriétaire : rien à exécuter
                     }
                     list.Remove(action);
+                    if (action.Group != null)
+                    {
+                        // Exclusion mutuelle : les cartes sœurs (même groupe,
+                        // même outil) sont retirées — une seule identification
+                        // par item, les autres candidats sont caducs.
+                        int dropped = list.RemoveAll(a => a != null && a.Group == action.Group
+                            && string.Equals(a.Tool, action.Tool, StringComparison.Ordinal));
+                        if (_pageNotified.TryGetValue(action.Session, out var pg))
+                            pg.RemoveAll(a => a != null && a.Group == action.Group
+                                && string.Equals(a.Tool, action.Tool, StringComparison.Ordinal));
+                        if (dropped > 0)
+                            SecurityMonitor.Record("ACTION_SOEURS_RETIREES",
+                                action.Tool + " [" + action.ActionId + "] — " + dropped + " carte(s) sœur(s) caduque(s)");
+                    }
                     SecurityMonitor.Record("ACTION_APPROUVEE",
                         action.Tool + " [" + action.ActionId + "] par " + userId);
                     return action;

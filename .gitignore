@@ -47,3 +47,6 @@ asset_version.js
 
 ## Companion app runtime config (contains generated secrets)
 chat-external/config.json
+
+## Local field notes (incident narratives moved out of AGENTS.md, private)
+docs/

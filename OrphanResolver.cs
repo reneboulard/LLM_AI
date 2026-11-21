@@ -582,6 +582,58 @@ namespace LLM_AI
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
+        /// <summary>Bande de la porte de durée FILM (v2.23.2), en ratio
+        /// durée fichier / durée fiche TMDB. Large À DESSEIN : la durée d'un
+        /// enregistrement varie selon la provenance (pubs incluses, version
+        /// télé coupée, marges DVR). Seuls les écarts grossiers — une autre
+        /// œuvre — sont rejetés ; 124 min contre 43 min = ratio 2,88.</summary>
+        internal const double MovieRuntimeMinRatio = 0.70;
+        internal const double MovieRuntimeMaxRatio = 1.60;
+
+        /// <summary>Porte de durée, FILMS seulement (jamais les séries : la durée
+        /// d'un dossier série ne dit rien d'un épisode). Retourne true si la
+        /// fiche doit être rejetée. Fail-open : durée du fichier ou de la fiche
+        /// inconnue (≤ 0) → pas de rejet. Le rejet bascule le verdict accepté
+        /// déjà consigné en trace (chat) et est toujours loggé.</summary>
+        private bool RuntimeRejects(BaseItem item, TmdbMeta meta, string kind, bool isSeries,
+            string stage, string epgTitle, PipelineTrace trace)
+        {
+            if (item == null || meta == null || isSeries) return false;
+            if (!string.Equals(kind, "movie", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!item.RunTimeTicks.HasValue || item.RunTimeTicks.Value <= 0) return false;
+            if (!meta.Runtime.HasValue || meta.Runtime.Value <= 0) return false;
+            double fileMin = item.RunTimeTicks.Value / (double)TimeSpan.TicksPerMinute;
+            double ficheMin = meta.Runtime.Value;
+            double ratio = fileMin / ficheMin;
+            if (ratio >= MovieRuntimeMinRatio && ratio <= MovieRuntimeMaxRatio) return false;
+
+            string reason = "durée incompatible : fichier " + Math.Round(fileMin).ToString(CultureInfo.InvariantCulture)
+                + " min vs fiche " + meta.Runtime.Value.ToString(CultureInfo.InvariantCulture)
+                + " min (ratio " + ratio.ToString("0.00", CultureInfo.InvariantCulture)
+                + ", bande admise " + MovieRuntimeMinRatio.ToString("0.00", CultureInfo.InvariantCulture)
+                + "–" + MovieRuntimeMaxRatio.ToString("0.00", CultureInfo.InvariantCulture) + ")";
+            _logger?.Info(
+                "[LLM_AI] OrphanIdentify : « {0} » — candidat « {1} » ({2}, {3}) rejeté : {4}.",
+                epgTitle, meta.Title,
+                meta.Year.HasValue ? meta.Year.Value.ToString(CultureInfo.InvariantCulture) : "?",
+                stage, reason);
+            if (trace != null)
+            {
+                trace.SawCandidates = true; // candidat vu et rejeté = needs-review, pas introuvable
+                bool flipped = false;
+                foreach (var cv in trace.Candidates)
+                    if (cv.Accepted && cv.Meta != null && cv.Meta.TmdbId == meta.TmdbId)
+                    {
+                        cv.Accepted = false;
+                        cv.Reason = reason;
+                        flipped = true;
+                    }
+                if (!flipped)
+                    trace.RecordCandidate(stage, meta, "faible", stage + " — durée", null, false, reason, false);
+            }
+            return true;
+        }
+
         private async Task<TmdbMeta> ResolvePipelineAsync(BaseItem item, EpgTruth truth,
             PluginConfiguration cfg, string kind, bool isSeries, bool allowS0,
             string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct,
@@ -694,6 +746,12 @@ namespace LLM_AI
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : SB « {0} » échoué ({1}).", epgTitle, ex.Message); }
 
+            if (meta != null && RuntimeRejects(item, meta, kind, isSeries, "SB", epgTitle, trace))
+            {
+                meta = null;
+                stage = null;
+            }
+
             // S0 : recherche native Emby (moteur du dialogue « Identifier »).
             if (allowS0 && (searchYear.HasValue || yearSoft))
             {
@@ -705,6 +763,12 @@ namespace LLM_AI
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S0 « {0} » échoué ({1}).", epgTitle, ex.Message); }
+            }
+
+            if (meta != null && RuntimeRejects(item, meta, kind, isSeries, "S0", epgTitle, trace))
+            {
+                meta = null;
+                stage = null;
             }
 
             // S1 : recherche multilingue sur le titre du guide. Avec une
@@ -785,6 +849,12 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S1 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
+            if (meta != null && RuntimeRejects(item, meta, kind, isSeries, "S1", epgTitle, trace))
+            {
+                meta = null;
+                stage = null;
+            }
+
             // S2 : proposition LLM validée par TMDB (juge). L'année reste
             // envoyée au LLM comme contexte indicatif ; la porte reçoit
             // gateYear (null si soft).
@@ -800,6 +870,12 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S2 « {0} » échoué ({1}).", epgTitle, ex.Message); }
             }
 
+            if (meta != null && RuntimeRejects(item, meta, kind, isSeries, "S2", epgTitle, trace))
+            {
+                meta = null;
+                stage = null;
+            }
+
             // S3 : recherche web (SearXNG) → ids IMDb/TMDB → validation TMDB + juge.
             if (meta == null && cfg.OrphanSearXngEnabled)
             {
@@ -811,6 +887,12 @@ namespace LLM_AI
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex) { _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » échoué ({1}).", epgTitle, ex.Message); }
+            }
+
+            if (meta != null && RuntimeRejects(item, meta, kind, isSeries, "S3", epgTitle, trace))
+            {
+                meta = null;
+                stage = null;
             }
 
             // Point de contrôle du retry ancré (bloc ci-dessus) : un rejet
@@ -3256,8 +3338,86 @@ namespace LLM_AI
             return await _tmdb.LookupMetaByIdAsync(tmdbId, kind, effTmdb, ct, prio).ConfigureAwait(false);
         }
 
+        /// <summary>Indice saisi par l'admin dans le chat (v2.23.2) — jamais une
+        /// preuve : la fiche référencée est relue sur TMDB et surfacée en tête
+        /// comme candidat « indice admin » non corroboré (l'admin tranche sur la
+        /// carte). Tous les champs sont optionnels.</summary>
+        internal sealed class ChatHint
+        {
+            public int TmdbId;
+            public string ImdbId;
+            public string Title;
+            public int? Year;
+            public bool IsEmpty => TmdbId <= 0 && string.IsNullOrWhiteSpace(ImdbId) && string.IsNullOrWhiteSpace(Title);
+        }
+
+        private async Task<List<CandidateVerdict>> ResolveChatHintAsync(ChatHint hint, string kind,
+            string[] langs, string effTmdb, IReadOnlyList<string> prio, CancellationToken ct)
+        {
+            var found = new List<CandidateVerdict>();
+            if (hint == null || hint.IsEmpty) return found;
+            string primary = langs != null && langs.Length > 0 ? langs[0] : effTmdb;
+            string other = string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase) ? "movie" : "series";
+
+            void Add(TmdbMeta m, string how, bool cross)
+            {
+                if (m == null || m.TmdbId <= 0) return;
+                if (found.Any(x => x.Meta.TmdbId == m.TmdbId
+                    && string.Equals(x.Meta.Kind, m.Kind, StringComparison.OrdinalIgnoreCase))) return;
+                found.Add(new CandidateVerdict
+                {
+                    Stage = "indice admin",
+                    Meta = m,
+                    Accepted = false,
+                    ProofLevel = "indice",
+                    ProofSource = "indice admin (" + how + ")",
+                    ProofEvidence = "fiche relue sur TMDB à partir de l'indice saisi par l'admin — non corroborée par la cascade",
+                    Reason = "indice admin (" + how + ") non corroboré par la cascade — validation visuelle requise",
+                    CrossKind = cross
+                });
+            }
+
+            try
+            {
+                if (hint.TmdbId > 0)
+                {
+                    var m = await _tmdb.LookupMetaByIdAsync(hint.TmdbId, kind, primary, ct, prio).ConfigureAwait(false);
+                    if (m != null) Add(m, "tmdb=" + hint.TmdbId, false);
+                    else
+                    {
+                        var mo = await _tmdb.LookupMetaByIdAsync(hint.TmdbId, other, primary, ct, prio).ConfigureAwait(false);
+                        Add(mo, "tmdb=" + hint.TmdbId, true);
+                    }
+                }
+                string imdb = hint.ImdbId?.Trim();
+                if (!string.IsNullOrWhiteSpace(imdb) && imdb.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
+                {
+                    var m = await _tmdb.FindByExternalIdAsync(imdb, "imdb_id", kind, primary, ct, prio).ConfigureAwait(false);
+                    if (m != null) Add(m, imdb, false);
+                    else
+                    {
+                        var mo = await _tmdb.FindByExternalIdAsync(imdb, "imdb_id", other, primary, ct, prio).ConfigureAwait(false);
+                        Add(mo, imdb, true);
+                    }
+                }
+                if (!string.IsNullOrWhiteSpace(hint.Title))
+                {
+                    var m = await _tmdb.LookupMetaMultiLangAsync(hint.Title.Trim(), kind, hint.Year, langs, ct, prio).ConfigureAwait(false);
+                    Add(m, "titre « " + hint.Title.Trim() + " »" + (hint.Year.HasValue ? " " + hint.Year.Value : ""), false);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] [CHAT] indice admin : lecture TMDB échouée — {0}", ex.ToString());
+            }
+            _logger?.Info("[LLM_AI] [CHAT] indice admin (tmdb={0}, imdb={1}, titre={2}) → {3} fiche(s) relue(s).",
+                hint.TmdbId, hint.ImdbId ?? "—", hint.Title ?? "—", found.Count);
+            return found;
+        }
+
         internal async Task<ChatResolveReport> ResolveForChatAsync(BaseItem item, PluginConfiguration cfg,
-            string userTmdb, CancellationToken ct)
+            string userTmdb, CancellationToken ct, ChatHint hint = null)
         {
             var report = new ChatResolveReport { Item = item };
             if (item == null || IsStrmCard(item))
@@ -3297,7 +3457,11 @@ namespace LLM_AI
                 allowS0, langs, effTmdb, dry: true, trace, ct,
                 deferredTruth: deferredTruth, overviewChain: prio).ConfigureAwait(false);
 
-            var allCandidates = new List<CandidateVerdict>(trace.Candidates);
+            var allCandidates = new List<CandidateVerdict>();
+            // Indice admin en tête : il n'est jamais une preuve (Accepted=false) ;
+            // si la cascade accepte la même fiche, son verdict accepté prime à la dédup.
+            allCandidates.AddRange(await ResolveChatHintAsync(hint, kind, langs, effTmdb, prio, ct).ConfigureAwait(false));
+            allCandidates.AddRange(trace.Candidates);
 
             if (meta == null && isSeries)
             {

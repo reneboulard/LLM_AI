@@ -37,8 +37,14 @@ namespace LLM_AI
     /// proposés sont relus sur TMDB, jamais appliqués sans corroboration —
     /// titre exact du guide ou année concordante, TMDB reste la source de
     /// vérité) propose un complément, puis un <b>renfort web</b> (miroir S3 :
-    /// SearXNG, ids extraits des résultats, même porte — le gate est la
-    /// présence de <c>SearXngUrl</c>, fail-open intégral) prend le relais.
+    /// SearXNG, ids extraits des résultats — le gate est la
+    /// présence de <c>SearXngUrl</c>, fail-open intégral) prend le relais :
+    /// un résultat web portant le titre du guide (clé exacte, matcher S3)
+    /// EST la preuve qui promeut sa fiche à l'écran, et toute autre fiche
+    /// web résolue est servie sans preuve en rang queue — jamais jetée
+    /// (v2.23.1, cas « La dernière séance de Freud » : le titre québécois
+    /// n'existe dans aucune base interrogeable ; le dialogue est une liste
+    /// à choisir, et le natif MovieDb montre lui-même des matches lâches).
     /// La pont MCC (titre québécois, via
     /// <c>TmdbLookupTool.LookupMetaMultiLangAsync</c>) et la chaîne de
     /// langues <c>TmdbLangPriority</c> s'appliquent comme partout.</para>
@@ -525,10 +531,11 @@ namespace LLM_AI
                         string.Join(", ", hits.Where(h => string.Equals(h.Source, "imdb_id", StringComparison.Ordinal)).Select(h => h.Id)),
                         string.Join(", ", hits.Where(h => string.Equals(h.Source, "tmdb_id", StringComparison.Ordinal)).Select(h => h.Id)));
 
-                    // Ancrés d'abord (le résultat web qui PORTE le titre du
-                    // guide est le suspect le plus sérieux). La porte de
-                    // corroboration — titre EXACT du guide ou année SAISIE —
-                    // filtre le bruit de tous les hits.
+                    // Ancrés d'abord : le résultat web qui PORTE le titre du
+                    // guide (clé exacte) est le suspect le plus sérieux — son
+                    // ancrage EST la preuve de sa fiche (v2.23.1, promotion).
+                    // Les hits non ancrés passent la porte (titre exact ou
+                    // année saisie) ou finissent en rang queue sans preuve.
                     foreach (var hit in hits.Where(h => h.TitleAnchored).Concat(hits.Where(h => !h.TitleAnchored)))
                     {
                         if (cts.Token.IsCancellationRequested) break;
@@ -552,7 +559,7 @@ namespace LLM_AI
                         if (meta == null) continue;
                         TryAddCorroboratedLlmCandidate(candidates, meta, query, year, order,
                             "web « " + (hit.ResultTitle ?? "—") + " » → " + hit.Source + "=" + hit.Id,
-                            source: "web", label: "résultat web");
+                            source: "web", label: "résultat web", webAnchored: hit.TitleAnchored);
                     }
                 }
             }
@@ -640,16 +647,40 @@ namespace LLM_AI
         /// réel 2026-09-20) — OU année concordante : l'année SAISIE par
         /// l'usager (le ParseName d'Emby) est fiable ; l'année du LLM seule
         /// ne prouve rien. Rejets logués, greppables.
+        /// <para>v2.23.1, bras web (<paramref name="source"/> = « web ») :
+        /// <paramref name="webAnchored"/> — le résultat web porte le titre
+        /// du guide (clé exacte, matcher S3) — EST la preuve : elle promeut
+        /// la fiche quand le titre de l'œuvre diffère de la requête (cas « La
+        /// dernière séance de Freud », titre québécois absent de TMDB) ;
+        /// sans aucune preuve, la fiche web est servie sans preuve en rang
+        /// queue plutôt que jetée — le dialogue est une liste à choisir.</para>
         /// </summary>
         private bool TryAddCorroboratedLlmCandidate(List<CandidateDto> candidates, TmdbMeta meta,
             string query, int? searchYear, OrderBox order, string arm,
-            string source = "llm", string label = "proposition LLM")
+            string source = "llm", string label = "proposition LLM", bool webAnchored = false)
         {
             if (meta == null || meta.TmdbId <= 0) return false;
             if (candidates.Any(x => x.TmdbId == meta.TmdbId)) return false;
 
             bool exactTitle = OrphanResolver.TitlesExactlyEqual(query, meta.Title);
+            bool isWeb = string.Equals(source, "web", StringComparison.Ordinal);
             bool ok = exactTitle || (searchYear.HasValue && meta.Year == searchYear.Value);
+            if (!ok && isWeb)
+            {
+                if (webAnchored)
+                {
+                    _logger?.Info(
+                        "[LLM_AI] Identifier : fiche « {0} » (TMDB {1}, {2}) servie — ancrage web, le résultat porte le titre exact du guide (bras {3}).",
+                        meta.Title, meta.TmdbId, meta.Year?.ToString(CultureInfo.InvariantCulture) ?? "?", arm);
+                }
+                else
+                {
+                    _logger?.Info(
+                        "[LLM_AI] Identifier : résultat web sans preuve servie — fiche « {0} » (TMDB {1}, {2}) en rang queue (titre non exact, non ancrée, année non concordante ; bras {3}).",
+                        meta.Title, meta.TmdbId, meta.Year?.ToString(CultureInfo.InvariantCulture) ?? "?", arm);
+                }
+                ok = true;
+            }
             if (!ok)
             {
                 _logger?.Info(
@@ -657,7 +688,7 @@ namespace LLM_AI
                     label, meta.Title, meta.TmdbId, meta.Year?.ToString(CultureInfo.InvariantCulture) ?? "?", arm);
                 return false;
             }
-            AddMeta(candidates, meta, source, exact: exactTitle, order);
+            AddMeta(candidates, meta, source, exact: exactTitle, order, webAnchor: webAnchored && isWeb);
             return true;
         }
 
@@ -677,6 +708,11 @@ namespace LLM_AI
             public string TvdbId;
             public bool Exact;
             public string Source;
+            /// <summary>Ancrage web : un résultat web portant le titre du
+            /// guide (clé exacte — matcher S3) corrobore la fiche résolue de
+            /// CE résultat (v2.23.1, promotion). Public sérialisé : survit
+            /// au cache 24 h.</summary>
+            public bool WebAnchor;
             /// <summary>Numéro d'insertion (ordre de pertinence TMDB).</summary>
             public int Order;
             /// <summary>Rang final (calculé avant émission — jamais utilement sérialisé).</summary>
@@ -684,10 +720,13 @@ namespace LLM_AI
         }
 
         /// <summary>Rang = paquet de preuve puis ordre d'insertion : id saisi
-        /// ou titre exact &gt; année concordante &gt; ordre TMDB brut.</summary>
+        /// ou titre exact &gt; ancrage web (résultat portant le titre du
+        /// guide) &gt; année concordante &gt; ordre TMDB brut / service web
+        /// sans preuve.</summary>
         private static int RankOf(int? searchYear, CandidateDto c)
         {
             if (string.Equals(c.Source, "id", StringComparison.Ordinal) || c.Exact) return c.Order;
+            if (c.WebAnchor) return 9000 + c.Order;
             if (searchYear.HasValue && c.Year == searchYear.Value) return 10000 + c.Order;
             return 20000 + c.Order;
         }
@@ -725,7 +764,7 @@ namespace LLM_AI
         }
 
         private void AddMeta(List<CandidateDto> candidates, TmdbMeta meta, string source, bool exact,
-            OrderBox order)
+            OrderBox order, bool webAnchor = false)
         {
             candidates.Add(new CandidateDto
             {
@@ -738,6 +777,7 @@ namespace LLM_AI
                 TvdbId = meta.TvdbId,
                 Exact = exact,
                 Source = source,
+                WebAnchor = webAnchor,
                 Order = order.N++
             });
         }
