@@ -43,7 +43,7 @@ namespace LLM_AI
     /// serveur Emby. Contrairement à <see cref="GetEmbyInfoTool"/> (bibliothèque
     /// / EPG, lecture seule), cet outil interroge les services SystÈME d'Emby
     /// (sessions, tâches planifiées, transcodage, infos serveur) et le système
-    /// hôte (process, disques) via la BCL. Vingt-trois actions dispatchées sur
+    /// hôte (process, disques) via la BCL. Vingt-quatre actions dispatchées sur
     /// <c>action</c> :
     /// <list type="bullet">
     /// <item><b>Inspection (lecture seule, toujours disponibles)</b> :
@@ -57,6 +57,8 @@ namespace LLM_AI
     ///   <c>duplicates_check</c> (constat « Doublons » natif — relaye le
     ///   filtre du dashboard, gestion manuelle de l'usager ; bibliothèque,
     ///   via <see cref="ILibraryManager"/> — couche DB, pas FS brut),
+    ///   <c>links_check</c> (validation des liens de fiches TMDB/IMDb/TVDB,
+    ///   incrémental à curseur — voir <see cref="LinkValidator"/>),
     ///   <c>security_metrics</c> (compteurs + événements de sécurité du
     ///   plugin, <see cref="SecurityMonitor"/>).</item>
     /// <item><b>Remédiation (écriture, GATE par config
@@ -129,7 +131,14 @@ namespace LLM_AI
                     "du dashboard), " +
                     "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
                     "table parentale intégrée du serveur — cotes non reconnues = limite parentale aveugle sur ces " +
-                    "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part). " +
+                    "items, avertissement + conseil de normalisation ; marqueurs « non coté » comptés à part), " +
+                    "links_check (validation des LIENS DE FICHES des films/séries : relit la fiche TMDB visée par " +
+                    "l'id de l'item — UN appel append_to_response=external_ids,translations, TVDB n'est jamais " +
+                    "interrogé directement, l'axe tvdb se croise via external_ids — et compare imdb/tvdb/titre/année ; " +
+                    "verdicts corroboré / variante / à réviser / divergent / non vérifiable ; INCRÉMENTAL : chaque " +
+                    "passage traite les items AJOUTÉS depuis le dernier (curseur validate_links_state.json, " +
+                    "plafond config ValidateLinksMaxItems par passage, throttle 300 ms/appel) ; LECTURE SEULE — " +
+                    "aucun id, tag ou verrou n'est modifié ; cloche admin seulement si divergent > 0). " +
                     "security_metrics (compteurs d'activité et fenêtre d'événements de sécurité DU PLUGIN : " +
                     "appels/erreurs web_fetch, SSRF bloqués, appels d'outils malformés ou inconnus, échecs backend " +
                     "LLM, tours de chat refusés, actions déposées/approuvées/refusées — en mémoire, reset au " +
@@ -155,7 +164,7 @@ namespace LLM_AI
             string actions =
                 "server_info | system_config | security_check | upnp_check | active_sessions | scheduled_tasks | " +
                 "list_logs | inspect_log | log_scan | transcode | host_metrics | gpu_transcode | disk_storage | processes | " +
-                "library_stats | missing_metadata | metadata_health | duplicates_check | ratings_check | security_metrics";
+                "library_stats | missing_metadata | metadata_health | duplicates_check | ratings_check | links_check | security_metrics";
             string remediationParams = "";
             if (remediation)
             {
@@ -181,7 +190,8 @@ namespace LLM_AI
                 "  \"tail\": \"(inspect_log, sans grep) nombre de lignes à lire depuis la fin (défaut 200, max 2000)\",\n" +
                 "  \"grep\": \"(inspect_log, optionnel) regex .NET pour filtrer — active le mode grep : retourne les lignes matchantes + 'context' lignes autour (déduction), cap 50 matchs\",\n" +
                 "  \"context\": \"(inspect_log, grep) lignes de contexte autour de chaque match (défaut 2, 0-10)\",\n" +
-                "  \"include_transcode_size\": \"(disk_storage) true pour calculer la taille du dossier de transcodage (défaut false)\"" +
+                "  \"include_transcode_size\": \"(disk_storage) true pour calculer la taille du dossier de transcodage (défaut false)\"," +
+                "  \"full\": \"(links_check) true pour reprendre la baseline depuis le plus ancien (remet le curseur d'audit à zéro — validate_links_state.json) ; défaut false : chaque passage traite les items AJOUTÉS depuis le dernier\"" +
                 remediationParams + "\n}";
         }
 
@@ -254,6 +264,7 @@ namespace LLM_AI
                     case "metadata_health":  result = MetadataHealth(); break;
                     case "duplicates_check": result = DuplicatesCheck(); break;
                     case "ratings_check":    result = RatingsCheck(); break;
+                    case "links_check":      result = await LinksCheckAsync(args, ct).ConfigureAwait(false); break;
                     case "security_metrics": result = SecurityMonitor.SnapshotJson(); break;
                     case "stop_session":      result = await StopSessionAsync(args, ct).ConfigureAwait(false); break;
                     case "trigger_task":      result = TriggerTask(args); break;
@@ -2104,6 +2115,218 @@ namespace LLM_AI
                 },
                 epg
             }, s_json);
+        }
+
+        // ------------------------------------------------------------------
+        //  Validation des liens de fiches (action links_check, v2.22.0)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Passe d'audit INCRÉMENTAL des liens de fiches : valide les
+        /// ids TMDB/IMDb/TVDB des films/séries AJOUTÉS depuis le dernier
+        /// passage (curseur <c>validate_links_state.json</c> — premier
+        /// passage sans marque = baseline depuis le plus ancien). Chaque
+        /// passage traite au plus <see cref="PluginConfiguration.ValidateLinksMaxItems"/>
+        /// items (clampé au plafond dur 1000, throttle 300 ms/appel TMDB) ;
+        /// l'argument <c>full=true</c> ignore le curseur enregistré et
+        /// reprend la baseline depuis le plus ancien (le nouveau curseur
+        /// est persisté en fin de passage, comme toujours). Les sélections
+        /// du TOOL CHAT validate_links ne touchent JAMAIS ce curseur.
+        /// LECTURE SEULE : aucun id, tag ou verrou n'est écrit — le
+        /// verdict (corroboré / variante / interne-EPG / non vérifiable /
+        /// à réviser / divergent) est rendu en C# déterministe
+        /// (<see cref="LinkRules"/>), indépendant du modèle. Cloche admin
+        /// seulement si divergent &gt; 0. L'échec de persistance du
+        /// curseur est LOUD et rejoue le lot au passage suivant
+        /// (idempotent par construction).
+        /// </summary>
+        private async Task<string> LinksCheckAsync(JsonElement args, CancellationToken ct)
+        {
+            string lang = I18n.ResolveDisplayLangKey(_host);
+            var cfg = Plugin.Instance?.Configuration;
+            if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey))
+                return Err(I18n.S("links.err.nokey", lang));
+
+            int cap = cfg.ValidateLinksMaxItems <= 0 ? 300 : Math.Min(cfg.ValidateLinksMaxItems, 1000);
+            bool full = OptBool(args, "full", false);
+
+            // Périmètre : films/séries éligibles (≥1 id, jamais une carte
+            // .strm), tri (DateCreated, Id) — « les X après la dernière
+            // date auditée ». Les épisodes/dossiers et les items sans
+            // AUCUN id (orphelins — pipeline dédié) sont hors lot.
+            List<BaseItem> pool;
+            try
+            {
+                var all = _library.GetItemList(new InternalItemsQuery
+                {
+                    IncludeItemTypes = new[] { "Movie", "Series" },
+                    Recursive = true,
+                    EnableTotalRecordCount = false
+                }) ?? Array.Empty<BaseItem>();
+                pool = all.Where(LinkValidator.IsEligible)
+                          .OrderBy(i => i.DateCreated)
+                          .ThenBy(i => i.InternalId)
+                          .ToList();
+            }
+            catch (Exception ex)
+            {
+                return Err("liens : requête bibliothèque échouée : " + ex.Message);
+            }
+
+            var state = full ? null : LinksAuditStateStore.Load(_logger);
+            IEnumerable<BaseItem> stream = pool;
+            if (state != null && state.CursorTicks > 0)
+            {
+                long t = state.CursorTicks, cursorId = state.CursorItemId;
+                stream = stream.Where(i => i.DateCreated.Ticks > t
+                    || (i.DateCreated.Ticks == t && i.InternalId > cursorId));
+            }
+            var lot = stream.Take(cap).ToList();
+
+            if (lot.Count == 0)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    report = I18n.S("links.report.drained", lang),
+                    audited = 0,
+                    cursor_reached = true
+                }, s_json);
+            }
+
+            string tmdbLang = I18n.ToTmdbLang(I18n.ResolveMetaLangKey(cfg, _host));
+            string serverId = await LinkValidator.ResolveServerIdAsync(_host).ConfigureAwait(false);
+            var engine = new LinkValidator(new TmdbLookupTool(_logger), _logger);
+            var batch = await engine.CheckItemsAsync(lot, tmdbLang, serverId, ct).ConfigureAwait(false);
+
+            // Avance du curseur (dernier item TRAITÉ du lot) — persistée
+            // LOUD ; un échec rejoue le lot au passage suivant.
+            bool saved = LinksAuditStateStore.Save(new LinksAuditState
+            {
+                CursorTicks = batch.LastTicks,
+                CursorItemId = batch.LastItemId,
+                LastRunUtc = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+                LastAudited = batch.Audited,
+                LastDivergent = batch.Divergent
+            }, _logger);
+
+            if (batch.Divergent > 0)
+                NotifyDivergentLinks(batch, serverId, lang);
+
+            var report = LinkValidator.BuildReportText(batch, lang);
+            report += "\n" + string.Format(CultureInfo.InvariantCulture,
+                I18n.S("links.report.cursor", lang),
+                new DateTime(batch.LastTicks).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
+                batch.LastItemId.ToString(CultureInfo.InvariantCulture));
+            if (!saved)
+                report += "\n" + I18n.S("links.report.statefail", lang);
+
+            return JsonSerializer.Serialize(new
+            {
+                report,
+                audited = batch.Audited,
+                corroborated = batch.Corroborated,
+                variant = batch.Variant,
+                internal_epg = batch.InternalEpg,
+                non_verifiable = batch.NonVerifiable,
+                review = batch.Review,
+                divergent = batch.Divergent,
+                tmdb_calls = batch.TmdbCalls,
+                elapsed_sec = Math.Round(batch.ElapsedSec, 1),
+                notable = LinkValidator.BuildNotableProjection(batch, lang),
+                full,
+                cursor_ticks = batch.LastTicks,
+                cursor_item_id = batch.LastItemId,
+                cursor_saved = saved
+            }, s_json);
+        }
+
+        /// <summary>
+        /// Cloche « liens divergents » — administrateurs uniquement,
+        /// silencieuse sur divergent=0 (convention « jamais de cloche
+        /// 0→0 »). Le lien profond voyage dans le champ <c>Url</c> ET en
+        /// fin de Description (règle v2.4.7 : le consommateur du canal de
+        /// lecture rend Title+Description mais ignore Url ; LF seul —
+        /// jamais de CR dans un payload webhook/JSON). Échec d'envoi
+        /// loggué, jamais levé.
+        /// </summary>
+        private void NotifyDivergentLinks(LinkBatchResult batch, string serverId, string lang)
+        {
+            try
+            {
+                var divergents = batch.Notable.Where(n => n.Verdict == LinkVerdict.Divergent).ToList();
+                if (divergents.Count == 0) return;
+
+                // Lien du PREMIER divergent (la liste complète vit dans le
+                // rapport et le journal) — URL ABSOLUE pour la cloche
+                // (priorité EmbyPublicUrl, même règle que la cloche
+                // cross-kind).
+                string baseUrl = (Plugin.Instance?.Configuration?.EmbyPublicUrl ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(baseUrl))
+                {
+                    try { baseUrl = _host.GetLocalHostApiUrl() ?? string.Empty; }
+                    catch { baseUrl = string.Empty; }
+                }
+                string url = null;
+                var first = divergents[0];
+                if (!string.IsNullOrWhiteSpace(baseUrl) && !string.IsNullOrWhiteSpace(serverId))
+                    url = baseUrl.TrimEnd('/') + "/web/index.html#!/item?id="
+                        + first.ItemId.ToString(CultureInfo.InvariantCulture)
+                        + "&serverId=" + Uri.EscapeDataString(serverId)
+                        + (first.IsSeries ? "&asSeries=true" : string.Empty);
+
+                var names = divergents.Take(3).Select(n => "« " + n.ItemName + " »").ToList();
+                if (divergents.Count > names.Count)
+                    names.Add(string.Format(CultureInfo.InvariantCulture, I18n.S("links.notif.more", lang),
+                        divergents.Count - names.Count));
+                string desc = string.Format(CultureInfo.InvariantCulture,
+                    I18n.S("links.notif.desc", lang), divergents.Count, batch.Audited, string.Join(", ", names));
+                if (!string.IsNullOrWhiteSpace(url))
+                    desc = desc + "\n" + url;
+
+                List<User> admins;
+                try
+                {
+                    admins = (_users.GetUserList(new UserQuery()) ?? Array.Empty<User>())
+                        .Where(u => u != null && (u.Policy?.IsAdministrator ?? false))
+                        .ToList();
+                }
+                catch (Exception ex)
+                {
+                    _logger?.Warn("[LLM_AI] Liens : lecture des administrateurs échouée ({0}) — cloche non envoyée.", ex.Message);
+                    return;
+                }
+
+                int sent = 0;
+                foreach (var u in admins)
+                {
+                    try
+                    {
+                        _notifications.SendNotification(new NotificationRequest
+                        {
+                            Title = I18n.S("links.notif.title", lang),
+                            Description = desc,
+                            Url = url,
+                            Date = DateTimeOffset.UtcNow,
+                            Severity = LogSeverity.Info,
+                            User = u
+                        });
+                        sent++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.Warn("[LLM_AI] Liens : cloche à « {0} » échouée ({1}).", u.Name, ex.Message);
+                    }
+                }
+                if (sent > 0)
+                    _logger?.Info("[LLM_AI] Liens : cloche divergents ({0} item(s)) envoyée à {1}/{2} administrateur(s) — lien : {3}.",
+                        divergents.Count, sent, admins.Count, string.IsNullOrWhiteSpace(url) ? "(aucun)" : url);
+                else
+                    _logger?.Warn("[LLM_AI] Liens : cloche divergents NON envoyée — aucun administrateur.");
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn("[LLM_AI] Liens : cloche divergents échouée ({0}).", ex.Message);
+            }
         }
 
         /// <summary>

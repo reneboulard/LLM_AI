@@ -161,6 +161,12 @@ namespace LLM_AI
             };
             if (!string.IsNullOrWhiteSpace(cfg.TmdbApiKey))
                 tools.Add(new TmdbLookupTool(_logger));
+            // mcc_lookup : consultation explicite du Répertoire des films
+            // classés (Québec) — même opt-in sémantique que le pont MCC
+            // (rang fr-CA de TmdbLangPriority, décision usager 2026-11-20).
+            // Un install sans le rang ne paie ni le tool ni son token de prompt.
+            if (MccClient.IsEnabledForInstall)
+                tools.Add(new MccLookupTool(_logger));
             if (!string.IsNullOrWhiteSpace(cfg.TvdbApiKey) ||
                 !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TVDB_API_KEY")))
                 tools.Add(new TvdbSearchTool(_logger));
@@ -597,6 +603,14 @@ namespace LLM_AI
                 var (reply, _) = await agent.RunAsync(
                     AppendAuditLangRequirement(userPrompt, langName), tools, ct).ConfigureAwait(false);
                 reply = SanitizeReport(reply);
+                // Filet liens profonds (v2.22.3) : le prompt d'audit configuré
+                // déclenche links_check à chaque audit → le rapport porte les
+                // mêmes liens profonds que le chat, donc la même classe de
+                // dérive (v2.6.9 absolutisation + v2.22.3 encodage %XX).
+                // Résout le serverId SANS injecter le bloc chat dans le
+                // workflow d'audit (seul l'effet de bord arme le filet).
+                await BuildDeepLinkBlockAsync().ConfigureAwait(false);
+                reply = NormalizeDeepLinks(reply, label);
 
                 _logger.Info("[LLM_AI] [{0}] Rapport d'audit :\n{1}", label, reply);
                 return reply;
@@ -788,7 +802,9 @@ namespace LLM_AI
                 ") — remplace Titre et ID, ne change rien d'autre. Le lien est RELATIF : il commence " +
                 "EXACTEMENT par « /web/ » — n'ajoute JAMAIS de préfixe d'hôte (https://, http://, un " +
                 "nom de domaine, une IP) : l'app qui affiche cette conversation ne reconnaît que la " +
-                "forme relative, et un hôte inventé casserait le lien. Pour une série (vue groupée par " +
+                "forme relative, et un hôte inventé casserait le lien. N'encode JAMAIS ce lien " +
+                "(aucun %2F, %23, %3F…) : recopie /, #, !, ?, &, = tels quels — un lien encodé en " +
+                "%XX est un lien MORT pour l'app. Pour une série (vue groupée par " +
                 "passages), ajoute &asSeries=true avant la parenthèse. Si l'id n'est pas connu, cite le " +
                 "titre SANS lien — ne fabrique JAMAIS un lien avec un id inventé.";
             _deepLinkServerId = serverId;
@@ -810,17 +826,28 @@ namespace LLM_AI
         /// (règle « jamais d'id inventé » du prompt) — les gardes du clic
         /// (garde même origine, PermissionGate) restent l'autorité. Ne compte
         /// que ce qui diffère réellement, avec une ligne de log greppable.
-        /// Sans serverId résolu (bloc omis) : no-op, fail-open.
+        /// Sans serverId résolu (bloc omis) : no-op, fail-open. v2.22.3 :
+        /// une première passe <see cref="RepairEncodedDeepLinks"/> rattrape
+        /// la dérive ENCODAGE %XX (un href percent-encodé ne matche pas le
+        /// gabarit littéral ci-dessous et traverserait ce filet en silence).
         /// </summary>
         internal string NormalizeDeepLinks(string text, string label)
         {
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(_deepLinkServerId))
                 return text;
+            // Passe encodage %XX (v2.22.3, dérive prod 2026-11-20) : AVANT
+            // la passe absolutisation — un href encodé ne matche pas le
+            // gabarit littéral ci-dessous et la traverserait en silence.
+            int encFixed = 0;
+            string result = RepairEncodedDeepLinks(text, _deepLinkServerId, out encFixed);
+            if (encFixed > 0)
+                _logger.Info("[LLM_AI] [{0}] {1} lien(s) profond(s) désencodé(s) vers la forme canonique relative (encodage %XX du gabarit par le modèle).",
+                    label, encFixed);
             int fixedCount = 0;
             // Formes rattrapées (préfixe d'hôte optionnel — https://hôte/,
             // hôte seul, vide = déjà relative) ; id, serverId et asSeries
             // capturés pour reconstruire la forme canonique.
-            string result = Regex.Replace(text,
+            result = Regex.Replace(result,
                 @"(?i)\[([^\]\n]+)\]\(([^)\s]*)?/web/index\.html#!/item\?id=([A-Za-z0-9\-]+)" +
                 @"(?:&(?:amp;)?serverId=[A-Za-z0-9\-]+)?(?:&(?:amp;)?asSeries=(true))?\)",
                 m =>
@@ -837,6 +864,51 @@ namespace LLM_AI
             if (fixedCount > 0)
                 _logger.Info("[LLM_AI] [{0}] {1} lien(s) profond(s) réécrit(s) vers la forme canonique relative (préfixe d'hôte ou serverId inventé par le modèle).",
                     label, fixedCount);
+            return result;
+        }
+
+        /// <summary>
+        /// Rattrap des liens profonds PERCENT-ENCODÉS par le modèle (classe
+        /// de dérive v2.6.9, variante v2.22.3, prod 2026-11-20 : le gabarit
+        /// relatif ressorti encodé en %XX ET massacré — « #!/item » rendu
+        /// « //#/item », le « ! » perdu — lien mort ET invisible pour la
+        /// garde même origine du chat). Pur et testable par réflexion :
+        /// tout href markdown contenant des séquences %XX est DÉCODÉ puis
+        /// QUALIFIÉ (« web/index.html » ET « id= ») puis RECONSTRUIT en
+        /// forme canonique avec le VRAI serverId — jamais corrigé à
+        /// moitié, la copie du modèle n'est jamais recyclée. Combine les
+        /// classes : une URL absolutisée ET encodée retombe ici et ressort
+        /// canonique. Hors qualification (URL externe légitime, pas d'id) :
+        /// href INTACT (fail-open).
+        /// </summary>
+        internal static string RepairEncodedDeepLinks(string text, string serverId, out int fixedCount)
+        {
+            fixedCount = 0;
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(serverId))
+                return text;
+            int fixedLocal = 0;
+            string result = Regex.Replace(text,
+                @"(?i)\[([^\]\n]+)\]\(([^)\s]*%[0-9a-f]{2}[^)\s]*)\)",
+                m =>
+                {
+                    string href;
+                    try { href = Uri.UnescapeDataString(m.Groups[2].Value); }
+                    catch (UriFormatException) { return m.Value; }
+                    if (href.IndexOf("web/index.html", StringComparison.OrdinalIgnoreCase) < 0)
+                        return m.Value;
+                    var id = Regex.Match(href, @"[?&]id=([A-Za-z0-9\-]+)");
+                    if (!id.Success)
+                        return m.Value;
+                    string canonical = "[" + m.Groups[1].Value + "](/web/index.html#!/item?id="
+                        + id.Groups[1].Value + "&serverId=" + serverId;
+                    if (href.IndexOf("asSeries=true", StringComparison.OrdinalIgnoreCase) >= 0)
+                        canonical += "&asSeries=true";
+                    canonical += ")";
+                    if (!string.Equals(m.Value, canonical, StringComparison.Ordinal))
+                        fixedLocal++;
+                    return canonical;
+                });
+            fixedCount = fixedLocal;
             return result;
         }
 
@@ -1173,6 +1245,11 @@ namespace LLM_AI
                     "\n(Assemblage final indisponible : " + ex.Message + " — les blocs de sections sont fournis tels quels.)";
             }
             reply = SanitizeReport(reply);
+            // Filet liens profonds (v2.22.3) : même rattrap que le chat —
+            // une dose pourrait rendre cliquable un lien d'une sonde
+            // (ex. fiche Emby de links_check). Fail-open sans serverId.
+            await BuildDeepLinkBlockAsync().ConfigureAwait(false);
+            reply = NormalizeDeepLinks(reply, label);
 
             _logger.Info("[LLM_AI] [{0}] Rapport d'audit (mode déterministe dosé) :\n{1}", label, reply);
             return reply;

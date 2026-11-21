@@ -726,6 +726,92 @@ The **last successful report** is persisted (`audit_report.json`, see
 loads — `GET /Plugins/LLMAI/Audit?Last=true` returns it without running an audit
 (zero LLM).
 
+### Link-sheet validation (validate_links)
+
+**Strictly read-only**: checks the consistency of the link-sheet ids (TMDB/IMDb/TVDB)
+carried by the library's movies and series. For each item, the TMDB sheet targeted by
+its id is re-read (a single `append_to_response=external_ids,translations,alternative_titles`
+call — TVDB
+is never queried directly: the tvdb axis crosses via `external_ids.tvdb_id`) then
+compared on the independent identity axes: imdb, tvdb, exact normalized title key
+(including the sheet's fr translations **and Canadian alternative titles**) and year (season-vs-series doctrine for
+series). The verdict is rendered **server-side in deterministic C#** — the LLM only
+reports it (the comparison bench showed models cannot hold "the id that found the
+sheet is never proof" on their own).
+
+- **Verdicts**: `corroborated` (title + year or ids in agreement); `variant`
+  (corroborated ids, title related through translation/regionalism — fr-CA/fr-FR
+  absorbed via the sheet's fr translations and Canadian alternative titles;
+  ampersand « & » ≡ « et », roman numerals « II » ≡ « 2 », token similarity
+  Jaccard ≥ 0.6 with ≥ 2 shared tokens); `internal-EPG` (zap2it/gracenote/trakt
+  ids only — counted, never validated); `not verifiable` (sheet missing or blank, or
+  no TMDB key — fail-closed, zero calls); `to review` (weak or contradictory signals:
+  title containment without independent id, year namesake, divergent sequel number,
+  movie↔series cross-kind sheet, corroborated ids with an unrelated title);
+  `divergent` (present contradictory id value, or title + year double refutation —
+  the only actionable class).
+- **Admin chat tool `validate_links`**: free selection — `items` (item ids, obtained
+  through `get_emby_info action="find"`), `library` (library name or path), `since`
+  (added-since date `yyyy-mm-dd`) or `full` (full re-scan by added date, cap 1000). No
+  selector → error. Never touches the audit cursor.
+- **Action `system_audit action="links_check"`**: **cursor-based incremental** audit —
+  each pass processes at most `ValidateLinksMaxItems` items (default 300, hard cap
+  1000) **added since the last pass** (cursor `validate_links_state.json`;
+  `full=true` restarts the baseline from the oldest; a first pass without a mark = a
+  baseline drained over several passes). Fixed 300 ms/TMDB-call throttle (~33 requests
+  per 10 s, under the service's rate limit).
+- **Zero writes**: no id, tag, lock or metadata is modified — removing a faulty id in
+  the Emby editor remains a manual gesture. An admin bell fires **only** when
+  divergent items are detected (Emby deep link in both the URL and the description).
+
+### Assisted "Identify" search (Emby's Identify dialog)
+
+The plugin serves as a **search provider** inside Emby's native **Identify**
+dialog (a movie or series' ⋮ menu → "Identify"), types **movie + series** —
+the same S0 as the orphan pass, reversed: the human opens the dialog, the
+plugin feeds the list, the human picks.
+
+- **Candidates served**: TMDB list search **without a year filter** (v2.4.4
+  cascade doctrine — a surface year, theme or season, must never hide the fiche;
+  the year stays a ranking hint), along the language chain (`TmdbLangPriority`,
+  then the item's language, then en-US), stopping at the first **exact title**.
+  Ids **typed into the dialog** (TMDB/IMDb fields) resolve directly to the top —
+  the typing act is the corroboration. In support, an **LLM backup** (S2 mirror
+  of the orphan pass, 25 s budget, 2 TMDB re-reads cap) only proposes when no
+  exact title emerged — every proposal is re-read on TMDB and corroborated
+  (exact guide title OR the typed matching year), never applied on the LLM's
+  word. When still nothing exact, an **web backup** (S3 mirror: self-hosted
+  SearXNG, IMDb/TMDB ids extracted from the web results, 3 TMDB re-reads cap,
+  8 s budget) takes over under the same corroboration gates — without
+  `SearXngUrl`, the phase silently skips. w500 posters served on cards; 24 h
+  result cache.
+- **Ranking**: typed id / exact title first, matching year next, TMDB relevance
+  order next.
+- **The provider writes nothing**: the picked fiche is applied by Emby's
+  standard gesture (ids + full refresh; Emby lifts the item's locks — native
+  behavior, the user is authoritative). The downstream audit stays the net: on
+  the DVR side, the watcher (§ [Orphan identification](#orphan-recording-identification))
+  judges the applied id against the frozen EPG truth.
+- **Visibility**: for an EXISTING item, the dialog only consults providers
+  **enabled in the item's library** (server mechanics, decompiled 4.10.2.0) —
+  the plugin arms itself in every library (Movie/Series types only, idempotent,
+  disarmed when the toggle or the TMDB key goes away). For a "new fiche"
+  (dialog without an item), no enabling is required. Dialog mechanics (bench
+  field-validated v2.23.0): it lists the candidates of the FIRST provider that
+  returns results; later providers only complete via a shared id. The armer
+  appends "LLM_AI" to both the enabled list and the order list
+  (`MetadataFetcherOrder`, nothing gets reordered) — on a library whose order
+  list was empty, the provider becomes index 0 and is consulted FIRST (natives
+  not in the list keep the default order): our ranked candidates display, the
+  native banks merge by id behind them and take over alone when the plugin
+  finds nothing; per-library reordering stays available in the library
+  settings.
+- **No automatic writing**: the metadata interface carried by the provider
+  (required by the server enumeration) is deliberately mute — zero I/O, zero
+  LLM in automatic refreshes; the search is never consulted automatically.
+  Non-destructive: nothing is written without your selection.
+  `IdentifyAiSearchEnabled` toggle (default: checked, opt-out).
+
 ### Orphan recording identification
 
 Daily **04:00** scheduled task that identifies **unidentified library items**
@@ -1057,6 +1143,7 @@ Three opt-in flags (see [Reflective memory](#reflective-memory)):
 | `DefaultImageApplier.cs` | `DefaultImageApplier` (static) | Sets a standardized default image (embedded resource): `default_poster.jpg` (400×600 portrait) on the `AI Tonight` collection (BoxSet) and on the "AI Tonight" playlists (public + per-user private), `default_library.jpg` (640×360 16:9) on the `.strm` library root (CollectionFolder). Idempotent (only if no `Primary` image yet). |
 | `AiBadgeEnhancer.cs` | `AiBadgeEnhancer : IImageEnhancer` | **Serve-time** badges on EPG images (overlay — stored artwork is never modified): **green chip + sparkle** for AI suggestions from the record bucket, **yellow chip without icon** for **already-owned** content — movies by name, series episodes **at episode level** (season/episode number, then episode title; owning a series does not badge all its airings, conservative series-level fallback when the EPG carries no numbering). Reuses the `Norm` matching; library names + episode keys cached 10 min. Drawn with SkiaSharp (bundled with Emby), **cache key per state AND per item** (a series' episodes share the same guide artwork — one episode's badge must not leak onto the others), copy-of-original fallback, never throws. Auto-discovered by Emby's assembly scan. |
 | `AiBadgeRegistry.cs` | `AiBadgeRegistry` (static) | Registry of programs suggested by the nightly task: replaced on each run (`ApplyRecos`, record-bucket filters), persisted as `AiBadgeProgramIds`, lazy reload on first `Supports` (the plugin ctor never touches `Configuration` — `AssemblyFilePath` is only set after construction). |
+| `AiIdentifySearchProvider.cs` | `AiIdentifyMovieSearchProvider` / `AiIdentifySeriesSearchProvider` (+ `AiIdentifySearchCore`, `AiIdentifyLibraryArmer : IServerEntryPoint`) | **Assisted "Identify" search** (v2.23.0): two providers wired to Emby's native **Identify** dialog (movie + series, `POST /Items/RemoteSearch/Movie|Series`) — phase A0 typed ids resolved by TMDB to the top, phase A TMDB list search **without a year filter** (v2.4.4 doctrine; stops at the exact title) with the MCC bridge via `LookupMetaMultiLangAsync`, phase B S2-mirrored `LlmRunner.ResolveIdsAsync` backup (25 s budget, ≤ 2 re-reads — exact guide title OR corroborated typed year; the LLM's year alone is worthless), phase C S3-mirrored web backup (SearXNG → ids extracted from web results → capped TMDB re-reads (3), 8 s budget, same gates; without `SearXngUrl`: silent skip), evidence ranking (exact > year > TMDB order), 24 h cache. Provider deliberately **inert for automatic metadata** (empty `GetMetadata` — required by the server enumeration, never consulted). Armer `AiIdentifyLibraryArmer`: the dialog of an existing item only consults providers enabled in its library — "LLM_AI" is idempotently armed in every library (Movie/Series TypeOptions, native `CollectionFolder.UpdateLibraryOptions`) at startup (+2 min) and on `ItemAdded` (10-min bound), disarmed when the toggle/key disappears. Writes nothing: Emby's native Apply writes ids + refresh (lifting the locks — native behavior, the user is authoritative). See [Assisted "Identify" search](#assisted-identify-search-emby-identify-dialog). |
 | `I18n.cs` | `I18n` (static) | Server-side i18n (C#): inline FR/EN dictionaries + language resolution (`ResolveMetaLangKey` metadata / `ResolveDisplayLangKey` UI) + `ToTmdbLang`/`ToLangName`. Localizes scheduled tasks and, since v1.15.0.2, the strings shown in the admin chat and the configuration page (cards, details, endpoint errors). |
 | `I18nOverlay.cs` | `I18nOverlay` / `I18nOverlay.Snapshot` (internal static) | **Community overlay** loader (v1.16.0, file `LLM_AI_i18n.json` — mtime-throttled re-read, no restart): `server`/`ext` families validated **per key** (placeholder `{n}` + HTML tag multiset vs EN natives; `ext` = plain text, `{n}` rules only) + the `web` slice served raw (validated client-side at merge); immutable snapshot swapped by reference, authoritative fr/en patches, unknown/invalid keys skipped + logged, load summary. |
 | `I18nApiService.cs` | `I18nApiService : BaseApiService` | i18n endpoints for translators (v1.16.0): `GET /Plugins/LLMAI/I18n` (overlay slices, fail-open), `?base=1` (hot EN native base — web extracted from the embedded i18n.js without eval, server + ext direct), `?missing=1&lang=xx` (diff of keys still to translate, paste-ready RAW output). |
@@ -1129,7 +1216,8 @@ The LLM chooses which tools to call on its own. Each tool implements `ILlmTool`
 | `web_search` | Web search ([SearXNG](https://docs.searxng.org/) `SearXngUrl` or built-in provider). |
 | `web_fetch` | Fetch/read a web page (public http(s) URL ≤ 2048 characters): **self-hosted local** structured extraction (`WebFetchDirect`, no key — title, og:/twitter + canonical metadata, schema.org JSON-LD, Readability-lite main content with boilerplate stripped, h1–h6 headings and tables as markdown, final URL after redirects) with Ollama Cloud fallback for anti-bot pages. |
 | `new_releases` | TV new releases from the `NewReleaseSources` web sources (one per line): bare URL = auto-detected RSS/Atom feed; `URL :: @showbizz` = built-in Showbizz.net extractor ("Saison 1" blocks); `URL :: .NET regex` = custom extraction (required `title` group, optional `url`/`date`). 24h cache invalidated by any source change (no restart). The configuration page sports a **"Test sources"** button (scrapes the edited lines without saving: detected mode, per-source count and title samples, HTTP/timeout/regex errors); every run logs the per-source count (`[LLM_AI] new_releases source … -> N item(s)`) and raises an explicit Warn on a line extracting 0 items. |
-| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 22 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `duplicates_check` (Emby's native « Duplicates » finding — same-`PresentationUniqueKey` groups, manual management), `ratings_check` (rating hygiene), `security_metrics` (plugin activity counters + security events — detection); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `system_audit` | **Health audit** (see [Server health audit](#server-health-audit)) — 23 actions on `action`: **inspection** `server_info`, `system_config` (server configuration via `IServerConfigurationManager`), `active_sessions`, `scheduled_tasks`, `list_logs`, `inspect_log` (grep + context, confined to the log folder), `transcode`, `gpu_transcode`, `host_metrics`, `disk_storage`, `processes` (ffmpeg orphans + top RAM/CPU), `library_stats`, `missing_metadata`, `security_check` (passwords, HTTPS, external access, public IPs), `upnp_check` (UPnP/NAT mapping), `metadata_health` (state of the plugin's `llmai-*` tags), `duplicates_check` (Emby's native « Duplicates » finding — same-`PresentationUniqueKey` groups, manual management), `ratings_check` (rating hygiene), `links_check` (link-sheet validation — cursor-based incremental, read-only; see [Link-sheet validation](#link-sheet-validation-validate_links)), `security_metrics` (plugin activity counters + security events — detection); **remediation** (gate `AuditRemediationEnabled`) `stop_session`, `trigger_task`, `send_message`. Never throws (error → JSON). |
+| `validate_links` | **Link-sheet validation (admin, read-only)** — re-reads the TMDB sheet of each selected item and renders a **server-side** verdict (corroborated / variant / to review / divergent / not verifiable). Selection: `items` (ids), `library` (name/path), `since` (date) or `full` (cap 1000). Never modifies ids, tags or locks. See [Link-sheet validation](#link-sheet-validation-validate_links). |
 
 ---
 

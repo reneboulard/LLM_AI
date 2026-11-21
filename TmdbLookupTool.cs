@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -138,6 +139,12 @@ namespace LLM_AI
                 ? await LookupMovieAsync(key, lang, query, year, ct, overviewChain).ConfigureAwait(false)
                 : await LookupSeriesAsync(key, lang, query, year, ct, overviewChain).ConfigureAwait(false);
 
+            // Pont MCC (Répertoire des films classés du Québec) — UNIQUEMENT
+            // ici, sur l'erreur de la recherche TMDB : jamais sur le chemin
+            // heureux, jamais pour les erreurs de paramètres/clé (renvoyées
+            // avant ce point). Voir <see cref="BridgeOnFailureAsync"/>.
+            result = await BridgeOnFailureAsync(result, key, lang, query, kind, year, ct).ConfigureAwait(false);
+
             // Ne cache QUE les résultats valides (pas les erreurs / « aucune
             // série »), comme web_search.
             bool valid = false;
@@ -152,6 +159,88 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] tmdb_lookup query={0} kind={1} -> {2} (non caché)",
                     query, kind, Truncate(result, 200));
             return result;
+        }
+
+        /// <summary>
+        /// Pont MCC (Répertoire des films classés du Québec) — UNIQUEMENT sur
+        /// l'échec de la recherche TMDB : un titre de distribution québécois
+        /// n'est PAS un titre TMDB (« Coup de coeur » → « aucun film », incident
+        /// 2026-11-20 prod) ; le répertoire gouvernemental porte la v.o.
+        /// (« The Love Punch », film/coup-de-coeur-386579). Si une v.o.
+        /// UNAMBIGUE existe (voir <see cref="MccClient.TryGetOriginalTitleAsync"/>),
+        /// la même recherche est relancée par ce titre original (SANS année —
+        /// doctrine cascade v2.4.4 : une année de surface instable ne doit pas
+        /// cacher la fiche) et, si elle résout, la fiche est servie avec le
+        /// marqueur <c>vo_bridge</c> (indexe de narration pour le LLM : le
+        /// viewer saura d'où vient la correspondance). Le CAS D'ÉQUIVOQUE réel
+        /// (« Coup de coeur » = fiches MCC 2013 ET 1993 à v.o. distinctes)
+        /// est désambiguïsé par l'année attendue passée par le caller
+        /// (l'année <c>tmdb_lookup</c> — sans année, équivoque → abandon
+        /// honnête). Fail-open intégral :
+        /// MCC muet, équivoque, délai ou indisponible → l'erreur historique
+        /// est retournée telle quelle. Résultat pondéré par l'appelant : la
+        /// fiche bridgeée est CACHÉE sous la requête originale (le titre a
+        /// bel et bien résolu ; le marqueur voyage avec), et traverse ensuite
+        /// les portes/juges de chaque caller comme toute fiche — le pont
+        /// n'ajoute aucune preuve. Coût hors-Québec : ≤ 1 GET de plus sur un
+        /// chemin déjà en échec (v.o. manquante = l'erreur ne change pas).
+        /// </summary>
+        private async Task<string> BridgeOnFailureAsync(string result, string key, string lang, string query, string kind,
+            int? expectedYear, CancellationToken ct)
+        {
+            bool errored;
+            try { using (JsonDocument.Parse(result)) { errored = false; } } // miroir du test de mise en cache
+            catch { errored = true; }
+            errored = errored || result.Contains("\"error\"");
+            if (!errored) return result;
+
+            // Gate d'opt-in sémantique (décision usager 2026-11-20 — aucun
+            // champ de config nouveau) : le pont est actif uniquement si la
+            // priorité de langue du SYNOPSIS (TmdbLangPriority) porte
+            // « fr-CA » explicitement — le rang déjà significatif de « cet
+            // install traite du contenu canadien-français » (prod :
+            // fr-CA, fr-FR, en-US). Vide, ou « fr » nu (étendu fr-FR par
+            // ToTmdbLang, jamais fr-CA), ou liste sans fr-CA → jamais
+            // consulté, exactement comme fr-CA n'est pas essayé par la
+            // chaîne de synopsis. Calcul sur le chemin d'erreur seulement.
+            var mccLangList = I18n.ParseTmdbLangPriority(Plugin.Instance?.Configuration?.TmdbLangPriority ?? "", out _);
+            if (!mccLangList.Any(l => string.Equals(l, "fr-CA", StringComparison.OrdinalIgnoreCase)))
+                return result;
+
+            string vo = await MccClient.TryGetOriginalTitleAsync(query, expectedYear, _logger, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(vo) || OrphanResolver.TitlesExactlyEqual(vo, query))
+                return result; // pas de pont, ou v.o. ≡ requête : re-erreur garantierait la même issue
+
+            string voResult = kind == "movie"
+                ? await LookupMovieAsync(key, lang, vo, null, ct, overviewChain: null).ConfigureAwait(false)
+                : await LookupSeriesAsync(key, lang, vo, null, ct, overviewChain: null).ConfigureAwait(false);
+
+            bool voOk;
+            try { using (JsonDocument.Parse(voResult)) { voOk = true; } }
+            catch { voOk = false; }
+            voOk = voOk && !voResult.Contains("\"error\"");
+            if (!voOk)
+            {
+                _logger?.Info("[LLM_AI] MCC pont : v.o. « {0} » résolue mais TMDB ne rend pas de fiche — erreur historique conservée", vo);
+                return result;
+            }
+
+            try
+            {
+                var obj = JsonNode.Parse(voResult) as JsonObject;
+                if (obj != null)
+                {
+                    obj["vo_bridge"] = "titre original « " + vo + " » (v.o. du répertoire de classification « " +
+                                       query + " », Répertoire des films classés — Québec)";
+                    voResult = obj.ToJsonString();
+                    _logger?.Info("[LLM_AI] MCC pont : « {0} » → v.o. « {1} » → fiche TMDB rendue (vo_bridge)", query, vo);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] MCC pont : marqueur vo_bridge non apposé (best-effort) : {0}", ex.Message);
+            }
+            return voResult;
         }
 
         /// <summary>
@@ -497,6 +586,213 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
+        //  Recherche-liste (dialogue « Identifier » d'Emby, v2.23.0) : la
+        //  recherche renvoie PLUSIEURS candidats (l'utilisateur choisit sa
+        //  fiche dans le dialogue), à l'inverse de LookupMovie/SeriesAsync qui
+        //  ne prennent que le premier. Pas de filtre d'année — doctrine
+        //  cascade v2.4.4 : une année de surface (année-thème, année de
+        //  saison) ne doit jamais MASQUER la fiche ; le caller la garde
+        //  comme indice de RANGEMENT. Ne lève pas (repli : liste vide).
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Recherche TMDB en liste (jusqu'à <paramref name="max"/> résultats,
+        /// ordre de pertinence TMDB) pour le dialogue « Identifier » :
+        /// titre, titre original, année, synopsis et poster. Sans filtre
+        /// d'année. Null/erreurs → liste vide, ne lève jamais.
+        /// </summary>
+        internal async Task<List<TmdbSearchCandidate>> SearchListAsync(string query, string kind, string lang,
+            int max, CancellationToken ct)
+        {
+            var list = new List<TmdbSearchCandidate>();
+            var cfg = Plugin.Instance?.Configuration;
+            if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey) || string.IsNullOrWhiteSpace(query))
+                return list;
+            if (max < 1) max = 8;
+            if (string.IsNullOrWhiteSpace(lang))
+                lang = string.IsNullOrWhiteSpace(cfg.TmdbLanguage) ? "en-US" : cfg.TmdbLanguage;
+            string path = kind == "movie" ? "movie" : "tv";
+            string dateField = kind == "movie" ? "release_date" : "first_air_date";
+            try
+            {
+                var doc = await GetJsonAsync(
+                    $"https://api.themoviedb.org/3/search/{path}?api_key={UrlEnc(cfg.TmdbApiKey)}" +
+                    $"&language={UrlEnc(lang)}&query={UrlEnc(query)}", ct).ConfigureAwait(false);
+                if (doc.RootElement.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var r in results.EnumerateArray())
+                    {
+                        int id = r.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number ? idp.GetInt32() : 0;
+                        if (id <= 0) continue;
+                        string title = Str(r, kind == "movie" ? "title" : "name");
+                        if (string.IsNullOrWhiteSpace(title)) continue;
+                        list.Add(new TmdbSearchCandidate
+                        {
+                            TmdbId = id,
+                            Title = title,
+                            OriginalTitle = Str(r, kind == "movie" ? "original_title" : "original_name"),
+                            Year = YearOf(Str(r, dateField)),
+                            Overview = Str(r, "overview"),
+                            PosterUrl = Poster(Str(r, "poster_path"))
+                        });
+                        if (list.Count >= max) break;
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] tmdb recherche-liste « {0} » ({1}) échouée : {2}", query, kind, ex.Message);
+            }
+            return list;
+        }
+
+        // ------------------------------------------------------------------
+        //  Fiche de VALIDATION des liens (validate_links, v2.22.0) : lecture
+        //  UNE seule par item avec append_to_response=external_ids,translations
+        //  (keyset complet — le titre candidat de la comparaison inclut le
+        //  titre dans la langue du fetch, l'original et TOUTES les variantes
+        //  fr-* de la table translations : fr-CA et fr-FR y sont des entrées
+        //  distinctes et TMDB ne fait AUCUN repli croisé). Retourne null si
+        //  la fiche n'existe pas pour ce type (HTTP 404 — id retiré, ou du
+        //  type opposé : le validateur essaie alors l'autre type et le
+        //  signale « cross-kind »). Ne lève pas (erreurs loguées + null).
+        //  Le validateur applique lui-même le throttle d'appels.
+        // ------------------------------------------------------------------
+
+        internal async Task<TmdbFicheCheck> FetchValidationFicheAsync(int tmdbId, string kind, string lang, CancellationToken ct)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey) || tmdbId <= 0) return null;
+            string path = kind == "movie" ? "movie" : "tv";
+            JsonDocument doc;
+            try
+            {
+                doc = await GetJsonOrNull404Async(
+                    $"https://api.themoviedb.org/3/{path}/{tmdbId}?api_key={UrlEnc(cfg.TmdbApiKey)}" +
+                    $"&language={UrlEnc(string.IsNullOrWhiteSpace(lang) ? "en-US" : lang)}" +
+                    "&append_to_response=external_ids,translations,alternative_titles", ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] tmdb fiche validation {0}/{1} échoué ({2}).", path, tmdbId, ex.Message);
+                return null;
+            }
+            if (doc == null) return null; // 404 : id non mappé sur ce type
+            using (doc)
+            {
+                var d = doc.RootElement;
+                var f = new TmdbFicheCheck
+                {
+                    TmdbId = tmdbId,
+                    Title = Str(d, "title") ?? Str(d, "name"),
+                    OriginalTitle = Str(d, "original_title") ?? Str(d, "original_name"),
+                    Year = YearOf(Str(d, "release_date") ?? Str(d, "first_air_date")),
+                    ImdbId = ExtId(d, "imdb_id"),
+                    TvdbId = ExtId(d, "tvdb_id")
+                };
+                // Variantes fr-* (translations) : data.title côté film,
+                // data.name côté série — on accepte les deux clés.
+                var frs = new List<string>();
+                try
+                {
+                    if (d.TryGetProperty("translations", out var tw) && tw.ValueKind == JsonValueKind.Object
+                        && tw.TryGetProperty("translations", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var t in arr.EnumerateArray())
+                        {
+                            if (t.ValueKind != JsonValueKind.Object) continue;
+                            // Terrain 2026-11-19 (tv/65417) : fr-FR et fr-CA
+                            // arrivent comme DEUX entrées iso_639_1="fr" (le
+                            // fr-CA vide ici) — on accepte aussi une forme
+                            // "fr-XX" défensive au cas où l'API l'émettrait.
+                            string iso = Str(t, "iso_639_1");
+                            if (string.IsNullOrEmpty(iso)
+                                || !(iso.Equals("fr", StringComparison.OrdinalIgnoreCase)
+                                     || iso.StartsWith("fr-", StringComparison.OrdinalIgnoreCase))) continue;
+                            if (!t.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) continue;
+                            string title = Str(data, "title") ?? Str(data, "name");
+                            if (!string.IsNullOrWhiteSpace(title) && !frs.Contains(title)) frs.Add(title);
+                        }
+                    }
+                }
+                catch { /* table illisible → pas de variantes */ }
+                f.FrTitles = frs.Count > 0 ? frs.ToArray() : null;
+
+                // Titres ALTERNATIFS du Canada (iso_3166_1=CA) — le dernier
+                // axe « titre fr » quand la table translations est muette
+                // (terrain 2026-11-19 : « Damned United », « To Rome with
+                // Love » sans TOUTE traduction fr). Côté film la réponse est
+                // titles[], côté série results[] — les deux clés acceptées.
+                var als = new List<string>();
+                try
+                {
+                    if (d.TryGetProperty("alternative_titles", out var aw) && aw.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var arrKey in new[] { "titles", "results" })
+                        {
+                            if (!aw.TryGetProperty(arrKey, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
+                            foreach (var t in arr.EnumerateArray())
+                            {
+                                if (t.ValueKind != JsonValueKind.Object) continue;
+                                string country = Str(t, "iso_3166_1");
+                                if (string.IsNullOrEmpty(country)
+                                    || !country.Equals("CA", StringComparison.OrdinalIgnoreCase)) continue;
+                                string alt = Str(t, "title") ?? Str(t, "name");
+                                if (!string.IsNullOrWhiteSpace(alt) && !als.Contains(alt, StringComparer.Ordinal)) als.Add(alt);
+                            }
+                        }
+                    }
+                }
+                catch { /* table illisible → pas d'alternatifs */ }
+                f.AltCaTitles = als.Count > 0 ? als.ToArray() : null;
+                return f;
+            }
+        }
+
+        /// <summary>Résolution indépendante d'un id externe : id TMDB du
+        /// 1er résultat /find pour le type demandé, null si aucun (le
+        /// validateur RELIT ensuite la fiche via
+        /// <see cref="FetchValidationFicheAsync"/> pour le keyset complet
+        /// — /find seul n'expose pas les ids externes). Ne lève pas.</summary>
+        internal async Task<int?> FindTmdbIdByExternalIdAsync(string externalId, string source, string kind, CancellationToken ct)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (string.IsNullOrWhiteSpace(cfg?.TmdbApiKey)
+                || string.IsNullOrWhiteSpace(externalId) || string.IsNullOrWhiteSpace(source)) return null;
+            string resultsField = kind == "movie" ? "movie_results" : "tv_results";
+            JsonDocument doc;
+            try
+            {
+                doc = await GetJsonAsync(
+                    $"https://api.themoviedb.org/3/find/{UrlEnc(externalId)}?api_key={UrlEnc(cfg.TmdbApiKey)}" +
+                    $"&external_source={UrlEnc(source)}", ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger?.Info("[LLM_AI] tmdb /find {0}={1} échoué ({2}).", source, externalId, ex.Message);
+                return null;
+            }
+            using (doc)
+            {
+                if (doc.RootElement.TryGetProperty(resultsField, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var x in arr.EnumerateArray())
+                    {
+                        if (x.TryGetProperty("id", out var idp) && idp.ValueKind == JsonValueKind.Number
+                            && idp.TryGetInt32(out int id) && id > 0)
+                            return id; // 1er résultat seulement
+                    }
+                }
+            }
+            return null;
+        }
+
+        // ------------------------------------------------------------------
         //  Nettoyage d'un titre EPG bruité (S1) : retire les marqueurs HD/VO/
         //  VOSTFR/Rediff/Inédit, les numéros de saison/épisode, les
         //  parenthèses, et les dates ISO (marqueur d'échec d'identification
@@ -554,6 +850,26 @@ namespace LLM_AI
                 using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
                 {
                     var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!resp.IsSuccessStatusCode)
+                        throw new InvalidOperationException($"TMDB HTTP {(int)resp.StatusCode}: {Truncate(text, 200)}");
+                    return JsonDocument.Parse(text);
+                }
+            }
+        }
+
+        /// <summary>Variante de <see cref="GetJsonAsync"/> tolérante au
+        /// 404 : null si la ressource n'existe pas (id TMDB retiré ou du
+        /// type opposé — le validateur de liens déduit la fiche croisée),
+        /// lève sinon comme GetJsonAsync.</summary>
+        private static async Task<JsonDocument> GetJsonOrNull404Async(string url, CancellationToken ct)
+        {
+            using (var req = new HttpRequestMessage(HttpMethod.Get, url))
+            {
+                req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                {
+                    var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
                     if (!resp.IsSuccessStatusCode)
                         throw new InvalidOperationException($"TMDB HTTP {(int)resp.StatusCode}: {Truncate(text, 200)}");
                     return JsonDocument.Parse(text);
@@ -684,5 +1000,60 @@ namespace LLM_AI
         public string ImdbId;
         /// <summary>Id TVDB (clé provider « tvdb »), séries uniquement.</summary>
         public string TvdbId;
+    }
+
+    /// <summary>
+    /// Candidat DE LISTE TMDB (recherche « Identifier » v2.23.0) : résultat brut
+    /// de <c>/search/movie|tv</c> — pas la fiche détaillée (pas de genres/ids
+    /// externes, pas de statut) ; le titre est dans la langue de la recherche,
+    /// le titre original est porté tel quel (preuve lexicale contre les
+    /// traductions divergentes).
+    /// </summary>
+    internal sealed class TmdbSearchCandidate
+    {
+        /// <summary>Id TMDB (clé provider « tmdb »).</summary>
+        public int TmdbId;
+        /// <summary>Titre dans la langue du fetch.</summary>
+        public string Title;
+        /// <summary>Titre original TMDB.</summary>
+        public string OriginalTitle;
+        /// <summary>Année de sortie / première diffusion (4 premiers caractères de la date).</summary>
+        public int? Year;
+        /// <summary>Synopsis (langue du fetch).</summary>
+        public string Overview;
+        /// <summary>URL complète du poster (w500), null si absente.</summary>
+        public string PosterUrl;
+    }
+
+    /// <summary>
+    /// Fiche TMDB relue pour la VALIDATION des liens d'un item
+    /// (<see cref="TmdbLookupTool.FetchValidationFicheAsync"/> — un seul
+    /// appel <c>append_to_response=external_ids,translations</c>). Porte
+    /// les axes de croisement : titres (langue du fetch + original +
+    /// variantes fr-*), année, ids externes. Aucun synopsis (le juge
+    /// n'intervient pas ici — c'est un croisement d'identité, pas un
+    /// jugement de contenu).
+    /// </summary>
+    internal sealed class TmdbFicheCheck
+    {
+        /// <summary>Id TMDB de la fiche relue.</summary>
+        public int TmdbId;
+        /// <summary>Titre dans la langue du fetch (title côté film, name côté série).</summary>
+        public string Title;
+        /// <summary>Titre original.</summary>
+        public string OriginalTitle;
+        /// <summary>Année de sortie / première diffusion.</summary>
+        public int? Year;
+        /// <summary>Id IMDb (external_ids).</summary>
+        public string ImdbId;
+        /// <summary>Id TVDB (external_ids).</summary>
+        public string TvdbId;
+        /// <summary>Variantes fr-* (fr-CA et fr-FR distinctes) de la table
+        /// translations — null si aucune.</summary>
+        public string[] FrTitles;
+        /// <summary>Titres alternatifs du Canada (iso_3166_1=CA, bloc
+        /// alternative_titles) — le dernier axe « titre fr » quand les
+        /// traductions fr sont muettes ; null si aucune.</summary>
+        public string[] AltCaTitles;
     }
 }

@@ -87,6 +87,12 @@ namespace LLM_AI
                          "(dis simplement que l'item est déjà identifié), sauf demande explicite de correction.\n");
                 b.Append("- Pour retirer une identification / remettre un item à zéro : appelle identify_undo.\n");
             }
+            if (MccClient.IsEnabledForInstall)
+                b.Append("- mcc_lookup : Répertoire des films classés du Québec (gouvernemental). Quand le titre de " +
+                         "l'item est un titre de distribution québécois, ou que des fiches homonymes se disputent, " +
+                         "consulte-le AVANT de trancher : il donne la v.o. (relance tmdb_lookup avec), l'année, le genre " +
+                         "et le synopsis de chaque fiche MCC. La carte identify affiche en plus la concordance MCC " +
+                         "calculée côté serveur.\n");
             b.Append("- N'invente JAMAIS un tmdb_id ni une preuve : les preuves sur la carte sont recalculées côté serveur.\n");
             return b.ToString();
         }
@@ -604,6 +610,67 @@ namespace LLM_AI
 
                 if (string.IsNullOrWhiteSpace(meta.Overview))
                     hints.Add("Synopsis TMDB muet dans les langues configurées");
+
+                // Concordance MCC (Répertoire des films classés — Québec) :
+                // le canal « validation MCC » de la carte, calculé côté
+                // serveur comme toute preuve affichée (décision usager
+                // 2026-11-20). Film natif uniquement — le répertoire ne
+                // couvre pas les séries télé. L'axe est la v.o. de la fiche
+                // MCC vs le titre ORIGINAL de la fiche proposée, JAMAIS le
+                // titre QC seul (un homonyme porte par construction le même
+                // titre QC : « Sur la route » = Big Drive 2011 vs On the
+                // Road 2012 — le titre QC corroborerait le mauvais candidat
+                // tout seul). Fail-open total : MCC muet/indisponible →
+                // aucune ligne.
+                if (MccClient.IsEnabledForInstall
+                    && !crossKind
+                    && string.Equals(kind, "movie", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(itemKind, "movie", StringComparison.OrdinalIgnoreCase))
+                {
+                    var mccFiches = await MccClient.LookupFichesAsync(item.Name, 3, _logger, ct).ConfigureAwait(false);
+                    if (mccFiches != null && mccFiches.Count > 0)
+                    {
+                        var ficheCheck = await new TmdbLookupTool(_logger)
+                            .FetchValidationFicheAsync(meta.TmdbId, kind, userTmdb, ct).ConfigureAwait(false);
+                        if (ficheCheck != null)
+                        {
+                            var concordants = mccFiches.Where(f => MccClient.Corroborates(f, ficheCheck)).ToList();
+                            if (concordants.Count > 0)
+                            {
+                                var f = concordants[0];
+                                string line = "MCC (Répertoire des films classés) : « " + f.Titre + " »" +
+                                          (string.IsNullOrWhiteSpace(f.Vo) ? "" : " → v.o. « " + f.Vo + " »") +
+                                          (f.Year.HasValue ? " (" + f.Year.Value.ToString(CultureInfo.InvariantCulture) + ")" : "") +
+                                          " — concorde avec la fiche proposée (v.o./titre original)";
+                                // Homonymes restants : quand le répertoire porte
+                                // PLUSIEURS fiches au même titre QC (terrain
+                                // 2026-11-20 : « Sur la route » = Big Drive
+                                // 2011 ET On the Road 2012), une proposition
+                                // fausse peut concorder avec la MAUVAISE fiche
+                                // — la ligne positive seule ne distinguerait
+                                // pas les deux mondes. On liste les homonymes
+                                // non concordantes (v.o. + année) : le geste
+                                // de départage manuel, visible sur la carte.
+                                var others = mccFiches.Where(x => !concordants.Contains(x)).ToList();
+                                if (others.Count > 0)
+                                {
+                                    line += " ; " + others.Count + " fiche(s) homonyme(s) au répertoire : " +
+                                        string.Join(" | ", others.Take(2).Select(o =>
+                                            "« " + (string.IsNullOrWhiteSpace(o.Vo) ? o.Titre : o.Vo) + " »" +
+                                            (o.Year.HasValue ? " (" + o.Year.Value.ToString(CultureInfo.InvariantCulture) + ")" : "")));
+                                }
+                                hints.Add(line);
+                            }
+                            else
+                            {
+                                string msg = "MCC : " + mccFiches.Count + " fiche(s) à ce titre au répertoire, " +
+                                             "aucune ne concorde avec la fiche proposée (v.o. divergente) — vérifiez visuellement";
+                                hints.Add("⚠️ " + msg);
+                                warning = string.IsNullOrEmpty(warning) ? msg : warning + " ; " + msg;
+                            }
+                        }
+                    }
+                }
 
                 if (crossKind)
                     hints.Add("⚠️ Fiche croisée : fiche " + kind + " appliquée sur un item " + itemKind + " (type d'item conservé)");

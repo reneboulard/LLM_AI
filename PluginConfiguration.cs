@@ -167,6 +167,20 @@ namespace LLM_AI
         public string TmdbLangPriority { get; set; } = "";
 
         /// <summary>
+        /// Plafond d'items par passage de l'audit incrémental des liens de
+        /// fiches (<c>system_audit action=links_check</c> + tool chat
+        /// <c>validate_links</c>, v2.22.0) : chaque passage valide au plus
+        /// ce nombre de films/séries AJOUTÉS depuis le dernier passage
+        /// (curseur <c>validate_links_state.json</c> — premier passage
+        /// sans marque = baseline depuis le plus ancien ; re-scan complet
+        /// via le sélecteur <c>full=true</c> du chat). Défaut 300 ≈
+        /// 90-100 s par passage (throttle fixe 300 ms/appel TMDB, ~33
+        /// req/10 s — une clé TMDB v3 ne s'épuise pas, c'est la rafale
+        /// qui est protégée). Clampé au plafond dur 1000 à l'exécution.
+        /// </summary>
+        public int ValidateLinksMaxItems { get; set; } = 300;
+
+        /// <summary>
         /// Clé API TheTVDB.com (v4) pour l'outil <c>tvdb_search</c> (enrichissement
         /// synopsis/statut des séries — portage de l'outil PHP qui fonctionne avec
         /// le LLM). Repli sur la variable d'environnement <c>TVDB_API_KEY</c> si
@@ -1046,6 +1060,25 @@ namespace LLM_AI
         /// proviennent toujours de TMDB).
         /// </summary>
         public bool OrphanEmbyFirstPass { get; set; } = true;
+
+        /// <summary>
+        /// Active la <b>recherche « Identifier » assistée</b> (v2.23.0) :
+        /// l'extension s'ajoute comme fournisseur de recherche dans le
+        /// dialogue <b>Identifier</b> d'Emby (types film + série). À chaque
+        /// recherche : candidats TMDB triés (titre exact d'abord, année
+        /// concordante ensuite, sans filtre d'année), fiches pont MCC pour
+        /// les titres de distribution québécois, et renfort LLM corroboré
+        /// (miroir S2) uniquement quand aucun titre exact n'émerge.
+        /// <para>Le fournisseur ne pose rien : la fiche choisie par l'usager
+        /// est appliquée par le geste standard d'Emby. Deux plombages
+        /// s'appliquent : l'armement par bibliothèque
+        /// (<see cref="AiIdentifyLibraryArmer"/> — le dialogue d'un item
+        /// existant n'interroge que les fournisseurs activés de sa
+        /// bibliothèque) et l'interface de métadonnées (volontairement
+        /// muette — exigée pour l'énumération, jamais consultée en
+        /// automatique). Défaut <c>true</c>.</para>
+        /// </summary>
+        public bool IdentifyAiSearchEnabled { get; set; } = true;
 
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : validation à la fin de

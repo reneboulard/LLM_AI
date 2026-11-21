@@ -397,6 +397,11 @@ namespace LLM_AI
                     LibraryManager, UserManager, _liveTv, ApplicationHost, _json, Logger));
                 actionsWorkflow = (actionsWorkflow ?? string.Empty)
                     + ChatIdentifyTools.BuildWorkflowBlock(cfg.ChatActionBudget > 0);
+                // v2.22.0 : validation des liens de fiches (LECTURE SEULE,
+                // admin — verdict serveur, le LLM ne fait que rapporter).
+                // Comme les outils d'identification : indépendant du budget
+                // d'actions (aucune écriture), indisponible en mode édition.
+                actionTools.Add(new ValidateLinksTool(admin, LibraryManager, ApplicationHost, Logger));
             }
 
             // Édition de prompts par le chat (v1.13.8, opt-in) : le tool

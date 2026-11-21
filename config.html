@@ -821,7 +821,7 @@
                                    label="Priorité des langues TMDB"
                                    data-i18n-label="cfg.tmdbprio.label"
                                    placeholder="fr-CA, fr-FR, en-US" />
-                            <div class="fieldDescription" data-i18n-html="cfg.tmdbprio.desc">Codes séparés par des virgules, par ordre de préférence (ex. fr-CA, fr-FR, en-US). Priorité du SYNOPSIS des fiches lors de l'identification des enregistrements : la langue du contenu (guide) passe en tête de sa famille, la fiche est lue une seule fois et le synopsis est pris dans la première langue disponible de la liste ; le dernier rang sert de repli. Vide = comportement par défaut (fr-CA n'est alors jamais essayé).</div>
+                            <div class="fieldDescription" data-i18n-html="cfg.tmdbprio.desc">Codes séparés par des virgules, par ordre de préférence (ex. fr-CA, fr-FR, en-US). Priorité du SYNOPSIS des fiches lors de l'identification des enregistrements : la langue du contenu (guide) passe en tête de sa famille, la fiche est lue une seule fois et le synopsis est pris dans la première langue disponible de la liste ; le dernier rang sert de repli. Vide = comportement par défaut (fr-CA n'est alors jamais essayé). Un rang `fr-CA` active aussi le pont de titre original par le Répertoire des films classés du Québec (MCC) : consulté seulement si un `tmdb_lookup` échoue, fail-open (MCC muet = comportement inchangé).</div>
                         </div>
 
                         <div class="inputContainer">
@@ -1621,6 +1621,38 @@
                             nouvelles quotidiennes, regardées puis supprimées). Vide = aucune
                             exclusion.
                         </div>
+                        </div>
+
+                        <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.aisearch.h">Recherche « Identifier » assistée (dialogue Identifier d'Emby)</h3>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.aisearch.desc">
+                            L'extension se place comme fournisseur dans le
+                            dialogue « Identifier » d'Emby (film + série). À
+                            chaque recherche : candidats TMDB triés — titre
+                            exact d'abord, année concordante ensuite — fiches
+                            pont MCC pour les titres de distribution
+                            québécois, et une proposition du LLM corroborée
+                            sur TMDB uniquement quand aucun titre exact
+                            n'émerge. Le fournisseur ne pose rien : la fiche
+                            choisie est appliquée par le geste standard
+                            d'Emby (pose des ids + rafraîchissement). Note :
+                            le dialogue d'Emby ne consulte le fournisseur que
+                            si les banques natives n'ont retourné aucun
+                            résultat (sinon, fusion des fiches partageant le
+                            même id) ; l'armement par bibliothèque est
+                            maintenu automatiquement au démarrage et aux
+                            scans.
+                        </div>
+
+                        <label class="emby-checkbox-label" style="display:flex;align-items:center;gap:0.5em;margin:0.6em 0;">
+                            <input type="checkbox" is="emby-checkbox" id="chkIdentifyAiSearchEnabled" />
+                            <span class="checkboxLabel" data-i18n="cfg.aisearch.flag">Proposer des candidats IA dans le dialogue « Identifier » d'Emby</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.aisearch.flag.desc">
+                            Active la recherche-liste TMDB + le renfort LLM
+                            dans le dialogue « Identifier » (budget 25 s,
+                            renfort seulement si aucun titre exact TMDB ;
+                            mise en cache 24 h par titre). Non destructif :
+                            aucune écriture sans sélection de votre part.
                         </div>
 
                         <!-- id : cible du lien profond de notification « fiche

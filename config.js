@@ -1217,6 +1217,8 @@ define(["loading"], function (loading) {
         // Badge « AI » (opt-out, non destructif — défaut coché).
         view.querySelector("#chkAiBadgeEnabled").checked = cfg.AiBadgeEnabled !== false;
         view.querySelector("#chkAiOwnedBadgeEnabled").checked = cfg.AiOwnedBadgeEnabled !== false;
+        // Recherche « Identifier » assistée (opt-out, non destructif — défaut coché).
+        view.querySelector("#chkIdentifyAiSearchEnabled").checked = cfg.IdentifyAiSearchEnabled !== false;
         view.querySelector("#chkLoginPopup").checked = cfg.LoginPopup !== false;
         view.querySelector("#chkTonightRecordingToast").checked = cfg.TonightRecordingToast !== false;
         view.querySelector("#chkNotifyRecommendations").checked = cfg.NotifyRecommendationsEnabled !== false;
@@ -1382,6 +1384,8 @@ define(["loading"], function (loading) {
             RecordingTaggingEnabled: view.querySelector("#chkRecordingTaggingEnabled").checked,
             AiBadgeEnabled: view.querySelector("#chkAiBadgeEnabled").checked,
             AiOwnedBadgeEnabled: view.querySelector("#chkAiOwnedBadgeEnabled").checked,
+            // Recherche « Identifier » assistée (opt-out, non destructif).
+            IdentifyAiSearchEnabled: view.querySelector("#chkIdentifyAiSearchEnabled").checked,
             // Carry-forward : AiBadgeProgramIds est réécrit côté serveur par la
             // tâche planifiée (registre du badge) — on le renvoie tel quel pour
             // ne pas l'écraser (même contrainte que StrmSecret).

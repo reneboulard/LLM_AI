@@ -1808,16 +1808,17 @@ namespace LLM_AI
         //  WebEvidenceContext avec le juge web de AcceptCandidateAsync.
         // ------------------------------------------------------------------
 
-        private static readonly Regex s_imdbUrlRe = new Regex(
+        internal static readonly Regex s_imdbUrlRe = new Regex(
             @"imdb\.com/(?:[a-z\-]+/)?title/(tt\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>Ids TMDB dans les URLs de résultats web — capture aussi
         /// les URLs slug (<c>themoviedb.org/movie/385870-arthur-…</c>) : les
-        /// fiches sans présence IMDb n'atterrissent que par cette voie.</summary>
-        private static readonly Regex s_tmdbUrlRe = new Regex(
+        /// fiches sans présence IMDb n'atterrissent que par cette voie.
+        /// (partagé avec le renfort web du provider Identifier, miroir S3)</summary>
+        internal static readonly Regex s_tmdbUrlRe = new Regex(
             @"themoviedb\.org/(?:movie|tv)/(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        private sealed class WebIdHit
+        internal sealed class WebIdHit
         {
             public string Id;
             public string Source; // "imdb_id" ou "tmdb_id"
@@ -2119,13 +2120,13 @@ namespace LLM_AI
             };
         }
 
-        private static void CollectWebHits(JsonElement parent, string prop, string resultTitle, bool anchored, List<WebIdHit> hits)
+        internal static void CollectWebHits(JsonElement parent, string prop, string resultTitle, bool anchored, List<WebIdHit> hits)
         {
             if (!parent.TryGetProperty(prop, out var el) || el.ValueKind != JsonValueKind.String) return;
             CollectWebHitsFromText(el.GetString(), resultTitle, anchored, hits);
         }
 
-        private static void CollectWebHitsFromText(string text, string resultTitle, bool anchored, List<WebIdHit> hits)
+        internal static void CollectWebHitsFromText(string text, string resultTitle, bool anchored, List<WebIdHit> hits)
         {
             if (string.IsNullOrEmpty(text)) return;
             foreach (Match match in s_imdbUrlRe.Matches(text))
@@ -2134,7 +2135,7 @@ namespace LLM_AI
                 AddOrUpgradeWebHit(hits, "tmdb_id", match.Groups[1].Value, resultTitle, anchored);
         }
 
-        private static void AddOrUpgradeWebHit(List<WebIdHit> hits, string source, string id, string resultTitle, bool anchored)
+        internal static void AddOrUpgradeWebHit(List<WebIdHit> hits, string source, string id, string resultTitle, bool anchored)
         {
             if (string.IsNullOrWhiteSpace(id)) return;
             for (int i = 0; i < hits.Count; i++)
@@ -2924,7 +2925,17 @@ namespace LLM_AI
             var t = sb.ToString().ToLowerInvariant();
             sb.Clear();
             foreach (var c in t)
-                if (char.IsLetterOrDigit(c)) sb.Append(c);
+            {
+                // Ligature « œ » dépliée en « oe » — « Coup de cœur » (EPG/UI)
+                // et « Coup de coeur » (Répertoire des films classés, NFO,
+                // noms de dossier) sont le même mot : sans le pliage, les clés
+                // divergent (« coupdecœur » ≠ « coupdecoeur ») et les gardes
+                // de titre exacte ratent le match (pont MCC v2.22.1). Pliage
+                // au sens unique tolérant uniquement : variantes de
+                // l'orthographe du même mot, aucune autre sémantique.
+                if (c == 'œ') sb.Append("oe");
+                else if (char.IsLetterOrDigit(c)) sb.Append(c);
+            }
             return sb.ToString();
         }
 
