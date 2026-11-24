@@ -180,7 +180,7 @@ namespace LLM_AI
                 }
                 catch (Exception ex)
                 {
-                    logger?.Warn("[LLM_AI] Tag cleanup : requête ({0}) échouée : {1}", filter, ex.Message);
+                    logger?.Warn("[LLM_AI] Tag cleanup : requête ({0}) échouée : {1}", filter, ex.ToString());
                     continue;
                 }
                 foreach (var it in found)

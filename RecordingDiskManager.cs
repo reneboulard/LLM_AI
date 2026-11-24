@@ -229,7 +229,7 @@ namespace LLM_AI
                     var drive = DriveInfo.GetDrives()
                         .Where(d => d.IsReady)
                         .OrderByDescending(d => d.Name.Length)  // préfixe le plus spécifique
-                        .FirstOrDefault(d => path.StartsWith(d.Name, StringComparison.OrdinalIgnoreCase));
+                        .FirstOrDefault(d => IsUnderVolume(path, d.Name));
                     if (drive == null)
                     {
                         logger?.Warn("[LLM_AI] Disque enregistrements : aucun volume local ne préfixe « {0} » — racine ignorée (échoue ouvert).", path);
@@ -374,7 +374,8 @@ namespace LLM_AI
                     if (freeBytes + reclaimed >= target) break;
                 }
 
-                var ids = picked.Select(i => i.Id.ToString()).ToList();
+                // Id canonique aux frontières : InternalId (le Guid ne passe que par repli).
+                var ids = picked.Select(i => i.InternalId.ToString()).ToList();
                 await AiTagger.AddAsync(library, logger, ids, DeleteTag, ct).ConfigureAwait(false);
 
                 bool covered = freeBytes + reclaimed >= target;
@@ -400,6 +401,24 @@ namespace LLM_AI
         }
 
         /// <summary>Taille du fichier si lisible, sinon 0 (best-effort).</summary>
+        /// <summary>
+        /// Le chemin est-il SOUS ce volume ? Un simple préfixe de chaîne
+        /// confondrait « /mnt/rec » et « /mnt/record » : après le préfixe, il faut
+        /// une fin de chaîne ou un séparateur (sauf si le nom du volume en porte
+        /// déjà un : « F:\ », « / »).
+        /// </summary>
+        private static bool IsUnderVolume(string path, string volumeName)
+        {
+            if (string.IsNullOrEmpty(volumeName)
+                || !path.StartsWith(volumeName, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (path.Length == volumeName.Length) return true;
+            char last = volumeName[volumeName.Length - 1];
+            if (last == '/' || last == '\\') return true;
+            char next = path[volumeName.Length];
+            return next == '/' || next == '\\';
+        }
+
         private static long FileSizeOrNull(string path, ILogger logger)
         {
             if (string.IsNullOrWhiteSpace(path)) return 0;

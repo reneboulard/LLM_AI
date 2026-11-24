@@ -309,17 +309,6 @@ namespace LLM_AI
             return list;
         }
 
-        /// <summary>
-        /// Invalide le cache d'un usager (force le prochain appel à relancer le
-        /// LLM). Utilisé par le login après auto-programmation si l'on veut
-        /// rafraîchir. Optionnel — l'endpoint utilise <c>Refresh=1</c>.
-        /// </summary>
-        internal static void InvalidateUser(string userId)
-        {
-            if (string.IsNullOrEmpty(userId)) return;
-            lock (_cacheLock) { _cache.Remove(userId); }
-        }
-
         // ------------------------------------------------------------------
         //  Période de grande écoute (gate des déclencheurs automatiques)
         // ------------------------------------------------------------------

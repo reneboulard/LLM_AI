@@ -96,7 +96,7 @@ namespace LLM_AI
 
                 BaseItem item;
                 try { item = ItemIdResolver.Resolve(library, raw); }
-                catch (Exception ex) { logger?.Warn("[LLM_AI] Favoris : résolution id {0} échouée : {1}", raw, ex.Message); continue; }
+                catch (Exception ex) { logger?.Warn("[LLM_AI] Favoris : résolution id {0} échouée : {1}", raw, ex.ToString()); continue; }
                 if (item == null) { skippedResolve++; continue; }
 
                 try

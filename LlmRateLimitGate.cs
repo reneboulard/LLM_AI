@@ -343,8 +343,11 @@ namespace LLM_AI
                 if (!limit.HasValue)
                 {
                     var lm = Regex.Match(message, @"limit:\s*(\d+)");
-                    if (lm.Success)
-                        limit = long.Parse(lm.Groups[1].Value, CultureInfo.InvariantCulture);
+                    // TryParse : > 19 chiffres lèverait OverflowException et
+                    // masquerait le 429 (pas de MarkThrottled).
+                    if (lm.Success && long.TryParse(lm.Groups[1].Value, NumberStyles.None,
+                            CultureInfo.InvariantCulture, out var lv))
+                        limit = lv;
                 }
             }
 

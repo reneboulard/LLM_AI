@@ -591,13 +591,6 @@ namespace LLM_AI
             catch { return null; }
         }
 
-        private static long[] ToLongIds(IEnumerable<string> normIds)
-            => normIds
-                .Where(s => long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
-                .Select(s => long.Parse(s, CultureInfo.InvariantCulture))
-                .Distinct()
-                .ToArray();
-
         // ------------------------------------------------------------------
         //  Tool : record_program (timer d'enregistrement)
         // ------------------------------------------------------------------

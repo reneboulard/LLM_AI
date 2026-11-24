@@ -245,14 +245,6 @@ namespace LLM_AI
         //  confirm — le code de l'usager déclenche la création
         // ------------------------------------------------------------------
 
-        private async Task<string> ConfirmAsync(JsonElement args, CancellationToken ct)
-        {
-            string pin = Str(args, "pin") ?? TryGetPinNumber(args);
-            if (string.IsNullOrWhiteSpace(pin))
-                return Json(new { error = "Paramètre 'pin' requis (code à 4 chiffres fourni par l'usager)." });
-            return await ConfirmCoreAsync(pin.Trim(), ct).ConfigureAwait(false);
-        }
-
         /// <summary>
         /// Noyau de la confirmation, partagé entre le tool (chemin normal,
         /// l'agent appelle confirm) et l'interception endpoint

@@ -1476,6 +1476,22 @@ namespace LLM_AI
                 {
                     if (esc)
                     {
+                        // Caractère de contrôle brut juste après l'anti-slash
+                        // (« \ » + saut de ligne réel) : on tombe l'anti-slash ET
+                        // on échappe le contrôle — sinon le JSON reste invalide.
+                        if (c < 0x20)
+                        {
+                            sb.Length--;
+                            switch (c)
+                            {
+                                case '\n': sb.Append("\\n"); break;
+                                case '\r': sb.Append("\\r"); break;
+                                case '\t': sb.Append("\\t"); break;
+                                default: sb.Append("\\u").Append(((int)c).ToString("x4")); break;
+                            }
+                            esc = false;
+                            continue;
+                        }
                         // Échappement invalide en JSON (vécu 2026-09-09, gemma4 :
                         // \' dans « l'historique » émis avec un anti-slash) — les
                         // échappements valides sont " \ / b f n r t u ; pour tout
