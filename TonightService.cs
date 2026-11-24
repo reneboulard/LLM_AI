@@ -390,15 +390,20 @@ namespace LLM_AI
             var w = cfg?.TonightProductionWindow?.Trim();
             if (string.IsNullOrEmpty(w))
                 return false; // gate inactive : pas de bornes
+            // Tirets typographiques (demi-cadratin, cadratin, signe moins) —
+            // produits par la saisie assistée / la traduction — ramenés à « - ».
+            w = w.Replace('–', '-').Replace('—', '-').Replace('−', '-');
             int dash = w.IndexOf('-');
-            if (dash <= 0 || dash >= w.Length - 1
-                || !TimeSpan.TryParseExact(w.Substring(0, dash).Trim(), @"hh\:mm",
-                    CultureInfo.InvariantCulture, out start)
-                || !TimeSpan.TryParseExact(w.Substring(dash + 1).Trim(), @"hh\:mm",
-                    CultureInfo.InvariantCulture, out end)
-                || start == end)
+            if (dash <= 0 || dash >= w.Length - 1)
                 return false;
-            return true;
+            // Même parseur tolérant que les bornes de soirée (« 9:00 » accepté).
+            if (!TryParseHHmm(w.Substring(0, dash), out start))
+                return false;
+            var endStr = w.Substring(dash + 1).Trim();
+            // « 24:00 » = fin de journée (« 17:00-24:00 » est une saisie naturelle).
+            if (endStr == "24:00") end = TimeSpan.FromHours(24);
+            else if (!TryParseHHmm(endStr, out end)) return false;
+            return start != end;
         }
 
         // ------------------------------------------------------------------
