@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 2.23.2 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
+**Version:** 2.23.3 · **Id:** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Target:** Emby (net8.0)
 
 > French version: see [README.md](README.md).
 

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Non publié / Unreleased] — depuis v2.23.2
+## [2.23.3] — 2026-11-24
 
 ### Fixed (FR)
 - **Porte de concurrence des tâches LLM** : une annulation survenant au moment exact de la libération d'un passage ne bloque plus définitivement les runs LLM suivants (jusqu'au redémarrage du serveur).

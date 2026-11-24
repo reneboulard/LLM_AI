@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 2.23.2 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
+**Version :** 2.23.3 · **Id :** `e7d3dee6-ef19-46a9-985f-06318b682e60` · **Cible :** Emby (net8.0)
 
 > Version anglaise : voir [README-EN.md](README-EN.md).
 
