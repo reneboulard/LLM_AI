@@ -243,7 +243,7 @@ namespace LLM_AI
                 payload = EnrichRecommendations(payload, toolResults);
                 return (payload, true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 _logger.Info("[LLM_AI] [{0}] Run annulé.", label);
                 throw;
@@ -292,7 +292,7 @@ namespace LLM_AI
                     systemPrompt, userPrompt, label, ct).ConfigureAwait(false);
                 return (reply, true);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 _logger.Info("[LLM_AI] [{0}] Synthèse annulée.", label);
                 throw;
@@ -615,7 +615,7 @@ namespace LLM_AI
                 _logger.Info("[LLM_AI] [{0}] Rapport d'audit :\n{1}", label, reply);
                 return reply;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 _logger.Info("[LLM_AI] [{0}] Audit annulé.", label);
                 throw;
@@ -1007,7 +1007,7 @@ namespace LLM_AI
                 _logger.Info("[LLM_AI] [{0}] Réponse chat :\n{1}", label, reply);
                 return reply;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 _logger.Info("[LLM_AI] [{0}] Chat annulé.", label);
                 throw;
@@ -1184,7 +1184,7 @@ namespace LLM_AI
                         sys, user, label + "::dose" + doseNo + "-" + dose.Title, ct).ConfigureAwait(false);
                     _logger.Info("[LLM_AI] [{0}] Dose {1}/{2} « {3} » : {4} car.", label, doseNo, doses.Length, dose.Title, block.Length);
                 }
-                catch (OperationCanceledException) { throw; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _logger.Warn("[LLM_AI] [{0}] Dose « {1} » indisponible sur tous les backends ({2}) — bloc mécanique.", label, dose.Title, ex.Message);
@@ -1237,7 +1237,7 @@ namespace LLM_AI
                 reply = await ChatWithFallbackAsync(backends, ollamaCloudKey, geminiKey,
                     systemAsm, userAsm, label + "::assemblage", ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger.Warn("[LLM_AI] [{0}] Assemblage final indisponible ({1}) — rapport = blocs + faits.", label, ex.Message);
@@ -1622,7 +1622,7 @@ namespace LLM_AI
                     text, "translate", ct).ConfigureAwait(false);
                 return string.IsNullOrWhiteSpace(reply) ? text : reply.Trim();
             }
-            catch (OperationCanceledException) { throw; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 _logger?.Warn("[LLM_AI] Traduction LLM en {0} échouée ({1}) — texte original conservé.",
@@ -2531,7 +2531,12 @@ namespace LLM_AI
                 foreach (var it in fuzzy)
                     if (it != null && NormTitle(it.Name) == normKey) return it;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Échec de requête bibliothèque ≠ « introuvable » : le tracer
+                // (AGENTS.md : ex.ToString() dans les catch de requête).
+                _logger?.Warn("[LLM_AI] Recherche approchée « {0} » en bibliothèque échouée : {1}", title, ex.ToString());
+            }
             return null;
         }
 

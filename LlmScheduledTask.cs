@@ -426,7 +426,7 @@ namespace LLM_AI
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 _logger.Info("[LLM_AI] Tâche annulée.");
                 throw;

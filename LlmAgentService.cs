@@ -1294,7 +1294,14 @@ namespace LLM_AI
             if (string.IsNullOrEmpty(reply) || string.IsNullOrEmpty(primaryRaw)) return primaryCalls;
 
             int primaryIdx = reply.IndexOf(primaryRaw, StringComparison.Ordinal);
-            if (primaryIdx < 0) return primaryCalls;   // réparé/tronqué : pas de suite à scanner
+            if (primaryIdx < 0)
+            {
+                // Réparé/tronqué : pas de suite à scanner — mais ne pas perdre
+                // un éventuel appel supplémentaire EN SILENCE (v2.20.3).
+                if (CountOccurrences(reply, "\"tool\"") > CountOccurrences(primaryRaw, "\"tool\""))
+                    logger?.Warn("[LLM_AI] Réponse multi-tableaux non analysable (tableau principal réparé/tronqué) : des appels d'outil supplémentaires ont pu être ignorés — le modèle devra les réémettre.");
+                return primaryCalls;
+            }
             int start = reply.IndexOf('[', primaryIdx + primaryRaw.Length);
             if (start < 0) return primaryCalls;
 
@@ -1340,12 +1347,25 @@ namespace LLM_AI
                 }
             }
 
+            // Plafond atteint avec du texte d'appel restant : tracer ce qui est ignoré.
+            if (toolGroups >= MaxFurtherToolArrays && start >= 0
+                && reply.IndexOf("\"tool\"", start, StringComparison.Ordinal) >= 0)
+                logger?.Warn("[LLM_AI] Réponse multi-tableaux : plafond de {0} tableaux d'appels supplémentaires atteint — les suivants sont IGNORÉS (le modèle devra les réémettre).",
+                    MaxFurtherToolArrays);
+
             if (recovered.Count == 0) return primaryCalls;
-            logger?.Info("[LLM_AI] Réponse multi-tableaux : {0} appel(s) d'outil supplémentaire(s) récupéré(s) — perdus en silence avant v2.20.3 (vécu 2026-11-13 : record_program fantôme).",
+            logger?.Info("[LLM_AI] Réponse multi-tableaux :{0} appel(s) d'outil supplémentaire(s) récupéré(s) — perdus en silence avant v2.20.3 (vécu 2026-11-13 : record_program fantôme).",
                 recovered.Count);
             var merged = new List<ToolCall>(primaryCalls);
             merged.AddRange(recovered);
             return merged;
+        }
+
+        private static int CountOccurrences(string text, string needle)
+        {
+            int count = 0, i = 0;
+            while ((i = text.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { count++; i += needle.Length; }
+            return count;
         }
 
         /// <summary>Clé de dédoublonnage d'un appel (outil + arguments

@@ -370,26 +370,39 @@ namespace LLM_AI
         public static IScheduledTaskWorker MatchTask(ITaskManager tasks, string taskId, string taskKey, bool excludeHidden)
         {
             var workers = tasks?.ScheduledTasks ?? Array.Empty<IScheduledTaskWorker>();
-            foreach (var w in workers)
+            // Passes SÉPARÉES (Id > Key > nom) : une boucle unique en OU
+            // renverrait la première tâche qui match l'un OU l'autre, quel que
+            // soit l'ordre de priorité annoncé.
+            if (!string.IsNullOrWhiteSpace(taskId))
             {
-                if (excludeHidden && IsHidden(w)) continue;
-                if (!string.IsNullOrWhiteSpace(taskId)
-                    && string.Equals(w.Id, taskId, StringComparison.OrdinalIgnoreCase))
-                    return w;
-                if (!string.IsNullOrWhiteSpace(taskKey)
-                    && string.Equals(w.ScheduledTask?.Key, taskKey, StringComparison.OrdinalIgnoreCase))
-                    return w;
+                foreach (var w in workers)
+                {
+                    if (excludeHidden && IsHidden(w)) continue;
+                    if (string.Equals(w.Id, taskId, StringComparison.OrdinalIgnoreCase))
+                        return w;
+                }
             }
-            // Repli : nom affiché (le LLM met volontiers le nom dans
-            // task_key — l'audit scheduled_tasks n'expose que id + name).
             if (string.IsNullOrWhiteSpace(taskKey)) return null;
             foreach (var w in workers)
             {
                 if (excludeHidden && IsHidden(w)) continue;
-                if (string.Equals(w.ScheduledTask?.Name, taskKey, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(w.ScheduledTask?.Key, taskKey, StringComparison.OrdinalIgnoreCase))
                     return w;
             }
-            return null;
+            // Repli : nom affiché (le LLM met volontiers le nom dans
+            // task_key — l'audit scheduled_tasks n'expose que id + name).
+            // Fail-closed sur l'ambiguïté : deux tâches homonymes → aucune
+            // (déclencher « la première » pourrait lancer la mauvaise).
+            IScheduledTaskWorker byName = null;
+            foreach (var w in workers)
+            {
+                if (excludeHidden && IsHidden(w)) continue;
+                if (!string.Equals(w.ScheduledTask?.Name, taskKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (byName != null) return null;
+                byName = w;
+            }
+            return byName;
         }
 
         /// <summary>
