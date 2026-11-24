@@ -194,9 +194,9 @@ goût). Voir [Mémoire réflexive](#mémoire-réflexive).
 18. [Langues d'interface communautaires](#langues-dinterface-communautaires)
 19. [Gestion bibliothèque](#gestion-bibliothèque-évaluation-ia-des-suppressions)
 20. [Dépannage](#dépannage)
-21. [Changelog](#changelog)
+21. [Licence](#licence)
 
-Voir aussi : [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
+Voir aussi : [LICENSE](LICENSE) (MIT).
 
 ---
 
@@ -284,7 +284,7 @@ activé de plus haute priorité est le serveur **primaire**. Chaque serveur :
 > requiert ~16 Go de VRAM — ou **gemma4:latest** (rapide, ~8 Go de VRAM) sur une carte
 > plus petite. Les deux jouent le protocole d'outils JSON du plugin ; la boucle intègre
 > des filets de réparation pour les modèles modestes (demande de renvoi avec gabarit,
-> béquilles de réparation JSON — voir CHANGELOG 2.6.7).
+> béquilles de réparation JSON).
 
 Champs hérités `LlmUrl` / `ModelName` restent supportés (repli legacy : un `LlmUrl` non
 vide est traité comme un serveur local).
@@ -3297,7 +3297,6 @@ warning. Les JS sont embarqués dans la DLL par le build (aucune étape JS disti
 
 ---
 
-## Changelog
+## Licence
 
-Les changements notables sont consignés dans [CHANGELOG.md](CHANGELOG.md). Licence :
 [MIT](LICENSE).

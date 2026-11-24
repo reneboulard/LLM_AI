@@ -6,7 +6,8 @@
 # Le workflow :
 #   1. compile le plugin en Release (net8.0),
 #   2. produit dist/LLM_AI-<version>.zip (DLL + install.sh + READMEs),
-#   3. crée une GitHub Release nommée d'après le tag et y joint l'archive.
+#   3. crée une GitHub Release nommée d'après le tag, avec CHANGELOG.md comme
+#      notes (changements depuis le dernier tag), et y joint l'archive.
 #
 # Prérequis : aucune secret particulière (GITHUB_TOKEN intégré suffit pour
 # gh release create). Adapter le champ `owner/repo` n'est pas nécessaire :
@@ -60,7 +61,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # Notes = CHANGELOG.md (changements depuis le dernier tag), sans
+          # l'en-tête du fichier (tout jusqu'au premier « --- » inclus).
+          sed '1,/^---$/d' CHANGELOG.md > release-notes.md
+          if [ -s release-notes.md ] && grep -q '[^[:space:]]' release-notes.md; then
+            NOTES=(--notes-file release-notes.md)
+          else
+            echo "::warning::CHANGELOG.md sans contenu — notes auto-générées."
+            NOTES=(--generate-notes)
+          fi
           gh release create "${TAG}" \
             --title "${TAG}" \
-            --generate-notes \
+            "${NOTES[@]}" \
             "${{ steps.archive.outputs.path }}#${{ steps.archive.outputs.name }}"

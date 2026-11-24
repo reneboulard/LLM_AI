@@ -98,7 +98,7 @@ Contenu de l'archive (${STAGE}/):
   README.md            — documentation française (principal, affiché sur GitHub)
   README-EN.md         — documentation anglaise
   LICENSE              — licence MIT
-  CHANGELOG.md         — journal des versions
+  CHANGELOG.md         — changements depuis la dernière release
 
 Pour publier : glisse ${ZIP} dans une GitHub Release (ou voir le workflow
 .github/workflows/release.yml qui le fait automatiquement sur un tag v*).

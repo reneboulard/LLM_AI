@@ -187,9 +187,9 @@ button, taste signals feeding the same journal, see
 18. [Community interface languages](#community-interface-languages)
 19. [Library management (AI deletion review)](#library-management-ai-deletion-review)
 20. [Troubleshooting](#troubleshooting)
-21. [Changelog](#changelog)
+21. [License](#license)
 
-See also: [LICENSE](LICENSE) (MIT) · [CHANGELOG.md](CHANGELOG.md).
+See also: [LICENSE](LICENSE) (MIT).
 
 ---
 
@@ -275,7 +275,7 @@ enabled backend is the **primary**. Each backend:
 > — the strongest so far (batched tool calls, very fast on large contexts), needs
 > ~16 GB VRAM — or **gemma4:latest** (fast, ~8 GB VRAM) on a smaller GPU. Both handle
 > the plugin's JSON tool protocol; the agent loop ships self-repair nets for modest
-> models (schema-bearing retry request, JSON repair crutches — see CHANGELOG 2.6.7).
+> models (schema-bearing retry request, JSON repair crutches).
 
 Legacy fields `LlmUrl` / `ModelName` are still supported (legacy fallback: a non-empty
 `LlmUrl` is treated as a local backend).
@@ -3184,6 +3184,6 @@ warnings. The JS files are embedded in the DLL by the build (no separate JS step
 
 ---
 
-## Changelog
+## License
 
-Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md). License: [MIT](LICENSE).
+[MIT](LICENSE).
