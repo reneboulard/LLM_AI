@@ -8,36 +8,66 @@ All notable changes to this plugin are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+
 ---
 
 ## [2.23.3] — 2026-11-24
 
-### Fixed (FR)
-- **Porte de concurrence des tâches LLM** : une annulation survenant au moment exact de la libération d'un passage ne bloque plus définitivement les runs LLM suivants (jusqu'au redémarrage du serveur).
-- **`web_search` / `web_fetch` / outils de l'agent** : une vraie annulation est propagée (le lot d'outils s'arrête, plus d'action exécutée après l'annulation) ; un délai dépassé renvoie « délai dépassé » au modèle au lieu de l'erreur .NET brute.
-- **États JSON** (décisions, snapshots EPG, favoris Tonight, mémoire/prompts du chat, rapports d'audit et de revue, validation des liens) : écriture atomique (fichier temporaire puis renommage) — un arrêt en pleine écriture ne tronque plus le fichier. Le store de validation des enregistrements met un fichier corrompu de côté (`.corrupt-…`) et n'écrit plus rien si sa lecture échoue, au lieu d'écraser la vérité EPG figée.
-- **Fenêtre de grande écoute Tonight** : `9:00`, `17:00-24:00` et les tirets typographiques sont acceptés (ils étaient refusés, ce qui repassait la production en 24 h/24).
-- **Réparation JSON des petits modèles** : un saut de ligne brut après une barre oblique inverse produit maintenant un JSON valide.
-- **Limite de quota Gemini (429)** : une valeur de limite démesurée ne masque plus le 429.
-- **Disque des enregistrements** : un volume ne préfixe plus un chemin voisin (`/mnt/rec` vs `/mnt/record`) ; id canonique (`InternalId`) pour le marquage « AI Delete ».
-- **Déclenchement de tâches planifiées depuis le chat/l'audit** : priorité Id > clé > nom respectée ; un nom partagé par plusieurs tâches n'en déclenche plus aucune (au lieu de la première).
+Version de fiabilité : aucune nouvelle fonction, mais plusieurs situations rares qui
+pouvaient bloquer le plugin ou abîmer ses données sont corrigées.
 
-### Changed (FR)
-- **Notes de release** : la release GitHub reprend le contenu de ce fichier, qui ne couvre que les changements depuis le dernier tag publié. Le workflow refuse un tag qui ne correspond pas à `<Version>`.
-- **Tests** : un projet xUnit (`tests/`) couvre les fonctions pures (fenêtre Tonight, gardes de titre/année des orphelins, réparation JSON, écriture atomique, porte LLM, actions du chat) ; exécuté avant le package de release. La DLL du plugin reste sans dépendance NuGet.
-- Journaux d'erreur : `ex.ToString()` (pile complète) pour les échecs de requête de bibliothèque ; code mort retiré ; exemples de chemins et d'adresses neutralisés dans la documentation.
+### Corrigé
+- **Les analyses IA ne se bloquent plus.** Dans de rares cas, annuler une tâche au
+  mauvais moment empêchait toutes les analyses suivantes de démarrer, jusqu'au
+  prochain redémarrage d'Emby.
+- **Annuler, c'est vraiment annuler.** Quand vous interrompez le chat ou une tâche,
+  l'assistant s'arrête tout de suite et n'exécute plus aucune action ensuite. Si une
+  recherche web prend trop de temps, l'assistant reçoit un message clair
+  (« délai dépassé ») au lieu d'une erreur technique.
+- **Vos données du plugin sont mieux protégées.** Décisions, mémoire de l'assistant,
+  favoris « AI Tonight », rapports d'audit : un arrêt du serveur en pleine
+  sauvegarde n'abîme plus ces fichiers. Si un fichier de validation des
+  enregistrements est endommagé, il est mis de côté (extension `.corrupt-…`) plutôt
+  qu'écrasé.
+- **« Période de grande écoute » : plus de réglage ignoré.** Des écritures comme
+  `9:00` ou `17:00-24:00` (ou avec un tiret typographique) étaient refusées, et le
+  plugin travaillait alors 24 h sur 24 sans prévenir. Elles sont maintenant acceptées.
+- **Petits modèles d'IA : réponses mieux récupérées.** Une réponse mal formée d'un
+  petit modèle local est réparée dans un cas de plus, au lieu d'être perdue.
+- **Quota Gemini dépassé :** le message « quota atteint » (erreur 429) n'est plus
+  masqué quand Google renvoie une valeur de limite démesurée.
+- **Espace disque des enregistrements :** le plugin ne confond plus deux dossiers dont
+  les noms commencent pareil (par exemple `/mnt/rec` et `/mnt/record`). Le marquage
+  « AI Delete » vise aussi toujours le bon élément.
+- **Tâches lancées depuis le chat ou l'audit :** si plusieurs tâches planifiées portent
+  le même nom, l'assistant n'en lance plus une au hasard ; il n'en lance aucune et
+  vous demande de préciser.
 
-### Fixed (EN)
-- **LLM task concurrency gate**: a cancellation landing at the exact moment a slot is released no longer blocks all following LLM runs for good (until server restart).
-- **`web_search` / `web_fetch` / agent tools**: a real cancellation is propagated (the tool batch stops, no action runs after the cancellation); a timeout returns "timed out" to the model instead of the raw .NET error.
-- **JSON state files** (decisions, EPG snapshots, Tonight favorites, chat memory/prompts, audit and review reports, link validation): atomic write (temp file then rename) — a stop mid-write no longer truncates the file. The recording-validation store sets a corrupt file aside (`.corrupt-…`) and writes nothing when its read fails, instead of overwriting the frozen EPG truth.
-- **Tonight prime-time window**: `9:00`, `17:00-24:00` and typographic dashes are accepted (they were rejected, which silently put production back to 24/7).
-- **Small-model JSON repair**: a raw newline right after a backslash now yields valid JSON.
-- **Gemini quota limit (429)**: an oversized limit value no longer masks the 429.
-- **Recording disk**: a volume no longer prefixes a sibling path (`/mnt/rec` vs `/mnt/record`); canonical id (`InternalId`) for the "AI Delete" tagging.
-- **Triggering scheduled tasks from chat/audit**: Id > key > name priority respected; a name shared by several tasks now triggers none (instead of the first one).
+## [2.23.3] — 2026-11-24
 
-### Changed (EN)
-- **Release notes**: the GitHub release uses the content of this file, which only covers changes since the last published tag. The workflow rejects a tag that does not match `<Version>`.
-- **Tests**: an xUnit project (`tests/`) covers the pure functions (Tonight window, orphan title/year guards, JSON repair, atomic write, LLM gate, chat actions); run before the release package. The plugin DLL still has no NuGet dependency.
-- Error logs: `ex.ToString()` (full stack) for library query failures; dead code removed; example paths and addresses neutralized in the documentation.
+Reliability release: no new feature, but several rare situations that could freeze
+the plugin or damage its data are fixed.
+
+### Fixed
+- **AI analyses no longer get stuck.** In rare cases, cancelling a task at the wrong
+  moment stopped every later analysis from starting until Emby was restarted.
+- **Cancel really cancels.** When you interrupt the chat or a task, the assistant
+  stops right away and runs no further action. If a web search takes too long, the
+  assistant now gets a clear message ("timed out") instead of a technical error.
+- **Your plugin data is better protected.** Decisions, assistant memory, "AI Tonight"
+  favorites, audit reports: a server shutdown in the middle of a save no longer
+  damages these files. If a recordings-validation file is damaged, it is set aside
+  (`.corrupt-…` extension) instead of being overwritten.
+- **"Prime-time window": no more ignored setting.** Entries such as `9:00` or
+  `17:00-24:00` (or with a typographic dash) used to be rejected, and the plugin then
+  silently worked 24/7. They are now accepted.
+- **Small AI models: better recovery of replies.** A badly formed reply from a small
+  local model is repaired in one more case instead of being lost.
+- **Gemini quota exceeded:** the "quota reached" message (error 429) is no longer
+  hidden when Google returns an oversized limit value.
+- **Recordings disk space:** the plugin no longer mixes up two folders whose names
+  start the same way (for example `/mnt/rec` and `/mnt/record`). The "AI Delete"
+  marking also always targets the right item.
+- **Tasks started from the chat or the audit:** if several scheduled tasks share the
+  same name, the assistant no longer starts one at random; it starts none and asks
+  you to be more specific.

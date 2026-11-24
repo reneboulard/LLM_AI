@@ -79,5 +79,5 @@ ${C_GREEN}Installation terminée.${C_RST}
 Ouvre Emby → Tableau de bord → Plugins → LLM_AI pour le configurer
 (backends LLM, clés API, section « Ce soir »).
 
-Voir README-FR.md / README-EN.md pour la documentation complète.
+Voir README.md / README-EN.md pour la documentation complète.
 EOF

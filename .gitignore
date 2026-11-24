@@ -49,4 +49,5 @@ asset_version.js
 chat-external/config.json
 
 ## Local field notes (incident narratives moved out of AGENTS.md, private)
-docs/
+docs/field-notes.md
+docs/AGENTS.md.orig
