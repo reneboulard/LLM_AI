@@ -26,6 +26,15 @@
     <None Remove="i18n-kit/**" />
   </ItemGroup>
 
+  <!-- Projet de tests (tests/, xUnit — NuGet réservé aux tests, JAMAIS
+       embarqué dans la DLL) : ses .cs ne sont pas des sources du plugin, et
+       il voit les membres `internal` (fonctions pures testables). -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <None Remove="tests/**" />
+    <InternalsVisibleTo Include="LLM_AI.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="MediaBrowser.Model">
       <HintPath>libs/MediaBrowser.Model.dll</HintPath>

@@ -45,6 +45,9 @@ jobs:
             exit 1
           fi
 
+      - name: Tests (fonctions pures)
+        run: dotnet test tests/LLM_AI.Tests.csproj
+
       - name: Build & package
         run: bash package.sh
 

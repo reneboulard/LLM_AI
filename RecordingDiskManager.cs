@@ -407,7 +407,7 @@ namespace LLM_AI
         /// une fin de chaîne ou un séparateur (sauf si le nom du volume en porte
         /// déjà un : « F:\ », « / »).
         /// </summary>
-        private static bool IsUnderVolume(string path, string volumeName)
+        internal static bool IsUnderVolume(string path, string volumeName)
         {
             if (string.IsNullOrEmpty(volumeName)
                 || !path.StartsWith(volumeName, StringComparison.OrdinalIgnoreCase))

@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Réparation JSON des petits modèles** : un saut de ligne brut après une barre oblique inverse produit maintenant un JSON valide.
 - **Limite de quota Gemini (429)** : une valeur de limite démesurée ne masque plus le 429.
 - **Disque des enregistrements** : un volume ne préfixe plus un chemin voisin (`/mnt/rec` vs `/mnt/record`) ; id canonique (`InternalId`) pour le marquage « AI Delete ».
+- **Déclenchement de tâches planifiées depuis le chat/l'audit** : priorité Id > clé > nom respectée ; un nom partagé par plusieurs tâches n'en déclenche plus aucune (au lieu de la première).
 
 ### Changed (FR)
 - **Notes de release** : la release GitHub reprend le contenu de ce fichier, qui ne couvre que les changements depuis le dernier tag publié. Le workflow refuse un tag qui ne correspond pas à `<Version>`.
+- **Tests** : un projet xUnit (`tests/`) couvre les fonctions pures (fenêtre Tonight, gardes de titre/année des orphelins, réparation JSON, écriture atomique, porte LLM, actions du chat) ; exécuté avant le package de release. La DLL du plugin reste sans dépendance NuGet.
 - Journaux d'erreur : `ex.ToString()` (pile complète) pour les échecs de requête de bibliothèque ; code mort retiré ; exemples de chemins et d'adresses neutralisés dans la documentation.
 
 ### Fixed (EN)
@@ -33,7 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Small-model JSON repair**: a raw newline right after a backslash now yields valid JSON.
 - **Gemini quota limit (429)**: an oversized limit value no longer masks the 429.
 - **Recording disk**: a volume no longer prefixes a sibling path (`/mnt/rec` vs `/mnt/record`); canonical id (`InternalId`) for the "AI Delete" tagging.
+- **Triggering scheduled tasks from chat/audit**: Id > key > name priority respected; a name shared by several tasks now triggers none (instead of the first one).
 
 ### Changed (EN)
 - **Release notes**: the GitHub release uses the content of this file, which only covers changes since the last published tag. The workflow rejects a tag that does not match `<Version>`.
+- **Tests**: an xUnit project (`tests/`) covers the pure functions (Tonight window, orphan title/year guards, JSON repair, atomic write, LLM gate, chat actions); run before the release package. The plugin DLL still has no NuGet dependency.
 - Error logs: `ex.ToString()` (full stack) for library query failures; dead code removed; example paths and addresses neutralized in the documentation.
