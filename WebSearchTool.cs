@@ -100,9 +100,21 @@ namespace LLM_AI
                     _logger?.Info("[LLM_AI] web_search query={0} -> {1} (non caché)", query, Truncate(result, 200));
                 return result;
             }
+            // Vraie annulation (arrêt de tâche, déconnexion) : on propage.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
+            // PAS annulé (gotcha AGENTS.md) : message clair, pas l'erreur .NET brute.
+            catch (OperationCanceledException ex)
+            {
+                _logger?.Warn("[LLM_AI] web_search délai dépassé query={0} : {1}", query, ex.ToString());
+                return Err("délai dépassé (recherche web)");
+            }
             catch (Exception ex)
             {
-                _logger?.ErrorException("[LLM_AI] web_search a levé : {0}", ex, ex.Message);
+                _logger?.ErrorException("[LLM_AI] web_search a levé : {0}", ex, ex.ToString());
                 return Err(ex.Message);
             }
         }

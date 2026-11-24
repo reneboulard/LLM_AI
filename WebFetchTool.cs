@@ -254,10 +254,24 @@ namespace LLM_AI
                     SecurityMonitor.Record("WEB_FETCH_ERREUR", Truncate(result, 200));
                 return result;
             }
+            // Vraie annulation (arrêt de tâche, déconnexion) : on propage, sans
+            // polluer SecurityMonitor.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
+            // PAS annulé (gotcha AGENTS.md) : message clair, pas l'erreur .NET brute.
+            catch (OperationCanceledException ex)
+            {
+                SecurityMonitor.Record("WEB_FETCH_ERREUR", "délai dépassé");
+                _logger?.Warn("[LLM_AI] web_fetch délai dépassé url={0} : {1}", Truncate(url, 120), ex.ToString());
+                return Err("délai dépassé (récupération web)");
+            }
             catch (Exception ex)
             {
                 SecurityMonitor.Record("WEB_FETCH_ERREUR", ex.Message);
-                _logger?.ErrorException("[LLM_AI] web_fetch a levé : {0}", ex, ex.Message);
+                _logger?.ErrorException("[LLM_AI] web_fetch a levé : {0}", ex, ex.ToString());
                 return Err(ex.Message);
             }
         }

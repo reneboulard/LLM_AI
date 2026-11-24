@@ -54,6 +54,7 @@ namespace LLM_AI
             Task waitTask;
             int cap;
             string holders;
+            CancellationTokenRegistration reg;
 
             lock (_sync)
             {
@@ -78,14 +79,21 @@ namespace LLM_AI
                 // Annulation paresseuse : l'attendant quitte la file en
                 // douceur (Release saute les attendants annulés — le slot
                 // n'est jamais consommé par un parti).
-                ct.Register(() => tcs.TrySetCanceled());
+                reg = ct.Register(() => tcs.TrySetCanceled());
             }
 
             var started = DateTime.UtcNow;
 
             // await hors verrou : le réveil vient de Release (ou de
             // l'annulation → TaskCanceledException : OperationCanceledException).
-            await waitTask.ConfigureAwait(false);
+            try
+            {
+                await waitTask.ConfigureAwait(false);
+            }
+            finally
+            {
+                reg.Dispose(); // ne garde pas le CTS vivant après le réveil
+            }
 
             logger?.Info("[LLM_AI] Porte LLM : « {0} » passe après {1:N1} min d'attente.",
                 label, (DateTime.UtcNow - started).TotalMinutes);
@@ -118,10 +126,15 @@ namespace LLM_AI
                 {
                     var (tcs, wl) = _waiters.First.Value;
                     _waiters.RemoveFirst();
-                    if (tcs.Task.IsCanceled) continue; // attendant parti — slot NON consommé
+                    // TrySetResult est l'arbitre atomique face au callback
+                    // d'annulation (hors verrou) : si l'annulation a gagné la
+                    // course, l'attendant est parti — slot NON consommé. On ne
+                    // compte l'actif QU'APRÈS avoir remporté le résultat, sinon
+                    // le slot fuit (personne n'appelle Release pour un
+                    // attendant qui a levé OperationCanceledException).
+                    if (!tcs.TrySetResult(true)) continue;
                     _active++;
                     _holders.Add(wl);
-                    tcs.TrySetResult(true);
                 }
             }
         }

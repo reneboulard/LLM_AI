@@ -571,10 +571,16 @@ namespace LLM_AI
                         {
                             res = await tool.ExecuteAsync(call.Arguments, ct).ConfigureAwait(false);
                         }
+                        // Vraie annulation : on stoppe le lot ici — sinon les outils
+                        // suivants (record_program…) s'exécuteraient APRÈS l'annulation.
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                        {
+                            throw;
+                        }
                         catch (Exception ex)
                         {
                             SecurityMonitor.Record("TOOL_ERREUR", call.Tool + " : " + ex.Message);
-                            _logger?.ErrorException("[LLM_AI] Outil {0} a levé : {1}", ex, call.Tool, ex.Message);
+                            _logger?.ErrorException("[LLM_AI] Outil {0} a levé : {1}", ex, call.Tool, ex.ToString());
                             res = "{\"error\":\"" + JsonEscape(ex.Message) + "\"}";
                         }
                         // On mémorise le résultat pour l'enrichissement post-boucle.
