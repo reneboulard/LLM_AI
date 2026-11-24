@@ -82,7 +82,7 @@ namespace LLM_AI
                     ["mode"] = rep.Mode,
                     ["report"] = rep.Report
                 };
-                File.WriteAllText(path, obj.ToJsonString());
+                AtomicFile.WriteAllText(path, obj.ToJsonString());
             }
             catch (Exception ex)
             {

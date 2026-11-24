@@ -211,7 +211,7 @@ namespace LLM_AI
         {
             var path = CardPath;
             if (path == null) return;
-            try { File.WriteAllText(path, json); }
+            try { AtomicFile.WriteAllText(path, json); }
             catch (Exception ex)
             {
                 logger?.Warn("[LLM_AI] Fiche mémoire : écriture échouée : {0}", ex.Message);

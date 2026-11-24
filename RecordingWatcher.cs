@@ -581,7 +581,10 @@ namespace LLM_AI
             {
                 lock (_lock)
                 {
-                    var list = Parse();
+                    // Lecture impossible (verrou, E/S) : ne PAS réécrire une
+                    // liste vide par-dessus la vérité EPG figée.
+                    var list = ParseForWrite(out var readFailed);
+                    if (readFailed) return;
                     var e = list.FirstOrDefault(x =>
                         string.Equals(x.Path, entry.Path, StringComparison.OrdinalIgnoreCase));
                     if (e == null)
@@ -611,7 +614,8 @@ namespace LLM_AI
             {
                 lock (_lock)
                 {
-                    var list = Parse();
+                    var list = ParseForWrite(out var readFailed);
+                    if (readFailed) return;
                     list.RemoveAll(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase));
                     Save(list);
                 }
@@ -620,10 +624,21 @@ namespace LLM_AI
         }
 
         /// <summary>Liste les entrées (tolérant : absent/corrompu → vide).</summary>
-        internal static List<Entry> Parse()
+        internal static List<Entry> Parse() => ParseCore(out _, quarantineCorrupt: false);
+
+        /// <summary>
+        /// Lecture avant réécriture (Upsert/Remove) : JSON corrompu → fichier
+        /// mis de côté (<c>.corrupt-…</c>) puis liste vide (rien d'autre à
+        /// sauver) ; échec de lecture E/S → <paramref name="readFailed"/> et
+        /// l'appelant s'abstient d'écrire.
+        /// </summary>
+        private static List<Entry> ParseForWrite(out bool readFailed)
+            => ParseCore(out readFailed, quarantineCorrupt: true);
+
+        private static List<Entry> ParseCore(out bool readFailed, bool quarantineCorrupt)
         {
             var list = new List<Entry>();
-            foreach (var n in ReadArray())
+            foreach (var n in ReadArray(out readFailed, quarantineCorrupt))
             {
                 if (!(n is JsonObject o)) continue;
                 var e = new Entry
@@ -684,25 +699,32 @@ namespace LLM_AI
             }
         }
 
-        private static IEnumerable<JsonNode> ReadArray()
+        private static IEnumerable<JsonNode> ReadArray(out bool readFailed, bool quarantineCorrupt)
         {
+            readFailed = false;
             var path = StorePath;
-            if (path == null || !File.Exists(path)) yield break;
+            if (path == null || !File.Exists(path)) return Array.Empty<JsonNode>();
             string json;
             try { json = File.ReadAllText(path); }
-            catch { yield break; }
+            catch { readFailed = true; return Array.Empty<JsonNode>(); }
             JsonArray arr = null;
             try { arr = JsonNode.Parse(json) as JsonArray; }
             catch { /* corrompu : vide */ }
-            if (arr == null) yield break;
-            foreach (var n in arr) yield return n;
+            if (arr == null)
+            {
+                // Fichier non vide mais illisible : le mettre de côté avant
+                // que la prochaine écriture ne l'écrase.
+                if (quarantineCorrupt && !string.IsNullOrWhiteSpace(json)) AtomicFile.Quarantine(path);
+                return Array.Empty<JsonNode>();
+            }
+            return arr;
         }
 
         private static void WriteAll(string json)
         {
             var path = StorePath;
             if (path == null) return;
-            try { File.WriteAllText(path, json); }
+            try { AtomicFile.WriteAllText(path, json); }
             catch { /* fail-open */ }
         }
 

@@ -376,7 +376,7 @@ namespace LLM_AI
                     });
                 }
                 var root = new JsonObject { ["sessions"] = arr };
-                File.WriteAllText(path, root.ToJsonString());
+                AtomicFile.WriteAllText(path, root.ToJsonString());
             }
             catch (Exception ex)
             {

@@ -624,7 +624,7 @@ namespace LLM_AI
                     ["last_audited"] = state.LastAudited,
                     ["last_divergent"] = state.LastDivergent
                 };
-                File.WriteAllText(path, root.ToJsonString());
+                AtomicFile.WriteAllText(path, root.ToJsonString());
                 return true;
             }
             catch (Exception ex)

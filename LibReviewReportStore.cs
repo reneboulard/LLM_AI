@@ -140,7 +140,7 @@ namespace LLM_AI
                     ["candidates"] = report.Candidates,
                     ["items"] = arr
                 };
-                File.WriteAllText(path, root.ToJsonString());
+                AtomicFile.WriteAllText(path, root.ToJsonString());
             }
             catch (Exception ex)
             {

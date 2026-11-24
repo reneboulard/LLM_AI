@@ -304,7 +304,7 @@ namespace LLM_AI
                     { "run", DateTimeOffset.UtcNow.ToString("o") },
                     { "items", entries }
                 };
-                File.WriteAllText(path, JsonSerializer.Serialize(payload));
+                AtomicFile.WriteAllText(path, JsonSerializer.Serialize(payload));
             }
             catch (Exception ex)
             {

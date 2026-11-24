@@ -315,7 +315,7 @@ namespace LLM_AI
             if (path == null) return;
             try
             {
-                File.WriteAllText(path, json);
+                AtomicFile.WriteAllText(path, json);
             }
             catch (Exception ex)
             {

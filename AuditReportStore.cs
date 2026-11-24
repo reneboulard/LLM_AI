@@ -93,7 +93,7 @@ namespace LLM_AI
                     ["focus"] = report.Focus ?? "",
                     ["report"] = report.Report
                 };
-                System.IO.File.WriteAllText(path, root.ToJsonString());
+                AtomicFile.WriteAllText(path, root.ToJsonString());
             }
             catch (Exception ex)
             {

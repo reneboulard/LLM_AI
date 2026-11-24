@@ -241,7 +241,7 @@ namespace LLM_AI
                     arr.Add(o);
                 }
                 var root = new JsonObject { ["pending"] = arr };
-                File.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                AtomicFile.WriteAllText(path, root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             }
             catch (Exception ex)
             {
