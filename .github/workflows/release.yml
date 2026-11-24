@@ -33,17 +33,25 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Check tag matches csproj version
+        run: |
+          # Un tag v2.24.0 avec <Version> 2.23.2 publierait LLM_AI-2.23.2.zip
+          # sous la release v2.24.0 : on échoue tôt plutôt que de mal étiqueter.
+          CSPROJ_VERSION="$(grep -oP '(?<=<Version>)[^<]+' LLM_AI.csproj | head -1)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${CSPROJ_VERSION}" != "${TAG_VERSION}" ]; then
+            echo "::error::Le tag ${GITHUB_REF_NAME} ne correspond pas à <Version> ${CSPROJ_VERSION} de LLM_AI.csproj."
+            exit 1
+          fi
+
       - name: Build & package
         run: bash package.sh
 
       - name: Resolve archive path
         id: archive
         run: |
-          ZIP="$(ls dist/${{ github.event.repository.name || 'LLM_AI' }}-*.zip 2>/dev/null | head -1)"
-          # Fallback : le nom du plugin est fixe (LLM_AI), peu importe le nom du dépôt.
-          if [ -z "${ZIP}" ]; then
-            ZIP="$(ls dist/LLM_AI-*.zip | head -1)"
-          fi
+          # Le nom du plugin est fixe (LLM_AI), peu importe le nom du dépôt.
+          ZIP="$(ls dist/LLM_AI-*.zip | head -1)"
           echo "path=${ZIP}" >> "$GITHUB_OUTPUT"
           echo "name=$(basename "${ZIP}")" >> "$GITHUB_OUTPUT"
 

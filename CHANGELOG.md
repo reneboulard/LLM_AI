@@ -4989,8 +4989,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed (FR)
 - **Dialogue cross-kind : le répertoire suggéré mélangeait les séparateurs sur
-  Windows** (« F:\Documentaires/Le blé, l'autre arme de Poutine (2024) » au
-  lieu de « F:\Documentaires\Le blé, l'autre arme de Poutine (2024) »). Trois
+  Windows** (« D:\Documentaires/Titre du documentaire (2024) » au
+  lieu de « D:\Documentaires\Titre du documentaire (2024) »). Trois
   corrections : (1) l'endpoint `CrossKindLibraries` expose désormais
   `Separator` (le `Path.DirectorySeparatorChar` de l'HÔTE — serveur Windows ou
   Linux), et `config.js` assemble « racine + sous-dossier » avec CE séparateur
@@ -5050,8 +5050,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed (EN)
 - **Cross-kind dialogue: the suggested folder mixed separators on Windows**
-  ("F:\Documentaires/Le blé, l'autre arme de Poutine (2024)" instead of
-  "F:\Documentaires\Le blé, l'autre arme de Poutine (2024)"). Three fixes:
+  ("D:\Documentaires/Titre du documentaire (2024)" instead of
+  "D:\Documentaires\Titre du documentaire (2024)"). Three fixes:
   (1) the `CrossKindLibraries` endpoint now exposes `Separator` (the HOST's
   `Path.DirectorySeparatorChar` — Windows or Linux server), and `config.js`
   joins "root + subfolder" with THAT separator (inferred from the path as
@@ -6609,7 +6609,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   liens étaient construits depuis `emby_url` (le loopback, obligatoire
   pour la gate du plugin) : corrects seulement quand on chatte depuis le
   serveur lui-même. Nouveau champ `emby_public_url` dans `config.json`
-  (ex. `http://192.168.1.20:8096`) — l'URL d'Emby telle que le navigateur
+  (ex. `http://192.0.2.10:8096`) — l'URL d'Emby telle que le navigateur
   de l'usager doit l'atteindre — utilisée pour ces liens ; vide = repli
   sur `emby_url`. La gate reste sur `emby_url`, inchangée. Le démarrage
   affiche les deux valeurs et rappelle le champ quand `emby_public_url`
@@ -6619,7 +6619,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **"↗ fiche web" deep links use the Emby URL as seen from the browser.**
   Links were built from `emby_url` (the loopback, required by the plugin
   gate) — correct only when chatting from the server machine itself. New
-  `emby_public_url` field in `config.json` (e.g. `http://192.168.1.20:8096`)
+  `emby_public_url` field in `config.json` (e.g. `http://192.0.2.10:8096`)
   — the Emby URL the user's browser must reach — used for these links;
   empty falls back to `emby_url`. The gate still uses `emby_url`,
   unchanged. Startup prints both values and hints at the field when

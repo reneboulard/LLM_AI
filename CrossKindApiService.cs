@@ -165,7 +165,7 @@ namespace LLM_AI
             /// Path.DirectorySeparatorChar) — le dialogue de destination
             /// assemble « racine + sous-dossier » avec CE séparateur, pas un
             /// « / » codé en dur (un serveur Windows préremplissait
-            /// « F:\Documentaires/Le blé… » — mélange fonctionnel mais faux,
+            /// « D:\Documentaires/Titre… » — mélange fonctionnel mais faux,
             /// corrigé v1.14.0.7).</summary>
             public string Separator { get; set; }
         }

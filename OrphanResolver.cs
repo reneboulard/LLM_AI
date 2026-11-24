@@ -1350,7 +1350,7 @@ namespace LLM_AI
         /// de l'état DVR du moment (cas 2026-11-11 : « Mini-Jean et
         /// Mini-Bulle » validé sans juge par le jumeau né de SON propre
         /// événement 3 min plus tôt ; vraie sœur légitime le même matin :
-        /// « Les Pyjamasques » ↔ F:\SeriesE, curatorée 2023). Requête base
+        /// « Titre A » ↔ D:\Series, curatorée 2023). Requête base
         /// (AncestorIds+Episode, miroir des compteurs LibReview), jamais de
         /// lecture disque. Échec de requête → false (fail-closed :
         /// l'incertitude retombe sur les couches lexicales/juge, jamais sur
