@@ -139,7 +139,7 @@ namespace LLM_AI
             public string Date;
             public bool FromCache;
             public string Error;
-            /// <summary>Origin « chat » : run déclenché par le tool
+            /// <summary>Origine « chat » : run déclenché par le tool
             /// <c>run_tonight_run</c> du chat (badge sur la page
             /// Recommandations).</summary>
             public bool ViaChat;
@@ -171,7 +171,7 @@ namespace LLM_AI
             public string Items;
             public string Date;
             public DateTimeOffset ExpiresAt;
-            /// <summary>Origin « chat » (badge) — cf. TonightResult.ViaChat.</summary>
+            /// <summary>Origine « chat » (badge) — cf. TonightResult.ViaChat.</summary>
             public bool ViaChat;
             public string ChatDirectives;
             /// <summary>Note parentale — cf. TonightResult.Warning.</summary>
@@ -181,13 +181,9 @@ namespace LLM_AI
         private static readonly Dictionary<string, CacheEntry> _cache = new Dictionary<string, CacheEntry>();
         private static readonly object _cacheLock = new object();
 
-        // Single-flight Tonight : au plus UN run de production par usager —
-        // le 2ᵉ déclencheur joint le résultat du run en cours au lieu de
-        // doubler l'appel LLM. Événement réel banc 2026-11-10 : trigger
-        // login + page GET simultanés → 2 runs × ~15,5k tokens d'entrée
-        // (Tonight complet) = 31k > fenêtre TPM free tier 16k/min → 429s
-        // mutuels, +2 min à la page, tokens doublés. In-memory, pas de
-        // fichier d'état — tout disparaît au restart.
+        // Single-flight : au plus UN run de production par usager — le 2ᵉ
+        // déclencheur joint le run en cours (deux runs simultanés dépassent
+        // la fenêtre TPM des offres gratuites → 429 mutuels). In-memory.
         private static readonly ConcurrentDictionary<string, InFlightRun> _inFlight =
             new ConcurrentDictionary<string, InFlightRun>(StringComparer.Ordinal);
         private static readonly object _inFlightLock = new object();
@@ -430,12 +426,8 @@ namespace LLM_AI
                 }
             }
 
-            // Single-flight (join) : le 2ᵉ déclencheur pendant un run en
-            // cours attend son résultat au lieu de doubler l'appel LLM
-            // (2 runs Tonight = ~31k tokens d'entrée — incompatibles avec la
-            // fenêtre TPM free tier 16k/min). Un <paramref name="refresh"/>
-            // explicite joint aussi : l'intention « donnée fraîche » est
-            // servie par le run en cours, démarré il y a quelques secondes.
+            // Single-flight (join) : un refresh explicite joint aussi le run
+            // en cours (la donnée fraîche est servie par lui).
             InFlightRun toJoin = null;
             InFlightRun own = null;
             lock (_inFlightLock)
@@ -506,14 +498,9 @@ namespace LLM_AI
             bool compact = IsLocalPrimary(cfg);
             if (compact) _logger?.Info("[LLM_AI] Tonight : backend local détecté — mode compact (données injectées réduites).");
 
-            // Racine de la bibliothèque .strm (recommendations à enregistrer,
-            // surface du record-bucket) à EXCLURE des sondes bibliothèque
-            // envoyées au LLM (profil de goût + réserve). Sans cela, les cartes
-            // .strm reviennent dans le profil (lu → marqué visionné) et dans la
-            // réserve (non visionné → candidat source="library") : décision
-            // circulaire (« recommande d'enregistrer X » → plus tard « recommande
-            // de regarder X ce soir depuis la bibliothèque »). Null si la
-            // bibliothèque .strm n'est pas configurée/trouvée → pas d'exclusion.
+            // Racine de la bibliothèque .strm à EXCLURE des sondes envoyées au
+            // LLM (profil + réserve) : sinon décision circulaire (« enregistre X »
+            // revient plus tard en « regarde X »). Null = pas d'exclusion.
             string excludedStrmRoot = StrmLibraryGenerator.ResolveLibraryRoot(
                 _library, Plugin.Instance?.Configuration?.StrmLibraryName, _logger);
             if (!string.IsNullOrWhiteSpace(excludedStrmRoot))
@@ -522,36 +509,24 @@ namespace LLM_AI
             // 1) Profil de goût : historique de visionnage récent de l'usager.
             string profile = BuildTasteProfile(user, compact, excludedStrmRoot);
 
-            // 2) Watched-guard : index per-usager du contenu DÉJÀ VISIONNÉ
-            //    (épisodes joués par série + films joués). Construit AVANT
-            //    les menus ci-dessous (v2.2.2) : au-delà de son rôle de
-            //    validation des recos live (marquer les rediffusions déjà
-            //    visionnées — l'UI affiche la carte avec badge « Déjà
-            //    visionné » et masque les actions, l'auto-programmation ne
-            //    crée pas de timer, les popups la sautent), il ANNOTE la
-            //    position de l'usager dans les séries du menu des
-            //    enregistrements (« user_started= ») et du bloc « prêtes à
-            //    dévorer ». Null si indisponible (fail-open : recos non
-            //    marquées, lignes sans annotation, jamais droppées pour
-            //    autant).
+            // 2) Watched-guard : index per-usager du contenu DÉJÀ VISIONNÉ.
+            //    Construit AVANT les menus : il valide les recos live (marque
+            //    les rediffusions vues) et annote la position de l'usager
+            //    (« user_started= »). Null si indisponible (fail-open).
             WatchedIndex watchedIdx = BuildWatchedIndex(user, excludedStrmRoot);
 
             // 2b) Enregistrements récents non visionnés (candidats « à regarder
             //     ce soir » — déjà enregistrés, prêts à lire). Injectés comme le
             //     profil : l'usager est résolu ici (le tool get_emby_info, lui,
             //     est global/sans usager). Les lignes kind=series portent la
-            //     position RÉELLE de l'usager (start=/unwatched=/user_started=,
-            //     v2.2.2) : sans elles, le LLM recommandait « le dernier
-            //     épisode » d'une série jamais commencée (vécu 2026-10-08, prod).
+            //     position RÉELLE de l'usager (start=/unwatched=/user_started=) :
+            //     sans elles, le LLM recommande « le dernier épisode » d'une
+            //     série jamais commencée.
             string recs = BuildUnwatchedRecordings(user, cfg, ct, compact, watchedIdx, out var menuTitles);
 
-            // 2b') Enregistrements À VENIR ce soir (timers DVR déjà
-            //      programmés) : complète le menu ci-dessus pour les runs
-            //      ANTICIPÉS (tâche planifiée de production anticipée v2.7.0 :
-            //      à 17 h, les enregistrements du soir n'existent pas encore —
-            //      leurs timers, si, et la grille EPG est complète). Bloc
-            //      contextuel auto-descriptif ; vide si aucun timer ne tombe
-            //      dans la fenêtre « ce soir ».
+            // 2b') Enregistrements À VENIR ce soir (timers DVR programmés) :
+            //      pour les runs ANTICIPÉS, où les enregistrements du soir
+            //      n'existent pas encore. Vide si aucun timer dans la fenêtre.
             string upcoming = BuildUpcomingRecordings(cfg, compact);
 
             // 2c) Réserve bibliothèque (items non visionnés) : utilisée par le
@@ -562,24 +537,20 @@ namespace LLM_AI
             //    séries dont l'enregistrement est actif et dont le stock d'épisodes
             //    non visionnés vient de franchir le seuil — signalées UNE fois par
             //    cycle d'accumulation (re-armées quand l'usager commence à regarder).
-            //    Lignes annotées « user_started= » (v2.2.2, même vocabulaire que
-            //    le menu des enregistrements).
             string binge = cfg.TonightBingeEnabled
                 ? BuildBingeReadySeries(user, cfg, compact, excludedStrmRoot, watchedIdx)
                 : string.Empty;
 
-            // 2e) Injection mémoire : la fiche mémoire réflexive (opt-in,
-            //     Phase C) a priorité — quand elle existe, elle REMPLACE la
+            // 2e) Injection mémoire : la fiche mémoire réflexive (opt-in) a priorité — quand elle existe, elle REMPLACE la
             //     directive de la boucle de rétroaction classique (repli
             //     fail-open sur cette dernière si la fiche est vide/absente).
             string feedback = MemoryCard.BuildInjectionBlock(cfg);
             if (string.IsNullOrEmpty(feedback) && cfg.RecoFeedbackEnabled)
                 feedback = RecoFeedback.BuildTonightBlock(cfg, user.Id.ToString());
 
-            // 3) Prompt personnalisé = template config + HEURE ACTUELLE (v2.3.3 :
-            //    le modèle n'a aucune horloge — même incident classe que le
-            //    chat v1.13.21.1) + profil + enregistrements + réserve
-            //    (+ binge + directive) + contrainte de minimum dynamique.
+            // 3) Prompt = template config + HEURE ACTUELLE (le modèle n'a aucune
+            //    horloge) + profil + enregistrements + réserve (+ binge +
+            //    directive) + contrainte de minimum dynamique.
             int minRec = Math.Max(0, cfg.TonightMinRecommendations);
             string prompt = (cfg.TonightPrompt ?? string.Empty).Trim()
                 + "\n\n" + BuildTonightTimeBlock()
@@ -602,10 +573,8 @@ namespace LLM_AI
                 + "BIBLIOTHÈQUE ci-dessus (source=\"library\", reprends id). Ne dépasse pas le "
                 + "minimum avec la réserve — l'EPG et les enregistrements restent prioritaires.";
 
-            // Gate droit TV en direct (v1.13.12.0) : si l'usager ne porte pas
-            // EnableLiveTvAccess, l'EPG n'est PAS consulté (tools epg_* → vide
-            // légitime, snapshot de validation sauté) — dit au LLM en amont pour
-            // qu'il réoriente sans tâtonner (filet double avec la note des tools).
+            // Gate droit TV en direct : sans EnableLiveTvAccess l'EPG n'est pas
+            // consulté ; on le dit au LLM en amont pour qu'il réoriente.
             bool canLive = PermissionGate.CanWatchLive(user);
             if (!canLive)
             {
@@ -616,11 +585,8 @@ namespace LLM_AI
                     + "(source=\"library\") — aucune reco source=\"live\".";
             }
 
-            // Gate parental (v1.13.15.0) : si l'usager porte une limite
-            // MaxParentalRating, des tags bloqués/autorisés ou
-            // BlockUnratedItems, dit-le au LLM EN AMONT (pattern canLive :
-            // le dire, puis l'imposer mécaniquement dans ValidateAndFilter).
-            // Null si aucune règle parentale — aucun bloc injecté.
+            // Gate parental : le dire au LLM en amont (pattern canLive), puis
+            // l'imposer dans ValidateAndFilter. Null = aucune règle, aucun bloc.
             string parentalPrompt = PermissionGate.DescribeForPrompt(user);
             if (parentalPrompt != null)
                 prompt += parentalPrompt;
@@ -628,10 +594,8 @@ namespace LLM_AI
             // 4) Run agent (boucle de tool-calling) — même logique que la tâche
             //    planifiée : backends, outils, enrichissement (match titres →
             //    id/channel_id/rating/image_url) gérés par LlmRunner.
-            // Mémoire réflexive (Phase A) : le runId relie les décisions
-            // journalisées au pool de candidats capturé pendant le run
-            // (epg_tonight par le tool get_emby_info, réserve + enregistrements
-            // par les builders ci-dessus). Best-effort, opt-in.
+            // Mémoire réflexive : le runId relie les décisions journalisées au
+            // pool de candidats capturé pendant le run. Best-effort, opt-in.
             string runId = (fromChat ? "c" : "t") + DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
                 + "-" + (user.Id.ToString("N").Length >= 6 ? user.Id.ToString("N").Substring(0, 6) : user.Id.ToString("N"));
             if (cfg.DecisionLogEnabled)
@@ -676,13 +640,10 @@ namespace LLM_AI
                 return new TonightResult { Error = I18n.SDisplay("tonight.err.noitems", _host) };
             }
 
-            // Note « contrôle parental restrictif » (v1.13.15.0) : si la policy
-            // parentale du compte est active et que la validation a laissé moins
-            // de recos que le minimum demandé au LLM, l'usager reçoit une
-            // EXPLICATION (TonightResult.Warning) au lieu d'une liste courte
-            // sans comprendre — le cas dégénéré « liste blanche de tags » ne
-            // peut littéralement rien recommander de visible (validé 2026-09-12 :
-            // 3782 films → 1, guide EPG → 0).
+            // Note « contrôle parental restrictif » : si la validation laisse
+            // moins de recos que le minimum, l'usager reçoit une EXPLICATION
+            // (TonightResult.Warning) plutôt qu'une liste courte (une liste
+            // blanche de tags peut ne rien laisser de visible).
             string warning = null;
             if (PermissionGate.HasParentalRestrictions(user))
             {
@@ -701,7 +662,7 @@ namespace LLM_AI
             //  - étiquetage par tag « AI Tonight » (filtre par tag dans Emby) ;
             //  - collection Emby « AI Tonight » (collection navigable, non
             //    destructive — regroupe les items par référence).
-            // Le nettoyage quotidien (AiTonightCleanupTask, 3 h) retire le genre
+            // Le nettoyage quotidien (AiTonightCleanupTask, 3 h) retire le tag
             // ET vide la collection ; les runs suivants reconstruisent l'un et/ou
             // l'autre selon les flags.
             HashSet<string> watchBucketIds = null;
@@ -743,9 +704,8 @@ namespace LLM_AI
                 catch (Exception ex) { _logger?.Warn("[LLM_AI] Tonight collection : {0}", ex.Message); }
             }
 
-            // Surfaces playlist (v1.13.16.0) : PRIVÉE par usager + PUBLIQUE
-            // foyer à intersection parentale. L'usager « Tonight » de la
-            // config n'est requis que pour la publique et les favoris.
+            // Surfaces playlist : PRIVÉE par usager + PUBLIQUE foyer. L'usager
+            // « Tonight » n'est requis que pour la publique et les favoris.
             User tonightUser = null;
             if (cfg.TonightPlaylistEnabled || cfg.TonightFavoritesEnabled)
             {
@@ -757,12 +717,9 @@ namespace LLM_AI
 
             if (cfg.TonightPlaylistEnabled && watchBucketIds != null)
             {
-                // a) Playlist PRIVÉE du run (« AI Tonight · {usager} ») :
-                //    chaque usager a la sienne, remplie avec les recos de SON
-                //    run (déjà filtrées par sa policy parentale dans
-                //    ValidateAndFilter). Un run ne touche plus jamais la
-                //    playlist d'un autre usager — la course du remplissage
-                //    (un run 0-reco vidait la playlist de tous) disparaît.
+                // a) Playlist PRIVÉE du run (« AI Tonight · {usager} ») : remplie
+                //    avec les recos de SON run (déjà filtrées par sa policy
+                //    parentale) ; un run ne touche jamais la playlist d'un autre.
                 try
                 {
                     await AiTonightPlaylistManager.EnsureUserAsync(_playlists, _library, _logger, watchBucketIds, user, _host, ct)
@@ -773,17 +730,13 @@ namespace LLM_AI
                 // b) Playlist PUBLIQUE foyer (« AI Tonight ») : SEULEMENT le
                 //    run de l'usager « Tonight » ; contenu = intersection
                 //    parentale (ce que tout compte actif peut lire). Le
-                //    contrôle parental Emby étant listing-only (validé
-                //    2026-09-12 — un item de playlist visible est LISIBLE),
-                //    l'intersection est ce qui empêche la surface foyer
+                //    contrôle parental Emby étant listing-only, un item de
+                //    playlist visible est LISIBLE : l'intersection empêche
                 //    d'exposer du contenu interdit à un compte restreint.
-                //    Résolution série→épisode FOYER (v2.2.0) : le « plus
-                //    avancé » des comptes actifs — le porteur seul (souvent
-                //    un compte technique sans historique) pointait
-                //    l'épisode 1 de chaque série (vécu 2026-10-08, prod).
-                //    Ensemble foyer = porteur + actifs, MOINS les comptes
-                //    ignorés (liste « comptes ignorés », v2.2.0 — la liste
-                //    n'entre JAMAIS dans l'intersection parentale).
+                //    Série→épisode FOYER : le « plus avancé » des comptes
+                //    (le porteur seul, souvent sans historique, pointerait
+                //    l'épisode 1). Foyer = porteur + actifs MOINS les comptes
+                //    ignorés, qui n'entrent JAMAIS dans l'intersection parentale.
                 if (tonightUser != null && user.Id == tonightUser.Id)
                 {
                     try
@@ -825,20 +778,10 @@ namespace LLM_AI
                 }
             }
 
-            // Journalisation du run pour la boucle de rétroaction hebdo
-            // (opt-in) : chaque reco devient une entrée du journal
-            // (kind=tonight) que RecoAnalysisTask rapprochera des
-            // visionnages réels de l'usager. Best-effort : un échec de
-            // journalisation ne casse jamais le run.
-            //
-            // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) : en
-            // PLUS du journal RecoLog (conservé pour l'analyse hebdo
-            // actuelle), chaque reco est journalisée avec sa raison et sa
-            // priorité (DecisionEntry), et le pool de candidats du run est
-            // persisté (RunPool) — la matière première de la calibration
-            // (reviser une croyance, pas un titre) et du diagnostic de
-            // classement (écarté vs choisi). Double écriture transitoire :
-            // la Phase C retire RecoLog.
+            // Journalisation (best-effort, un échec ne casse jamais le run) :
+            // mémoire réflexive (opt-in DecisionLogEnabled : décisions avec
+            // raison/priorité + pool de candidats) EN PLUS du journal RecoLog,
+            // toujours lu par l'analyse hebdo de rétroaction.
             if (cfg.DecisionLogEnabled)
             {
                 try
@@ -868,7 +811,7 @@ namespace LLM_AI
                             Source = r.Source ?? "",
                             Reason = r.Reason ?? "",
                             Priority = r.Priority ?? "",
-                            Mv = 0 // fiche mémoire : Phase C
+                            Mv = 0 // version de fiche mémoire : non renseignée ici
                         });
                     }
                     if (decisions.Count > 0)
@@ -958,14 +901,11 @@ namespace LLM_AI
         ///   un BaseItem via <see cref="ILibraryManager.GetItemList"/>. Un id
         ///   Guid hérité qui résout via <c>GetItemById</c> est normalisé en
         ///   InternalId avant le check (le Guid n'est pas consommable côté
-        ///   REST/UI). Rattrapage v2.3.2 : une reco recording SANS id est
-        ///   d'abord rapprochée par titre normalisé sur le magasin
-        ///   d'enregistrements (mêmes bornes que le menu : fenêtre
+        ///   REST/UI). Une reco recording SANS id est d'abord rapprochée par
+        ///   titre normalisé sur le magasin d'enregistrements (mêmes bornes
+        ///   que le menu : fenêtre
         ///   <see cref="PluginConfiguration.TonightRecordingsDays"/>, non
-        ///   joués) — vécu prod 2026-10-09 : le petit modèle local omet
-        ///   parfois le champ id en recopiant la ligne du menu, et la
-        ///   meilleure reco du soir (« Élémentaire », priority high) mourait
-        ///   en « items bibli. introuvables ». Introuvable sous aucune forme →
+        ///   joués). Introuvable sous aucune forme →
         ///   drop (item supprimé / id halluciné).</item>
         /// <item>source absente/autre : gardé tel quel (recos hors flux « ce
         ///   soir », non concernées par la validation EPG).</item>
@@ -974,13 +914,10 @@ namespace LLM_AI
         ///   parse JSON, index watched indispo) renvoie le payload original
         ///   inchangé — on ne vide jamais les recos sur un échec de requête.
         ///   Ne lève pas.
-        /// <para>Gate droit TV en direct (v1.13.12.0) : <paramref name="canLive"/>
-        /// = <see cref="PermissionGate.CanWatchLive"/> de l'usager du run. Sans le
-        /// droit, PAS de snapshot EPG (donnée à laquelle l'usager n'a pas droit) et
-        /// les recos <c>source="live"</c> pures sont droppées (compteur
-        /// <c>liveNotPermitted</c>) — conservées seulement si enrichies d'un
-        /// <c>library_id</c> (watchables depuis la bibliothèque). Avec le droit, la
-        /// logique fail-open existante est inchangée.</para>
+        /// <para><paramref name="canLive"/> = <see cref="PermissionGate.CanWatchLive"/>
+        /// de l'usager du run. Sans le droit, PAS de snapshot EPG et les recos
+        /// <c>source="live"</c> pures sont droppées — conservées seulement si
+        /// enrichies d'un <c>library_id</c>.</para>
         /// </summary>
         private string ValidateAndFilter(string payload, WatchedIndex watchedIdx, CancellationToken ct,
             bool canLive = true, User user = null, PluginConfiguration cfg = null)
@@ -1008,11 +945,7 @@ namespace LLM_AI
                 // la fenêtre « ce soir ». Couvre les programmes récemment
                 // diffusés (détection « Diffusé », gère la fraîcheur du cache
                 // jusqu'à ~24 h) + ceux à venir ce soir. Une seule requête.
-                // Gate droit TV en direct (v1.13.12.0) : PAS de snapshot si
-                // l'usager ne porte pas EnableLiveTvAccess — l'EPG est une donnée
-                // à laquelle il n'a pas droit ; les recos live pures sont
-                // droppées plus bas (liveNotPermitted), celles enrichies
-                // library_id (watchables depuis la bibliothèque) sont conservées.
+                // Pas de snapshot sans droit TV en direct (voir canLive).
                 Dictionary<string, BaseItemDto> epg;
                 if (!canLive)
                 {
@@ -1031,15 +964,10 @@ namespace LLM_AI
                     var programs = (_liveTv.GetPrograms(q)?.Items) ?? Array.Empty<BaseItemDto>();
                     if (programs.Length == 0)
                     {
-                        // Même bug de build que epg_tonight (cf. GetEmbyInfoTool) :
-                        // GetPrograms n'honore pas MinStartDate/MaxStartDate ici —
-                        // la fenêtre retourne 0 programme, le snapshot serait VIDE
-                        // et la validation dropperait TOUTES les recos « live »
-                        // comme « hors-snapshot » (vécu 2026-09-01 : 4/4 enrichies
-                        // puis 4/4 supprimées). Requête sans fenêtre — ni
-                        // HasAired=false : le snapshot couvre aussi les 24
-                        // dernières heures pour la détection « Diffusé » — puis
-                        // filtre StartDate en C#.
+                        // GetPrograms n'honore pas MinStartDate/MaxStartDate (cf.
+                        // GetEmbyInfoTool) : snapshot VIDE = toutes les recos live
+                        // droppées. Requête sans fenêtre (ni HasAired=false : on
+                        // veut aussi les 24 dernières heures), filtre en C#.
                         var fq = new InternalItemsQuery { };
                         var pool = (_liveTv.GetPrograms(fq)?.Items) ?? Array.Empty<BaseItemDto>();
                         programs = pool
@@ -1082,17 +1010,11 @@ namespace LLM_AI
                         obj["id"] = resolved.InternalId.ToString();
                 }
 
-                // Rattrapage v2.3.2 — recos « recording » SANS id : le petit
-                // modèle local omet parfois le champ id en recopiant la ligne
-                // du menu (vécu prod 2026-10-09 : « Élémentaire » et « Aurora
-                // Teagarden » proposées à juste titre, puis droppées « items
-                // bibli. introuvables » — la meilleure reco du soir perdue ;
-                // lendemain, même pipeline avec id recopié : gardée). Avant
-                // le drop, rapprochement best-effort par titre normalisé sur
-                // le magasin d'enregistrements, mêmes bornes que le menu
-                // (fenêtre TonightRecordingsDays, non joués). Sans match →
-                // inchangé : le drop existant s'applique. Fail-open : erreur
-                // de requête → recos sans id laissées inchangées.
+                // Recos « recording » SANS id (les petits modèles omettent parfois
+                // le champ en recopiant le menu) : avant le drop, rapprochement
+                // best-effort par titre normalisé sur le magasin d'enregistrements
+                // (mêmes bornes que le menu). Sans match → le drop s'applique.
+                // Fail-open : erreur de requête → recos inchangées.
                 var noIdRecording = new List<JsonObject>();
                 foreach (var node in arr)
                 {
@@ -1210,10 +1132,8 @@ namespace LLM_AI
                     }
                 }
 
-                // Gate parental (v1.13.15.0) : verdicts par reco (cote, tags,
-                // BlockUnratedItems) — la policy est lue une fois par run ;
-                // l'ILocalizationManager (cotes EPG textuelles) est résolu une
-                // seule fois. Fail-open : policy illisible → aucun drop.
+                // Gate parental : verdicts par reco (cote, tags, BlockUnratedItems).
+                // Fail-open : policy illisible → aucun drop.
                 var loc = _host?.TryResolve<MediaBrowser.Model.Globalization.ILocalizationManager>();
                 bool parentalActive = PermissionGate.HasParentalRestrictions(user);
 
@@ -1225,14 +1145,9 @@ namespace LLM_AI
                     string src = ObjStr(obj, "source");
                     string id = ObjStr(obj, "id");
 
-                    // Filet v2.7.5 — reco auto-contradictoire : le LLM émet un
-                    // titre MAIS sa raison déclare l'exclusion (« exclu selon
-                    // ta mémoire… », vécu prod 2026-11-01 : « Hunger Games:
-                    // L'embrasement »émis avec « mais **exclu** selon ta mémoire
-                    // d'assistant (rejet des films) » — sous pression de la
-                    // contrainte « AU MOINS N »). La reco est GARDÉE (le minimum
-                    // reste garanti) mais la raison est réécrite en repli honnête
-                    // : jamais d'auto-exclusion affichée sur une reco émise.
+                    // Reco auto-contradictoire (titre émis, raison qui déclare
+                    // l'exclusion, sous la pression du minimum) : GARDÉE (minimum
+                    // garanti), raison réécrite en repli honnête.
                     string reason = ObjStr(obj, "reason");
                     if (!string.IsNullOrEmpty(reason) && IsSelfExcludingReason(reason))
                     {
@@ -1247,11 +1162,8 @@ namespace LLM_AI
                     {
                         if (epg == null)
                         {
-                            // Usager sans droit TV en direct (gate v1.13.12.0) :
-                            // une reco live pure n'est pas watchable ni
-                            // programmable pour lui → drop ; conservée seulement
-                            // si enrichie d'un library_id (watchable depuis la
-                            // bibliothèque). Hors gate : fail-open standard
+                            // Sans droit TV en direct : reco live pure → drop ;
+                            // conservée si library_id. Sinon fail-open standard
                             // (EPG indispo → recos live conservées).
                             if (!canLive && string.IsNullOrWhiteSpace(ObjStr(obj, "library_id")))
                             { arr.RemoveAt(i); dropped++; liveNotPermitted++; continue; }
@@ -1269,11 +1181,8 @@ namespace LLM_AI
                         }
                         if (epg.TryGetValue(id ?? "", out var p))
                         {
-                            // Gate parental (v1.13.15.0) : verdict du programme
-                            // EPG (cote textuelle via mapper/table serveur,
-                            // tags du programme). Cote non reconnue → conservé
-                            // (native-blind, compté à part). Fail-open :
-                            // policy illisible → aucune drop parentale.
+                            // Gate parental : verdict du programme EPG. Cote non
+                            // reconnue → conservé (compté à part). Fail-open.
                             if (parentalActive && p != null)
                             {
                                 var v = PermissionGate.IsEpgAllowed(user, loc, p.OfficialRating,
@@ -1308,10 +1217,8 @@ namespace LLM_AI
                     {
                         if (libFound.Contains(id ?? ""))
                         {
-                            // Gate parental (v1.13.15.0) : verdict de l'item
-                            // bibliothèque (cote héritée, tags item/série,
-                            // BlockUnratedItems). Item non chargé (fail-open
-                            // du lookup) → verdict parental sauté.
+                            // Gate parental : verdict de l'item bibliothèque.
+                            // Item non chargé (fail-open du lookup) → sauté.
                             if (parentalActive && libById.TryGetValue(id ?? "", out var item))
                             {
                                 var v = PermissionGate.IsParentallyAllowed(user, item);
@@ -1374,11 +1281,10 @@ namespace LLM_AI
         /// casse (pattern <c>GetEmbyInfoTool.ResolveUser</c>) ; nom vide →
         /// premier usager admin, sinon premier usager. Best-effort : null si
         /// aucun usager résoluble.
-        /// <para><b>Repli et comptes ignorés (v2.2.0)</b> : quand le champ
+        /// <para><b>Repli et comptes ignorés</b> : quand le champ
         /// est vide, le repli « premier admin » <b>saute les comptes
-        /// ignorés</b> (<see cref="IgnoredUserKeys"/> — il ne peut plus
-        /// retomber sur un compte technique sans historique, vécu
-        /// 2026-10-08 en prod), puis le repli utilisateur fait de même ;
+        /// ignorés</b> (<see cref="IgnoredUserKeys"/> — pas de repli sur un
+        /// compte technique sans historique), puis le repli utilisateur fait de même ;
         /// un foyer entièrement ignoré → <c>null</c> (pas de porteur :
         /// pas de playlist publique ni de favoris pour ce run). Le nom
         /// <b>explicite</b> n'est jamais filtré : une config qui désigne
@@ -1416,12 +1322,11 @@ namespace LLM_AI
         /// <summary>
         /// Usagers ACTIFS du foyer (non désactivés) — l'ensemble de
         /// résolution <b>foyer</b> « next-up le plus avancé » de la
-        /// playlist publique (v2.2.0) : le porteur Tonight (passé à part
+        /// playlist publique : le porteur Tonight (passé à part
         /// par le manager) y est complété par tous les comptes actifs. Un
         /// compte sans historique y est <b>neutre</b> : son repli
-        /// « premier épisode non vu » (S1E1) ne gagne le max que si
-        /// personne n'a entamé la série — le bon résultat (« nouvelle
-        /// série pour le foyer »). Best-effort : échec de listing =
+        /// « premier épisode non vu » ne gagne que si personne n'a entamé
+        /// la série. Best-effort : échec de listing =
         /// liste vide (la résolution foyer retombe sur le seul porteur).
         /// </summary>
         internal static List<User> GetActiveUsers(IUserManager users)
@@ -1700,13 +1605,11 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// <see cref="TryParseHHmm"/> + garde-fou v2.15.0 (doctrine fail-loud,
-        /// miroir de <see cref="IsInProductionWindow"/>) : une valeur NON VIDE
+        /// <see cref="TryParseHHmm"/> + garde-fou fail-loud (miroir de
+        /// <see cref="IsInProductionWindow"/>) : une valeur NON VIDE
         /// invalide est journalisée une seule fois par « champ|valeur »
-        /// distincte. Terrain : le repli silencieux au défaut (début =
-        /// maintenant, fin = 23:59) masquait des fenêtres mal formées
-        /// (« 18 h 00 », méta-forme traduite…) — l'admin croyait sa fenêtre
-        /// appliquée, les recos couraient sur la mauvaise soirée. Vide =
+        /// distincte (un repli silencieux au défaut ferait croire à l'admin que
+        /// sa fenêtre est appliquée). Vide =
         /// légitime (défaut), jamais de Warn. Partagé par les trois sites de
         /// parse (EpgTonight, BuildUpcomingRecordings, TonightWindowEnd) qui
         /// lisent les mêmes bornes.
@@ -1739,12 +1642,10 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Filet v2.7.5 : détecte une raison de recommandation
+        /// Détecte une raison de recommandation
         /// <b>auto-contradictoire</b> — le LLM émet le titre mais déclare
-        /// l'exclure dans la raison (vécu prod 2026-11-01 : « mais **exclu**
-        /// selon ta mémoire d'assistant (rejet des films) » sur un titre émis,
-        /// sous pression de la contrainte « AU MOINS N »). Marqueurs tolérants
-        /// (casse/accents/postonction), insensible à la casse. Faux positifs
+        /// l'exclure dans la raison. Marqueurs tolérants
+        /// (accents/ponctuation), insensible à la casse. Faux positifs
         /// acceptables : le filet ne réécrit la raison que pour la rendre
         /// honnête, jamais pour dropper la reco.
         /// </summary>
@@ -1919,21 +1820,16 @@ namespace LLM_AI
         /// Chaque entrée porte l'id Emby de l'enregistrement (Guid) pour que le
         /// LLM puisse le référencer (<c>source="recording"</c>, <c>id=…</c>) et
         /// que l'UI propose « Regarder ».
-        /// <para><b>Position dans la série (v2.2.2)</b> : les lignes
+        /// <para><b>Position dans la série</b> : les lignes
         /// <c>kind=series</c> sont annotées <c>start=SxxEyy</c> (premier épisode
         /// non visionné du dossier — l'entrée de lecture réelle),
         /// <c>unwatched=N</c> (stock non visionné disponible) et
         /// <c>user_started=no|yes</c> (l'usager a-t-il déjà visionné cette
-        /// série — <paramref name="watchedIdx"/>). Motif (vécu 2026-10-08,
-        /// prod) : la DVR n'enregistre souvent que les épisodes COURANTS d'une
-        /// série (« Indomptables » : un seul épisode en dossier, S01E18 — les
-        /// épisodes 1-17 n'ont jamais été enregistrés) ; sans la position, le
-        /// LLM recommandait la série et le repli next up ne pouvait retomber
-        /// que sur « le dernier épisode » d'une série jamais commencée. Avec
-        /// les faits + la règle du pied de bloc, le LLM évite de proposer
-        /// d'entrer dans une série au milieu — sauf épisodes
-        /// auto-suffisants (magazine, documentaire) qu'un filtre dur aurait
-        /// à tort exclus. Best-effort : échec de résolution/résumé → ligne
+        /// série — <paramref name="watchedIdx"/>). Motif : la DVR n'enregistre
+        /// souvent que les épisodes COURANTS d'une série ; sans la position, le
+        /// LLM recommande d'entrer dans une série au milieu (sauf épisodes
+        /// auto-suffisants, qu'un filtre dur exclurait à tort).
+        /// Best-effort : échec de résolution/résumé → ligne
         /// sans annotation ; <paramref name="watchedIdx"/> null → pas de
         /// <c>user_started=</c> (fail-open).</para>
         /// <para>Résolu ici (et pas via un tool <c>get_emby_info</c>) car
@@ -1942,11 +1838,8 @@ namespace LLM_AI
         private string BuildUnwatchedRecordings(User user, PluginConfiguration cfg, CancellationToken ct,
             bool compact, WatchedIndex watchedIdx, out HashSet<string> menuTitles)
         {
-            // Titres normalisés des lignes ÉMISES (v2.3.3) : alimente la
-            // déduplication menu ↔ réserve — un titre déjà au menu ne doit
-            // pas réapparaître à la réserve avec un autre id (vécu
-            // 2026-10-10 : « Élémentaire » visible 2 fois, dossier série
-            // id=779011 au menu + épisode id=779013 en réserve).
+            // Titres normalisés des lignes ÉMISES : déduplication menu ↔ réserve
+            // (un titre au menu ne doit pas revenir en réserve avec un autre id).
             menuTitles = new HashSet<string>(StringComparer.Ordinal);
             var sb = new StringBuilder();
             try
@@ -1967,22 +1860,14 @@ namespace LLM_AI
 
                 var lines = new List<string>();
 
-                // Caches de position par série (v2.2.2) : un même dossier n'est
-                // résumé qu'une fois par run, quel que soit le nombre de lignes
-                // qui le référencent (une série multi-épisodes enregistrée).
+                // Caches de position par série : un dossier n'est résumé qu'une fois par run.
                 var stockBySeries = new Dictionary<long, (string Start, int Unwatched)>();
                 var positionLog = new List<string>();
 
-                // v2.20.1 — habitudes de lecture récentes, lues à la volée
-                // dans le journal de télémétrie (playback.json, rétention
-                // DecisionStore.RetentionDays, figé à l'écriture v2.7.2) :
-                // les lectures partielles, les extraits et le « regardé puis
-                // effacé ou transféré » que l'état « vu » d'Emby ignore — la
-                // donnée qui manquait au justificatif « L'épicerie = comédie
-                // dramatique » (incident 2026-11-12 : le modèle a transplanté
-                // un genre absent de la ligne). Fail-safe : journal
-                // indisponible → dictionnaire vide, lignes sans champ,
-                // jamais d'échec du build du prompt.
+                // Habitudes de lecture récentes, lues à la volée dans le journal
+                // de télémétrie : lectures partielles, extraits, « regardé puis
+                // effacé » que l'état « vu » d'Emby ignore. Fail-safe : journal
+                // indisponible → dictionnaire vide, lignes sans champ.
                 var recentPlays = BuildRecentPlays(user, _logger);
                 var habitLog = new List<string>();
                 var fillLog = new List<string>();
@@ -1996,17 +1881,11 @@ namespace LLM_AI
                     bool isSeries = r.IsSeries == true;
                     bool isMovie = r.IsMovie == true;
 
-                    // v2.3.2 : le DTO série-level de GetRecordings in-process
-                    // (vérifié 4.10.1.0 en prod, 2026-10-09/10) ne porte PAS
-                    // IsSeries=true — sans repli, la ligne sort « kind=other »
-                    // et l'annotation de position v2.2.2 (start=/unwatched=/
-                    // user_started=) ne se déclenche JAMAIS (vécu : zéro ligne
-                    // « position annotée » sur tous les runs observés, y
-                    // compris avec « Élémentaire » S04E19 fraîchement
-                    // enregistré au menu). Repli double : SeriesName présent
-                    // (forme série-level de ce build — le titre ci-dessous en
-                    // dépend déjà) ou id résolvant en série/saison/épisode
-                    // (formes per-épisode d'autres builds). Best-effort.
+                    // Le DTO série-level de GetRecordings in-process (4.10.1.0) ne
+                    // porte PAS IsSeries=true : sans repli, la ligne sort
+                    // « kind=other » et l'annotation de position ne se déclenche
+                    // jamais. Repli : SeriesName présent, ou id résolvant en
+                    // série/saison/épisode (formes per-épisode). Best-effort.
                     if (!isSeries && !isMovie)
                     {
                         isSeries = !string.IsNullOrEmpty(r.SeriesName);
@@ -2035,8 +1914,7 @@ namespace LLM_AI
                     if (isSeries)
                         AppendSeriesPosition(line, r, user, title, watchedIdx, stockBySeries, positionLog,
                             genres.Length == 0, fillLog);
-                    // v2.20.1 — nombre de lectures récentes du titre par
-                    // l'usager (toutes sources : bibliothèque, carte .strm) —
+                    // Lectures récentes du titre par l'usager (toutes sources) —
                     // le « touché » qu'IsPlayed ne connaît pas.
                     AppendRecentPlay(line, recentPlays, title, habitLog);
                     lines.Add(line.ToString());
@@ -2062,10 +1940,9 @@ namespace LLM_AI
                                   "ces titres qui correspond aux goûts de l'usager, recommande-le avec " +
                                   "source=\"recording\" en recopiant son id dans le champ \"id\" — OBLIGATOIRE : " +
                                   "une reco recording sans id est rejetée (l'UI proposera « Regarder »).");
-                    // Exemple travaillé (v2.3.3) : les petits modèles suivent le
-                    // schéma du USER prompt (quirk gemma4 documenté) — un exemple
-                    // complet avec l'id rempli renforce mieux le contrat que la
-                    // prose seule (les ids omis 2 jours de suite en prod).
+                    // Exemple travaillé : les petits modèles suivent le schéma du
+                    // USER prompt ; un exemple avec l'id rempli renforce le contrat
+                    // mieux que la prose seule (ids sinon omis).
                     sb.AppendLine("Exemple de reco bien formée pour un de ces enregistrements : " +
                                   "{\"title\": \"<title exact de la ligne>\", \"kind\": \"<kind de la ligne>\", " +
                                   "\"reason\": \"pourquoi ce titre convient ce soir\", \"priority\": \"high|medium|low\", " +
@@ -2086,9 +1963,7 @@ namespace LLM_AI
                             string.Join(" ; ", positionLog));
                     }
 
-                    // v2.20.1 — légendes des nouveaux champs, émises seulement
-                    // quand le champ apparaît réellement sur une ligne de ce
-                    // bloc (pas de bruit sinon).
+                    // Légendes émises seulement si le champ apparaît sur une ligne.
                     if (habitLog.Count > 0)
                     {
                         sb.AppendLine("Lignes des enregistrements : « recent_play=N » est le nombre de " +
@@ -2134,18 +2009,13 @@ namespace LLM_AI
         /// (<see cref="PluginConfiguration.TonightWindowStart"/> →
         /// <see cref="PluginConfiguration.TonightWindowEnd"/>, défaut
         /// maintenant → 23:59, franchissement de minuit géré). Complète le
-        /// menu des enregistrements complétés pour les runs ANTICIPÉS (tâche
-        /// de production anticipée, v2.7.0 : à 17 h, les enregistrements du
-        /// soir n'existent pas encore — leurs timers, si, et l'EPG est
-        /// complet ; la soirée vue par le LLM redevient équivalente à celle
-        /// d'un run au moment du login).
-        /// <para>Sémantique auto-portée par les lignes (patron v2.2.2/v2.6.10 :
-        /// le bloc reste compréhensible SANS changement du workflow stocké) :
+        /// menu des enregistrements complétés pour les runs ANTICIPÉS (à 17 h,
+        /// les enregistrements du soir n'existent pas encore, leurs timers si).
+        /// <para>Sémantique auto-portée par les lignes :
         /// « DÉJÀ programmé — ne pas re-programmer ». Le bloc est un CONTEXTE
         /// de planification, PAS une source de champs — une reco
-        /// <c>source="live"</c> reste copiée depuis epg_tonight (seule source
-        /// validée pour title/channel/start ; un titre de timer est un titre
-        /// de SÉRIE, l'EPG porte le titre d'épisode — vécu v2.6.6).</para>
+        /// <c>source="live"</c> reste copiée depuis epg_tonight (un titre de
+        /// timer est un titre de SÉRIE, l'EPG porte le titre d'épisode).</para>
         /// <para>Fail-open : toute erreur → bloc vide (run inchangé). Aucun
         /// timer dans la fenêtre → bloc vide (pas de bruit).</para>
         /// </summary>
@@ -2182,11 +2052,9 @@ namespace LLM_AI
                 {
                     if (t?.ProgramInfo == null) continue;
 
-                    // v2.6.6 (vécu « SEAL Team ») : un timer peut passer
-                    // Status=Cancelled silencieusement — un timer annulé
-                    // n'ira pas au bloc. Completed = déjà couvert par le menu
-                    // des enregistrements complétés (double représentation) ;
-                    // Aborted = annulé après démarrage.
+                    // Un timer peut passer Cancelled silencieusement. Completed =
+                    // déjà couvert par le menu des enregistrements ; Aborted =
+                    // annulé après démarrage.
                     string status = t.Status.ToString();
                     if (status == "Cancelled" || status == "Completed" || status == "Aborted") continue;
 
@@ -2233,12 +2101,11 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Annote une ligne d'enregistrement <c>kind=series</c> (v2.2.2) avec
+        /// Annote une ligne d'enregistrement <c>kind=series</c> avec
         /// la position RÉELLE de l'usager dans la série : résout l'id de
         /// l'enregistrement (le DTO in-process est au niveau <b>série</b> sur
-        /// ce build — vérifié 4.10.1.0 en prod : la ligne porte l'id du dossier
-        /// « Indomptables » — mais peut être <b>épisode</b> sur d'autres :
-        /// les deux formes sont gérées), résume le stock du dossier via
+        /// 4.10.1.0, mais peut être <b>épisode</b> ailleurs : les deux formes
+        /// sont gérées), résume le stock du dossier via
         /// <see cref="NextUpResolver.SummarizeSeriesStock"/> (cache
         /// <paramref name="stockBySeries"/> : un dossier = un résumé par
         /// run) puis append <c>start=SxxEyy</c>, <c>unwatched=N</c> et
@@ -2295,13 +2162,9 @@ namespace LLM_AI
                         + " non-vus=" + stock.Unwatched);
                 }
 
-                // v2.20.1 — les DTO d'enregistrement portent rarement des
-                // genres en propre (forme série-level sans Genres : vécu
-                // « L'épicerie », prod 2026-11-12) : on complète depuis
-                // l'œuvre bibliothèque résolue ci-dessus — zéro I/O en plus
-                // (la série est déjà extraite pour la position). Champ sans
-                // légende quand le DTO porte déjà ses genres (comportement
-                // v2.20.0 conservé).
+                // Les DTO d'enregistrement série-level n'ont pas de Genres : on
+                // complète depuis la série bibliothèque déjà résolue (zéro I/O
+                // en plus).
                 if (dtoGenresEmpty && series.Genres != null)
                 {
                     var parts = new List<string>();
@@ -2318,7 +2181,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Habitudes de lecture récentes de l'usager (v2.20.1) : agrège le
+        /// Habitudes de lecture récentes de l'usager : agrège le
         /// journal de télémétrie <c>playback.json</c>
         /// (<see cref="DecisionStore.ParseAllPlayback"/>, rétention
         /// <see cref="DecisionStore.RetentionDays"/>) par titre d'œuvre
@@ -2329,7 +2192,7 @@ namespace LLM_AI
         /// <para>La donnée couvre ce que l'état « vu » d'Emby ignore
         /// (lectures partielles, extraits, regardé puis effacé ou transféré)
         /// et survit aux dossiers éphémères du foyer car les champs sont
-        /// figés à l'écriture (v2.7.2). Lecture fail-safe : toute erreur →
+        /// figés à l'écriture. Lecture fail-safe : toute erreur →
         /// dictionnaire vide (lignes sans champ, prompt jamais cassé).</para>
         /// </summary>
         private static Dictionary<string, (int Count, DateTimeOffset Last, bool Complete)>
@@ -2375,7 +2238,7 @@ namespace LLM_AI
         /// <summary>
         /// Ajoute à une ligne d'enregistrement le champ
         /// <c>recent_play=N (dernière : aaaa-mm-jj, complète|partielle)</c>
-        /// quand le titre a été lu récemment par l'usager (v2.20.1). Date en
+        /// quand le titre a été lu récemment par l'usager. Date en
         /// HEURE LOCALE du serveur (le journal est écrit en UTC — la date de
         /// journal d'une soirée locale peut être le lendemain).
         /// No-op sans lecture récente (champ absent, légende le documente).
@@ -2394,12 +2257,9 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Bloc « HEURE ACTUELLE » du prompt Tonight (v2.3.3) — même pattern
-        /// que le chat (<see cref="LlmRunner"/>, v1.13.21.1, incident live :
-        /// le LLM déduisait « maintenant » des horaires EPG et se croyait
-        /// plusieurs heures plus tard qu'il ne l'est). Le modèle n'a AUCUN
-        /// accès à l'horloge : sans ancre, il raisonne sur « ce soir »,
-        /// « diffusé à 22:35 », « enregistré hier » sans savoir qu'il est.
+        /// Bloc « HEURE ACTUELLE » du prompt Tonight (même pattern que le
+        /// chat, <see cref="LlmRunner"/>). Le modèle n'a AUCUN accès à
+        /// l'horloge : sans ancre, il déduit « maintenant » des horaires EPG.
         /// Heure locale du serveur (celle du foyer) avec décalage UTC
         /// explicite ; recalculée à chaque run, jamais mise en cache.
         /// </summary>
@@ -2434,12 +2294,10 @@ namespace LLM_AI
         /// forme comprise par la couche REST/UI — voir
         /// <see cref="ItemIdResolver"/>) pour <c>source="library"</c> + bouton
         /// « Regarder » (lecture bibliothèque).
-        /// <para><b>Représentant par série (v2.2.2)</b> : une série y est
+        /// <para><b>Représentant par série</b> : une série y est
         /// représentée par son épisode non visionné le PLUS ANCIEN du pool
-        /// (ordre saison/épisode), pas par le plus récemment ajouté — même
-        /// défaut de classe que le menu des enregistrements (vécu
-        /// 2026-10-08, prod : pointer « le dernier épisode » d'une série
-        /// jamais commencée).</para>
+        /// (ordre saison/épisode), pas par le plus récemment ajouté (sinon on
+        /// pointerait « le dernier épisode » d'une série jamais commencée).</para>
         /// </summary>
         private string BuildLibraryFallbackPool(User user, bool compact, string excludedRoot,
             HashSet<string> menuTitles = null)
@@ -2459,32 +2317,21 @@ namespace LLM_AI
                 };
                 var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
 
-                // Gate accès médiathèque (v1.13.12.0) : les candidats de la réserve
-                // restent dans les bibliothèques accessibles à l'usager
-                // (EnableAllFolders/EnabledFolders) — no-op si non restrictif.
+                // Gate accès médiathèque : candidats limités aux bibliothèques
+                // accessibles à l'usager (no-op si non restrictif).
                 var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
                 if (accessible != null) items = accessible.ToArray();
 
-                // Gate parental (v1.13.15.0) : la réserve ne présente au LLM
-                // que des items que la policy parentale laisse visibles
-                // (MaxParentalRating / BlockUnratedItems / tags) — no-op si
-                // aucune règle.
+                // Gate parental : la réserve ne présente que des items que la
+                // policy parentale laisse visibles (no-op si aucune règle).
                 var parentallyOk = PermissionGate.FilterParental(user, items, _logger);
                 items = parentallyOk.ToArray();
 
-                // Représentant par série = l'épisode non visionné le PLUS
-                // ANCIEN rencontré dans le pool (ordre saison/épisode), pas
-                // le plus récemment ajouté (v2.2.2) : la réserve ne doit pas
-                // pointer « le dernier épisode » d'une série jamais commencée
-                // — même défaut de classe que le menu des enregistrements
-                // (vécu 2026-10-08, prod : « Indomptables » S01E18 seul en
-                // dossier). Best-effort : le pool est borné (15/30 items
-                // DateCreated décroissant), le représentant est donc le plus
-                // ancien DISPONIBLE DANS LE POOL, pas forcément le premier
-                // épisode de la série. Ordre de sortie STRICTEMENT inchangé
-                // (ordre de rencontre) : chaque série réserve sa place dès sa
-                // première rencontre (placeholder), rempli après la boucle
-                // par son représentant final.
+                // Représentant par série = l'épisode non visionné le PLUS ANCIEN
+                // du pool (ordre saison/épisode). Le pool étant borné, c'est le
+                // plus ancien DISPONIBLE, pas forcément le premier de la série.
+                // Ordre de sortie inchangé (ordre de rencontre) : chaque série
+                // réserve sa place (placeholder), rempli après la boucle.
                 int cap = compact ? 8 : 20;
                 int emitted = 0;
                 var lines = new List<string>();
@@ -2532,13 +2379,9 @@ namespace LLM_AI
                     string key = LlmRunner.NormTitle(title);
                     if (string.IsNullOrEmpty(key)) continue;
 
-                    // Dédup menu ↔ réserve (v2.3.3) : un titre déjà présent au
-                    // menu des enregistrements n'occupe PAS une ligne de réserve —
-                    // le LLM voyait la même série deux fois avec deux ids
-                    // différents (vécu 2026-10-10 : « Élémentaire » menu
-                    // id=779011 dossier série + réserve id=779013 épisode).
-                    // Le menu prime : plus frais, et le contrat source=
-                    // "recording" est le canal naturel de la soirée.
+                    // Dédup menu ↔ réserve : un titre déjà au menu des
+                    // enregistrements n'occupe PAS une ligne de réserve (sinon la
+                    // même série apparaît avec deux ids). Le menu prime.
                     if (menuTitles != null && menuTitles.Contains(key)) continue;
 
                     if (isEpisode)
@@ -2634,13 +2477,10 @@ namespace LLM_AI
         /// <para>Fail-open : toute erreur renvoie une chaîne vide (le run
         /// Tonight continue sans le bloc). Retourne aussi une chaîne vide quand
         /// il n'y a rien à signaler (pas de section vide dans le prompt).</para>
-        /// <para><b>Annotation de position (v2.2.2)</b> : chaque ligne porte
+        /// <para><b>Annotation de position</b> : chaque ligne porte
         /// <c>user_started=no|yes</c> (<paramref name="watchedIdx"/>) — même
         /// vocabulaire que le menu des enregistrements ; le pied de bloc
-        /// demande de signaler un stock qui démarre au milieu de la série
-        /// (start ≠ début : les premiers épisodes n'ont jamais été
-        /// enregistrés), miroir de la règle du menu (vécu 2026-10-08, prod :
-        /// « le dernier épisode » d'une série jamais commencée).</para>
+        /// demande de signaler un stock qui démarre au milieu de la série.</para>
         /// </summary>
         private string BuildBingeReadySeries(User user, PluginConfiguration cfg, bool compact,
             string excludedRoot, WatchedIndex watchedIdx)
@@ -2661,26 +2501,18 @@ namespace LLM_AI
                     IncludeItemTypes = new[] { "Episode" },
                     OrderBy = new[] { ("DateCreated", SortOrder.Descending) },
                     // Pool large : le compte par série doit être fiable jusqu'au
-                    // seuil. Les séries dormantes « pour un jour de pluie »
-                    // gonflent le pool d'épisodes non visionnés — une fenêtre
-                    // DateCreated côté requête raterait des stockpiles dont les
-                    // épisodes anciens précèdent la coupure ; on filtre
-                    // l'activité en C# après agrégation plutôt qu'en requête.
+                    // seuil. Une fenêtre DateCreated côté requête raterait des
+                    // stocks aux épisodes anciens ; on filtre l'activité en C#.
                     Limit = 600,
                     EnableTotalRecordCount = false
                 };
                 var items = _library.GetItemList(q) ?? Array.Empty<BaseItem>();
 
-                // Gate accès médiathèque (v1.13.12.0) : le pool d'épisodes
-                // agrégés reste dans les bibliothèques accessibles à l'usager
-                // (EnableAllFolders/EnabledFolders) — no-op si non restrictif.
+                // Gate accès médiathèque (no-op si non restrictif).
                 var accessible = PermissionGate.FilterAccessible(user, _library, _logger, items);
                 if (accessible != null) items = accessible.ToArray();
 
-                // Gate parental (v1.13.15.0) : épisodes filtrés par la policy
-                // parentale (cote héritée de la série, tags série/épisode,
-                // BlockUnratedItems) avant l'agrégation par série — no-op si
-                // aucune règle.
+                // Gate parental avant l'agrégation par série (no-op si aucune règle).
                 var parentallyOk = PermissionGate.FilterParental(user, items, _logger);
                 items = parentallyOk.ToArray();
 
@@ -2773,11 +2605,9 @@ namespace LLM_AI
                     if (s.FirstSeason != int.MaxValue || s.FirstEpisode != int.MaxValue)
                         line.Append(" | start=S" + (s.FirstSeason == int.MaxValue ? 0 : s.FirstSeason).ToString("00", CultureInfo.InvariantCulture)
                                   + "E" + (s.FirstEpisode == int.MaxValue ? 0 : s.FirstEpisode).ToString("00", CultureInfo.InvariantCulture));
-                    // Position de l'usager (v2.2.2) : l'usager a-t-il déjà
-                    // visionné cette série ? Même vocabulaire que le menu des
-                    // enregistrements (user_started=no|yes) — la ligne « prête à
-                    // dévorer » d'une série jamais commencée dont le stock
-                    // démarre au milieu doit être signalée comme telle.
+                    // Position de l'usager : l'usager a-t-il déjà visionné cette série ?
+                    // Même vocabulaire que le menu des enregistrements
+                    // (user_started=no|yes).
                     if (watchedIdx != null)
                         line.Append(" | user_started=" +
                             ((watchedIdx.SeriesEpisodes.ContainsKey(s.Key) ||

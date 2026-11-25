@@ -133,8 +133,7 @@ namespace LLM_AI
             };
 
             // Timeout court (30 s) : c'est un test de bouton, pas un run agent.
-            // NB : HttpClient lève TaskCanceledException à son propre timeout —
-            // on distingue via IsCancellationRequested (cf. gotcha LLM HTTP).
+            // Le timeout HttpClient est distingué de l'annulation via IsCancellationRequested.
             using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
             {
                 var sw = Stopwatch.StartNew();
@@ -359,7 +358,7 @@ namespace LLM_AI
         /// statut et corps rendus pour interprétation par service. NB :
         /// le timeout HttpClient lève TaskCanceledException alors que le
         /// token passé n'est PAS annulé — distingué par
-        /// <c>cts.IsCancellationRequested</c> (cf. gotcha LLM HTTP).</summary>
+        /// <c>cts.IsCancellationRequested</c>.</summary>
         private static async Task<(bool Ok, int Status, string Body)> ProbeHttpAsync(
             string method, string url, string jsonBody)
         {
@@ -403,9 +402,8 @@ namespace LLM_AI
         //  Test des sources new_releases (bouton « Tester les sources »)
         // ------------------------------------------------------------------
 
-        /// <summary>Résultat du test d'UNE ligne de sources (média centre : les
-        /// chaînes et aperçus viennent du web — l'UI doit les rendre en
-        /// textContent, jamais en innerHTML).</summary>
+        /// <summary>Résultat du test d'UNE ligne de sources (contenu issu du web : l'UI doit
+        /// rendre les chaînes et aperçus en textContent, jamais en innerHTML).</summary>
         public class TestSourceResultItem
         {
             public string Source { get; set; }
@@ -416,7 +414,7 @@ namespace LLM_AI
             public int Ms { get; set; }
         }
 
-        /// <summary>Réponse du test : un entrée par ligne testée, plus le
+        /// <summary>Réponse du test : une entrée par ligne testée, plus le
         /// total consolidé. <c>Ok</c> : la requête a abouti (les échecs
         /// individuels sont dans <c>Results[].Error</c>).</summary>
         public class TestNewReleaseSourcesResponse
@@ -577,7 +575,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Fiche mémoire réflexive (Phase C) : consultation + édition admin
+        //  Fiche mémoire réflexive : consultation + édition admin
         // ------------------------------------------------------------------
 
         /// <summary>

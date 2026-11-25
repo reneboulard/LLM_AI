@@ -12,7 +12,7 @@ namespace LLM_AI
     /// plus <see cref="PluginConfiguration.LlmMaxConcurrentTasks"/> runs
     /// LLM du plugin en même temps (défaut 1 — un Ollama local traite une
     /// conversation à la fois ; des runs empilés s'étouffent sur le timeout
-    /// par appel de 2 min et la cascade de replis s'épuise, cf. AGENTS.md).
+    /// par appel de 2 min et la cascade de replis s'épuise).
     ///
     /// Sémantique (règle usager 2026-10-08) : une tâche qui arrive sur une
     /// porte pleine <b>attend</b> — réveil immédiat à la libération, pas de

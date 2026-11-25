@@ -16,12 +16,12 @@ namespace LLM_AI
     /// Maintient une <b>collection Emby</b> nommée <see cref="CollectionName"/>
     /// (« AI Tonight ») regroupant les items du <b>watch bucket</b> recommandés
     /// par « À regarder ce soir » (enregistrements non visionnés + items
-    /// possédés). Même principe que l'étiquetage par genre
+    /// possédés). Même principe que l'étiquetage par tag
     /// (<see cref="AiTagger"/>) mais présenté comme une collection navigable
-    /// plutôt qu'un filtre par genre — et surtout <b>non destructif</b> : les
+    /// plutôt qu'un filtre par tag — et surtout <b>non destructif</b> : les
     /// items sont référencés (regroupés), jamais copiés ni déplacés, et ils
     /// proviennent de bibliothèques potentiellement distinctes (enregistrements
-    /// + films/séries possédés), ce qu'un filtre par genre ne permet pas aussi
+    /// + films/séries possédés), ce qu'un filtre par tag ne permet pas aussi
     /// directement.
     /// </summary>
     /// <remarks>
@@ -31,22 +31,21 @@ namespace LLM_AI
     /// run frais (recos watch bucket) — opt-in via
     /// <see cref="PluginConfiguration.TonightCollectionEnabled"/>. Crée la
     /// collection à la première exécution (membres initiaux passés en un appel),
-    /// puis la rapproche à chaque run par « tout retirer puis tout réajouter »
-    /// (volume faible, ~10 items) — évite une logique de diff et garantit que la
-    /// collection reflète exactement les recos courantes.</item>
+    /// puis, à chaque run, y AJOUTE les membres manquants (cumul : aucun
+    /// retrait ici ; le vidage est fait par <see cref="ClearAsync"/>).</item>
     /// <item><see cref="ClearAsync"/> : appelée par la tâche planifiée
     /// <c>AiTonightCleanupTask</c> (3 h du matin) pour <b>vider</b> la collection
     /// (retirer tous les membres ; la coquille BoxSet reste pour être re-remplie
     /// au prochain run) — tourne toujours, même si la feature est désactivée,
     /// afin de nettoyer les membres restants.</item>
     /// </list>
-    /// <para><b>Scope isolé</b> du genre <c>AI Tonight</c> (étiquetage) et du
+    /// <para><b>Scope isolé</b> du tag <c>AI Tonight</c> (étiquetage) et du
     /// genre <c>AI Suggestion</c> (bibliothèque <c>.strm</c>) : cette collection
     /// n'interfère ni avec l'un ni avec l'autre — les trois nettoyages sont
     /// indépendants. Indépendante aussi du flag
     /// <see cref="PluginConfiguration.TonightGenreTagEnabled"/> (les deux peuvent
     /// cohabiter).</para>
-    /// <para><b>API Emby utilisées</b> (vérifiées sur cet hôte, Emby 4.9.5.0) :
+    /// <para><b>API Emby utilisées</b> (vérifiées sur Emby 4.9.5.0 ; le code compile aussi contre le SDK 4.10.x) :
     /// <see cref="ICollectionManager.CreateCollection"/> (crée un
     /// <see cref="BoxSet"/> avec <c>ItemIdList</c> = membres initiaux),
     /// <see cref="ICollectionManager.AddToCollection"/> (ajoute par
@@ -56,8 +55,8 @@ namespace LLM_AI
     /// résolus en <see cref="BaseItem"/> via <see cref="ItemIdResolver"/>, puis
     /// en <see cref="BaseItem.InternalId"/> (long) pour le gestionnaire de
     /// collections. Les membres courants de la collection sont lus via
-    /// <see cref="Folder.GetChildrenIds"/> (les membres d'un <see cref="BoxSet"/>
-    /// sont ses enfants).</para>
+    /// <see cref="InternalItemsQuery.CollectionIds"/> (les membres sont les items
+    /// dont <c>CollectionIds</c> contient l'id du <see cref="BoxSet"/>).</para>
     /// </remarks>
     internal static class AiTonightCollectionManager
     {
@@ -65,7 +64,7 @@ namespace LLM_AI
         /// Nom de la collection Emby maintenue pour « À regarder ce soir ».
         /// Volontairement identique au tag <see cref="AiTagger.TonightTag"/>
         /// (« AI Tonight ») pour une cohérence d'interface, mais c'est un artefact
-        /// distinct (une collection, pas un genre) — les deux mécanismes sont
+        /// distinct (une collection, pas un tag) — les deux mécanismes sont
         /// indépendants.
         /// </summary>
         public const string CollectionName = "AI Tonight";
@@ -152,7 +151,7 @@ namespace LLM_AI
                     await collections.CreateCollection(opts).ConfigureAwait(false);
                     logger?.Info("[LLM_AI] Collection « {0} » : créée avec {1} membre(s).", CollectionName, freshArr.Length);
 
-                    // CreateCollection ne retourne pas le BoxSet : on le ré-resout pour poser
+                    // CreateCollection ne retourne pas le BoxSet : on le résout à nouveau pour poser
                     // l'image par défaut (idempotent — ne s'applique qu'à la création).
                     try
                     {
@@ -213,8 +212,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Ajoute des items à la collection <see cref="CollectionName"/>
-        /// SANS rapprochement (additif pur) — contrairement à
-        /// <see cref="EnsureAsync"/> qui remplace tout le contenu. Crée la
+        /// SANS rapprochement (additif pur). Crée la
         /// collection (membres initiaux, <c>IsLocked=true</c>, image par
         /// défaut) si absente ; sinon <c>AddToCollection</c> sur la coquille
         /// existante. Retourne le nombre d'items réellement ajoutés.

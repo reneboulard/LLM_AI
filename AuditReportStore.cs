@@ -7,10 +7,8 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  AuditReportStore : persistance du DERNIER rapport d'audit (v1.13.10).
-    //  Le rapport n'existait que dans le DOM de la page de config — quitter
-    //  la page le perdait, et toute relecture exigeait de relancer un audit
-    //  (coût LLM inutile). Un unique fichier audit_report.json est écrit à
+    //  AuditReportStore : persistance du DERNIER rapport d'audit.
+    //  Un unique fichier audit_report.json est écrit à
     //  chaque audit RÉUSSI (un rapport d'erreur type « aucun backend »
     //  n'écrase jamais le dernier vrai rapport) et renvoyé par
     //  l'endpoint pour affichage par défaut dans la page.

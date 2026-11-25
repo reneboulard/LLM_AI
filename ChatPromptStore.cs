@@ -36,7 +36,7 @@ namespace LLM_AI
         public string Label { get; set; }
         public string OldText { get; set; }
         public string NewText { get; set; }
-        /// <summary>Avertissement de divergence (null si none) : le
+        /// <summary>Avertissement de divergence (null si aucun) : le
         /// nouveau texte recouvre peu le texte courant — affiché sur la
         /// carte de diff (v1.13.9).</summary>
         public string Warn { get; set; }

@@ -15,7 +15,7 @@ namespace LLM_AI
     /// Tâche planifiée de nettoyage nocturne des surfaces natives du watch bucket
     /// « À regarder ce soir » : (1) revert des favoris <b>posés par le plugin</b>
     /// (<see cref="AiTonightFavoritesManager.Revert"/> — set tracé dans le fichier
-    /// d'état), (2) retire le genre
+    /// d'état), (2) retire le tag
     /// <see cref="AiTagger.TonightTag"/> (« AI Tonight ») de tous les items
     /// Emby qui le portent, (3) <b>vide</b> la collection
     /// <see cref="AiTonightCollectionManager.CollectionName"/> (« AI Tonight ») de
@@ -109,7 +109,7 @@ namespace LLM_AI
                 progress?.Report(50);
 
                 // 3) Vidage de la collection « AI Tonight » (best-effort : un
-                //    échec collection ne doit pas masquer un nettoyage genre
+                //    échec collection ne doit pas masquer un nettoyage tag
                 //    réussi, ni inversement). Tourne toujours pour nettoyer les
                 //    membres restants même si la feature collection est désactivée.
                 try
@@ -189,7 +189,7 @@ namespace LLM_AI
             {
                 Type = "DailyTrigger",
                 // 3h00 — sans LLM, aucune contention Ollama. L'agent EPG
-                // (l'agent EPG) suit à 3h10.
+                // suit à 3h10.
                 TimeOfDayTicks = new TimeSpan(3, 0, 0).Ticks
             };
         }

@@ -13,7 +13,7 @@ using MediaBrowser.Model.Services;
 namespace LLM_AI
 {
     /// <summary>
-    /// Endpoint « i18n » (v1.16.0, plan P2) : sert les traductions
+    /// Endpoint « i18n » (v1.16.0) : sert les traductions
     /// communautaires aux pages web du plugin, et la base EN native aux
     /// traducteurs. Auth Emby standard (aucun gate admin : la page recos est
     /// en menu usager, et le dictionnaire ne contient que des libellés
@@ -28,18 +28,18 @@ namespace LLM_AI
     ///   rien → natif, fail-open symétrique du chargeur). La section
     ///   <c>server</c> n'est JAMAIS servie ici.</item>
     /// <item><c>GET /Plugins/LLMAI/I18n?base</c> — base EN native générée à
-    ///   chaud (<c>{"en": {"web": {…}, "server": {…}, "ext": {…}}}</c>, P2b :
-    ///   une section « ext » en plus) : la moitié serveur vient directement
+    ///   chaud (<c>{"en": {"web": {…}, "server": {…}, "ext": {…}}}</c>,
+    ///   avec une section « ext » en plus) : la moitié serveur vient directement
     ///   de <see cref="I18n"/>, la famille ext de <see cref="I18n.EnExtDict"/> ;
     ///   la moitié web est EXTRAITE du module embarqué <c>i18n.js</c> (scan
     ///   borné de <c>STRINGS.en</c> — ancre, accolades équilibrées, paires
-    ///   "clé" : "valeur" — approche de <c>extract_i18n.js</c>, sans eval).
+    ///   "clé" : "valeur" — sans eval).
     ///   C'est le pivot de traduction : le traducteur remplit les sections
     ///   pour sa langue.</item>
     /// <item><c>GET /Plugins/LLMAI/I18n?missing&lang=es</c> — diff usager vs
     ///   EN natif : ne sert que les clés ABSENTES du fichier usager pour la
     ///   langue (même forme que <c>?base</c>, sous la langue demandée —
-    ///   collable direct dans son fichier). Diffe contre le RAW du fichier :
+    ///   collable direct dans son fichier). Compare contre le RAW du fichier :
     ///   une clé présente mais fautive (invalidée au chargement) n'est PAS
     ///   « manquante » — elle est déjà signalée par le log du chargeur.
     ///   Fichier absent/illisible → tout est manquant (template complet).</item>
@@ -103,7 +103,7 @@ namespace LLM_AI
         /// <summary>Base EN native (+ éventuellement la diff « manquantes »).
         /// La forme de réponse est celle du fichier usager :
         /// <c>{ "&lt;lang&gt;": { "web": {…}, "server": {…}, "ext": {…} } }</c>
-        /// — collable direct (la section ext, v1.16.0 P2b, couvre la famille
+        /// — collable direct (la section ext, v1.16.0, couvre la famille
         /// du chat externe : chrome ext.* + messages Python srv.*).</summary>
         private object GetBase(I18nRequest request, bool missingOnly)
         {
@@ -163,7 +163,7 @@ namespace LLM_AI
         /// présente mais fautive n'est pas « manquante », elle est déjà
         /// signalée par le log du chargeur). Fichier absent/illisible/JSON
         /// cassé → sets vides (tout manquant = template complet). Les trois
-        /// sections du fichier sont lues (web/server/ext — P2b).</summary>
+        /// sections du fichier sont lues (web/server/ext).</summary>
         private static (HashSet<string> Web, HashSet<string> Server, HashSet<string> Ext)
             ReadUserOverlayKeys(string langKey)
         {
@@ -214,12 +214,9 @@ namespace LLM_AI
         /// <summary>Nom de ressource embarquée du module i18n js.</summary>
         private const string I18nJsResource = "LLM_AI.i18n.js";
 
-        /// <summary>Compte attendu des clés web EN (kit 2026-10-02 : 393 ;
-        /// T1a 2026-10-03 : +20 clés du panneau « Langues » = 413 ;
-        /// v1.17.0.2 2026-10-04 : +12 clés de la carte i18n du chat
-        /// (chat.i18n.pending.*, chat.note.i18n.*) = 425) —
-        /// la ligne de log d'extraction le rapporte pour l'œil du
-        /// mainteneur ; un écart signalé = i18n.js a dérivé du kit.</summary>
+        /// <summary>Compte attendu des clés web EN (425) — la ligne de
+        /// log d'extraction le rapporte pour l'œil du mainteneur ; un écart
+        /// signalé = i18n.js a dérivé de ce compte.</summary>
         private const int ExpectedWebKeys = 425;
 
         private static readonly object s_webEnLock = new object();
@@ -267,7 +264,7 @@ namespace LLM_AI
                 if (logger != null)
                     logger.Info("[LLM_AI] I18n ?base : STRINGS.en extrait du {0} embarqué — {1} clés (attendu ~{2}{3}).",
                         I18nJsResource, extracted.Count, ExpectedWebKeys,
-                        extracted.Count == ExpectedWebKeys ? "" : " — ÉCART : i18n.js a dérivé du kit");
+                        extracted.Count == ExpectedWebKeys ? "" : " — ÉCART : i18n.js a dérivé du compte attendu");
                 s_webEn = extracted;
                 return s_webEn;
             }
@@ -280,7 +277,7 @@ namespace LLM_AI
         private static bool s_webFrFailed;                        // log d'échec déjà émis
 
         /// <summary>STRINGS.fr extrait de l'embarqué — cache statique miroir
-        /// de WebEnExtracted (v1.17.0 T1b : la moitié FR des paires de contexte
+        /// de WebEnExtracted (v1.17.0 : la moitié FR des paires de contexte
         /// des doses). Pas de compte attendu (le FR suit le EN par convention
         /// de maintenance ; une dérive se verrait dans les comptes du ?base).</summary>
         private static Dictionary<string, string> WebFrExtracted(ILogger logger)
@@ -322,7 +319,7 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>Table web native pour le moteur de génération (T1b) : « en »
+        /// <summary>Table web native pour le moteur de génération : « en »
         /// = base formelle, « fr » = contexte auteur. Toute autre langue → EN
         /// (pas de natif web au-delà des deux, par convention de maintenance).</summary>
         internal static IReadOnlyDictionary<string, string> WebNativesLang(string lang, ILogger logger)
@@ -330,8 +327,7 @@ namespace LLM_AI
 
         /// <summary>Extraction bornée de <c>STRINGS.en</c> depuis le source du
         /// module AMD i18n.js (spécialisation EN de
-        /// <see cref="ExtractWebStringsLang"/> — garde son nom pour la symétrie
-        /// du harnais réflexion avec le kit).</summary>
+        /// <see cref="ExtractWebStringsLang"/> — garde son nom pour la symétrie).</summary>
         internal static Dictionary<string, string> ExtractWebStringsEn(string js)
             => ExtractWebStringsLang(js, "en");
 
@@ -340,10 +336,9 @@ namespace LLM_AI
         /// <c>var STRINGS = {</c>, accolades équilibrées (chaînes + commentaires
         /// // et /* */ gérés), sous-objet <c>lang:</c>, paires "clé" : "valeur".
         /// Null si l'ancre ou le sous-objet ne se trouvent pas (fail-open côté
-        /// appelant). v1.17.0 T1b : généralisée EN+FR — le FR web vit dans
+        /// appelant). v1.17.0 : généralisée EN+FR — le FR web vit dans
         /// i18n.js exactement comme l'EN et sert la moitié FR des paires de
-        /// contexte des doses. Pur et statique : rejouable au harnais réflexion
-        /// (symétrie des comptes avec le kit).</summary>
+        /// contexte des doses. Pur et statique.</summary>
         internal static Dictionary<string, string> ExtractWebStringsLang(string js, string langHead)
         {
             if (string.IsNullOrEmpty(js)) return null;
@@ -395,7 +390,7 @@ namespace LLM_AI
                 RegexOptions.Compiled);
 
         /// <summary>Parse les paires "clé" : "valeur" d'un span d'objet JS.
-        /// Clé dupliquée → la dernière gagne (le kit throw, ici log-agnostiques :
+        /// Clé dupliquée → la dernière gagne (log-agnostique :
         /// i18n.js est sous notre contrôle source; le compte de la ligne de log
         /// révèle toute dérive).</summary>
         private static Dictionary<string, string> ParseJsStringPairs(string span)
@@ -449,8 +444,7 @@ namespace LLM_AI
         private static readonly Regex JsUnicodeEscapeRx =
             new Regex(@"\\u([0-9a-fA-F]{4})", RegexOptions.Compiled);
 
-        /// <summary>Déséchapement d'un littéral JS (miroir de l'unesc du kit +
-        /// \uXXXX). En l'état du source : uniquement \" et \n réellement
+        /// <summary>Déséchapement d'un littéral JS (avec \uXXXX). En l'état du source : uniquement \" et \n réellement
         /// utilisés — le reste est une robustesse gratuite.</summary>
         internal static string UnescapeJsLiteral(string s)
         {

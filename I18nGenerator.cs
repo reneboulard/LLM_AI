@@ -19,7 +19,7 @@ namespace LLM_AI
     /// <summary>
     /// Jalon de progression du moteur de génération de langues. Le moteur
     /// publie des événements STRUCTURÉS (pas de texte localisé) — l'appelant
-    /// (endpoint, T1c) les traduit via <see cref="I18n.SDisplay"/> et les
+    /// (endpoint) les traduit via <see cref="I18n.SDisplay"/> et les
     /// publie dans <see cref="I18nGenState"/>. Kinds : <c>collect</c> (base
     /// native + glossaire), <c>dose</c> (n/total — nom — clés),
     /// <c>repair</c> (clés), <c>write</c> (clés écrites).
@@ -28,17 +28,17 @@ namespace LLM_AI
         string doseName, int keys);
 
     /// <summary>
-    /// Sentinelles d'échappement des doses (v1.17.0, terrain du 2026-10-03) :
+    /// Sentinelles d'échappement des doses :
     /// les deux caractères que les modèles échappent mal dans un JSON rendu —
     /// <see cref="Qu"/> (guillemet double : un <c>"</c> non échappé casse la
-    /// chaîne JSON) et <see cref="Nl"/> (saut de ligne réel, même panne —)
+    /// chaîne JSON) et <see cref="Nl"/> (saut de ligne réel, même panne)
     /// sont REMPLACÉS dans le payload servi au modèle par des tokens visibles
     /// qu'il copie fidèlement, puis DÉCODÉS ici après le parsage, avant toute
     /// validation. La valeur écrite dans l'overlay reste naturelle.
-    /// <para>Vérifié au harnais : aucun native EN/FR web/server/ext ne
+    /// <para>Vérifié par les tests : aucune native EN/FR web/server/ext ne
     /// contient ces tokens (la correspondance est injective). Un native qui
-    /// en contiendrait un jour devrait changer la table — le harnais
-    /// échouera d'abord.</para></summary>
+    /// en contiendrait un jour devrait changer la table — les tests
+    /// échoueront d'abord.</para></summary>
     internal static class I18nSentinel
     {
         /// <summary>Token d'un saut de ligne dans une valeur.</summary>
@@ -68,9 +68,9 @@ namespace LLM_AI
 
     /// <summary>
     /// Moteur de génération de langues d'interface (v1.17.0, chantier
-    /// « Atelier de langues », T1b) : produit la section d'une langue du
+    /// « Atelier de langues ») : produit la section d'une langue du
     /// fichier <c>LLM_AI_i18n.json</c> avec le LLM configuré du plugin.
-    /// <para><b>Campagne par doses OBLIGATOIRE</b> (leçon du kit : la passe
+    /// <para><b>Campagne par doses OBLIGATOIRE</b> (la passe
     /// unique échoue — attention étirée sur le local, faux conforme cloud =
     /// copie EN verbatim que la Validation structurelle seule ne détecte pas).
     /// Le moteur porte la recette complète :</para>
@@ -80,7 +80,7 @@ namespace LLM_AI
     /// <item>Chaque dose reçoit : directive (comptes DYNAMIQUES — jamais
     /// hardcodés) + <b>paires EN+FR</b> (le FR = rédaction auteur, la meilleure
     /// déclaration d'intention) + fiche de domaine + glossaire officiel Emby
-    /// extrait des chaînes du hôte.</item>
+    /// extrait des chaînes de l'hôte.</item>
     /// <item>Validation par dose : placeholders/balises (miroir chargeur) +
     /// <b>garde identique-EN</b> (une DOSE qui recopie l'anglais est re-tentée
     /// avec un avertissement dur ; une clé isolée identique-EN non triviale est
@@ -181,16 +181,11 @@ namespace LLM_AI
                 AppendLine(noop, "- " + Display("i18n.gen.nokeys"));
                 return (true, null, noop.ToString());
             }
-            // Terrain 2026-10-04 : les valeurs balisées HTML (40/626, toutes
-            // web, moy. 416 car.) ont leur propore classe de doses (TagCap 15
-            // + bloc de règles balises dans DoseUser) — gemma4:latest avait
-            // refusé 2× la valeur la plus balisée (cfg.extchat.desc, 10
-            // balises) en dose mélangée PUIS en réparation avec la raison
-            // pourtant affichée : la cause était la REPRÉSENTATION des
-            // balises, pas l'attention (la réparation était déjà une dose de
-            // 1). Le prédicat rejoue SUR LES NATIVES EN le même test que la
-            // porte de validation (HtmlTagSig) — une seule définition du
-            // « balisé », zéro désynchronisation possible.
+            // Les valeurs balisées HTML ont leur propre classe de doses (TagCap
+            // + bloc de règles balises dans DoseUser) : leur échec venait de
+            // la REPRÉSENTATION des balises, pas de l'attention. Le prédicat
+            // rejoue sur les natives EN le même test que la porte de
+            // validation (HtmlTagSig) — une seule définition du « balisé ».
             Func<(string Sec, string Key), bool> IsTagged = k =>
                 nats.TryGetValue(k.Sec, out var dict) && dict.TryGetValue(k.Key, out var enVal)
                 && I18nOverlay.HtmlTagSig(enVal) != "";
@@ -296,15 +291,11 @@ namespace LLM_AI
             }
 
             // ---- 6b) réparation passe 2 : SINGLETONS (1 clé/dose) -----------
-            // Terrain 2026-10-04 (gemma4:latest) : la réparation groupée a
-            // refusé ENTIÈREMENT deux doses de suite (tags de 4 clés puis
-            // crosskind) — 0/5 récupérées — alors que la forme singleton n'a
-            // jamais perdu au terrain (Compléter d'une clé passé du premier
-            // coup sur les deux modèles). Une dose — donc un appel — par clé
-            // restée, au plus : borné, déclenché seulement s'il reste des
-            // clés. Les singletons portent la raison réelle +, pour les
-            // balisées, le bloc tags/inventaire de DoseUser. Ce qui résiste
-            // encore tombe au repli natif (le journal final les nomme).
+            // La réparation groupée peut refuser des doses entières ; la forme
+            // singleton réussit là où elle échoue. Un appel par clé restante
+            // au plus (borné). Les singletons portent la raison réelle et,
+            // pour les balisées, le bloc tags/inventaire de DoseUser. Le reste
+            // tombe au repli natif (le journal final le nomme).
             if (repairs.Count > 0)
             {
                 try { _progress?.Invoke("repair", 0, 0, null, repairs.Count); }
@@ -342,12 +333,9 @@ namespace LLM_AI
             }
 
             var stillMissing = targets.Where(t => !results.ContainsKey(t)).ToList();
-            // Terrain 2026-10-04 08:56 : une dose « morte » du loop principal
-            // peut être rattrapée par la réparation (crosskind réparée 1/1
-            // après 2 refus totaux) — ne nommer que celles dont des clés
-            // restent absentes du résultat final, sinon le rapport annonce
-            // « doses fallidas definitivamente » et « ninguna clave en el
-            // fallback nativo » dans le même souffle.
+            // Une dose « morte » peut être rattrapée par la réparation : ne
+            // nommer que celles dont des clés restent absentes du résultat
+            // final, sinon le rapport se contredit.
             var deadNames = doses
                 .Where(d => deadDoses.Contains(d.Name))
                 .Where(d => d.Entries.Any(e => !results.ContainsKey((e.Sec, e.Key))))
@@ -359,12 +347,9 @@ namespace LLM_AI
                 langKey, results.Count, stillMissing.Count, _llmCalls,
                 deadNames.Count > 0 ? ", doses mortes : " + string.Join(",", deadNames) : "");
 
-            // Terrain 2026-10-04 : même information au VERDICT FINAL — les
-            // clés au repli natif avec leur raison, liste actionnable pour la
-            // retouche chat admin. Pilotée par stillMissing (le rapport
-            // liste les mêmes clés) et non par « repairs », qui peut garder
-            // l'entrée d'une tentative depuis rattrapée par la re-tentative
-            // durcie — sans l'intersection, le log mentirait par excès.
+            // Verdict final : clés au repli natif avec leur raison (retouche
+            // chat admin). Piloté par stillMissing et non par « repairs », qui
+            // peut garder une tentative depuis rattrapée — sinon le log mentirait.
             var refusalReasons = repairs
                 .GroupBy(r => (r.Sec, r.Key))
                 .ToDictionary(g => g.Key, g => g.First().Reason);
@@ -592,14 +577,10 @@ namespace LLM_AI
             var parsed = TryParseDose(raw, langKey);
             if (parsed == null)
             {
-                // ESCALADE PARSE-DEAD (v1.17.0, terrain 2026-10-03) : un
-                // backend qui rend HTTP-200 avec un JSON imparsable doit
-                // céder la dose aux backends suivants — avant ce correctif,
-                // seul un EXCEPTION escaladait : les 3 doses mortes de glm
-                // (newreleases_nfo, activate_channels_feedback,
-                // autoprog_chatext_diskgate) n'ont JAMAIS vu gemma4 local ni
-                // Gemini, 0/45 sur toute la journée. Chaque backend est
-                // tenté une fois par RunDoseAsync.
+                // ESCALADE PARSE-DEAD : un backend qui rend HTTP-200 avec un
+                // JSON imparsable doit céder la dose aux backends suivants
+                // (pas seulement sur exception). Chaque backend est tenté une
+                // fois par RunDoseAsync.
                 while (parsed == null && backendIdx + 1 < _backends.Count)
                 {
                     var next = _backends[backendIdx + 1];
@@ -630,7 +611,7 @@ namespace LLM_AI
                 }
             }
 
-            // Validation par clé (la native EN comme référence — règle kit).
+            // Validation par clé (la native EN comme référence).
             // Les valeurs de la réponse sont DÉCODÉES ([NL]/[QU] → \n/") au
             // préalable : la native EN de référence reste naturelle, la valeur
             // écrite aussi.
@@ -670,13 +651,9 @@ namespace LLM_AI
                     {
                         var sigEn = I18nOverlay.HtmlTagSig(enNative);
                         var sigV = I18nOverlay.HtmlTagSig(val);
-                        // Cas terrain (cfg.crosskind.convert.hint, refusée 5×
-                        // d'affilée par gemma4:latest) : la native est NUE — le
-                        // modèle dés-échappe une entité HTML (« &lt;movie&gt; »
-                        // devient « <movie> », balise vraie) et la porte
-                        // refuse. « attendu aucune / reçu X » seul laisse le
-                        // modèle deviner ; nommer le dés-échappement dit quoi
-                        // corriger.
+                        // Native NUE : le modèle dés-échappe une entité HTML
+                        // (« &lt;movie&gt; » → « <movie> ») et la porte refuse ;
+                        // nommer le dés-échappement dit quoi corriger.
                         reason = sigEn.Length == 0
                             ? "balises HTML ajoutées (la native n'en porte AUCUNE ; recopie les entités HTML &lt;…&gt; à l'identique — les dés-échapper crée une balise vraie et est refusé)"
                             : "balises HTML divergentes (attendu « " + BoundedSig(sigEn)
@@ -684,8 +661,7 @@ namespace LLM_AI
                     }
                     else if (verdict == I18nDoses.Verdict.EmojiMismatch)
                     {
-                        // Audit 2026-10-05 (es, ext.title) : le modèle
-                        // substitue un emoji (🤖 → 😄) — nommer le symbole
+                        // Le modèle peut substituer un emoji : nommer le symbole
                         // attendu rend la réparation immédiate.
                         reason = "emojis modifiés (recopie chaque emoji TEL QUEL — attendu « "
                             + BoundedSig(I18nOverlay.EmojiSig(enNative))
@@ -694,8 +670,7 @@ namespace LLM_AI
                     else if (verdict == I18nDoses.Verdict.EdgeMismatch)
                     {
                         // Bords : préfixes/suffixes assemblés en runtime —
-                        // l'espace initial/final est structurel (audit es,
-                        // rec.tonight.why : espace final perdu).
+                        // l'espace initial/final est structurel.
                         reason = "espaces de bord divergents (la valeur est assemblée en runtime — recopie l'espace initial/final de la native : un bord perdu colle le texte suivant, un bord ajouté double l'espace)";
                     }
                     else
@@ -707,8 +682,8 @@ namespace LLM_AI
                 }
                 // Étiquettes de données : toute étiquette présente dans la
                 // native EN doit se retrouver à l'identique dans la valeur
-                // (fail-closed ; terrain 2026-10-05 : « AI Tonight » devenu
-                // « Esta noite IA » côté es). La raison voyage en réparation.
+                // (fail-closed : un nom d'étiquette traduit casse la
+                // recherche). La raison voyage en réparation.
                 var tagMisses = I18nDirective.PluginTagValues(enNative, null)
                     .Where(t => !val.Contains(t, StringComparison.Ordinal)).ToList();
                 if (tagMisses.Count > 0)
@@ -731,10 +706,8 @@ namespace LLM_AI
             if (outcome.Accepted == null || outcome.Accepted.Count == 0)
             {
                 outcome.LastError = "aucune clé valide dans la réponse";
-                // Terrain 2026-10-04 : les raisons partaient au rebut dans ce
-                // chemin (noErrs) — or un refus GÉNÉRAL est le cas où le
-                // diagnostic compte le plus (« TagMismatch ×6 » vs « dose en
-                // échec » ne conduit pas la même retouche chat admin).
+                // Un refus GÉNÉRAL est le cas où le diagnostic compte le plus :
+                // journaliser les raisons.
                 if (refused.Count > 0)
                     _logger?.Warn("[LLM_AI] I18n génération : refus dose {0} (totale) — {1}.",
                         dose.Name, string.Join(" ; ", refused.Select(f => f.Sec + "." + f.Key + " (" + f.Reason + ")")));
@@ -747,7 +720,7 @@ namespace LLM_AI
             }
 
             // Garde anti-copie-EN : une DOSE (pas une clé) qui recopie
-            // l'anglais = le faux conforme du kit (529 clés copiées, mesuré).
+            // l'anglais = le faux conforme.
             // Majorité suspecte → dose refusée ENTIÈRE, re-tentative durcie par
             // l'appelant. Les suspects résiduels d'une dose acceptée sont
             // gardés (marques légitimes) + flag ⚠️ au rapport.
@@ -764,11 +737,8 @@ namespace LLM_AI
             _logger?.Info("[LLM_AI] I18n génération : dose {0} — {1}/{2} clés validées ({3} refusée(s), {4} suspecte(s) identiques-EN).",
                 dose.Name, outcome.Accepted.Count, dose.Size, refused.Count, outcome.Suspects.Count);
 
-            // Terrain 2026-10-04 (cfg.extchat.desc refusée 2× — dose puis
-            // réparation — sans que le log dise QUI ni POURQUOI : la ligne ne
-            // portait que le décompte « 1 refusée(s) »). Le nom + la raison
-            // de chaque refusée rendent la retouche ciblée possible depuis le
-            // chat admin (i18n_get / i18n_set_key) sans diagnostic à l'aveugle.
+            // Nom + raison de chaque refusée : retouche ciblée possible depuis
+            // le chat admin (i18n_get / i18n_set_key).
             if (refused.Count > 0)
                 _logger?.Info("[LLM_AI] I18n génération : refus dose {0} — {1}.",
                     dose.Name, string.Join(" ; ", refused.Select(f => f.Sec + "." + f.Key + " (" + f.Reason + ")")));
@@ -799,7 +769,7 @@ namespace LLM_AI
         /// <summary>Dump borné d'une réponse brute pour diagnostic — UNE ligne
         /// de log : les contrôles sont rendus visibles (␊ = saut de ligne
         /// RÉEL, ␍, ␉ — un texte « \n » mal échappé du modèle reste tel quel,
-        /// les deux formes deviennent distinguables au relecture) ; au-delà de
+        /// les deux formes deviennent distinguables à la relecture) ; au-delà de
         /// 900 caractères, tête 600 + « ⋮ » + queue 250.</summary>
         internal static string BoundedDump(string s)
         {
@@ -890,10 +860,14 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Appel LLM (fallback multi-backend — version minimaliste de
-        //  LlmAgentService.ChatAsync ; sans verrou de backend actif : un run
-        //  éphémère n'a pas besoin de persistance de sélection)
+        //  Appel LLM
         // ------------------------------------------------------------------
+
+        /// <summary>Timeout PAR APPEL des doses (10 min) : le global 2 min de
+        /// LlmClient tuait les grosses doses sur un modèle local lent
+        /// (TaskCanceledException sans ct annulé = run mort sans escalade).
+        /// Le CTS 25 min du run reste le filet run-level.</summary>
+        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(10);
 
         /// <summary>Appel LLM (fallback multi-backend — version minimaliste de
         /// LlmAgentService.ChatAsync ; sans verrou de backend actif : un run
@@ -903,18 +877,8 @@ namespace LLM_AI
         /// ultérieur : un backend qui rend un JSON imparsable via HTTP 200 a
         /// déjà eu sa chance, voir RunDoseAsync).
         /// <para><c>_llmCalls</c> est incrémenté ICI par TENTATIVE RÉELLE et
-        /// constitue le comptage fait foi — l'ancien double comptage
-        /// (72 appels rapportés pour 36 réels, constaté au terrain du
-        /// 2026-10-03) est corrigé : un seul incrément par appel réel, les
-        /// appelants n'ajoutent plus rien.</para></summary>
-        /// <summary>Timeout PAR APPEL des doses (10 min) : les grosses doses
-        /// de tête (56 clés) sur un modèle local lent dépassaient le global
-        /// 2 min de LlmClient → TaskCanceledException sans ct annulé =
-        /// tout le run mourait « timeout 25 min » sans escalade (terrain
-        /// 2026-10-03, run « de » gemma4:26b) ; 10 min couvre ~56 clés à
-        /// >5 s/clé — le CTS 25 min du run reste le filet run-level.</summary>
-        private static readonly TimeSpan CallTimeout = TimeSpan.FromMinutes(10);
-
+        /// constitue le comptage fait foi : un seul incrément par appel réel,
+        /// les appelants n'ajoutent rien.</para></summary>
         private async Task<(string Content, int Backend)> ChatAsync(
             string system, string user, int startBackend = 0)
         {
@@ -1050,7 +1014,7 @@ namespace LLM_AI
             return WriteOverlayFile(canonical);
         }
 
-        /// <summary>Écriture D'UNE CLÉ (revue chat T1d — décision « clé unique
+        /// <summary>Écriture D'UNE CLÉ (décision « clé unique
         /// directe ») : la valeur validée par l'appelant remplace (ou ajoute)
         /// exactement une entrée ; TOUT le reste du fichier est préservé à
         /// l'IDENTIQUE (les correctifs admin sont intouchables, contrairement
@@ -1074,7 +1038,7 @@ namespace LLM_AI
         /// <summary>SÉRIALISATION + écriture atomique communes (batch campagne
         /// ET édition clé unique — un seul point de write : les deux chemins
         /// produisent la même forme canonique lang → fams web/server/ext →
-        /// valeurs, . précédent conservé en .bak, tmp+move, re-scan forcé
+        /// valeurs, précédent conservé en .bak, tmp+move, re-scan forcé
         /// (effectif au prochain accès, sans restart). Retourne le chemin
         /// écrit ; les échecs IO propagent (l'appelant catche et localise).</summary>
         private static string WriteOverlayFile(
@@ -1271,7 +1235,7 @@ namespace LLM_AI
             };
 
         /// <summary>Directive système (comptes DYNAMIQUES — jamais hardcodés,
-        /// leçon du kit : les chiffres figés se percent). Sortie attendue par
+        /// les chiffres figés se percent). Sortie attendue par
         /// dose décrite aussi ici, mais le schéma complet vit dans le USER.</summary>
         internal static string SystemPrompt(string langKey, string langName,
             int webCount, int serverCount, int extCount,
@@ -1339,9 +1303,8 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
 
             // Dose « tags » : règles + inventaire EXPLICITE par clé — le
             // modèle vérifie ses balises contre un contrat listé au lieu de
-            // les « retoucher » en réécrivant du long HTML (terrain
-            // 2026-10-04 : la raison seule, même en dose singleton de
-            // réparation, n'a pas suffi — la cause était la représentation).
+            // les « retoucher » en réécrivant du long HTML (la raison seule
+            // ne suffit pas).
             if (dose.Tagged)
             {
                 sb.Append("\nRÈGLES BALISES :\n");
@@ -1354,10 +1317,9 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             }
 
             // Étiquettes de données vues dans la dose — inventaire explicite
-            // (pattern des doses « tags ») : la règle 7 globale a pu passer
-            // inaperçue dans une phrase fluide (terrain 2026-10-05 : « AI
-            // Tonight » traduit « Esta noite IA » en es, 1 clé sur 19) ;
-            // la validation refuse mécaniquement une étiquette perdue.
+            // (pattern des doses « tags ») : la règle 7 globale peut passer
+            // inaperçue dans une phrase fluide ; la validation refuse
+            // mécaniquement une étiquette perdue.
             var verbatim = VerbatimHits(dose, nats, frs);
             if (verbatim.Count > 0)
                 sb.Append("\nÉTIQUETTES DE DONNÉES — valeurs écrites dans Emby puis relues par égalité exacte ; recopie EXACTE, identique à la source, JAMAIS traduites ni reformulées : ")
@@ -1385,12 +1347,9 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
 
             // Entités HTML : inventaire littéral par clé porteuse. La règle 4
             // (SystemPrompt) dit l'interdit, mais la raison de réparation
-            // seule n'a pas fait converger gemma4:latest (terrain 2026-10-05 :
-            // 4 refus sur les 2 clés crosskind puis repli natif). L'annotation
-            // voyage avec le CONTEXTE dans TOUTES les passes qui portent la
-            // clé (première passe ET singletons de réparation) — contrat
-            // nominal, même mécanique que l'inventaire des balises des doses
-            // « tags » (I18nOverlay.Inventory).
+            // seule ne converge pas. L'annotation voyage avec le CONTEXTE dans
+            // TOUTES les passes qui portent la clé (première passe ET
+            // singletons), comme l'inventaire des balises (I18nOverlay.Inventory).
             var entLines = new List<string>();
             foreach (var e in dose.Entries)
             {
@@ -1424,7 +1383,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
         /// <see cref="I18nOverlay.Inventory"/> (une seule définition du
         /// format, partagée avec le contrat de l'atelier de langues) ;
         /// ordre de première apparition, comptage par balise EXACTE
-        /// (attributs compris, p.ex. « 2×&lt;b&gt;, 2×&lt;/b&gt; ») : aliment le
+        /// (attributs compris, p.ex. « 2×&lt;b&gt;, 2×&lt;/b&gt; ») : alimente le
         /// bloc de règles des doses « tags ». La validation utilise la même
         /// regex (HtmlTagSig) — l'inventaire liste exactement ce que la porte
         /// exigera.</summary>
@@ -1463,9 +1422,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
         /// « AI Suggestions » est le nom de bibliothèque par défaut des
         /// cartes .strm (défaut de configuration). Le préfixe
         /// <c>llmai-</c> (marqueurs d'orphelins/cross-kind) est scanné
-        /// génériquement. Terrain 2026-10-05 : la règle 7 globale seule a
-        /// laissé traduire « AI Tonight » (1 clé es sur 19 porteuses) —
-        /// d'où l'inventaire dosé et le refus mécanique.</summary>
+        /// génériquement.</summary>
         private static readonly string[] TagsPlain =
         {
             AiTagger.TonightTag, AiTagger.DeleteTag, "AI Suggestions",
@@ -1475,9 +1432,8 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
         /// existe comme mot ordinaire en anglais) : considérées étiquette
         /// uniquement entre guillemets — « x », « x » (espaces), "x", “x”,
         /// 'x'. Noms de groupes regex lus par le parseur des sources
-        /// « nouveautés » (v2.15.0) : <c>Groups["title"]</c> est LIT — un
-        /// groupe traduit (« título », constaté dans le pack es) échoue en
-        /// silence ; la citation entre guillemets est la signature de ces
+        /// « nouveautés » : <c>Groups["title"]</c> est LIT — un groupe
+        /// traduit échoue en silence ; la citation entre guillemets est la signature de ces
         /// valeurs de données.</summary>
         private static readonly string[] TagsQuoted =
         {
@@ -1488,7 +1444,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
         /// <summary>Valeurs techniques de données — noms de fichiers journaux,
         /// endpoints du chat externe, exemple d'enregistrement JSON (les
         /// natives portent « … »/“ … ” depuis l'élimination du
-        /// <c>&lt;code&gt;</c> natif, 2026-10-05 ; la valeur EN entière est
+        /// <c>&lt;code&gt;</c> natif ; la valeur EN entière est
         /// verrouillée, le <c>"name"</c> interne du JSON compris ; la native
         /// FR de l'exemple porte « nom » — seule la forme EN est exigée en
         /// validation, elle est l'ancre).</summary>
@@ -1498,31 +1454,20 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             "playback.json",
             "POST /Plugins/LLMAI/ChatExternal", "POST /Plugins/LLMAI/Show",
             "[{\"u\":\"userId\",\"n\":\"name\",\"d\":\"date\",\"text\":\"…\"}]",
-            // Têtes de planification (v2.15.0) — crontab restreint,
-            // agnostique par construction (nombres et astérisques, rien
-            // à traduire). Terrain : l'ancienne syntaxe par mots-clés
-            // anglais a été traduite par l'atelier es (« Diario 03:00 »)
-            // et enseignait une forme que le parseur serveur ignorait —
-            // repli silencieux à minuit. Seules les formes CANONIQUES
-            // sont verrouillées : les surfaces usager n'enseignent que le
-            // crontab (décision usager 2026-11-06 — l'acceptation des
-            // anciens mots-clés est un fait du parseur, documenté au seul
-            // CHANGELOG, pas une chose à enseigner).
+            // Têtes de planification : crontab restreint, agnostique (nombres
+            // et astérisques). Une syntaxe à mots-clés traduite serait ignorée
+            // par le parseur serveur (repli silencieux à minuit). Seules les
+            // formes CANONIQUES sont verrouillées.
             "MM HH * * *", "MM HH * * D", "0 */N * * *",
             "10 3 * * *", "10 5 * * 0",
-            // Syntaxe de ligne des sources « nouveautés » (même classe de
-            // défaut, complément v2.15.0) : le parseur attend EXACTEMENT
-            // « :: » avec ses espaces (NewReleasesTool) et le jeton
-            // « @showbizz » ; le groupe regex « title » est verrouillé en
-            // TagsQuoted (mot ambigu). « URL :: @showbizz » est le gabarit
-            // copié-collé de l'admin.
+            // Syntaxe de ligne des sources « nouveautés » : le parseur attend
+            // EXACTEMENT « :: » avec ses espaces (NewReleasesTool) et le jeton
+            // « @showbizz » ; « title » est verrouillé en TagsQuoted.
             "URL :: @showbizz", " :: ", "@showbizz",
-            // Méta-formes des fenêtres horaires « ce soir » (complément
-            // v2.15.0) : les valeurs sont des nombres (« 18:00 »), seul le
-            // gabarit « HH:mm » est enseigné en prose traduisible ;
-            // « 17:00-02:00 » est l'exemple concret de la fenêtre de
-            // production, « 23:59 » la borne par défaut documentée. Rejet
-            // bruyant associé : TryParseHHmmWarned (TonightService).
+            // Méta-formes des fenêtres horaires « ce soir » : seul le gabarit
+            // « HH:mm » est enseigné en prose traduisible ; « 17:00-02:00 » et
+            // « 23:59 » sont l'exemple et la borne par défaut documentés.
+            // Rejet bruyant associé : TryParseHHmmWarned (TonightService).
             "HH:mm", "HH:mm-HH:mm", "17:00-02:00", "23:59",
         };
 
@@ -1656,7 +1601,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
     /// Glossaire officiel Emby : extrait des chaînes d'interface du SERVEUR
     /// (<c>dashboard-ui/strings/&lt;lang&gt;.json</c>, embarquées dans le
     /// dossier système) — le vocabulaire que les traducteurs Emby ont déjà
-    /// fixé, l'ancre terminologique de chaque dose (leçon du kit : sans
+    /// fixé, l'ancre terminologique de chaque dose (sans
     /// ancre, même le meilleur modèle invente « bibliothèque » en 3 façons).
     /// <para>Méthode : mots-graines fréquents des natives EN du plugin →
     /// recherche inverse dans les chaînes officielles (id dont la valeur EN
@@ -1750,7 +1695,7 @@ RÈGLES (validation automatique par dose — une dose fautive est refusée et re
             return sb.ToString();
         }
 
-        /// <summary>Résolution du dossier <c>dashboard-ui/strings</c> du hôte :
+        /// <summary>Résolution du dossier <c>dashboard-ui/strings</c> de l'hôte :
         /// le chemin système via les propriétés candidates (réflexion — même
         /// convention que RecordingDiskManager : pas de référence compilée à
         /// une propriété dont le nom a pu varier entre builds).</summary>

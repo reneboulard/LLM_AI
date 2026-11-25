@@ -9,9 +9,9 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  Fiche mémoire réflexive (mémoire réflexive, Phase C) : le LLM gère et
+    //  Fiche mémoire réflexive (mémoire réflexive) : le LLM gère et
     //  met à jour lui-même sa fiche de stratégie persistante (~250 mots,
-    //  Markdown), réinjetée dans ses prochains runs (recommandations + chat).
+    //  Markdown), réinjectée dans ses prochains runs (recommandations + chat).
     //
     //  Une fois par semaine, MemoryTask soumet au LLM la fiche actuelle face
     //  aux événements bruts de la semaine (décisions journalisées ×

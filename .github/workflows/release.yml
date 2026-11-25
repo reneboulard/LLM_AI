@@ -9,7 +9,7 @@
 #   3. crée une GitHub Release nommée d'après le tag, avec CHANGELOG.md comme
 #      notes (changements depuis le dernier tag), et y joint l'archive.
 #
-# Prérequis : aucune secret particulière (GITHUB_TOKEN intégré suffit pour
+# Prérequis : aucun secret particulier (GITHUB_TOKEN intégré suffit pour
 # gh release create). Adapter le champ `owner/repo` n'est pas nécessaire :
 # $GITHUB_REPOSITORY est utilisé tel quel.
 name: Release

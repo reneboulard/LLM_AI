@@ -4,22 +4,7 @@
     <title>Recommandations LLM AI</title>
 </head>
 <body>
-    <!--
-        Page dashboard « Recommandations LLM AI ».
-        Apparaît dans le menu principal (EnableInMainMenu + EnableInUserMenu côté Plugin.cs).
-        Affiche la dernière liste de recommandations produite par la tâche planifiée,
-        relue depuis la config du plugin (champs Recommendations / RecommendationsDate)
-        via getPluginConfiguration — aucun endpoint custom requis.
-
-        UI en grille de cartes (poster, badge priorité, note ⭐, date/chaîne, raison,
-        boutons Programmer / Oublier) — réplique de la section IA de absent_series.php
-        (ai_section.php), adaptée au dark Emby. Le bouton Programmer crée un vrai timer
-        série Emby (POST /LiveTv/SeriesTimers) ; Oublier ajoute le titre à la drop list
-        persistante (DroppedTitles) via updatePluginConfiguration.
-
-        Même pattern que la page de config : data-controller AMD (un <script> inline
-        n'est pas exécuté par le dashboard moderne qui injecte via innerHTML).
-    -->
+    <!-- Page dashboard des recommandations. Le data-controller charge les données et gère l'UI. -->
     <div data-role="page"
          class="type-interior LLMAIRecommendationsPage"
          data-require="emby-button"
@@ -27,20 +12,12 @@
 
         <style>
             .LLMAIRecommendationsPage {
-                /* Fallback sombre : tant que l'image de fond (ressource embarquée
-                   LLMAIBg) n'est pas posée par recommendations.js, ou si JS est
-                   désactivé / la ressource injoignable. L'image + voile sombre
-                   sont appliquées en inline sur l'élément de page au viewshow via
-                   ApiClient.getUrl (URL absolue correcte quel que soit le prefix
-                   /emby multiserver — une URL relative dans le CSS casserait car
-                   la page est injectée via innerHTML). */
+                /* Fallback sombre. Le JS applique l'image de fond via ApiClient.getUrl
+                   pour garantir une URL absolue (injection innerHTML). */
                 background-color: #101010;
                 min-height: 100%;
             }
-            /* Titre de page « 🤖 LLM AI Recommendations » : par défaut Emby le
-               laisse dans la couleur du thème (souvent noire) → invisible sur le
-               fond sombre. On force le gris pale cohérent avec le reste de la page
-               (.recSectionTitle / .ai-card-title en #e8e8e8). */
+            /* Le titre de page par défaut peut être invisible sur fond sombre ; on force une couleur lisible. */
             .LLMAIRecommendationsPage .sectionTitle {
                 color: #e8e8e8 !important;
             }
@@ -74,7 +51,7 @@
                 font-size: 1.15em;
             }
 
-            /* ---- Grille de cartes (port de ai_section.php) ---- */
+            /* ---- Grille de cartes ---- */
             .LLMAIRecommendationsPage .ai-cards-container {
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -131,10 +108,7 @@
                 font-weight: bold;
                 padding: 2px;
             }
-            /* Badge de type (coin haut-gauche du poster) : différencie une reco
-               « À venir » (programme EPG du soir) d'une reco déjà disponible
-               (enregistrement / bibliothèque) ou diffusée. Icône seule — le
-               libellé complet va dans la méta-ligne (le poster ne fait que 90 px). */
+            /* Badge de type (À venir, Enregistrement, etc.) sur le poster. */
             .LLMAIRecommendationsPage .ai-type-badge {
                 position: absolute;
                 top: 0;
@@ -155,9 +129,7 @@
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-lib { background: #2a7a7a; }
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-aired { background: #555; color: #ccc; }
             .LLMAIRecommendationsPage .ai-type-badge.ai-type-watched { background: #8a6d1a; color: #f5eecf; }
-            /* Une reco diffusée (passée, sans action) est estompée — distincte
-               des recos « À venir » encore actionnables. Même estompage pour
-               une rediffusion déjà visionnée (watched-guard). */
+            /* Estompe les recos passées (diffusées ou déjà vues) pour les distinguer des recos actionnables. */
             .LLMAIRecommendationsPage .ai-card[data-aired="1"],
             .LLMAIRecommendationsPage .ai-card[data-watched="1"] {
                 opacity: 0.72;
@@ -216,8 +188,7 @@
                 color: #888;
                 cursor: not-allowed;
             }
-            /* Déjà programmé (détecté au chargement ou doublon au clic) : état
-               neutre/gris, distinct du vert « je viens de programmer ». */
+            /* Style pour un programme déjà programmé (état neutre/gris). */
             .LLMAIRecommendationsPage .ai-btn-record.already {
                 background: #555;
                 color: #bbb;
@@ -286,8 +257,7 @@
                 transition: background 0.2s;
             }
             .LLMAIRecommendationsPage .ai-btn-watchlive:hover { background: #388bfd; }
-            /* Bouton « Regarder » (enregistrement disponible, source="recording"). */
-            .LLMAIRecommendationsPage .ai-btn-watchrec {
+                        .LLMAIRecommendationsPage .ai-btn-watchrec {
                 background: #238636;
                 color: white;
                 border: none;
@@ -300,7 +270,7 @@
                 transition: background 0.2s;
             }
             .LLMAIRecommendationsPage .ai-btn-watchrec:hover { background: #2ea043; }
-            /* Spinner de chargement du run LLM (10–60 s la 1re fois). */
+            /* Spinner de chargement (run LLM). */
             .LLMAIRecommendationsPage .tonight-spinner {
                 display: inline-block;
                 width: 1em;

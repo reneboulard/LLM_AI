@@ -10,22 +10,21 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  EpgSnapshot (mémoire réflexive, Phase B) : figer les métadonnées EPG
+    //  EpgSnapshot (mémoire réflexive) : figer les métadonnées EPG
     //  éphémères dès l'émission au LLM ou la programmation d'un timer.
     //
     //  Un programme EPG disparaît de la base Emby une fois diffusé : sans
     //  snapshot, tout ce qu'on en savait (titre, description, genres,
     //  durée de diffusion) est perdu — et l'analyse ne peut plus rattacher
     //  une lecture du direct à son programme (le % du direct = durée lue ÷
-    //  durée DE DIFFUSION du programme, ici figée). Les entrées sont écrites
-    //  :
+    //  durée DE DIFFUSION du programme, ici figée). Les entrées sont écrites :
     //    1. à l'émission au LLM (captures epg_tonight / epg_series /
     //       epg_movies — mêmes sites que le pool de candidats) ;
     //    2. à la création d'un timer d'enregistrement (AutoProgrammer).
     //
     //  Le croisement avec la bibliothèque (providerIds, itemId de l'item
     //  enregistré) N'EST PAS résolu en temps réel : il l'est de façon
-    //  déterministe À L'ANALYSE (Phase C) par ItemIdResolver / providerIds —
+    //  déterministe À L'ANALYSE par ItemIdResolver / providerIds —
     //  les enregistrements complétés deviennent des items bibliothèque que
     //  Emby résout lui-même ; un rapprochement à l'analyse suffit et
     //  n'introduit aucune dépendance au runtime.
@@ -64,7 +63,7 @@ namespace LLM_AI
     /// Store fichier <c>epg_snapshot.json</c> (répertoire de configuration du
     /// plugin, pattern <see cref="DecisionStore"/>). Statique : écrit par
     /// <see cref="GetEmbyInfoTool"/> et <see cref="AutoProgrammer"/>, lu par
-    /// l'analyse hebdo (Phase C). Les lectures tolèrent un JSON invalide.
+    /// l'analyse hebdo. Les lectures tolèrent un JSON invalide.
     /// </summary>
     internal static class EpgSnapshotStore
     {
@@ -194,7 +193,7 @@ namespace LLM_AI
         }
 
         // -----------------------------------------------------------------
-        //  Lecture (analyse hebdo, Phase C)
+        //  Lecture (analyse hebdo)
         // -----------------------------------------------------------------
 
         /// <summary>Liste les entrées (tolérant : absent/corrompu → vide).</summary>

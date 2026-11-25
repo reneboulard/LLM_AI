@@ -117,7 +117,7 @@
             .LLMAIConfigPage .llmBackendRow .btnRemoveBackend {
                 flex: 0 0 auto;
             }
-            /* Boîte de filtres (cases à cocher chaines/genres/flags).
+            /* Boîte de filtres (cases à cocher chaînes/genres/flags).
                Grille CSS : colonnes alignées quelle que soit la longueur du
                libellé (le flux flex-wrap laissait les items « pêle-mêle »).
                minmax(170px,1fr) → colonnes ≥170px qui s'étirent pour remplir,
@@ -180,7 +180,7 @@
                 gap: 0.4em;
             }
             /* Onglets de navigation : la barre est assemblée par config.js au
-               viewshow (makeTabs) à partir des h3.sectionTitle plate du HTML
+               viewshow (makeTabs) à partir des h3.sectionTitle à plat du HTML
                (regroupement fixe, voir TAB_GROUPS dans config.js) — ils
                deviennent des boutons .tab-button et chaque groupe de champs un
                panneau .tab-pane. Un seul <form> : les panneaux inactifs restent
@@ -789,7 +789,7 @@
                         </div>
 
                         <h3 class="sectionTitle" style="margin-top:1.5em;" data-i18n="cfg.apikeys.h">Clés API — services externes</h3>
-                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.apikeys.desc">Clés des services web auxquels l'extension peut faire appel. Un champ vide désactive le service correspondant : l'LLM ne le voit plus.</div>
+                        <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.apikeys.desc">Clés des services web auxquels l'extension peut faire appel. Un champ vide désactive le service correspondant : le LLM ne le voit plus.</div>
 
                         <div class="inputContainer">
                             <input is="emby-input" type="password" id="txtTmdbApiKey"
@@ -947,7 +947,7 @@
                             <span class="checkboxLabel" data-i18n="cfg.debug.label">Mode debug (journal complet de l'agent)</span>
                         </label>
                         <div class="fieldDescription" style="margin-bottom:0.8em;" data-i18n-html="cfg.debug.desc">
-                            Écrit dans le journal Emby tout ce que voit l'LLM : prompts complets,
+                            Écrit dans le journal Emby tout ce que voit le LLM : prompts complets,
                             réponses, résultats d'outils. À activer ponctuellement pour comprendre
                             un comportement. Désactivé par défaut.
                         </div>
@@ -2351,7 +2351,7 @@
                             .LLMAIConfigPage .librevChip-delete { background: #5c1f1f; color: #ffb3b3; }
                             .LLMAIConfigPage .librevChip-can_delete { background: #5c3a12; color: #ffd9a1; }
                             .LLMAIConfigPage .librevChip-keep { background: #1d4a30; color: #a8e6bf; }
-                            /* v2.13.0 — en-têtes de section à la emby-delete.sh :
+                            /* v2.13.0 — en-têtes de section :
                                titre numéroté + compteur + Go, règle en sous-texte grisé. */
                             .LLMAIConfigPage .librevSectionHeader {
                                 grid-column: 1 / -1; font-weight: 700; font-size: 13px;
@@ -2401,7 +2401,7 @@
                 <!-- Onglet outil « 💬 Chat en direct » (v2.9.0) : le panneau
                      #tab-chatlive ci-dessous vit HORS du <form> (ce n'est pas
                      un réglage, aucun de ses champs n'est soumis) mais DANS
-                     .content-primary (même carte visuel). makeTabs (config.js)
+                     .content-primary (même carte visuelle). makeTabs (config.js)
                      l'ajoute à la barre via l'entrée { tool: true } de
                      TAB_GROUPS (le panneau existant n'est pas déplacé). Le
                      module AMD LLMAIChatPageJS est chargé par require() au

@@ -4,16 +4,16 @@ using System.Threading;
 namespace LLM_AI
 {
     /// <summary>
-    /// État partagé du run d'audit <b>détaché</b> (P1+P2, terrain 2026-10-01 :
+    /// État partagé du run d'audit <b>détaché</b> (terrain 2026-10-01 :
     /// six clics en rafale avaient lancé six audits concurrents sur un seul
     /// gemma4:latest, et la fermeture de l'onglet annulait tout par
     /// déconnexion HTTP — « Audit annulé » ×9, aucun rapport persisté).
     /// Deux rôles :
     /// <list type="bullet">
-    /// <item><b>Single-flight (P1)</b> : <see cref="TryStart"/> ne laisse
+    /// <item><b>Single-flight</b> : <see cref="TryStart"/> ne laisse
     /// passer qu'UN run à la fois — un clic pendant qu'un audit tourne
     /// renvoie l'état « en cours » au lieu d'en relancer un neuf.</item>
-    /// <item><b>Progression (P2)</b> : le run s'exécute en tâche de fond
+    /// <item><b>Progression</b> : le run s'exécute en tâche de fond
     /// (indépendante de la requête HTTP) et publie ici ses jalons
     /// (« Dose 3/7 — … ») que la page de config interroge via
     /// <c>GET /Plugins/LLMAI/Audit?Status=true</c>.</item>

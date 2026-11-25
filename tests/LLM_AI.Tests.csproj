@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Tests des fonctions pures du plugin (voir AGENTS.md « Tests »).
+  <!-- Tests des fonctions pures du plugin.
        Lancer : dotnet test tests/LLM_AI.Tests.csproj
        Les paquets NuGet ci-dessous servent UNIQUEMENT à ce projet : la DLL du
        plugin reste sans dépendance NuGet. -->

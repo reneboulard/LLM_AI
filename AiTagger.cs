@@ -46,7 +46,7 @@ namespace LLM_AI
     /// genre « AI Suggestion » utilisé par la bibliothèque <c>.strm</c> —
     /// les nettoyages ne se marchent jamais l'un sur l'autre.</para>
     /// <para><b>Persistance</b> : modifie les métadonnées réelles des items
-    /// (tableaux <c>Tags</c> / <c>Genres</c> pour le migration) via
+    /// (tableaux <c>Tags</c> / <c>Genres</c> pour la migration) via
     /// <c>BaseItem.UpdateToRepository</c> (<c>ItemUpdateType.MetadataEdit</c>).
     /// Un refresh métadonnées peut annuler le tag — le prochain run Tonight
     /// le réajoutera.</para>
@@ -138,7 +138,7 @@ namespace LLM_AI
         /// depuis le PREMIER JOUR, sur tout build — indépendant d'Emby
         /// 4.10, de <c>Recursive</c> et du pipeline GetItems/GetItemList.
         /// Règle : n'assigner QUE le filtre utilisé, jamais null aux
-        /// autres (cf. AGENTS.md).
+        /// autres.
         /// </summary>
         internal static BaseItem[] FindByTagOrGenre(
             ILibraryManager library, string tag, bool byTags, int? limit)

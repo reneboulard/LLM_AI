@@ -82,7 +82,7 @@ namespace LLM_AI
                 else
                     result = await SearchOllamaCloud(query, ct).ConfigureAwait(false);
 
-                // Ne cache QUE les résultats valids (pas les erreurs). Une
+                // Ne cache QUE les résultats valides (pas les erreurs). Une
                 // réponse de moteurs IMPOSÉS portant un moteur sans réponse
                 // n'est pas cachée non plus : geler un échec transitoire
                 // (quota, CAPTCHA) pendant 24h empêcherait de réessayer dès
@@ -106,7 +106,7 @@ namespace LLM_AI
                 throw;
             }
             // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
-            // PAS annulé (gotcha AGENTS.md) : message clair, pas l'erreur .NET brute.
+            // PAS annulé : message clair, pas l'erreur .NET brute.
             catch (OperationCanceledException ex)
             {
                 _logger?.Warn("[LLM_AI] web_search délai dépassé query={0} : {1}", query, ex.ToString());

@@ -57,12 +57,10 @@ namespace LLM_AI
     /// </list>
     /// </summary>
     /// <remarks>
-    /// Le contexte de l'exploration v1.13.31 : le fichier .ts d'un
-    /// enregistrement DVR mal typé (fiche film sur un item Série) copié dans
-    /// une bibliothèque de films avec un nommage « Titre (Année).ts » est
-    /// ré-importé nativement par Emby sous le bon type (vérifié en réel :
-    /// « France, il était une fois demain »). Ce service industrialise cette
-    /// recette. Service ServiceStack découvert par scanning d'assembly :
+    /// Principe : le fichier .ts d'un enregistrement DVR mal typé (fiche film
+    /// sur un item Série) copié dans une bibliothèque de films avec un nommage
+    /// « Titre (Année).ts » est ré-importé nativement par Emby sous le bon
+    /// type. Service ServiceStack découvert par scanning d'assembly :
     /// hérite <see cref="BaseApiService"/> ; routes portées par les DTO via
     /// <see cref="RouteAttribute"/>. La lecture de fiche TMDB (titre/année de
     /// la fiche croisée) réutilise <see cref="TmdbLookupTool"/> — la même
@@ -164,9 +162,7 @@ namespace LLM_AI
             /// <summary>Séparateur natif de l'HÔTE (plugin side,
             /// Path.DirectorySeparatorChar) — le dialogue de destination
             /// assemble « racine + sous-dossier » avec CE séparateur, pas un
-            /// « / » codé en dur (un serveur Windows préremplissait
-            /// « D:\Documentaires/Titre… » — mélange fonctionnel mais faux,
-            /// corrigé v1.14.0.7).</summary>
+            /// « / » codé en dur.</summary>
             public string Separator { get; set; }
         }
 
@@ -267,14 +263,14 @@ namespace LLM_AI
         //  Helpers
         // ------------------------------------------------------------------
 
-        /// <summary>Type de l'item tel que posé par l'import (OrphanResolver:152).</summary>
+        /// <summary>Type de l'item tel que posé par l'import DVR (Series vs Movie).</summary>
         private static bool IsSeriesItem(BaseItem item) =>
             item != null && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0;
 
         /// <summary>
         /// Assainit un titre pour usage en nom de dossier/fichier : les
         /// caractères invalides deviennent des espaces, points finaux retirés
-        /// (Windows), espaces collées réduites. Même pattern que
+        /// (Windows), espaces multiples réduits à un seul. Même pattern que
         /// <c>StrmLibraryGenerator.SanitizeName</c>.
         /// </summary>
         private static string SanitizeName(string s)
@@ -406,8 +402,8 @@ namespace LLM_AI
 
         /// <summary>
         /// Année de diffusion de repli pour un enregistrement sans fiche TMDB
-        /// (l'item DVR importé par la coquille n'a souvent PAS de ProductionYear
-        /// — vérifié en réel sur « Les couleurs du passé ») : ProductionYear de
+        /// (l'item DVR importé par la coquille n'a souvent PAS de ProductionYear) :
+        /// ProductionYear de
         /// l'item si plausible, sinon PremiereDate du premier épisode (donnée
         /// EPG), sinon l'horodatage DVR du nom de fichier (« Titre
         /// 2026_09_26_20_00_00.ts » — dernier segment « aaaa_ » ou « aaaa- » du
@@ -482,7 +478,7 @@ namespace LLM_AI
                 return new CrossKindQueueResponse { Error = "Lecture bibliothèque échouée : " + ex.Message };
             }
 
-            // Racines des enregistrements DVR (pluriel v2.18.0) : le signal
+            // Racines des enregistrements DVR (plusieurs possibles) : le signal
             // « suspect » (not-found dont le dossier vit sous une racine DVR)
             // et la borne de la conversion sur place.
             var dvrRoots = ResolveDvrRoots();
@@ -868,7 +864,7 @@ namespace LLM_AI
             }
 
             // Re-import immédiat et déterministe : le RealtimeMonitor réagit à
-            // un fichier ajouté (vérifié en réel) mais le scan explicite
+            // un fichier ajouté mais le scan explicite
             // garantit l'import sans attendre le débounce.
             if ((copied.Count + skipped.Count) > 0)
                 TryTriggerLibraryScan();
@@ -943,12 +939,9 @@ namespace LLM_AI
                     return Refuse("Les fichiers de l'œuvre vivent dans plusieurs dossiers — conversion sur place impossible (utilisez la copie).");
             }
 
-            // Borne : le dossier doit être sous une des racines des
-            // enregistrements DVR (pluriel v2.18.0 — une install peut avoir
-            // des racines films ET séries distinctes : l'ancienne forme
-            // singulière refusait à tort toute la moitié « séries ») —
-            // ailleurs, la forme du dossier n'est pas un import DVR et la
-            // copie reste l'outil adapté.
+            // Borne : le dossier doit être sous UNE des racines DVR (films ET
+            // séries peuvent être distinctes) — ailleurs, la forme du dossier
+            // n'est pas un import DVR et la copie reste l'outil adapté.
             string dvrRoot = ResolveDvrRoots().FirstOrDefault(r => IsUnderPath(srcFolder, r));
             if (string.IsNullOrWhiteSpace(dvrRoot))
             {
@@ -1072,7 +1065,7 @@ namespace LLM_AI
 
             // Image du poster préchargée AVANT tout renommage : après
             // Directory.Move, le chemin d'image de l'item ne pointe plus le
-            // fichier (Emby renvoie 404 à l'endpoint image — vérifié en réel).
+            // fichier (Emby renvoie 404 à l'endpoint image).
             byte[] posterBytes = TryReadItemPosterBytes(item);
 
             // Exécution + journal de rollback : dossier d'abord (une seule
@@ -1182,7 +1175,7 @@ namespace LLM_AI
                 await TrySaveItemPosterAsync(item, newFolder, ct, posterBytes).ConfigureAwait(false);
 
                 // Re-import immédiat : le RealtimeMonitor ne réagit PAS au
-                // renommage d'un dossier DVR (vérifié en réel) — le scan
+                // renommage d'un dossier DVR — le scan
                 // bibliothèque retire l'ancien item (chemin disparu) et
                 // importe l'œuvre sous le bon type.
                 TryTriggerLibraryScan();
@@ -1244,8 +1237,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Écrit l'image principale de l'item (l'affiche EPG d'un enregistrement
-        /// DVR — vérifié en réel : le poster.jpg du dossier EST cette image, md5
-        /// identique) en <c>poster.jpg</c> du dossier cible, en complément du
+        /// DVR ; c'est aussi le poster.jpg du dossier) en <c>poster.jpg</c> du dossier cible, en complément du
         /// renommage du poster d'origine (« &lt;base&gt;-poster.jpg ») : le nom
         /// canonique garantit que l'œuvre ré-importée garde une affiche même si
         /// le dossier n'en avait pas (ou seulement un logo de chaîne). Pattern
@@ -1268,8 +1260,8 @@ namespace LLM_AI
 
                 // 1) Octets préchargés AVANT un renommage (conversion) : après
                 // Directory.Move, le chemin d'image de l'item pointe l'ancien
-                // dossier — l'endpoint image d'Emby renvoie alors 404 (vérifié
-                // en réel : il re-résout le fichier par son chemin stocké).
+                // dossier — l'endpoint image d'Emby renvoie alors 404 (il
+                // re-résout le fichier par son chemin stocké).
                 if (preloaded != null && preloaded.Length > 0)
                 {
                     await File.WriteAllBytesAsync(dst, preloaded, ct).ConfigureAwait(false);
@@ -1354,10 +1346,9 @@ namespace LLM_AI
         /// <summary>
         /// Déclenche le scan bibliothèque d'Emby (tâche « Scan media library »,
         /// clé <c>RefreshLibrary</c>) après une copie ou une conversion : le
-        /// re-import doit être immédiat et déterministe. Vérifié en réel : le
-        /// RealtimeMonitor réagit à un fichier ajouté (copie) mais PAS au
-        /// renommage d'un dossier DVR (conversion — l'ancien item restait
-        /// pointé sur un chemin disparu, le nouveau jamais importé). Réutilise
+        /// re-import doit être immédiat et déterministe : le RealtimeMonitor
+        /// réagit à un fichier ajouté (copie) mais PAS au renommage d'un
+        /// dossier DVR (conversion). Réutilise
         /// <see cref="ServerRemediation.TriggerTask"/> ; best-effort : un échec
         /// est logué, jamais bloquant (le scan planifié suivra).
         /// </summary>
@@ -1432,10 +1423,8 @@ namespace LLM_AI
 
             try
             {
-                // Pluriel (v2.18.0) : la rétention DVR d'Emby s'applique à
-                // N'IMPORTE QUELLE racine d'enregistrements — l'ancienne forme
-                // singulière ne voyait que la première, et copier dans la
-                // racine séries passait sans le warning.
+                // La rétention DVR d'Emby s'applique à N'IMPORTE QUELLE racine
+                // d'enregistrements.
                 foreach (var dvrRoot in ResolveDvrRoots())
                 {
                     if (!IsUnderPath(folder, dvrRoot)) continue;
@@ -1473,11 +1462,8 @@ namespace LLM_AI
             return "Attention : " + string.Join(" ; ", parts) + ".";
         }
 
-        /// <summary>Racines d'enregistrements DVR, forme plurielle (v2.18.0) :
-        /// une install peut avoir des racines films ET séries distinctes —
-        /// l'ancienne forme singulière n'en voyait que la première, et toute la
-        /// moitié « séries » des enregistrements passait au travers de la file
-        /// cross-kind. Liste vide si aucune/illisible (le Warn d'échec est
+        /// <summary>Racines d'enregistrements DVR (une install peut avoir des
+        /// racines films ET séries distinctes — les traiter toutes). Liste vide si aucune/illisible (le Warn d'échec est
         /// émis ici).</summary>
         private List<string> ResolveDvrRoots()
         {
@@ -1494,7 +1480,7 @@ namespace LLM_AI
             return new List<string>();
         }
 
-        /// <summary>Sous N'IMPORTE QUELLE racine DVR (v2.18.0 — même
+        /// <summary>Sous N'IMPORTE QUELLE racine DVR (même
         /// comparaison à frontière de séparateur que
         /// <see cref="IsUnderPath"/>). Candidat nul/vide ou liste vide →
         /// false.</summary>
@@ -1509,9 +1495,7 @@ namespace LLM_AI
         /// <summary>True si <paramref name="candidate"/> est <paramref name="root"/>
         /// ou un sous-chemin de <paramref name="root"/> (insensible à la casse,
         /// séparateurs normalisés sur '/' DES DEUX CÔTÉS — un chemin Windows
-        /// backslash contre une racine backslash doit matcher : l'ancienne
-        /// forme n'ajoutait '/' qu'à droite et ratait tout sous-chemin
-        /// backslash, bug latent Windows v1.14.0.7).</summary>
+        /// backslash contre une racine backslash doit matcher).</summary>
         private static bool IsUnderPath(string candidate, string root)
         {
             if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;

@@ -93,7 +93,7 @@ namespace LLM_AI
             var stats = new ProgramStats();
             if (string.IsNullOrWhiteSpace(payload)) return stats;
 
-            // Liste ordonnée des recos (tableau JSON). On tri par priority desc
+            // Liste ordonnée des recos (tableau JSON). On trie par priority desc
             // (high=0, medium=1, low=2) : les plus prioritaires passent d'abord,
             // les conflits de tuners éliminent les moins prioritaires.
             var recos = ParseRecommendations(payload);
@@ -260,7 +260,7 @@ namespace LLM_AI
                 }
                 _logger?.Info("[LLM_AI] Auto-program : « {0} » → {1} timer créé (programId={2}).",
                     r.Title, IsSeries(r.Kind) ? "series" : "movie", r.Id);
-                // Snapshot EPG (Phase B) : le programme programmé est figé
+                // Snapshot EPG : le programme programmé est figé
                 // (même s'il n'a jamais passé un outil EPG). Best-effort.
                 EpgSnapshotStore.MarkTimer(r.Id, r.Title, r.Channel, null, _logger);
                 // Mémorise pour le dedup intra-passe (deux recos du même titre).

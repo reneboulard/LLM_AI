@@ -41,7 +41,7 @@ namespace LLM_AI
     /// <summary>
     /// Outil natif « system_audit » exposé au LLM pour auditer la santé du
     /// serveur Emby. Contrairement à <see cref="GetEmbyInfoTool"/> (bibliothèque
-    /// / EPG, lecture seule), cet outil interroge les services SystÈME d'Emby
+    /// / EPG, lecture seule), cet outil interroge les services système d'Emby
     /// (sessions, tâches planifiées, transcodage, infos serveur) et le système
     /// hôte (process, disques) via la BCL. Vingt-quatre actions dispatchées sur
     /// <c>action</c> :
@@ -82,13 +82,12 @@ namespace LLM_AI
 
         public string Name => "system_audit";
 
-        // Description DYNAMIQUE (v1.13.30) : les actions de remédiation n'y
+        // Description DYNAMIQUE : les actions de remédiation n'y
         // figurent QUE si AuditRemediationEnabled est activé. Sans le flag,
         // elles n'existent pas pour le LLM — le chat admin doit router vers
         // les tools DÉDIÉS stop_session / trigger_task / send_message (deux
         // phases), sinon le modèle appelle system_audit action=stop_session,
-        // reçoit l'erreur de gate et rapporte un faux « pas les droits »
-        // (constat terrain 2026-09-21, gemma4, 11 tools chat pourtant actifs).
+        // reçoit l'erreur de gate et rapporte un faux « pas les droits ».
         public string Description
         {
             get
@@ -153,7 +152,7 @@ namespace LLM_AI
             }
         }
 
-        // Schéma DYNAMIQUE (v1.13.30) : sans AuditRemediationEnabled, les
+        // Schéma DYNAMIQUE : sans AuditRemediationEnabled, les
         // actions de remédiation ne figurent ni dans l'énumération d'actions
         // ni dans les paramètres — le LLM ne peut pas les mal-router (cf.
         // Description). Les tools DÉDIÉS du chat restent la voie normale.
@@ -188,7 +187,7 @@ namespace LLM_AI
                 "  \"sample_limit\": \"(missing_metadata) taille de l'échantillon à examiner (défaut 1000, max 5000) — les comptes sont estimés sur cet échantillon\",\n" +
                 "  \"file\": \"(inspect_log) nom du fichier journal (nom seul, pas de chemin) — depuis list_logs\",\n" +
                 "  \"tail\": \"(inspect_log, sans grep) nombre de lignes à lire depuis la fin (défaut 200, max 2000)\",\n" +
-                "  \"grep\": \"(inspect_log, optionnel) regex .NET pour filtrer — active le mode grep : retourne les lignes matchantes + 'context' lignes autour (déduction), cap 50 matchs\",\n" +
+                "  \"grep\": \"(inspect_log, optionnel) regex .NET pour filtrer — active le mode grep : retourne les lignes matchantes + 'context' lignes autour (fenêtres dédoublonnées), cap 50 matchs\",\n" +
                 "  \"context\": \"(inspect_log, grep) lignes de contexte autour de chaque match (défaut 2, 0-10)\",\n" +
                 "  \"include_transcode_size\": \"(disk_storage) true pour calculer la taille du dossier de transcodage (défaut false)\"," +
                 "  \"full\": \"(links_check) true pour reprendre la baseline depuis le plus ancien (remet le curseur d'audit à zéro — validate_links_state.json) ; défaut false : chaque passage traite les items AJOUTÉS depuis le dernier\"" +
@@ -245,7 +244,7 @@ namespace LLM_AI
                 {
                     case "server_info":      result = await ServerInfoAsync(ct).ConfigureAwait(false); break;
                     case "system_config":   result = SystemConfig(); break;
-                    // async depuis v-next : la sonde de mots de passe triviaux
+                    // async : la sonde de mots de passe triviaux
                     // attend le chemin d'auth in-process des comptes admin.
                     case "security_check":   result = await SecurityCheckAsync(ct).ConfigureAwait(false); break;
                     case "upnp_check":       result = await UpnpCheckAsync(ct).ConfigureAwait(false); break;
@@ -287,14 +286,6 @@ namespace LLM_AI
         //  Inspection : télémétrie & configuration
         // ------------------------------------------------------------------
 
-        /// <summary>
-        /// Récupère <see cref="SystemInfo"/> (vue complète : version, OS, ports,
-        /// chemins, redémarrage en attente, mise à jour). On passe
-        /// <see cref="IPAddress.Loopback"/> comme remoteAddress (l'API n'a pas
-        /// de surcharge sans adresse ; null peut lever). En cas d'échec, vue
-        /// réduite depuis <see cref="IServerApplicationHost.GetPublicSystemInfo"/>
-        /// + propriétés de l'hôte.
-        /// </summary>
         private async Task<string> ServerInfoAsync(CancellationToken ct)
         {
             var info = await GetSystemInfoAsync(ct).ConfigureAwait(false);
@@ -595,10 +586,10 @@ namespace LLM_AI
                 try { grepRe = new Regex(grep, RegexOptions.CultureInvariant | RegexOptions.Compiled); }
                 catch (Exception ex) { return Err($"regex 'grep' invalide : {ex.Message}"); }
 
-                // Mode grep : on materialise les lignes (les journaux Emby sont
-                // tournants et de taille bornée) pour pouvoir ramener, comme
-                // l'app PHP de référence, chaque match + N lignes de contexte
-                // (déduction, cap 50 matchs) — le contexte d'une erreur est ce
+                // Mode grep : on matérialise les lignes (les journaux Emby sont
+                // tournants et de taille bornée) pour pouvoir ramener chaque
+                // match + N lignes de contexte
+                // (fenêtres dédoublonnées, cap 50 matchs) — le contexte d'une erreur est ce
                 // qu'un LLM auditant a besoin de voir, pas la seule ligne match.
                 int context = Math.Min(Math.Max(0, OptInt(args, "context", 2)), 10);
                 int maxMatches = 50;
@@ -697,8 +688,7 @@ namespace LLM_AI
         /// Compteur d'un motif de journal : total exact, bornes temporelles et
         /// lignes témoins bornées (2 max, tronquées). Les comptages sont faits
         /// en C# pur — le LLM du rapport les reprend TELS QUELS (les petits
-        /// modèles locaux sont mauvais en comptage, documenté au design
-        /// 2026-10-01).
+        /// modèles locaux sont mauvais en comptage).
         /// </summary>
         private sealed class ScanHit
         {
@@ -734,12 +724,10 @@ namespace LLM_AI
 
         // Format positionnel d'une ligne de journal Emby : « <date> <Niveau>
         // <Catégorie>: texte » (ms optionnelles selon version). Le niveau est
-        // lu sur ce CHAMP, JAMAIS dans le texte libre — leçon terrain
-        // 2026-10-01 : le titre de film « The Fatal Flaw » matchait « Fatal ».
-        // Les lignes sans horodatage (préfixe tab) sont des continuations du
+        // lu sur ce CHAMP, JAMAIS dans le texte libre (un titre d'œuvre peut
+        // contenir « Fatal », « Error »…). Les lignes sans horodatage (préfixe tab) sont des continuations du
         // bloc précédent : c'est là que vivent les blocs Error Report et les
-        // stacks (sans leur attachement, le bug OptInt du 2026-10-01 était
-        // invisible — le tail 150 ne le montrait pas).
+        // stacks — sans leur rattachement au bloc, ils seraient invisibles.
         private static readonly Regex s_logLineRe = new(
             @"^(?<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{1,3})?) (?<lvl>Debug|Info|Warn|Error|Fatal) (?<cat>.+?)(?:: (?<txt>.*))?$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -755,14 +743,14 @@ namespace LLM_AI
             @"^\t\s+at (?<frame>\S+)",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-        // Codes HTTP observables à la verbosité par défaut — CORRECTION
-        // terrain 2026-10-01 : l'exercice python cherchait « HTTP Response »
-        // (0 hit sur 16 Mo) mais la vraie casse est « Http response NNN from
+        // Codes HTTP observables à la verbosité par défaut — les libellés
+        // exacts du journal Emby sont « Http response NNN from
         // <url> » (sortant, cat. HttpClient) et « http/1.1 Response NNN to
-        // <ip> » (entrant, ligne de requête). JAMAIS de nombre nu « 429 » :
-        // les horodatages « .429 » et l'id TVDB 429955 dans les URLs
-        // matchaient — le code est capté depuis le libellé, pas depuis un
-        // nombre flottant.
+        // <ip> » (entrant, ligne de requête) ; « HTTP Response » ne matche
+        // rien. JAMAIS de nombre nu « 429 » :
+        // les horodatages « .429 » et les ids dans les URLs matchaient —
+        // le code est capté depuis le libellé, pas depuis un nombre
+        // flottant.
         private static readonly Regex s_httpOutRe = new(
             @"Http response (?<code>\d{3}) from (?<url>\S+)",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -771,17 +759,16 @@ namespace LLM_AI
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         // Sorties de processus ffmpeg/ffprobe/ffdetect : « ProcessRun
-        // '<proc>' Process exited with code N ». Leçons terrain : code 0 =
-        // sonde de version (ignoré) ; ffdetect_* code 1 à Info = GPU absent,
-        // bénin — seul un ffmpeg/ffprobe ≠ 0 est un échec réel.
+        // '<proc>' Process exited with code N ». code 0 = sonde de version
+        // (ignoré) ; ffdetect_* code 1 à Info = GPU absent, bénin — seul un
+        // ffmpeg/ffprobe ≠ 0 est un échec réel.
         private static readonly Regex s_procExitRe = new(
             @"ProcessRun '(?<proc>[^']*)' Process exited with code (?<code>\d+)",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         // Échec d'un provider de métadonnées, message Emby « Error in X » —
         // uniquement sur lignes Error/Fatal : un miss provider (Info, « aucune
-        // série… ») n'est PAS une panne (leçon terrain : pannes Tvdb réelles
-        // du 28 sept ≠ diagnostics de miss).
+        // série… ») n'est PAS une panne.
         private static readonly Regex s_providerErrRe = new(
             @"Error in (?<prov>[A-Za-z]\w*)",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -794,13 +781,11 @@ namespace LLM_AI
 
         // Échecs d'authentification par compte et verrouillages — motif
         // « authentification » de log_scan. Base du croisement déterministe
-        // avec security_check.password_probe (FAITS ÉTABLIS de l'audit dosé,
-        // 2026-10-01) : avant, les « has been denied » n'étaient vus que dans
-        // le tail brut, sans comptage par compte — le LLM devait croiser à la
-        // louche deux sections lointaines. Terrain : la sonde émet au plus
-        // ProbeAttemptCap refus par compte par run (signature à reconnaître) ;
-        // « Temporarily locking out user X » (chaîne field-verified 2026-10-01)
-        // ne peut PAS venir de la sonde = échecs répétés réels.
+        // avec security_check.password_probe : le croisement par compte
+        // remplace une lecture « à la louche » du tail brut. La sonde émet au
+        // plus ProbeAttemptCap refus par compte par run (signature à
+        // reconnaître) ; « Temporarily locking out user X » ne peut PAS venir
+        // de la sonde = échecs répétés réels.
         private static readonly Regex s_authDeniedRe = new(
             @"Authentication request for (?<acct>.+?) has been denied",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -810,9 +795,8 @@ namespace LLM_AI
 
         /// <summary>
         /// Emby 4.10 enrobe IP et tokens de caractères invisibles
-        /// (U+200C/U+200D — anti-copie ; constat terrain 2026-10-01 : un grep
-        /// littéral « to … » échoue sur ces lignes) : on les retire avant
-        /// d'exposer une valeur.
+        /// (U+200C/U+200D — anti-copie ; un grep littéral échoue alors sur ces lignes) :
+        /// on les retire avant d'exposer une valeur.
         /// </summary>
         private static string StripInvisibles(string s) =>
             string.IsNullOrEmpty(s) ? s : s.Replace("\u200C", "").Replace("\u200D", "").Replace("\uFEFF", "");
@@ -822,11 +806,10 @@ namespace LLM_AI
         /// journaux — LECTURE SEULE, ZÉRO LLM dans la détection. Sortie =
         /// faits groupés compacts (comptages exacts, bornes temporelles,
         /// témoins tronqués) que le LLM du rapport reprend tels quels.
-        /// Périmètre borné (design 2026-10-01) : journal courant + 2 rotatés
+        /// Périmètre borné : journal courant + 2 rotatés
         /// les plus récents (<c>embyserver*.txt</c> — exclut hardware_detection
         /// et readme), ≤ 5 Mo par fichier lus PAR LA FIN, ≤ 7 jours d'âge : PAS
-        /// de lecture intégrale de la rétention (≈ 4 Mo/jour localement,
-        /// fenêtre ≈ 2 jours — compromis assumé, les événements plus vieux
+        /// de lecture intégrale de la rétention (les événements plus vieux
         /// restent consultables via inspect_log). Le tail 150 brut du journal
         /// le plus récent continue d'être fourni par le digest pour la
         /// citation d'évidence.
@@ -868,8 +851,8 @@ namespace LLM_AI
             var tooMany = new ScanHit();
             int benignProbes = 0;
             int totalLines = 0, errorLines = 0, fatalLines = 0, warnLines = 0;
-            // Témoins bruts des compteurs du profil (terrain 18:36 : le modèle
-            // ne pouvait rien dire d'un « warn:1 » nu). Bornés : 5 warn / 3
+            // Témoins bruts des compteurs du profil : un compte nu
+            // (« warn:1 ») ne dit rien au modèle. Bornés : 5 warn / 3
             // error / 3 fatal — au-delà, les motifs groupés portent le détail.
             var warnWitnesses = new List<string>();
             var errWitnesses = new List<string>();
@@ -982,7 +965,7 @@ namespace LLM_AI
 
                     // ---- Authentification : refus par compte + verrouillages --
                     // StripInvisibles obligatoire : Emby 4.10 enrobe aussi les
-                    // noms d'usager de U+200C/U+200D (note_ip).
+                    // noms d'usager de U+200C/U+200D.
                     var ad = s_authDeniedRe.Match(txt);
                     if (ad.Success)
                     {
@@ -1010,7 +993,7 @@ namespace LLM_AI
                             if (code != 0)
                             {
                                 if (proc.StartsWith("ffdetect_", StringComparison.Ordinal) && !isBad)
-                                    benignProbes++;           // GPU absent — bénin (leçon terrain)
+                                    benignProbes++;           // GPU absent — bénin
                                 else
                                 {
                                     string key = proc + " (code " + code + ")";
@@ -1041,14 +1024,13 @@ namespace LLM_AI
                         }
                     }
                     if (txt.Contains("Too Many Requests", StringComparison.Ordinal))
-                        tooMany.Add(ts, witness);   // jamais « 429 » nu (leçon terrain)
+                        tooMany.Add(ts, witness);   // jamais « 429 » nu
 
                     // ---- Live TV / DVR / scan de bibliothèque --------------
-                    // Contexte Live TV calibré sur le premier run prod
-                    // (2026-10-01, serveur de production) : « Error copying live stream »
-                    // (SharedHttpPipelineSource) et « Error getting channels »
-                    // (cat. LiveTvManager) — le vocabulaire local n'avait
-                    // rien donné, zéro échec dans la fenêtre.
+                    // Mots-clés calibrés sur le vocabulaire réel des journaux
+                    // Emby (« Error copying live stream », « Error getting
+                    // channels ») — le contexte vit dans le texte de la ligne,
+                    // pas dans la catégorie seule.
                     if (isBad || lvl == "Warn")
                     {
                         string low = txt.ToLowerInvariant();
@@ -1209,10 +1191,9 @@ namespace LLM_AI
                     plus_recente_ligne = newest,
                     lignes_lues = totalLines
                 },
-                // Terrain 18:36 : le profil NU ne dit rien (« 1 warning ») —
-                // le modèle n'avait que le chiffre à parodier. Témoins bruts
-                // (ligne complète tronquée à 200 car.) : la dose peut dire CE
-                // QUE c'est (catégorie + propos), même bénin.
+                // Profil NU vs témoins bruts : un chiffre seul ne dit
+                // rien — la dose peut dire CE QUE c'est (catégorie +
+                // propos), même bénin.
                 profil = new
                 {
                     error = errorLines, fatal = fatalLines, warn = warnLines,
@@ -1233,7 +1214,7 @@ namespace LLM_AI
         /// <summary>
         /// Transcodages ffmpeg actifs : sessions dont <c>TranscodingInfo</c> est
         /// non null. Détail complet (codecs, HW/SW, CPU, bitrate, completion,
-        /// raisons de transcodage). C'est le « parse_ffmpeg_transcode ».
+        /// raisons de transcodage).
         /// </summary>
         private string Transcode()
         {
@@ -1377,7 +1358,7 @@ namespace LLM_AI
         /// <item>sinon → <c>ok</c>.</item>
         /// </list>
         /// On renvoie aussi chaque ffmpeg avec son CPU time et son âge pour
-        /// que l'LLM juge la staleness. <see cref="Process.GetProcesses"/>
+        /// que le LLM juge la staleness. <see cref="Process.GetProcesses"/>
         /// renvoie noms/temps, pas d'arguments — aucune fuite.
         /// </remarks>
         private string Processes(JsonElement args)
@@ -1490,18 +1471,16 @@ namespace LLM_AI
         /// </summary>
         private async Task<string> DiskStorageAsync(JsonElement args, CancellationToken ct)
         {
-            // Filtre squashfs (terrain 2026-10-01 : les mounts /snap/… readonly
-            // rapportent TOUJOURS 100% utilisé ; une passe LLM en a tiré un faux
-            // 🔴 « Capacité maximale atteinte » + une action urgente absurde).
-            // A-v3 (terrain 18:25) : sous LXC, les images snap ne sont PAS du
-            // squashfs — elles arrivent en fuse (fuse.snapfuse) avec total>0 et
-            // free=0 → used_pct=100 servi à chaque audit (le modèle a ré-mordu
-            // au run 18:25) ; le préfixe /snap/ est le propre de snapd (images
-            // système read-only). Filtre capacité nulle (A-v2, terrain 17:09) :
-            // sur un hôte LXC, lxcfs/efivars rapportent total_bytes=0 — appât
-            // vivant pour les modèles naïfs. On retire ces volumes du JSON et
-            // on compte ce qui est retiré : l'appât n'existe plus, au lieu
-            // d'espérer que le modèle l'ignore.
+            // Filtre squashfs : les mounts /snap/… readonly rapportent
+            // TOUJOURS 100% utilisé, un faux positif de capacité. Sous LXC,
+            // les images snap ne sont PAS du squashfs — elles arrivent en
+            // fuse (fuse.snapfuse) avec total>0 et free=0 → used_pct=100 ;
+            // le préfixe /snap/ est le propre de snapd (images système
+            // read-only). Filtre capacité nulle : sur un hôte LXC,
+            // lxcfs/efivars rapportent total_bytes=0 — appât vivant pour les
+            // modèles naïfs. On retire ces volumes du JSON et on compte ce
+            // qui est retiré : l'appât n'existe plus, au lieu d'espérer que
+            // le modèle l'ignore.
             var allReady = DriveInfo.GetDrives()
                 .Where(d => d.IsReady)
                 .OrderByDescending(d => d.Name.Length)   // match préfixe le plus spécifique
@@ -1736,7 +1715,7 @@ namespace LLM_AI
         /// exemples de noms pour les needs-review (révision manuelle).</item>
         /// <item><b>identified_never_audited</b> : items avec ids provider
         /// mais sans tag du plugin — identifiés par Emby natif, jamais
-        /// passés par le juge (pré-v1.13.19 ou hors DVR) ; le thermomètre
+        /// passés par le juge ; le thermomètre
         /// de couverture de la validation.</item>
         /// <item><b>unidentified_no_ids</b> : ni id ni tag — orphelins
         /// jamais traités.</item>
@@ -1764,8 +1743,8 @@ namespace LLM_AI
                 reviewByType[t] = CountByTag(tagReview, t);
 
             // 2) Balayage Movie/Series — couverture de la validation (cap),
-            //    recoupée sur le domaine DVR (racines d'enregistrements,
-            //    pluriel v2.18.0 — là où le plugin agit ; le reste de la
+            //    recoupée sur le domaine DVR (racines d'enregistrements —
+            //    là où le plugin agit ; le reste de la
             //    bibliothèque est identifié par Emby natif et n'est pas son
             //    périmètre).
             var dvrRoots = new List<string>();
@@ -2118,7 +2097,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Validation des liens de fiches (action links_check, v2.22.0)
+        //  Validation des liens de fiches (action links_check)
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -2244,7 +2223,7 @@ namespace LLM_AI
         /// Cloche « liens divergents » — administrateurs uniquement,
         /// silencieuse sur divergent=0 (convention « jamais de cloche
         /// 0→0 »). Le lien profond voyage dans le champ <c>Url</c> ET en
-        /// fin de Description (règle v2.4.7 : le consommateur du canal de
+        /// fin de Description (le consommateur du canal de
         /// lecture rend Title+Description mais ignore Url ; LF seul —
         /// jamais de CR dans un payload webhook/JSON). Échec d'envoi
         /// loggué, jamais levé.
@@ -2334,14 +2313,13 @@ namespace LLM_AI
         /// seule) : regroupe les films/séries par
         /// <see cref="BaseItem.PresentationUniqueKey"/> — LA clé d'identité
         /// d'Emby (id TVDB + langue de métadonnées + bibliothèque), le
-        /// critère EXACT du filtre « Doublons » du dashboard (vérifié terrain
-        /// 2026-10-06 : les groupes à PUK complète reproduisent au item près
+        /// critère EXACT du filtre « Doublons » du dashboard (les groupes à
+        /// PUK complète reproduisent à l'item près
         /// les flaggés <c>IsDuplicate=true</c> ; la clé est bien bornée par
         /// bibliothèque — un même id TVDB porté dans deux bibliothèques a deux
         /// PUK différentes et n'apparaît pas). Motif : une même œuvre fichée
         /// en plusieurs dossiers — Emby type l'import DVR d'après le titre
-        /// EPG, chaque variation de titre enfante un NOUVEAU dossier (ex.
-        /// « Le monde de Gabrielle Roy » vs « … (2021) ») — et Emby marque le
+        /// EPG, chaque variation de titre enfante un NOUVEAU dossier — et Emby marque le
         /// doublon sans JAMAIS fusionner : son identité est le dossier. Le
         /// constat prévient l'usager qu'une GESTION MANUELLE est requise
         /// (fusionner ou supprimer le dossier redondant) — invariant de
@@ -2546,7 +2524,7 @@ namespace LLM_AI
         ///   (invisible). Vérification in-process via le chemin d'auth du
         ///   compte — la signature <c>IUserManager.AuthenticateUser</c>
         ///   (validée 4.10.1 ; réflexion avec repli « info non vérifiable »
-        ///   pour les builds qui differeraient). JAMAIS le login HTTP, jamais
+        ///   pour les builds qui différeraient). JAMAIS le login HTTP, jamais
         ///   le hash exposé (seul le booléen de match ; la valeur matchante
         ///   n'est pas divulguée). Liste fermée bornée (~40 candidats :
         ///   triviaux universels + nom du compte, nom du serveur, « emby »,
@@ -2567,7 +2545,7 @@ namespace LLM_AI
         /// <item><b>Clés API Emby</b> (inventaire) : une clé API est un
         ///   credential ADMIN-ÉQUIVALENT PERMANENT. Lecture réflexion-safe de
         ///   l'<c>IAuthenticationRepository</c> (records actifs sans usager,
-        ///   ≈ la page /Auth/Keys du dashboard — validé 2026-10-01) ; ⚠️ si
+        ///   ≈ la page /Auth/Keys du dashboard) ; ⚠️ si
         ///   clés actives + rotation conseillée au-delà de ~6 mois
         ///   (<c>DateCreated</c>) et dernier usage lisible
         ///   (<c>DateLastActivity</c>) ; le token lui-même n'est JAMAIS
@@ -2589,18 +2567,19 @@ namespace LLM_AI
         ///   réel) ET historique des appareils <c>IDeviceManager.GetDevices</c>
         ///   (table Devices2 de authentication.db — preuve durable : tout
         ///   appareil jamais connecté avec une IP publique).</item>
-        /// <item><b>Surfaces plugin</b> (v1.13.13.0) : les playlists
-        ///   « AI Tonight » (publique foyer + privées par usager,
-        ///   v1.13.16.0 — verdict parental COMPLET du gate) et la bibliothèque
+        /// <item><b>Surfaces plugin</b> : les playlists
+        ///   « AI Tonight » (publique foyer + privées par usager —
+        ///   verdict parental COMPLET du gate) et la bibliothèque
         ///   .strm sont des surfaces foyer — vérifie que chaque usager actif
         ///   ne voit pas d'items hors des bibliothèques partagées avec lui
         ///   (FilterAccessible, fail-open) ni au-dessus de son contrôle
+        ///   ni au-dessus de son contrôle
         ///   parental complet, et que l'accès aux cartes .strm s'accompagne
-        ///   du droit d'enregistrement (règle v1.13.11.0 — inverse en info).
+        ///   du droit d'enregistrement (inverse en info).
         ///   Un échec de lecture → constat « info non vérifiable », jamais
         ///   une erreur.</item>
         /// <item><b>Contrôle parental : collection et règles de tags</b>
-        ///   (v1.13.17.0) : la collection « AI Tonight » (BoxSet) — le listing
+        ///   : la collection « AI Tonight » (BoxSet) — le listing
         ///   de ses membres est filtré NATIVEMENT par Emby (validé) et le
         ///   container reste visible — est couverte en INFO (pas un
         ///   contournement, contrairement à la playlist) ; les règles de
@@ -2646,10 +2625,10 @@ namespace LLM_AI
                     var name = u.Name ?? u.Id.ToString();
                     // L'entité User n'expose pas HasPassword (le DTO REST
                     // l'ajoute) : 4.10 écrit SHA1("") dans Password pour les
-                    // comptes SANS mot de passe (sentinelle, terrain 2026-10-01
-                    // users.db) — comptes sans mdp des builds anciens = champs
-                    // vides. IsPasswordSet couvre les deux ; le hash lui-même
-                    // ne sort JAMAIS — seulement le booléen.
+                    // comptes SANS mot de passe (sentinelle) — comptes sans
+                    // mdp des builds anciens = champs vides. IsPasswordSet
+                    // couvre les deux ; le hash lui-même ne sort JAMAIS —
+                    // seulement le booléen.
                     bool hasPassword = IsPasswordSet(u);
                     currentHasPassword[name] = hasPassword;
                     if (u.Policy?.IsAdministrator == true) { adminCount++; adminNames.Add(name); }
@@ -2724,14 +2703,13 @@ namespace LLM_AI
             }
 
             // ---- Sonde « mot de passe trivial » (admins uniquement) --------
-            // (décision 2026-10-01) Le trou entre « sans mdp » (déjà détecté
-            // ci-dessus) et « mdp = 1234 » (invisible). Vérification IN-PROCESS
-            // contre une liste fermée bornée via le chemin d'auth du compte —
-            // JAMAIS le login HTTP, jamais le hash exposé (seul le booléen de
-            // match), la valeur matchante JAMAIS divulguée. Usagers ordinaires
-            // NON sondés. Repli : signature AuthenticateUser introuvable →
-            // constat info, jamais une erreur (gotcha JIT des builds qui
-            // différencieraient — signature validée 4.10.1).
+            // Le trou entre « sans mdp » (déjà détecté ci-dessus) et
+            // « mdp = 1234 » (invisible). Vérification IN-PROCESS contre une
+            // liste fermée bornée via le chemin d'auth du compte — JAMAIS le
+            // login HTTP, jamais le hash exposé (seul le booléen de match),
+            // la valeur matchante JAMAIS divulguée. Usagers ordinaires NON
+            // sondés. Repli : signature AuthenticateUser introuvable →
+            // constat info, jamais une erreur.
             int probeScanned = 0, probeTried = 0;
             var probeMatches = new List<string>();
             var probeSuspended = new List<string>();    // comptes non sondés : verrouillé OU compteur d'échecs résiduel
@@ -2755,7 +2733,7 @@ namespace LLM_AI
                     {
                         probeScanned++;
 
-                        // Pré-vérification par compte (terrain 2026-10-01) : Emby
+                        // Pré-vérification par compte : Emby
                         // verrouille TEMPORAIREMENT un compte au-delà de ~5 échecs
                         // d'authentification (UserPolicy.InvalidLoginAttemptCount,
                         // remis à zéro UNIQUEMENT par une connexion réussie du
@@ -2764,9 +2742,8 @@ namespace LLM_AI
                         // JAMAIS à des échecs existants. On ne teste PAS
                         // User.IsLockedOut/LockedOutDate : la date peut rester
                         // non-nulle POUR TOUJOURS après un vieux verrouillage
-                        // déjà expiré (terrain 16:0x : LockedOutDate=15:22
-                        // encore posé, login pourtant rétabli 15:42) — la lire
-                        // suspendrait le compte pour tous les audits futurs.
+                        // déjà expiré — la lire suspendrait le compte pour
+                        // tous les audits futurs.
                         User fresh = null;
                         try { fresh = _users.GetUserByName(name); } catch { }
                         if (fresh == null) continue;    // parti entre la lecture et la sonde
@@ -2801,7 +2778,7 @@ namespace LLM_AI
                             // cap ET des échecs concurrents (l'usager réel se
                             // trompe pendant la sonde), on s'arrête — ne JAMAIS
                             // ajouter l'échec qui ferait franchir le seuil
-                            // de verrouillage (~5, terrain 2026-10-01).
+                            // de verrouillage (~5).
                             User after = null;
                             try { after = _users.GetUserByName(name); } catch { }
                             int afterCount = 0;
@@ -2850,11 +2827,10 @@ namespace LLM_AI
             // ---- Inventaire des clés API Emby ------------------------------
             // Une clé API = credential ADMIN-ÉQUIVALENT PERMANENT (pas de
             // session, pas de mot de passe, pas d'expiration). Inventaire des
-            // auth records actifs SANS usager (≈ /Auth/Keys du dashboard,
-            // validé 2026-10-01), lecture réflexion-safe (les shapes varient
-            // par build). Rotation conseillée au-delà de ~6 mois (seuil fixé
-            // à l'implémentation — décision 2026-10-01). Fallback = info,
-            // jamais une erreur.
+            // auth records actifs SANS usager (≈ /Auth/Keys du dashboard),
+            // lecture réflexion-safe (les shapes varient par build). Rotation
+            // conseillée au-delà de ~6 mois. Fallback = info, jamais une
+            // erreur.
             bool apiKeyChecked = false;
             int apiKeyCount = 0;
             var apiKeyLabels = new List<string>();
@@ -2871,7 +2847,7 @@ namespace LLM_AI
                     {
                         try { queryType.GetProperty(prop)?.SetValue(q, val, null); } catch { }
                     }
-                    // HasUser=false ≈ /Auth/Keys (validé 2026-10-01 : la page du
+                    // HasUser=false ≈ /Auth/Keys (la page du
                     // dashboard ne renvoie que les records sans usager).
                     SetQ("HasUser", false);
                     SetQ("IsActive", true);
@@ -2942,17 +2918,17 @@ namespace LLM_AI
                     detail += " Rotation conseillée (" + ApiKeyRotationDays + " j ou plus) : " +
                         string.Join(", ", apiKeyTooOld) +
                         " — créer une nouvelle clé, migrer les appels, retirer l'ancienne.";
-                // NB gouvernance fusionnée ici (terrain 2026-10-01 : les
-                // constats info isolés « multi-admins » sont tombés à la
-                // compression de synthèse sur 3 modèles et 2 pipelines ;
-                // ce constat ⚠️ a survécu à CHAQUE run — le fait y voyage).
+                // NB gouvernance fusionné dans ce constat ⚠️ : les constats
+                // info isolés « multi-admins » sont tombés à la compression
+                // de synthèse — le fait voyage avec le constat qui survit
+                // à chaque run.
                 if (adminCount > 1)
                     detail += " NB gouvernance : " + adminCount + " comptes administrateurs actifs (" +
                         string.Join(", ", adminNames) +
                         ") — bonne pratique : un seul compte admin sécurisé, comptes usagers à droits réduits.";
                 Add("avertissement", "Clés API Emby actives",
                     detail,
-                    "Dashboard → Avancé → Clés API : revoquer les clés qui ne servent plus ; ne les partager " +
+                    "Dashboard → Avancé → Clés API : révoquer les clés qui ne servent plus ; ne les partager " +
                     "qu'avec les applications qui en ont besoin.");
             }
             else if (apiKeyCount == 0 && adminCount > 1)
@@ -3053,15 +3029,14 @@ namespace LLM_AI
                     "Optionnel : Dashboard → Réseau → « Filtre d'adresses externes » en mode whitelist.");
             }
 
-            // ---- Surfaces plugin : cohérence d'accès (v1.13.13.0,
-            //      playlists per-usager + verdicts complets v1.13.16.0) ---
+            // ---- Surfaces plugin : cohérence d'accès --------------------
             // Les playlists « AI Tonight » (publique foyer + privées par
             // usager) et la bibliothèque .strm exposent les cartes
             // d'enregistrement. Un usager peut donc voir ces surfaces sans
             // avoir accès aux bibliothèques qui portent leur contenu (il
             // voit la reco — titre, poster — hébergée ailleurs), ou accéder
-            // aux cartes .strm sans porter le droit d'enregistrement (règle
-            // v1.13.11.0). Le contrôle parental Emby étant LISTING-ONLY,
+            // aux cartes .strm sans porter le droit d'enregistrement.
+            // Le contrôle parental Emby étant LISTING-ONLY,
             // un item visible dans une playlist est LISIBLE — l'audit
             // signale ces décalages à l'admin ; le dashboard reste maître
             // des accès, le plugin ne modifie jamais les comptes.
@@ -3088,7 +3063,7 @@ namespace LLM_AI
                 }
 
                 // --- A. Playlists « AI Tonight » (publique + privées) ------
-                // v1.13.16.0 : la playlist PUBLIQUE foyer (« AI Tonight »)
+                // La playlist PUBLIQUE foyer (« AI Tonight »)
                 // coexiste avec les playlists PRIVÉES par usager
                 // (« AI Tonight · {usager} », remplie par les runs de chacun).
                 // Le contrôle parental Emby est LISTING-ONLY (validé
@@ -3164,7 +3139,7 @@ namespace LLM_AI
                         if (u == null) continue;
 
                         // Mismatch bibliothèque : même mécanique que le gate des
-                        // recos (v1.13.12.0) — les items de la playlist doivent
+                        // recos — les items de la playlist doivent
                         // rester dans les bibliothèques accessibles à l'usager.
                         if (!PermissionGate.HasUnrestrictedFolders(u))
                         {
@@ -3179,10 +3154,10 @@ namespace LLM_AI
                             }
                         }
 
-                        // Verdict parental COMPLET (v1.13.16.0) : remplace
+                        // Verdict parental COMPLET : remplace
                         // l'ancien check « MaxParentalRating seul » — le
                         // contrôle parental Emby ne bloque PAS la lecture
-                        // depuis une playlist (validé 2026-09-12), donc un
+                        // depuis une playlist, donc un
                         // item interdit visible y est LISIBLE.
                         int blocked = members.Count(m =>
                             PermissionGate.IsParentallyAllowed(u, m) != PermissionGate.ParentalVerdict.Allowed);
@@ -3234,16 +3209,16 @@ namespace LLM_AI
                 }
 
                 // --- C. Contrôle parental : collection et règles de tags ----
-                // (v1.13.17.0) Deux volets complémentaires aux playlists :
+                // Deux volets complémentaires aux playlists :
                 //
                 // • Collection « AI Tonight » (BoxSet) : le listing de ses
                 //   membres est filtré NATIVEMENT par Emby pour un compte
-                //   restreint (validé 2026-09-12 : un item CA-14A ajouté au
+                //   restreint (un item au-dessus de la limite ajouté au
                 //   BoxSet est invisible dans le listing du compte, les items
                 //   sous la limite restent visibles) et le container lui-même
                 //   reste toujours visible, même quand sa cote agrégée dépasse
                 //   la limite. Ce n'est donc pas un contournement (contraire-
-                //   ment à la playlist, corrigée en v1.13.16.0) — INFO de
+                //   ment à la playlist) — INFO de
                 //   transparence, pas alerte. L'accès direct par id reste
                 //   possible (comportement Emby natif, hors du plugin).
                 // • Règles de TAGS inopérantes : un BlockedTags / IncludeTags
@@ -3580,18 +3555,17 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>Borne dure de la LISTE de candidats par compte admin — la
-        /// sonde est CONTRÔLÉE, jamais un brute-force (décision 2026-10-01 :
-        /// ~30 candidats triviaux + contextuels, un cap en dur pour l'avenir).</summary>
+        /// sonde est CONTRÔLÉE, jamais un brute-force (~40 candidats triviaux
+        /// + contextuels, un cap en dur pour l'avenir).</summary>
         private const int ProbeCandidateCap = 40;
 
         /// <summary>TENTATIVES d'authentification max PAR COMPTE PAR RUN — la
         /// sonde ne doit JAMAIS faire basculer le verrouillage de connexion
-        /// d'Emby (constat terrain 2026-10-01 15:22 : « Temporarily locking
-        /// out user Élodie due to 5 unsuccessful login attempts » — le serveur
-        /// verrouille le compte au-delà de ~5 échecs, compteur
-        /// <c>UserPolicy.InvalidLoginAttemptCount</c>, remis à zéro
-        /// UNIQUEMENT par une connexion réussie du compte). Cap = 3 (marge de
-        /// 2), la sonde suspend tout compte dont le compteur n'est pas déjà à
+        /// d'Emby (le serveur verrouille le compte au-delà de ~5 échecs —
+        /// « Temporarily locking out user <nom> due to 5 unsuccessful login
+        /// attempts », compteur <c>UserPolicy.InvalidLoginAttemptCount</c>,
+        /// remis à zéro UNIQUEMENT par une connexion réussie du compte).
+        /// Cap = 3 (marge de 2), la sonde suspend tout compte dont le compteur n'est pas déjà à
         /// zéro, et s'arrête sur <see cref="ProbeLockoutMargin"/> si le
         /// compteur grimpe en cours de sonde. La couverture du reste de la
         /// liste est PROGRESSIVE : reprise aux runs suivants une fois le
@@ -3601,22 +3575,20 @@ namespace LLM_AI
 
         /// <summary>Marge d'arrêt en cours de sonde : dès que le compteur
         /// d'échecs d'un compte atteint cette valeur pendant qu'on le sonde,
-        /// on arrête ce compte (le seuil de verrouillage observé est ~5 —
-        /// terrain 2026-10-01 — on refuse d'ajouter l'échec qui pourrait
+        /// on arrête ce compte (le seuil de verrouillage d'Emby est ~5 —
+        /// on refuse d'ajouter l'échec qui pourrait
         /// l'atteindre, même si des échecs réels concurrents ont mangé notre
         /// marge). Doit rester &lt; au seuil d'Emby.</summary>
         private const int ProbeLockoutMargin = 4;
 
         /// <summary>Âge (jours) au-delà duquel la rotation d'une clé API Emby
-        /// est suggérée dans le constat — ~6 mois ; seuil fixé à
-        /// l'implémentation (décision 2026-10-01).</summary>
+        /// est suggérée dans le constat — ~6 mois.</summary>
         private const int ApiKeyRotationDays = 183;
 
         /// <summary>SHA1 de la chaîne vide — sentinelle « sans mot de passe »
         /// que Emby 4.10 écrit dans le champ <c>User.Password</c> des comptes
-        /// SANS mot de passe (terrain 2026-10-01 : users.db LocalUsersv2,
-        /// compte « Test » sans mdp = DA39A3EE…709, et le DTO REST l'exclut
-        /// aussi : HasPassword=false). Sur 4.10 un compte sans mdp n'a donc
+        /// SANS mot de passe (le DTO REST l'exclut aussi : HasPassword=false).
+        /// Sur 4.10 un compte sans mdp n'a donc
         /// PAS Password/Salt vides : sans ce test sur le hash vide, FAUX
         /// POSITIF « a un mot de passe ». (Un compte à vrai mot de passe n'a pas de
         /// Salt du tout : le champ Salt est un reliquat legacy.)</summary>
@@ -3651,9 +3623,9 @@ namespace LLM_AI
 
         /// <summary>Candidats de la sonde : candidats contextuels EN TÊTE (nom
         /// du compte en 2 casses, nom du serveur en 2 casses, « emby »,
-        /// « test ») puis triviaux universels — dédup ORDINEL exact (les
-        /// variantes minuscules doivent rester probed : un mot de passe
-        /// « elodie » ≠ « Élodie »), cap <see cref="ProbeCandidateCap"/>. Ne lève
+        /// « test ») puis triviaux universels — dédup ORDINALE exacte (les
+        /// variantes minuscules doivent rester sondées : un mot de passe
+        /// « alice » ≠ « Alice »), cap <see cref="ProbeCandidateCap"/>. Ne lève
         /// jamais.</summary>
         private static List<string> BuildTrivialCandidates(string username, string serverName)
         {
@@ -3682,9 +3654,9 @@ namespace LLM_AI
         /// la forme différemment, la résolution échoue et la sonde se dégrade
         /// en constat « info non vérifiable » (jamais une
         /// MissingMethodException à JIT qui tuerait la chaîne entière — gotcha
-        /// documenté). Signature validée contre libs/ 4.10.1 le 2026-10-01 :
-        /// (username, password, isUserSession, cancellationToken) → Task&lt;User&gt;
-        /// ; repli sur l'ancienne forme (username, password, cancellationToken).</summary>
+        /// documenté). Signature Emby 4.10 : (username, password,
+        /// isUserSession, cancellationToken) → Task&lt;User&gt; ;
+        /// repli sur l'ancienne forme (username, password, cancellationToken).</summary>
         private static MethodInfo s_authenticateUserMi;
         private static MethodInfo ResolveAuthenticateUser()
         {
@@ -3916,11 +3888,9 @@ namespace LLM_AI
                     upnp_available = false,
                     verdict = "ok",
                     checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
-                    // Terrain 18:36 : sans findings explicite, gemma4 lisait
-                    // « upnp_available=false » comme une PANNE et classait la
-                    // ligne UPnP en 🔴. La sévérité devient structurelle : la
-                    // dose cite le constat sous sa sévérité d'origine (règle
-                    // fidélité #1), plus de jugement laissé au modèle.
+                    // Sévérité structurelle : le constat porte la
+                    // sienne, la dose la cite telle quelle — un état sain
+                    // n'est jamais relayé comme une panne.
                     findings = new object[]
                     {
                         new
@@ -3985,7 +3955,7 @@ namespace LLM_AI
                     discovered_locations = locations.Keys.ToArray(),
                     verdict = "info",
                     checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
-                    // Sévérité structurelle (même correction terrain 18:36).
+                    // Sévérité structurelle (constat porte sa propre sévérité).
                     findings = new object[]
                     {
                         new
@@ -4098,7 +4068,7 @@ namespace LLM_AI
                 mapping_count = mappings.Count,
                 mappings,
                 checked_seconds = Math.Round(sw.Elapsed.TotalSeconds, 1),
-                // Sévérité structurelle (même correction terrain 18:36) : le
+                // Sévérité structurelle : le
                 // constat porte sa propre sévérité, la dose la cite telle
                 // quelle (critique → 🔴, info → ℹ️, ok → ✅).
                 findings = new object[]
@@ -4158,7 +4128,7 @@ namespace LLM_AI
         /// section <c>## nom</c> contient le JSON brut d'une sonde. Ce digest est
         /// ensuite fourni à un unique passage LLM sans outils (synthèse) pour le
         /// mode <c>AuditMode=deterministic</c> — conçu pour les modèles
-        /// locaux/modestes (ex. gemma4) en retirant l'orchestration multi-outils.
+        /// locaux/modestes en retirant l'orchestration multi-outils.
         /// Inclut le tail (150 lignes) du journal le plus récent (best-effort,
         /// via <see cref="ListLogsAsync"/> puis <see cref="InspectLogAsync"/>).
         /// Aucune action de remédiation : ce mode est lecture-seule au sens
@@ -4277,7 +4247,7 @@ namespace LLM_AI
             Plugin.Instance?.Configuration?.AuditRemediationEnabled == true;
 
         /// <summary>Message d'erreur standard quand la remédiation est désactivée.
-        /// Redirige explicitement vers les tools DÉDIÉS du chat (v1.13.30) :
+        /// Redirige explicitement vers les tools DÉDIÉS du chat :
         /// si un LLM de chat s'aventure malgré tout sur ce chemin, l'erreur le
         /// ramène vers la carte d'approbation au tour suivant.</summary>
         private static string RemediationDisabledErr() =>
@@ -4292,8 +4262,8 @@ namespace LLM_AI
         /// <summary>
         /// Arrête la lecture d'une session — primitive partagée
         /// <see cref="ServerRemediation.StopSessionAsync"/> : contrôleur
-        /// premier admin (v2.6.3), arrêt CONFIRMÉ PAR RELECTURE, repli
-        /// GoHome (v2.6.4) — jamais d'arrêt annoncé sur le seul ok d'envoi.
+        /// premier admin, arrêt CONFIRMÉ PAR RELECTURE, repli
+        /// GoHome — jamais d'arrêt annoncé sur le seul ok d'envoi.
         /// </summary>
         private async Task<string> StopSessionAsync(JsonElement args, CancellationToken ct)
         {
@@ -4302,7 +4272,7 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(sessionId))
                 return Err("paramètre 'session_id' requis (voir active_sessions).");
 
-            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // Primitive partagée avec les tools d'action du chat —
             // deux chemins, un seul code métier.
             var r = await ServerRemediation.StopSessionAsync(_sessions, _users, sessionId, ct).ConfigureAwait(false);
             if (r.Error != null) return Err(r.Error);
@@ -4332,7 +4302,7 @@ namespace LLM_AI
             if (string.IsNullOrWhiteSpace(taskId) && string.IsNullOrWhiteSpace(taskKey))
                 return Err("paramètre 'task_id' ou 'task_key' requis (voir scheduled_tasks).");
 
-            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // Primitive partagée avec les tools d'action du chat —
             // l'audit ne filtre PAS les tâches cachées (comportement historique).
             var r = ServerRemediation.TriggerTask(_tasks, taskId, taskKey, excludeHidden: false);
             if (r.Error != null) return Err(r.Error);
@@ -4373,7 +4343,7 @@ namespace LLM_AI
             string delivery = (OptString(args, "delivery") ?? "notification").ToLowerInvariant();
             int timeoutMs = OptInt(args, "timeout_ms", 5000);
 
-            // Primitive partagée avec les tools d'action du chat (v1.13.30) —
+            // Primitive partagée avec les tools d'action du chat —
             // deux chemins, un seul code métier (les deux modes de livraison
             // et la résolution usager sont documentés sur ServerRemediation).
             var r = await ServerRemediation.SendMessageAsync(_sessions, _users, _notifications, _logger,
@@ -4409,6 +4379,14 @@ namespace LLM_AI
         private SystemInfo _cachedSystemInfo;
         private bool _systemInfoTried;
 
+        /// <summary>
+        /// Récupère <see cref="SystemInfo"/> (vue complète : version, OS, ports,
+        /// chemins, redémarrage en attente, mise à jour). On passe
+        /// <see cref="IPAddress.Loopback"/> comme remoteAddress (l'API n'a pas
+        /// de surcharge sans adresse ; null peut lever). En cas d'échec, vue
+        /// réduite depuis <see cref="IServerApplicationHost.GetPublicSystemInfo"/>
+        /// + propriétés de l'hôte.
+        /// </summary>
         private async Task<SystemInfo> GetSystemInfoAsync(CancellationToken ct)
         {
             if (_systemInfoTried) return _cachedSystemInfo;
@@ -4694,7 +4672,7 @@ namespace LLM_AI
             return e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
         }
 
-        // Args LLM : garde ValueKind AVANT TryGetInt32 (léve sinon sur une
+        // Args LLM : garde ValueKind AVANT TryGetInt32 (lève sinon sur une
         // chaîne — piège .NET documenté, cf. TmdbLookupTool.IntN) + tolère
         // "50" encodé en chaîne.
         private static int OptInt(JsonElement e, string name, int dflt)

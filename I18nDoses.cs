@@ -6,10 +6,8 @@ using System.Text.RegularExpressions;
 namespace LLM_AI
 {
     /// <summary>
-    /// Découpe + validation des « doses » de traduction (v1.17.0, T1b) —
-    /// port C# des outils du kit local (<c>i18n-kit/split_i18n.js</c> +
-    /// règles 4-5 de <c>validate_i18n.js</c>). Pur et statique :
-    /// rejouable au harnais réflexion (même convention que
+    /// Découpe + validation des « doses » de traduction (v1.17.0) —
+    /// pur et statique : rejouable sans hôte Emby (même convention que
     /// <see cref="I18nOverlay.LoadFrom"/>).
     /// <para><b>Dose</b> = familles atomiques du MÊME domaine (web + server
     /// confondus — la cohérence terminologique d'un écran se joue sur ses
@@ -17,17 +15,17 @@ namespace LLM_AI
     /// « ext » (chrome + serveur du chat externe = une seule page). Une
     /// famille insécable ne traverse jamais un bin ; une famille plus large
     /// que le cap forme sa propre dose (la cohérence passe avant le cap —
-    /// règle du kit). Cap 50 clés : la plus grosse dose ≈ 10-12 Ko de
+    /// règle de découpage). Cap 50 clés : la plus grosse dose ≈ 10-12 Ko de
     /// prompt — tient dans le <c>num_ctx</c> 8192 d'un petit modèle local
-    /// (terrain kit : la passe unique 529 clés échoue, attention étirée,
+    /// (terrain : la passe unique 529 clés échoue, attention étirée,
     /// 514/529 mesurés).</para>
     /// </summary>
     internal static class I18nDoses
     {
-        /// <summary>Clés max par dose (kit <c>split_i18n.js</c> : CAP = 50).</summary>
+        /// <summary>Clés max par dose (cap de 50).</summary>
         internal const int Cap = 50;
 
-        /// <summary>Seuil de fusion des doses trop petites (kit : &lt; 12).</summary>
+        /// <summary>Seuil de fusion des doses trop petites (&lt; 12).</summary>
         internal const int MinMergeSize = 12;
 
         /// <summary>Cap des doses « tags » (valeurs dont la native EN porte
@@ -62,7 +60,7 @@ namespace LLM_AI
 
         /// <summary>Famille d'une clé : 2 premiers segments pour <c>cfg.X</c> /
         /// <c>act.X</c> (famille = section de panneau / type de carte), 1er
-        /// segment sinon (port exact de <c>famOf</c> du kit).</summary>
+        /// segment sinon.</summary>
         internal static string FamilyOf(string key)
         {
             if (string.IsNullOrEmpty(key)) return key ?? string.Empty;
@@ -72,10 +70,9 @@ namespace LLM_AI
                 : parts[0];
         }
 
-        /// <summary>Domaine d'une famille (port de <c>domOf</c> du kit, +
-        /// regroupement <c>srv</c> → <c>ext</c> : chrome ext.* et messages
+        /// <summary>Domaine d'une famille (+ regroupement <c>srv</c> → <c>ext</c> : chrome ext.* et messages
         /// srv.* du chat externe partagent leur dose — même page, même voix).
-        /// Le rec/reco fusionne comme au kit.</summary>
+        /// Le rec/reco fusionne.</summary>
         internal static string DomainOf(string fam)
         {
             string d = fam.StartsWith("cfg.", StringComparison.Ordinal)
@@ -96,8 +93,7 @@ namespace LLM_AI
         /// modèle frais) ; 1) familles ; 2) domaines ; 3) empaquetage
         /// premier-satisfait par domaine (familles triées par taille
         /// décroissante, bins ≤ cap) ; 4) fusion des doses trop petites ;
-        /// 5) nommage (dom / dom_pN ; doses triées par taille décroissante
-        /// comme au kit). Déterministe : mêmes entrées → mêmes doses (les
+        /// 5) nommage (dom / dom_pN ; doses triées par taille décroissante). Déterministe : mêmes entrées → mêmes doses (les
         /// dictionnaires sont parcourus dans l'ordre de déposition).
         /// </summary>
         internal static List<Dose> Split(List<(string Sec, string Key)> all,
@@ -182,7 +178,7 @@ namespace LLM_AI
                 bins.AddRange(domBins);
             }
 
-            // 4) fusion des doses trop petites (règle kit : les deux < 12 et
+            // 4) fusion des doses trop petites (règle : les deux < 12 et
             //    la somme ≤ cap — une dose fusionnée peut mélanger deux
             //    domaines minuscules).
             var merged = new List<(List<string> Fams, int Size)>();
@@ -198,7 +194,7 @@ namespace LLM_AI
                 else merged.Add(d);
             }
 
-            // 5) nommage : tri par taille décroissante (kit) ; un domaine qui
+            // 5) nommage : tri par taille décroissante ; un domaine qui
             //    s'étale sur plusieurs doses porte _pN.
             var ordered = merged.OrderByDescending(m => m.Size).ThenBy(m => m.Fams[0], StringComparer.Ordinal);
             var domCount = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -281,7 +277,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Garde « identique à l'anglais » (leçon du kit : le faux conforme)
+        //  Garde « identique à l'anglais » (le faux conforme)
         // ------------------------------------------------------------------
 
         /// <summary>Mots non traduits (marques, tokens techniques) — la
@@ -295,7 +291,7 @@ namespace LLM_AI
                 "http", "https", "token", "key", "id", "ids", "uuid", "etag",
                 "cron", "gpu", "ram", "ssd", "linux", "windows", "docker",
                 "youtube", "trakt", "imdb", "fanart",
-                // trouvées au harnais T1b (chaînes identiques légitimes)
+                // trouvées aux tests (chaînes identiques légitimes)
                 "server", "servers", "tv", "live", "dvr", "epg", "app"
             };
 
@@ -305,7 +301,7 @@ namespace LLM_AI
         /// courte (≤ 3 caractères), ou composée uniquement de mots
         /// non-traduits (marques). Ex. « 🔊 Auto » contient « Auto » — mot
         /// alphabétique hors marques → PAS trivial (suspect à relire même si
-        /// légitime dans la langue). Le vérdict final (garder + flag ⚠️) vit
+        /// légitime dans la langue). Le verdict final (garder + flag ⚠️) vit
         /// dans le moteur — ici seule la classification.
         /// </summary>
         internal static bool TriviallyIdenticalEn(string enNative, string value)

@@ -8,18 +8,12 @@ namespace LLM_AI
     /// Appariement session ↔ usager — UNE seule source de vérité (v2.7.4).
     /// </summary>
     /// <remarks>
-    /// <para><b>Piège de format (vécu prod 2026-10-29→31, preuve banc
-    /// 2026-11-01 sur Emby 4.10.2.0)</b> :
-    /// <see cref="SessionInfo.UserId"/> est stocké en forme « N » (Guid
-    /// SANS tirets, ex. <c>00c272f6365b4f79866c3db322ed4d1a</c>) alors que
+    /// <para><b>Piège de format</b> : <see cref="SessionInfo.UserId"/> est
+    /// stocké en forme « N » (Guid SANS tirets, ex.
+    /// <c>0123456789abcdef0123456789abcdef</c>) alors que
     /// <c>User.Id.ToString()</c> produit la forme « D » (AVEC tirets) — une
-    /// comparaison de chaînes stricte entre les deux ne matche JAMAIS. C'est
-    /// ce qui a tué silencieusement les toasts d'enregistrement
-    /// (<c>TonightRecordingService</c>, v2.4.0→v2.7.3 : « 0 toast(s) » sur
-    /// CHAQUE annonce — début et complétion — alors que l'usager regardait
-    /// Emby, la ligne de log ne distinguant pas « pas de session » de « pas
-    /// de correspondance ») et le mode <c>osd</c> de
-    /// <c>ServerRemediation.SendMessageAsync</c> (forme « D » seule).</para>
+    /// comparaison de chaînes stricte entre les deux ne matche JAMAIS, sans
+    /// aucune erreur visible (ex. : aucun toast envoyé).</para>
     /// <para><b>Contrat</b> : comparer <see cref="SessionInfo.UserId"/> à un
     /// usager TOUJOURS par <see cref="Matches"/> (trois formes + casse),
     /// jamais directement contre <c>user.Id.ToString()</c>. La résolution

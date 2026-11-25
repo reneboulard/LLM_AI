@@ -8,16 +8,9 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  Boucle de rétroaction des recommandations (feedback loop)
-    //
-    //  Chaque reco émise (run « À regarder ce soir », tâche planifiée
-    //  d'enregistrement) et chaque rejet explicite (bouton « Oublier »)
-    //  est journalisé dans RecoLog. Une fois par semaine, RecoAnalysisTask
-    //  rapproche ce journal des visionnages réels de l'usager (hits/misses/
-    //  rejets/vu-sans-reco) et fait produire au LLM une DIRECTIVE concise
-    //  persistée dans PromptDirectives — réinjectée dans les prompts des
-    //  runs suivants. Tout est opt-in (RecoFeedbackEnabled) et fail-open :
-    //  sans directive, les prompts sont inchangés.
+    // Boucle de rétroaction (feedback loop) des recommandations :
+    // le journal des recos passées et des visionnages réels produit des
+    // directives qui orientent les recommandations futures.
     // ---------------------------------------------------------------------
 
     /// <summary>Une entrée du journal des recommandations (RecoLog).</summary>
@@ -60,7 +53,7 @@ namespace LLM_AI
     /// Helpers partagés de la boucle de rétroaction : parse/persist du
     /// journal (<see cref="PluginConfiguration.RecoLog"/>) et des directives
     /// (<see cref="PluginConfiguration.PromptDirectives"/>), et construction
-    /// des blocs de prompt réinjectés dans les runs. Les appelsants passent
+    /// des blocs de prompt réinjectés dans les runs. Les appelants passent
     /// la config courante — la persistance passe par
     /// <c>Plugin.Instance.SaveConfiguration()</c> (best-effort).
     /// </summary>

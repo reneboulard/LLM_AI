@@ -19,8 +19,7 @@ namespace LLM_AI
         /// ollama.com, clé <see cref="PluginConfiguration.OllamaApiKey"/>) ou
         /// <c>"gemini"</c> (Google Gemini, clé
         /// <see cref="PluginConfiguration.GeminiApiKey"/>). Défaut
-        /// <c>"ollama_local"</c>. Porte la même dynamique que l'app de
-        /// référence /var/www/llm_core (3 providers, routage par type).
+        /// <c>"ollama_local"</c>. Trois providers, routage par type.
         /// </summary>
         public string Provider { get; set; } = "ollama_local";
 
@@ -59,7 +58,7 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Type de backend LLM (portage des 3 providers de /var/www/llm_core).
+    /// Type de backend LLM (3 providers).
     /// </summary>
     public enum LlmProvider { OllamaLocal, OllamaCloud, Gemini }
 
@@ -109,7 +108,7 @@ namespace LLM_AI
         /// rétroaction, mémoire réflexive) autorisées à tourner en même
         /// temps — capacité de la porte <see cref="LlmTaskGate"/>. Défaut 1 :
         /// un Ollama local traite une conversation à la fois, des runs
-        /// empilés s'étouffent sur le timeout par appel (2 min) et épuisent
+        /// empilés s'étouffent sur le timeout par appel et épuisent
         /// la cascade de replis. Monter à 2+ pour un setup cloud ou un
         /// Ollama à slots parallèles. Les surfaces interactives (chat,
         /// Tonight) ne passent pas par la porte.
@@ -153,13 +152,11 @@ namespace LLM_AI
         /// historique inchangé</b> (aucune lecture <c>translations</c>, ordre
         /// bibliothèque→contenu, cascade historique). Non vide = le
         /// <b>contenu d'abord</b> : la langue du synopsis EPG figé met SA famille
-        /// en tête de la liste, la fiche est lise UNE fois avec
+        /// en tête de la liste, la fiche est lue UNE fois avec
         /// <c>append_to_response=translations</c> et le synopsis est pris dans la
-        /// première langue disponible de la liste (fr-CA avant fr-FR — sans ce
-        /// champ, fr-CA est structurellement inatteignable : <c>ToTmdbLang</c> ne
-        /// connaît que fr-FR, et TMDB ne fait AUCUN repli croisé fr-FR↔fr-CA) ;
-        /// le TITRE reste lu dans la langue du contenu (doctrine portes
-        /// lexicales 2026-10-01) ; le dernier rang de la liste = repli final.
+        /// première langue disponible de la liste (fr-CA avant fr-FR — TMDB ne
+        /// fait aucun repli croisé fr-FR↔fr-CA) ; le TITRE reste lu dans la
+        /// langue du contenu ; le dernier rang de la liste = repli final.
         /// Codes à deux lettres acceptés (fr → fr-FR, en → en-US…), familles
         /// inconnues gardées telles quelles (bg, nl…), entrée invalide
         /// ignorée (loguée). Config vivante, sans restart.
@@ -171,19 +168,16 @@ namespace LLM_AI
         /// fiches (<c>system_audit action=links_check</c> + tool chat
         /// <c>validate_links</c>, v2.22.0) : chaque passage valide au plus
         /// ce nombre de films/séries AJOUTÉS depuis le dernier passage
-        /// (curseur <c>validate_links_state.json</c> — premier passage
-        /// sans marque = baseline depuis le plus ancien ; re-scan complet
-        /// via le sélecteur <c>full=true</c> du chat). Défaut 300 ≈
-        /// 90-100 s par passage (throttle fixe 300 ms/appel TMDB, ~33
-        /// req/10 s — une clé TMDB v3 ne s'épuise pas, c'est la rafale
-        /// qui est protégée). Clampé au plafond dur 1000 à l'exécution.
+        /// (curseur <c>validate_links_state.json</c> ; re-scan complet via
+        /// <c>full=true</c> du chat). Défaut 300 ≈ 90-100 s par passage
+        /// (throttle fixe 300 ms/appel TMDB : c'est la rafale qui est
+        /// protégée). Clampé au plafond dur 1000 à l'exécution.
         /// </summary>
         public int ValidateLinksMaxItems { get; set; } = 300;
 
         /// <summary>
         /// Clé API TheTVDB.com (v4) pour l'outil <c>tvdb_search</c> (enrichissement
-        /// synopsis/statut des séries — portage de l'outil PHP qui fonctionne avec
-        /// le LLM). Repli sur la variable d'environnement <c>TVDB_API_KEY</c> si
+        /// synopsis/statut des séries). Repli sur la variable d'environnement <c>TVDB_API_KEY</c> si
         /// vide. Laisser les deux vides pour désactiver l'outil. À renseigner via
         /// la page de configuration (persisté dans le fichier XML), pas en dur.
         /// </summary>
@@ -232,9 +226,7 @@ namespace LLM_AI
         /// qu'une clé Ollama cloud est présente, l'outil repli
         /// automatiquement sur <c>https://ollama.com/api/web_fetch</c>. Défaut
         /// <c>true</c> (communauté). <c>false</c> = utiliser uniquement Ollama
-        /// cloud (nécessite <see cref="OllamaApiKey"/>). Portage C# de la logique
-        /// d'extraction de <c>/var/www/llm_core/tools/fetch_web_page.php</c>
-        /// (sans ses dépendances curl-impersonate/Redis, non portables).
+        /// cloud (nécessite <see cref="OllamaApiKey"/>).
         /// </summary>
         public bool WebFetchDirect { get; set; } = true;
 
@@ -266,7 +258,7 @@ namespace LLM_AI
         /// <list type="bullet">
         /// <item>« URL » : flux RSS/Atom auto-détecté ;</item>
         /// <item>« URL :: @showbizz » : extracteur intégré (blocs
-        /// <c>/emissions/</c> + « Saison 1 », portage du scraper PHP) ;</item>
+        /// <c>/emissions/</c> + « Saison 1 ») ;</item>
         /// <item>« URL :: regex .NET » : extraction personnalisée (groupe nommé
         /// « title » requis, « url »/« date » optionnels), p. ex.
         /// <c>https://…/Category:2026_Canadian_television_series_debuts :: &lt;li&gt;&lt;a href="(?&lt;url&gt;/wiki/[^:"]+)"[^&gt;]*&gt;(?&lt;title&gt;[^&lt;]+)&lt;/a&gt;</c>.</item>
@@ -314,13 +306,13 @@ namespace LLM_AI
         /// Langue de sortie du LLM pour le texte en langage naturel (pastilles
         /// AI-Tonight, raisons des recommandations, rapport d'audit, fiches
         /// mémoire, chat). Toute valeur non vide (ex. « English », « Français »,
-        /// « Español ») injecte une directive forçant l'LLM à répondre dans cette
+        /// « Español ») injecte une directive forçant le LLM à répondre dans cette
         /// langue — une valeur libre non reconnue des métadonnées (ex.
         /// « Nederlands ») reste comprise ici. Vide = « Auto » : la langue est
         /// résolue via <see cref="I18n.ResolveProseLangName"/> — langue de
         /// configuration de l'interface Emby (UICulture), sinon anglais — et la
-        /// directive est TOUJOURS injectée (règle usager 2026-10-01 ; sans
-        /// directive, un modèle a déjà dérivé en chinois). Les infos EPG
+        /// directive est TOUJOURS injectée (sans directive, le modèle peut
+        /// dériver vers une autre langue). Les infos EPG
         /// (titres de films/séries, noms de chaînes, horaires) ne se traduisent
         /// JAMAIS : le LLM enrichit autour, dans la langue résolue ; les noms
         /// de champs JSON techniques restent inchangés.
@@ -412,10 +404,10 @@ namespace LLM_AI
         public string GenreAliasApplied { get; set; } = "";
 
         /// <summary>
-        /// Whitelist de chaines (tableau JSON de noms, ex.
+        /// Whitelist de chaînes (tableau JSON de noms, ex.
         /// <c>["TF1","Arte"]</c>) : seuls les programmes EPG diffusés sur ces
-        /// chaines sont renvoyés à l'agent par <c>get_emby_info</c>
-        /// (epg_series/epg_movies). Vide = toutes les chaines (pas de filtre).
+        /// chaînes sont renvoyés à l'agent par <c>get_emby_info</c>
+        /// (epg_series/epg_movies). Vide = toutes les chaînes (pas de filtre).
         /// Spécifique à la tâche de recommandation. Peuplée par la page de
         /// config (cases à cocher depuis <c>LiveTv/Channels</c>).
         /// </summary>
@@ -633,14 +625,14 @@ namespace LLM_AI
         /// <c>[{"u":"userId","n":"nom","d":"yyyy-MM-dd","text":"directive"}]</c>.
         /// Réinjectées dans le prompt des runs « À regarder ce soir » (par
         /// usager) et de la tâche planifiée d'enregistrement (fusionnées).
-        /// Affichées et <b>éditables/clearables</b> dans la page de config —
+        /// Affichées et <b>éditables/effaçables</b> dans la page de config —
         /// l'admin garde le contrôle de ce que le LLM a conclu.
         /// </summary>
         public string PromptDirectives { get; set; } = "";
 
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : si coché, après chaque
-        /// run <b>frais</b> de « À regarder ce soir », le plugin ajoute le genre
+        /// run <b>frais</b> de « À regarder ce soir », le plugin ajoute le tag
         /// <c>AI Tonight</c> aux items Emby du <b>watch bucket</b> recommandés
         /// (enregistrements non visionnés + items possédés) — l'usager les
         /// retrouve en filtrant sur ce <b>tag</b> dans n'importe quel client
@@ -736,13 +728,12 @@ namespace LLM_AI
         /// lui-même peut y figurer) ;</para>
         /// <para>2) <b>Repli du porteur</b> (champ <see cref="TonightUserName"/>
         /// vide) : le repli « premier admin » <b>saute les comptes ignorés</b>
-        /// — il ne peut plus retomber sur un compte technique sans
-        /// historique (vécu 2026-10-08, prod) ;</para>
+        /// — il ne retombe pas sur un compte technique sans
+        /// historique ;</para>
         /// <para>3) <b>Déclencheur login</b> (<c>TonightLoginService</c>) : le
         /// login d'un compte ignoré ne déclenche <b>plus</b> de run « À
-        /// regarder ce soir » (fin des runs LLM au profil vide et des
-        /// favoris parasites — un login admin en générait, découvert
-        /// 2026-10-08).</para>
+        /// regarder ce soir » (évite runs LLM au profil vide et favoris
+        /// parasites).</para>
         /// <para><b>Jamais appliquée</b> à : l'<b>intersection parentale</b>
         /// de la playlist publique (tous les comptes restreints actifs
         /// comptent toujours — un compte ignoré ne doit pas pouvoir rouvrir
@@ -755,14 +746,14 @@ namespace LLM_AI
         public string TonightIgnoredUsers { get; set; } = string.Empty;
 
         // ------------------------------------------------------------------
-        //  Mémoire réflexive (Phase A) : les données qui alimenteront la
+        //  Mémoire réflexive : les données qui alimenteront la
         //  réflexion du LLM. Trois stores fichiers dans le répertoire de
         //  configuration du plugin (rétention 30 jours, plafonnés) :
         //  decisions.json (chaque reco émise avec sa raison + version de la
         //  fiche), run_pool.json (le « menu » soumis au LLM à chaque run),
         //  playback.json (chaque lecture terminée, avec % lu). La fiche
         //  mémoire elle-même (rédigée par le LLM, injectée dans les prompts)
-        //  arrive en Phase C.
+        //  est gérée séparément (MemoryCard).
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -790,7 +781,7 @@ namespace LLM_AI
         /// (&lt; 5 %), abandon en cours (5–50 %), contenu validé (&gt; 80 %).
         /// Aucun effet sur la lecture elle-même (best-effort) ; le
         /// pourcentage du direct reste à dériver via le snapshot EPG
-        /// (Phase B).
+        ///.
         /// </summary>
         public bool PlaybackTelemetryEnabled { get; set; } = false;
 
@@ -857,7 +848,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Opt-in (défaut <c>false</c>) : quand le seuil
-        /// <see cref="RecordingDiskThresholdGb"/> est franchi, tag les
+        /// <see cref="RecordingDiskThresholdGb"/> est franchi, étiquette les
         /// enregistrements <b>visionnés</b> (par n'importe quel usager), du
         /// plus ancien au plus récent, avec le tag « AI Delete » — jusqu'à
         /// ce que la suppression de tout ce qui est tagué ramène l'espace
@@ -1018,7 +1009,7 @@ namespace LLM_AI
         /// <summary>
         /// <b>Opt-in explicite (défaut <c>false</c>)</b> : active la tâche
         /// planifiée quotidienne d'identification des enregistrements orphelins.
-        /// <c>false</c> = la tâche est inactive (no-op). Mutant des métadonnées
+        /// <c>false</c> = la tâche est inactive (no-op). Modifie les métadonnées
         /// d'enregistrements — d'où l'opt-in.
         /// </summary>
         public bool OrphanIdentifyEnabled { get; set; } = false;
@@ -1034,7 +1025,7 @@ namespace LLM_AI
         /// <summary>
         /// Si <c>true</c>, la tâche retraite les orphelins déjà marqués
         /// <c>llmai-needs-review</c> (au lieu de les sauter) — utile pour refaire
-        /// passer les besoins-revues par S3 (recherche web) une fois SearXNG
+        /// passer les items à revoir (needs-review) par S3 (recherche web) une fois SearXNG
         /// configuré. Les items déjà <c>llmai-identified</c> restent sautés. En cas
         /// de résolution réussie, le tag <c>needs-review</c> est remplacé par
         /// <c>identified</c>. Défaut <c>false</c>.
@@ -1089,7 +1080,7 @@ namespace LLM_AI
         /// retrait des ids + reprise du pipeline d'identification), et les
         /// enregistrements non identifiés passent immédiatement dans le même
         /// pipeline. Vérifiée à chaque événement (activable sans redémarrage).
-        /// Mutant des métadonnées d'enregistrements — d'où l'opt-in.
+        /// Modifie les métadonnées d'enregistrements — d'où l'opt-in.
         /// </summary>
         public bool OrphanValidateOnRecordingEnd { get; set; } = false;
 
@@ -1102,7 +1093,7 @@ namespace LLM_AI
         /// titre de l'item (garde lexicale) : match → verrous + migration du
         /// tag vers <c>llmai-identified</c> ; mismatch → retrait des ids +
         /// reprise immédiate du pipeline S1→S2→S3 (auto-remédiation). Respecte
-        /// le dry-run. Mutant des métadonnées — d'où l'opt-in.
+        /// le dry-run. Modifie les métadonnées — d'où l'opt-in.
         /// </summary>
         public bool OrphanAuditTaggedIds { get; set; } = false;
 
@@ -1118,7 +1109,7 @@ namespace LLM_AI
         /// les enregistrements éphémères volontairement non identifiés
         /// (ex. les nouvelles quotidiennes, regardées puis supprimées :
         /// aucun catalogue ne les identifiera jamais, chaque passe y
-        /// brûlait des appels pour rien). La vérité EPG continu d'être
+        /// brûlait des appels pour rien). La vérité EPG continue d'être
         /// figée au store par la validation en fin d'enregistrement (sans
         /// coût LLM). Vide = aucune exclusion. Défaut vide.
         /// </summary>
@@ -1147,7 +1138,7 @@ namespace LLM_AI
         /// <c>trigger_task</c> (déclencher une tâche planifiée) et
         /// <c>send_message</c> (notifier un usager) — peuvent être exécutées par
         /// le LLM. Tant que ce flag est décoché, ces actions renvoient une
-        /// erreur (l'LLM doit alors se contenter de recommander l'action dans
+        /// erreur (le LLM doit alors se contenter de recommander l'action dans
         /// son rapport, sans l'exécuter). Double contrôle : le prompt d'audit
         /// demande aussi au LLM de ne JAMAIS exécuter de remédiation sans
         /// demande explicite de l'usager — ce flag ne fait qu'ouvrir la
@@ -1160,7 +1151,7 @@ namespace LLM_AI
         /// Éditable dans la page de config (textarea + « Réinitialiser ») ;
         /// le défaut vient de <see cref="DefaultPrompts"/> (source de vérité
         /// unique). L'éventuel paramètre <c>Focus</c> de l'endpoint (ex.
-        /// « transcoding », « disk ») est appendé à ce template à l'exécution
+        /// « transcoding », « disk ») est ajouté à ce template à l'exécution
         /// pour orienter l'audit. NB : les garde-fous de remédiation ne
         /// dépendent PAS de ce texte — ils vivent dans AUDIT_WORKFLOW
         /// (system prompt, LlmRunner) et la gate AuditRemediationEnabled.
@@ -1170,7 +1161,7 @@ namespace LLM_AI
         /// <summary>
         /// Stratégie d'exécution de l'audit santé.
         /// <list type="bullet">
-        /// <item><c>single</c> (défaut) : une seule boucle agent — l'LLM appelle
+        /// <item><c>single</c> (défaut) : une seule boucle agent — le LLM appelle
         ///   lui-même l'outil <c>system_audit</c> de façon adaptative (peut
         ///   creuser un journal suite à un constat). Convient à un modèle
         ///   costaud (cloud). C'est le seul mode où la remédiation peut être
@@ -1182,7 +1173,7 @@ namespace LLM_AI
         ///   on retire du LLM l'orchestration multi-outils (son point faible)
         ///   et on ne lui laisse que la synthèse de texte fourni (son point
         ///   fort). Mode lecture-seule au sens exécution : la remédiation y est
-        ///   toujours report-only (l'LLM n'a pas d'outil pour l'exécuter).</item>
+        ///   toujours report-only (le LLM n'a pas d'outil pour l'exécuter).</item>
         /// </list>
         /// </summary>
         public string AuditMode { get; set; } = "single";
@@ -1247,8 +1238,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Âge minimum (en jours) d'un film JAMAIS VU pour entrer dans le
-        /// pool « canards boîteux » du run films (v2.11.0, critère repris de
-        /// emby-delete.sh : DateCreated &lt; il y a 1 an). 0 = désactivé
+        /// pool « canards boîteux » du run films (v2.11.0, critère : DateCreated &lt; il y a 1 an). 0 = désactivé
         /// (comportement antérieur : seuls les films vus étaient candidats).
         /// Défaut 365.
         /// </summary>
@@ -1256,8 +1246,8 @@ namespace LLM_AI
 
         /// <summary>
         /// Injecte dans le prompt du run films un profil de goûts de
-        /// l'administrateur (historique de visionnage + favoris, repris de
-        /// emby-delete.sh — permet au LLM de justifier « sans lien avec les
+        /// l'administrateur (historique de visionnage + favoris —
+        /// permet au LLM de justifier « sans lien avec les
         /// goûts constatés »). v2.11.0. Défaut true.
         /// </summary>
         public bool LibReviewTasteProfile { get; set; } = true;

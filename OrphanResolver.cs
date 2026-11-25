@@ -49,31 +49,21 @@ namespace LLM_AI
     /// MUETTE (overview vide — le juge n'aura jamais d'avis) sans preuve
     /// corroborante (titre ≠ égalité exacte ET année incompatible) → même
     /// chemin que le mismatch (v2.18.0) : l'id d'Emby n'est alors qu'une
-    /// supposition non vérifiable.</para></item>
-    /// <item><b>SB — ancrage bibliothèque</b> (dossier frère) : avant toute
-    /// banque externe, la bibliothèque de l'usager est interrogée — un item
-    /// homonyme (± « (année) », parenthèses et bruit EPG retirés) portant
-    /// déjà une fiche la propose comme candidat n° 0 à la porte commune.
-    /// Emby type l'import DVR d'après le titre EPG : chaque variation de
-    /// titre enfante un NOUVEAU dossier, souvent le double d'une œuvre déjà
-    /// identifiée (« Le monde de Gabrielle Roy » vs « … (2021) ») — sans
-    /// ancrage, la chaîne ré-identifie depuis les banques et peut DIVERGER
-    /// de la fiche du dossier existant (cas réels : « Les enquêtes de Vera
-    /// (2020) » fiché Sommerdahl ; « La recrue FBI » fiché The Rookie).
-    /// Règle d'année dédiée (séries) : un enregistrement ne peut pas
-    /// précéder la série — année item ≥ année fiche − 1 (les saisons d'une
-    /// série longue se diffusent des années après la première) ; un frère
-    /// homonyme d'une AUTRE époque sans synopsis à arbitrer est rejeté
-    /// (reboot/homonyme). Bénéfice systémique : les fiches convergent, le
-    /// filtre natif « Doublons » d'Emby (même id TVDB) devient fiable.</item>
+    /// supposition non vérifiable.</item>
+    /// <item><b>SB — ancrage bibliothèque</b> (dossier frère) : avant toute banque externe, un item
+    /// homonyme de la bibliothèque (± « (année) », parenthèses et bruit EPG retirés) portant déjà
+    /// une fiche la propose comme candidat n° 0 à la porte commune — sans ancrage, la chaîne peut
+    /// DIVERGER de la fiche du dossier existant. Règle d'année dédiée (séries) : année item ≥ année
+    /// fiche − 1 ; un frère homonyme d'une AUTRE époque sans synopsis à arbitrer est rejeté
+    /// (reboot/homonyme).</item>
     /// <item><b>S0 — recherche native Emby</b> (option
     /// <c>OrphanEmbyFirstPass</c>) : <c>IProviderManager.GetRemoteSearchResults</c>
     /// (le moteur du dialogue « Identifier ») sur le titre EPG nettoyé.
     /// Candidats dans l'ordre d'Emby, porte renforcée (titre + année + juge).
-    /// Accepté → fiche TMDB détaillée → application.</para></item>
+    /// Accepté → fiche TMDB détaillée → application.</item>
     /// <item><b>S1 — recherche TMDB multilingue</b> (garde lexicale).
     /// <b>S2 — proposition LLM</b> (juge). <b>S3 — SearXNG → id IMDb</b>
-    /// (juge).</para></item>
+    /// (juge).</item>
     /// </list>
     /// <para><b>Repli de type (series→movie)</b> : quand l'item est une série
     /// et que la chaîne échoue en kind series, la chaîne est rejouée en kind
@@ -222,12 +212,10 @@ namespace LLM_AI
             /// <summary>Titre de diffusion EPG (programmes sériés : souvent le
             /// titre d'ÉPISODE — « Multicolore », pas « Empathie »).</summary>
             public string Title;
-            /// <summary>Titre SÉRIE du guide (SeriesName du programme ; vide
-            /// pour les films et programmes creux). Ancre d'audit v2.19.2 :
-            /// figé à la fin d'enregistrement, JAMAIS dérivé de l'item (leçon
-            /// v2.19.0 — les champs de l'item à l'import dérivent de la fiche
-            /// posée par Emby : ancrer une preuve sur item.Name validerait
-            /// circulairement la fiche fausse qui l'a renommé).</summary>
+            /// <summary>Titre SÉRIE du guide (SeriesName du programme ; vide pour les films et
+            /// programmes creux). Ancre d'audit v2.19.2 : figé à la fin d'enregistrement, JAMAIS
+            /// dérivé de l'item (son nom dérive de la fiche posée par Emby : validation
+            /// circulaire).</summary>
             public string SeriesName;
             /// <summary>Synopsis EPG figé.</summary>
             public string Overview;
@@ -280,15 +268,10 @@ namespace LLM_AI
 
             if (strmCard) return Status.Skipped;
 
-            // Langue de la fiche S1/S2/S3 (règle usager 2026-10-01 : configs
-            // Emby en premier) : langue préférée de la bibliothèque de
-            // l'item, sinon langue du PROGRAMME (synopsis du guide, titre en
-            // repli — chaîne FR → fiche FR, chaîne EN → fiche EN, comportement
-            // validé d'Emby lui-même), sinon langue usager (comportement
-            // historique inchangé, ordre de cascade compris). Fix #6
-            // (TmdbLangPriority non vide) : le CONTENU passe en tête et la
-            // liste priorisée gouverne le synopsis (table translations, UNE
-            // lecture) ; champ vide : comportement historique au bit près.
+            // Langue de la fiche S1/S2/S3 : langue préférée de la bibliothèque de l'item, sinon
+            // langue du PROGRAMME (synopsis du guide, titre en repli), sinon langue usager
+            // (comportement historique). TmdbLangPriority non vide : le CONTENU passe en tête et la
+            // liste priorisée gouverne le synopsis (table translations, UNE lecture).
             string metaLang = ResolveItemMetaTmdb(item, truth, cfg, out var prio);
             string effTmdb = metaLang ?? userTmdb;
             if (metaLang != null && !string.Equals(metaLang, userTmdb, StringComparison.OrdinalIgnoreCase))
@@ -298,13 +281,10 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — priorité synopsis TMDB active : {1} (contenu en tête de famille, dernier rang = repli).",
                     ResolveEpgTitle(item, truth, deferredTruth) ?? itemName, string.Join(", ", prio));
 
-            // Audit des taggés « revenus avec ids » : Emby identifie parfois un
-            // item APRÈS qu'il a été taggé introuvable/besoin-revue — parfois
-            // à tort (homonyme). Option OrphanAuditTaggedIds (opt-in) : la
-            // fiche de l'id posé est confrontée au titre de l'item ; mismatch
-            // = auto-remédiation (ids retirés + reprise S1→S2→S3). Passe 04 h
-            // uniquement : avec vérité EPG (RecordingWatcher), l'audit Emby à
-            // juge synopsis ci-dessous reste la voie supérieure.
+            // Audit des taggés « revenus avec ids » (opt-in OrphanAuditTaggedIds) : Emby peut
+            // identifier un item APRÈS le tag, parfois à tort (homonyme) ; mismatch =
+            // auto-remédiation. Passe 04 h uniquement : avec vérité EPG (RecordingWatcher), l'audit
+            // à juge synopsis ci-dessous reste la voie supérieure.
             if (truth == null && !orphan && (taggedReview || taggedNotFound) && cfg.OrphanAuditTaggedIds)
                 return await AuditTaggedIdsAsync(item, cfg, kind, isSeries, dry, effTmdb, verbose, ct, deferredTruth, prio).ConfigureAwait(false);
 
@@ -318,10 +298,8 @@ namespace LLM_AI
                 return await AuditEmbyIdsAsync(item, truth, cfg, kind, isSeries, dry, effTmdb, metaLang, ct, prio).ConfigureAwait(false);
             }
 
-            // Même piège que l'entrée du pipeline (t="" = programme creux au
-            // store) : la coalescence doit être tolérante aux espaces pour
-            // que le repli item.Name garde l'item traitable — Skipped
-            // seulement si les DEUX sont vides (aucun ancre de titre).
+            // Même piège que l'entrée du pipeline (t="" = programme creux) : la coalescence doit
+            // tolérer les espaces ; Skipped seulement si les DEUX titres sont vides.
             string epgTitle = ResolveEpgTitle(item, truth, deferredTruth);
             if (string.IsNullOrWhiteSpace(epgTitle)) return Status.Skipped;
 
@@ -334,43 +312,21 @@ namespace LLM_AI
             var meta = await ResolvePipelineAsync(item, truth, cfg, kind, isSeries,
                 allowS0, langs, effTmdb, dry, trace, ct, deferredTruth: deferredTruth, overviewChain: prio).ConfigureAwait(false);
 
-            // Repli de type « film importé comme série » : Emby type l'import
-            // DVR d'après le guide — un film/documentaire diffusé avec des
-            // métadonnées d'épisode (titre d'épisode, saison, marqueur
-            // IsSeries du programme) atterrit en Series/Episode alors que
-            // l'œuvre est un film. La passe en kind series échoue alors PAR
-            // CONSTRUCTION (la banque « tv » de TMDB ne connaît pas l'œuvre ;
-            // le /find d'un id IMDb de film, proposé en S2, ne regarde que
-            // movie_results). Cas réel du 2026-09-20 : « La foudre, un éclair
-            // de génie » (tmdb=1674784, film) taggé needs-review après une
-            // résolution tentée uniquement en series. On rejoue donc le
-            // pipeline complet en kind « movie » sur le même item — la porte
-            // (année ±1 + garde lexicale + juge synopsis) reste la même, la
-            // fiche appliquée écrit seulement les ids/champs manquants (le
-            // type de l'item, fixé par Emby à l'import, n'est jamais modifié :
-            // l'invariant « le plugin ne détruit rien » s'applique). Repli
-            // unidirectionnel series→movie : l'inverse (œuvre sérielle
-            // importée comme Movie) suppose une erreur inverse du guide,
-            // jamais observée — et un vrai film homonyme d'une série absent
-            // de TMDB risquerait un faux match. Trace pré-ensemencée : la
-            // sémantique du tag d'échec (needs-review vs introuvable) fusionne
-            // les candidats vus par les DEUX passes.
+            // Repli de type « film importé comme série » : Emby type l'import DVR d'après le guide
+            // ; la passe en kind series échoue alors PAR CONSTRUCTION (la banque « tv » de TMDB ne
+            // connaît pas l'œuvre). On rejoue le pipeline en kind « movie » sur le même item — même
+            // porte ; la fiche appliquée n'écrit que les ids/champs manquants et le type de l'item
+            // n'est jamais modifié. Unidirectionnel : l'inverse risquerait un faux match
+            // d'homonyme. Trace pré-ensemencée : le tag d'échec (needs-review vs introuvable)
+            // fusionne les candidats vus par les DEUX passes.
             if (meta == null && isSeries)
             {
-                // Vérité EPG différée (passe 04 h) : le watcher gèle
-                // l'entrée d'un épisode « couvert par l'audit de sa
-                // série » — sans relais, cette vérité mourait dans le
-                // store (rétention 7 j) et le repli film courait sur un
-                // item creux (sans année ni synopsis), rejetant des
-                // fiches trouvées faute de preuve. Injectée ICI
-                // UNIQUEMENT : la passe série ci-dessus reste sans
-                // vérité — l'année EPG d'un épisode = année de SAISON
-                // (ex. magazine S39E06 annoncé 2026, série 1988),
-                // l'y injecter casserait la garde ±1 des séries longues
-                // orphelines ; dans la passe film, l'année du guide =
-                // année de l'œuvre (sémantique exacte). Le Title de
-                // l'entrée différée est null par construction (titre
-                // d'épisode ≠ titre de série) — repli item.Name.
+                // Vérité EPG différée (passe 04 h) : le watcher gèle l'entrée d'un épisode «
+                // couvert par l'audit de sa série » ; sans relais, le repli film courrait sur un
+                // item creux. Injectée ICI UNIQUEMENT : l'année EPG d'un épisode = année de SAISON,
+                // l'injecter dans la passe série casserait la garde ±1 des séries longues ; dans la
+                // passe film, l'année du guide = année de l'œuvre. Le Title de l'entrée différée
+                // est null par construction (titre d'épisode ≠ titre de série) — repli item.Name.
                 var movieTruth = deferredTruth ?? truth;
                 if (deferredTruth != null && (deferredTruth.Year.HasValue || !string.IsNullOrWhiteSpace(deferredTruth.Overview)))
                     _logger?.Info(
@@ -403,36 +359,23 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         // ------------------------------------------------------------------
-        //  Langue de la fiche S1/S2/S3. Champ TmdbLangPriority vide :
-        //  config Emby d'abord, puis langue du programme, sinon null
-        //  (l'appelant garde la langue usager et l'ordre de cascade
-        //  historique) — comportement historique au bit près. Champ non
-        //  vide (fix #6) : le CONTENU en tête, la liste priorisée gouverne
-        //  le synopsis (table translations) et l'ordre de cascade.
+        //  Langue de la fiche S1/S2/S3 (détail dans le <summary> ci-dessous).
         // ------------------------------------------------------------------
 
         /// <summary>
         /// Résout la langue TMDB de la fiche pour un item :
         /// <list type="number">
-        /// <item><b>Champ <see cref="PluginConfiguration.TmdbLangPriority"/>
-        /// non vide (fix #6) : CONTENU d'abord</b> — langue du synopsis EPG
-        /// (<paramref name="truth"/> figée, titre en repli) via
-        /// <see cref="I18n.DetectContentLangKey"/> ; indéterminé → fail-open
-        /// sur la langue préférée de la bibliothèque (comportement
-        /// historique — la famille résolue ordonne la liste). La FAMILLE
-        /// résolue met ses rangs en tête de la liste : la fiche revient
-        /// dans la langue du contenu (titre comparable au titre du guide —
-        /// doctrine portes lexicales 2026-10-01) et le SYNOPSIS est
-        /// sélectionné dans la table <c>translations</c> par la liste
-        /// priorisée (fr-CA avant fr-FR — le point structurel du champ :
-        /// sans lui, fr-CA est inatteignable, <see cref="I18n.ToTmdbLang"/>
-        /// ne connaît que fr-FR et TMDB ne fait aucun repli croisé ;
-        /// incident « Épique » 2026-11-12 : synopsis en-US posé sur un
-        /// contenu fr faute de fr-CA). <paramref name="prio"/> reçoit la
-        /// liste ordonnée (null si le champ est vide) ; elle alimente la
-        /// cascade de recherche ET la sélection du synopsis. Aucune
-        /// famille résolue → liste telle que tapée, langue = comportement
-        /// historique (usager).</item>
+        /// <item><b>Champ <see cref="PluginConfiguration.TmdbLangPriority"/> non vide : CONTENU
+        /// d'abord</b> — langue du synopsis EPG (<paramref name="truth"/> figée, titre en repli)
+        /// via <see cref="I18n.DetectContentLangKey"/> ; indéterminé → fail-open sur la langue
+        /// préférée de la bibliothèque. La FAMILLE résolue met ses rangs en tête de la liste (la
+        /// fiche revient dans la langue du contenu) et le SYNOPSIS est choisi dans la table
+        /// <c>translations</c> par la liste priorisée (fr-CA avant fr-FR : sans elle fr-CA est
+        /// inatteignable, <see cref="I18n.ToTmdbLang"/> ne connaît que fr-FR et TMDB ne fait aucun
+        /// repli croisé). <paramref name="prio"/> reçoit la liste ordonnée (null si le champ est
+        /// vide) ; elle alimente la cascade de recherche ET la sélection du synopsis. Aucune
+        /// famille résolue → liste telle que tapée, langue = comportement historique
+        /// (usager).</item>
         /// <item><b>Champ vide : comportement historique</b> : langue
         /// préférée de la bibliothèque de l'item
         /// (<c>PreferredMetadataLanguage</c> — l'usager la règle dans Emby,
@@ -446,25 +389,17 @@ namespace LLM_AI
         private string ResolveItemMetaTmdb(BaseItem item, EpgTruth truth, PluginConfiguration cfg,
             out IReadOnlyList<string> prio)
         {
-            // Fix #6 : liste de priorité des langues du synopsis. Vide
-            // (défaut) = comportement historique au bit près — aucune
-            // lecture translations, ordre bibliothèque→contenu, cascade
-            // historique.
+            // Liste de priorité des langues du synopsis ; vide (défaut) = comportement historique.
             prio = null;
             var prioList = ParsePrioWithLog(cfg);
             if (prioList.Count > 0)
             {
-                // Contenu d'abord : un enregistrement ANGLAIS reçoit une
-                // fiche anglaise même sur une bibliothèque fr (erreur
-                // miroir du point précédent — la détection existait déjà
-                // mais restait préemptée par la langue de bibliothèque).
+                // Contenu d'abord : un enregistrement ANGLAIS reçoit une fiche anglaise même sur
+                // une bibliothèque fr.
                 string fam = I18n.DetectContentLangKey(
                     ResolveEpgTitle(item, truth) ?? item?.Name, truth?.Overview ?? item?.Overview);
-                // Détection indéterminée → fail-open sur le comportement
-                // historique : famille de la langue de bibliothèque
-                // (Recordings sans détection conserve l'ordre d'aujourd'hui,
-                // ordonné par la liste — la bibliothèque est une famille,
-                // la liste tranche la variante).
+                // Détection indéterminée → fail-open : famille de la langue de bibliothèque ; la
+                // liste tranche la variante.
                 if (fam == null) fam = TryLibraryLangKey(item);
                 if (fam != null)
                 {
@@ -491,7 +426,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Ordonne la liste de priorité TMDB pour la famille de langue
-        /// résolue d'un item (fix #6) : les rangs de la FAMILLE en tête
+        /// résolue d'un item : les rangs de la FAMILLE en tête
         /// (ordre de la liste conservé — fr-CA avant fr-FR), le reste
         /// ensuite. Famille absente de la liste → le code canonique de la
         /// famille en tête (le titre du contenu garde sa langue), liste
@@ -565,7 +500,7 @@ namespace LLM_AI
         /// est déterminée) en TÊTE — la fiche revient dans la langue du contenu et
         /// son titre devient comparable au titre du guide pour la porte
         /// lexicale. Indéterminé → ordre historique {en-US, fr-FR, usager}
-        /// strictement inchangé. Priorité usager non vide (fix #6) : la liste
+        /// strictement inchangé. Priorité usager non vide : la liste
         /// ordonnée par famille REMPLACE la construction ad-hoc (fr-CA, fr-FR,
         /// en-US au lieu de {fr-FR, en-US} — la famille doit rester contiguë en
         /// tête) ; la langue usager historique reste un ultime rang de
@@ -582,11 +517,9 @@ namespace LLM_AI
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
-        /// <summary>Bande de la porte de durée FILM (v2.23.2), en ratio
-        /// durée fichier / durée fiche TMDB. Large À DESSEIN : la durée d'un
-        /// enregistrement varie selon la provenance (pubs incluses, version
-        /// télé coupée, marges DVR). Seuls les écarts grossiers — une autre
-        /// œuvre — sont rejetés ; 124 min contre 43 min = ratio 2,88.</summary>
+        /// <summary>Bande de la porte de durée FILM (v2.23.2), en ratio durée fichier / durée fiche
+        /// TMDB. Large À DESSEIN : la durée d'un enregistrement varie (pubs, version télé coupée,
+        /// marges DVR) ; seuls les écarts grossiers — une autre œuvre — sont rejetés.</summary>
         internal const double MovieRuntimeMinRatio = 0.70;
         internal const double MovieRuntimeMaxRatio = 1.60;
 
@@ -639,18 +572,10 @@ namespace LLM_AI
             string[] langs, string userTmdb, bool dry, PipelineTrace trace, CancellationToken ct,
             bool crossKind = false, EpgTruth deferredTruth = null, IReadOnlyList<string> overviewChain = null)
         {
-            // t="" au store = programme creux au RecordingEnded (état
-            // légitime et fréquent : Sahara vert, téléjournal, « De
-            // souche »). La coalescence `??` ne rattrape PAS la chaîne
-            // vide (seul null), et la vérité relayée par la branche
-            // épisode (fix B v2.18.0) porte le t BRUT — la résolution
-            // différée de la passe 04 h, elle, nullifie le titre à dessein
-            // (titre d'épisode ≠ titre de série). Un titre vide ici
-            // empoisonne toute la chaîne : requête web «  2026 », ids
-            // parasites, bras « année corroborante » (cas réel
-            // 2026-11-10 : « Eleições 2026 » acceptée sur la seule année).
-            // Tolérant aux espaces, comme la tête de l'audit
-            // (IsNullOrWhiteSpace, l. ci-dessous) — repli item.Name.
+            // t="" = programme creux au RecordingEnded (état fréquent) : `??` ne rattrape pas la
+            // chaîne vide, et un titre vide empoisonne la chaîne (requête web sur l'année seule,
+            // bras « année corroborante »). Tolérant aux espaces, comme la tête de l'audit — repli
+            // item.Name.
             string epgTitle = ResolveEpgTitle(item, truth, deferredTruth);
             // Année = ProductionYear UNIQUEMENT (date de DIFFUSION pour un DVR,
             // pas PremiereDate/DateCreated). La vérité EPG peut corriger ; si
@@ -671,14 +596,10 @@ namespace LLM_AI
             string cleanTitle = TmdbLookupTool.CleanEpgTitle(epgTitle);
             if (string.IsNullOrWhiteSpace(cleanTitle)) cleanTitle = epgTitle;
 
-            // Année aberrante (imports gracenote : ProductionYear = 1…) : elle
-            // n'a aucun sens (année < 1900) et empoisonne toute la chaîne — la
-            // requête part avec primary_release_year=1 (zéro résultat) et la
-            // garde d'année rejette TOUT (YearCompatible(1, 2025) = faux). Cas
-            // réel 2026-09-20 : « ADN, la face cachée des tests grand public »,
-            // Year=1, vraie fiche movie 2025. Traitée comme la date-marqueur
-            // Emby : année inconnue — recherche SANS filtre d'année, porte
-            // sans garde d'année (le titre + le juge décident).
+            // Année aberrante (imports gracenote : ProductionYear = 1…) : elle ferait partir
+            // primary_release_year=1 (zéro résultat) et la garde d'année rejetterait TOUT. Traitée
+            // comme année inconnue : recherche SANS filtre d'année, porte sans garde d'année (le
+            // titre + le juge décident).
             bool bogusYear = year.HasValue && year.Value < 1900;
             if (bogusYear)
             {
@@ -692,7 +613,7 @@ namespace LLM_AI
             // l'année vient de l'item). C'est une date de diffusion : l'année
             // qu'elle induit est « soft » — on ne filtre pas la recherche TMDB
             // dessus et la porte ne la rejette pas ; l'acceptation repose alors
-            // sur le titre lexicale + le juge synopsis.
+            // sur le titre lexical + le juge synopsis.
             bool yearSoft = bogusYear
                 || (truth == null && TmdbLookupTool.HasEmbyDateMarker(epgTitle));
             int? searchYear = yearSoft ? (int?)null : year;
@@ -701,23 +622,13 @@ namespace LLM_AI
                 _logger?.Info("[LLM_AI] OrphanIdentify : « {0} » — date Emby en fin de titre : année {1} indicative (soft), titre nettoyé pour la recherche.",
                     epgTitle, year.HasValue ? year.Value.ToString(CultureInfo.InvariantCulture) : "?");
 
-            // Ancre de prévention du retry 04 h (v2.20.17 — décision usager,
-            // étage « prévention seule » ; faux positif « De souche » du
-            // 2026-11-16 : tmdb 155980 « Immigrants de souche » accepté SANS
-            // juge au retry 04 h, sur l'année-artefact de l'item (2023, résidu
-            // de la fiche fautive posée à l'import) + la simple contenance
-            // lexicale — alors que la vérité figée y=2026 l'avait rejetée 2×
-            // la veille ; la SEULE variable qui avait changé entre les deux
-            // était la source de l'année). Quand le store porte une entrée
-            // vivante avec le titre-SÉRIE figé du guide (sn), l'acceptation
-            // d'une fiche exige la CLÉ EXACTE du titre figé + une année
-            // compatible avec l'ancre : la contenance lexicale et l'année
-            // d'item redeviennent de simples indices de recherche. La passe
-            // série 04 h reste SANS vérité injectée (doctrine v2.16.3 — année
-            // EPG d'un épisode = année de SAISON) : seule la contrainte
-            // d'acceptation change. Inactif ici si truth != null (chemin
-            // watcher, couches v2.19.2 propres) ou sans entrée/sn
-            // (comportement historique inchangé).
+            // Ancre de prévention du retry 04 h (v2.20.17) : quand le store porte une entrée
+            // vivante avec le titre-SÉRIE figé du guide (sn), l'acceptation d'une fiche exige la
+            // CLÉ EXACTE de ce titre + une année compatible avec l'ancre ; contenance lexicale et
+            // année d'item ne sont que des indices de recherche (l'année d'item peut être le résidu
+            // de la fiche fautive posée à l'import). La passe série 04 h reste SANS vérité injectée
+            // (v2.16.3 : année EPG d'un épisode = année de SAISON). Inactif si truth != null
+            // (chemin watcher) ou sans entrée/sn.
             string retryAnchorTitle = (truth == null && !string.IsNullOrWhiteSpace(deferredTruth?.SeriesName))
                 ? deferredTruth.SeriesName
                 : null;
@@ -771,18 +682,11 @@ namespace LLM_AI
                 stage = null;
             }
 
-            // S1 : recherche multilingue sur le titre du guide. Avec une
-            // année fiable (ou soft) : garde lexicale + garde d'année (les
-            // homonymes d'époques différentes sont rejetés). SANS aucune
-            // année : S1 tournait avec une garde stricte — l'item partait
-            // alors en S2/S3 où le LLM hallucine (cas réel 2026-09-20 :
-            // « La foudre, un éclair de génie » — fiche movie 2026 au titre
-            // IDENTIQUE, atteignable par la recherche seule, jamais proposée
-            // par le LLM : trois hallucinations rejetées en trois passes).
-            // La doctrine de corroboration s'applique : sans année fiable,
-            // seule l'ÉGALITÉ EXACTE du titre du guide avec la fiche est une
-            // preuve — un homonyme dont le titre diffère (inclus, traduit…)
-            // ne passe pas.
+            // S1 : recherche multilingue sur le titre du guide. Année fiable (ou soft) : garde
+            // lexicale + garde d'année (homonymes d'époques différentes rejetés). SANS aucune année
+            // : seule l'ÉGALITÉ EXACTE du titre du guide avec la fiche est une preuve (un homonyme
+            // dont le titre diffère ne passe pas) ; une garde plus stricte envoyait l'item en S2/S3
+            // où le LLM hallucine.
             bool exactOnlyS1 = !searchYear.HasValue && !yearSoft;
             bool exactKeyS1 = isSeries && !string.IsNullOrWhiteSpace(truth?.SeriesName);
             if (meta == null && (searchYear.HasValue || yearSoft || exactOnlyS1))
@@ -790,11 +694,10 @@ namespace LLM_AI
                 try
                 {
                     var s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, searchYear, langs, ct, overviewChain).ConfigureAwait(false);
-                    // Cascade annuelle : l'année de référence est une date de
-                    // diffusion, parfois éloignée de l'année de sortie — si le
-                    // filtre primary_release_year écarte tous les résultats,
-                    // rejouer SANS filtre (PickFirstResult privilégie déjà le
-                    // résultat à la bonne année).
+                    // Cascade annuelle : l'année de référence est une date de diffusion, parfois
+                    // éloignée de l'année de sortie — si primary_release_year écarte tous les
+                    // résultats, rejouer SANS filtre (PickFirstResult privilégie déjà la bonne
+                    // année).
                     if (s1 == null && searchYear.HasValue)
                         s1 = await _tmdb.LookupMetaMultiLangAsync(cleanTitle, kind, null, langs, ct, overviewChain).ConfigureAwait(false);
                     if (s1 != null) trace.SawCandidates = true; // une banque liste le titre
@@ -806,12 +709,9 @@ namespace LLM_AI
                             : TitleMatches(cleanTitle, s1?.Title, gateYear, s1?.Year);
                     if (s1Ok)
                     {
-                        // Garde « fiche déjà portée » : S1 n'appelle pas la
-                        // porte commune (acceptation lexicale historique) —
-                        // la garde y est appliquée directement. Un candidat
-                        // dont la fiche est déjà portée par une œuvre au
-                        // titre divergent est rejeté ici (arbitrage juge /
-                        // prudence), comme sur les autres voies.
+                        // Garde « fiche déjà portée » : S1 n'appelle pas la porte commune, la garde
+                        // y est appliquée directement (porteur au titre divergent → rejet par
+                        // arbitrage juge / prudence).
                         if (await FicheConflictGateAsync(cfg, s1, item, epgTitle, gateYear,
                                 overview, false, ct, trace: trace, stageLabel: "S1",
                                 proofLevel: "forte",
@@ -827,13 +727,9 @@ namespace LLM_AI
                     }
                     else if (s1 != null)
                     {
-                        // Rejet historiquement MUET — le seul chemin de la
-                        // chaîne sans log (cas réel : documentaire importé
-                        // en série, la bonne fiche film trouvée par S1 puis
-                        // rejetée sans trace, « NON résolu » sans raison —
-                        // diagnostic d'une lecture impossible). La raison
-                        // distingue la porte sans année fiable (égalité
-                        // exacte du titre seule) de la garde titre/année.
+                        // Rejet loggé : c'était le seul chemin de la chaîne sans trace. La raison
+                        // distingue la porte sans année fiable (égalité exacte du titre seule) de
+                        // la garde titre/année.
                         string s1Reason = exactOnlyS1
                             ? "sans année fiable, seule l'égalité exacte du titre du guide est une preuve"
                             : "garde titre/année non satisfaite";
@@ -895,13 +791,10 @@ namespace LLM_AI
                 stage = null;
             }
 
-            // Point de contrôle du retry ancré (bloc ci-dessus) : un rejet
-            // laisse l'item en needs-review (visible, récupérable) et laisse
-            // le repli film de ResolveItemAsync tourner sur la vérité différée
-            // — jamais une identification terminale erronée silencieuse. S1
-            // accepte le premier résultat retenu sans juge (doctrine
-            // historique, intacte) : c'est ICI que la contrainte s'applique,
-            // couvrant d'un même coup SB/S0/S1/S2/S3.
+            // Point de contrôle du retry ancré : un rejet laisse l'item en needs-review (visible,
+            // récupérable) et laisse le repli film de ResolveItemAsync tourner sur la vérité
+            // différée — jamais une identification terminale erronée silencieuse. S1 accepte sans
+            // juge : c'est ICI que la contrainte s'applique, couvrant SB/S0/S1/S2/S3.
             if (meta != null && !RetryAnchorAccepts(retryAnchorTitle, retryAnchorYear, meta.Title, meta.Year))
             {
                 string anchorReason = "ancre store vivante sur « " + retryAnchorTitle + " » exige la clé exacte + année compatible";
@@ -987,10 +880,8 @@ namespace LLM_AI
 
             if (string.IsNullOrWhiteSpace(epgSynopsis))
             {
-                // Toujours loggué (v2.18.0) : ce motif ne court que depuis le
-                // RecordingWatcher (vérité EPG présente) — un « reporté »
-                // silencieux se lisait en champ comme une validation (cas
-                // 2026-11-09 : la mauvaise fiche restait posée sans trace).
+                // Toujours loggué (v2.18.0) : ce motif ne court que depuis le RecordingWatcher ; un
+                // « reporté » silencieux se lisait comme une validation.
                 _logger?.Info("[LLM_AI] Recording : « {0} » identifié par Emby (tmdb={1}) — pas de synopsis EPG à comparer, audit reporté.",
                     epgTitle, item.GetProviderId("tmdb") ?? "—");
                 return Status.Skipped;
@@ -1033,18 +924,11 @@ namespace LLM_AI
                 return Status.Skipped;
             }
 
-            // Repli synopsis en-US (parité avec TmdbLookupTool.ExecuteAsync /
-            // LookupMetaMultiLangAsync) : une fiche TMDB muette en fr-FR
-            // (ex. tmdb 155980 « Immigrants de souche ») porte souvent un
-            // overview renseigné en en-US ; sans ce repli, un faux match
-            // Emby dans la même fenêtre d'année resterait reporté au lieu
-            // d'être réfuté par le juge. Le titre reste celui de userTmdb.
-            // Fix #6 : priorité usager active = la table translations a DÉJÀ
-            // été scannée (le fetch ci-dessus porte la chaîne) — re-fetcher
-            // en en-US aveuglément réintroduirait exactement le défaut
-            // corrigé (synopsis anglais sur un contenu français, « Épique »
-            // 2026-11-12) quand en-US n'est PAS un rang de la liste ; le
-            // repli ne court que sur le comportement historique.
+            // Repli synopsis en-US (parité avec TmdbLookupTool) : une fiche TMDB muette en fr-FR
+            // porte souvent un overview en en-US ; sans repli, un faux match Emby resterait reporté
+            // au lieu d'être réfuté par le juge. Priorité usager active = table translations DÉJÀ
+            // scannée : re-fetcher en en-US réintroduirait un synopsis anglais sur un contenu
+            // français — le repli ne court que sur le comportement historique.
             if (overviewChain == null
                 && meta.TmdbId > 0 && string.IsNullOrWhiteSpace(meta.Overview)
                 && !string.Equals(userTmdb, "en-US", StringComparison.OrdinalIgnoreCase))
@@ -1055,28 +939,17 @@ namespace LLM_AI
                     meta.Overview = enMeta.Overview;
             }
 
-            // v2.19.2 — classement AVANT le juge (séries uniquement, fiche du
-            // type de l'item : une fiche croisée garde l'arbitrage complet).
-            // Le juge compare le synopsis d'un ÉPISODE à l'overview d'une
-            // fiche de SÉRIE : sur les occurrences DVR réelles, cette
-            // différence de granularité produisait 6 rejets / 6 faux
-            // négatifs (2026-11-10 : « Empathie » E10 « Multicolore », « Le
-            // dernier des monstres » E3 « Solstice », propositions SB tuées
-            // à titre égal — revert + voyage NFO pour des fiches justes,
-            // guéries à 04 h par S1). Trois preuves déterministes, par
-            // ordre de force : (1) corroboration de la série-sœur de
-            // l'usager (même clé de titre exacte, même fiche, ≥1 épisode
-            // requis depuis v2.19.3 — un jumeau de métadonnées sans
-            // vidéos n'est pas une preuve indépendante) ; (2) garde
-            // lexicale sur le titre-SÉRIE du guide ; (3) le juge pour les
-            // divergences — avec la leçon de granularité au prompt
-            // (LlmRunner). Risque résiduel assumé (doctrine S1) : l'homonyme
-            // parfait (même titre, même année, autre œuvre) passe sans juge —
-            // classe jamais observée sur le terrain.
+            // v2.19.2 — classement AVANT le juge (séries uniquement, fiche du type de l'item : une
+            // fiche croisée garde l'arbitrage complet). Le juge compare le synopsis d'un ÉPISODE à
+            // l'overview d'une fiche de SÉRIE : cette différence de granularité donnait des faux
+            // négatifs. Trois preuves déterministes, par ordre de force : (1) corroboration de la
+            // série-sœur de l'usager (même clé de titre exacte, même fiche, ≥1 épisode requis
+            // depuis v2.19.3) ; (2) garde lexicale sur le titre-SÉRIE du guide ; (3) le juge pour
+            // les divergences. Risque résiduel assumé (doctrine S1) : l'homonyme parfait (même
+            // titre, même année, autre œuvre) passe sans juge.
             //
-            // Ancre série = titre-SÉRIE DU GUIDE uniquement. Vide (films,
-            // fiches croisées, entrées figées avant v2.19.2) → juge,
-            // comportement historique.
+            // Ancre série = titre-SÉRIE DU GUIDE uniquement. Vide (films, fiches croisées, entrées
+            // figées avant v2.19.2) → juge, comportement historique.
             string seriesAnchor = isSeries && !crossRead
                 && !string.IsNullOrWhiteSpace(truth.SeriesName) ? truth.SeriesName : null;
 
@@ -1150,21 +1023,14 @@ namespace LLM_AI
 
             if (!verdict.IsValid)
             {
-                // D (v2.18.0) : distinguer deux « indisponibles » de nature
-                // différente. Une fiche MUETTE (overview vide) ne donnera
-                // JAMAIS matière au juge — défaut STRUCTUREL, pas un échec
-                // backend (cas réel 2026-11-09 : « Immigrants de souche »,
-                // tmdb 155980, overview vide, impossible à réfuter). Si la
-                // fiche ne porte en plus AUCUNE preuve corroborante (titre ≠
-                // égalité exacte du guide ET année incompatible), l'id posé
-                // par Emby n'est qu'une supposition non vérifiable → même
-                // chemin que le mismatch : retour EPG + re-pipeline S1/S2/S3.
-                // La passe 04 h refera ensuite le repli film de la série sur
-                // la vérité différée du store. Une fiche muette au titre
-                // égal ou à l'année compatible reste « reportée » : prudence
-                // — on ne détruit pas une identification plausible sans
-                // preuve (protège les séries longues muettes correctement
-                // fichées par Emby).
+                // v2.18.0 : deux « indisponibles » de nature différente. Une fiche MUETTE (overview
+                // vide) ne donnera JAMAIS matière au juge — défaut STRUCTUREL, pas un échec
+                // backend. Sans AUCUNE preuve corroborante (titre ≠ égalité exacte du guide ET
+                // année incompatible), l'id posé par Emby n'est qu'une supposition non vérifiable →
+                // même chemin que le mismatch : retour EPG + re-pipeline S1/S2/S3 (la passe 04 h
+                // refera le repli film sur la vérité différée). Une fiche muette au titre égal ou à
+                // l'année compatible reste « reportée » : on ne détruit pas une identification
+                // plausible sans preuve (séries longues muettes correctement fichées par Emby).
                 if (string.IsNullOrWhiteSpace(meta.Overview)
                     && !TitlesExactlyEqual(epgTitle, meta.Title)
                     && !TitlesExactlyEqual(seriesAnchor, meta.Title) // v2.19.2 : ancre série — une fiche muette au titre-SÉRIE du guide reste plausible (defer, jamais de churn)
@@ -1309,14 +1175,10 @@ namespace LLM_AI
                 if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
                     && !HasItemProviderId(sib, "tvdb")) continue;
 
-                // Garde « vraie sœur » (v2.19.3) : un jumeau sans épisode
-                // n'est pas une curation de l'usager — sa fiche est l'état
-                // DVR mirroré (NFO sans vidéos), donc une COPIE de la fiche
-                // qu'on est en train d'auditer, pas une preuve indépendante
-                // (cas 2026-11-11 : « Mini-Jean et Mini-Bulle » validé sans
-                // juge par le jumeau né de son propre événement, 3 min plus
-                // tôt). Écartée avec trace ; la vraie sœur, si elle existe
-                // plus loin dans la réponse, qualifie seule.
+                // Garde « vraie sœur » (v2.19.3) : un jumeau sans épisode n'est pas une curation de
+                // l'usager — sa fiche est l'état DVR mirroré (NFO sans vidéos), une COPIE de la
+                // fiche auditée, pas une preuve indépendante. Écartée avec trace ; une vraie sœur
+                // plus loin dans la réponse qualifie seule.
                 if (!HasAnyEpisode(sib, ct))
                 {
                     _logger?.Info("[LLM_AI] Recording : série sœur candidate « {0} » ({1}) écartée — aucun épisode en bibliothèque (jumeau de métadonnées ?), pas une preuve de curation.",
@@ -1340,23 +1202,14 @@ namespace LLM_AI
             return (null, null);
         }
 
-        /// <summary>Une SÉRIE candidate porte-t-elle AU MOINS un épisode en
-        /// bibliothèque ? Garde « vraie sœur » v2.19.3 : les dossiers jumeaux
-        /// nés du miroir de métadonnées de l'usager (robocopy NFO sans
-        /// vidéos) deviennent de vrais items Série+Saison en base, mais
-        /// JAMAIS d'épisode (les conteneurs vidéo ne sont pas mirrorés) —
-        /// un item Série sans aucun épisode n'est donc pas une curation,
-        /// juste l'écho d'un enregistrement passé : sa fiche est une copie
-        /// de l'état DVR du moment (cas 2026-11-11 : « Mini-Jean et
-        /// Mini-Bulle » validé sans juge par le jumeau né de SON propre
-        /// événement 3 min plus tôt ; vraie sœur légitime le même matin :
-        /// « Titre A » ↔ D:\Series, curatorée 2023). Requête base
-        /// (AncestorIds+Episode, miroir des compteurs LibReview), jamais de
-        /// lecture disque. Échec de requête → false (fail-closed :
-        /// l'incertitude retombe sur les couches lexicales/juge, jamais sur
-        /// une preuve non vérifiable). NB : une fois l'usager y dépose les
-        /// vidéos, le jumeau convergé redevient une sœur à part entière —
-        /// la garde ne punit pas les séries nées fantômes.</summary>
+        /// <summary>Une SÉRIE candidate porte-t-elle AU MOINS un épisode en bibliothèque ? Garde «
+        /// vraie sœur » v2.19.3 : les dossiers jumeaux nés d'un miroir de métadonnées (NFO sans les
+        /// vidéos) deviennent des items Série+Saison mais JAMAIS d'épisode — sans épisode, ce n'est
+        /// pas une curation mais l'écho d'un enregistrement passé. Requête base
+        /// (AncestorIds+Episode, miroir des compteurs LibReview), jamais de lecture disque. Échec
+        /// de requête → false (fail-closed : l'incertitude retombe sur les couches lexicales/juge).
+        /// NB : une fois les vidéos déposées, le jumeau redevient une sœur à part
+        /// entière.</summary>
         private bool HasAnyEpisode(BaseItem series, CancellationToken ct)
         {
             if (series == null || _library == null) return false;
@@ -1413,12 +1266,10 @@ namespace LLM_AI
             if (meta == null && isSeries && !string.IsNullOrWhiteSpace(item.GetProviderId("tvdb")))
                 meta = await _tmdb.FindByExternalIdAsync(item.GetProviderId("tvdb").Trim(), "tvdb_id", kind, userTmdb, ct, overviewChain).ConfigureAwait(false);
 
-            // Fiche illisible sous le type de l'item → relire sous le type
-            // opposé : c'est le cas d'une fiche croisée posée par le repli de
-            // type du pipeline (film sur un item série) — l'audit est le
-            // mécanisme de confirmation décrit dans le README. Sans cette
-            // relecture croisée, l'audit sauterait éternellement une fiche
-            // pourtant correcte. tvdb n'a de sens que dans l'espace série.
+            // Fiche illisible sous le type de l'item → relire sous le type opposé (fiche croisée
+            // posée par le repli de type du pipeline) : sans cette relecture croisée, l'audit
+            // sauterait éternellement une fiche pourtant correcte. tvdb n'a de sens que dans
+            // l'espace série.
             if (meta == null)
             {
                 string otherKind = isSeries ? "movie" : "series";
@@ -1459,15 +1310,11 @@ namespace LLM_AI
                 return Status.OrphanResolved;
             }
 
-            // Mismatch : titre EPG ≠ fiche. Les ids sont CONSERVÉS — la garde
-            // lexicale est aveugle aux titres traduits (dry-run 2026-09-17 :
-            // « Erreur vitale » = « The Fatal Flaw », « Jungle en délire » =
-            // « La Famille Delajungle » — fiches pourtant correctes) et la
-            // reprise S1/S2/S3 échouerait de la même façon (même garde). On
-            // flague needs-review : décision humaine dans l'éditeur Emby
-            // (retirer l'id si la fiche est fausse, puis re-tagguer). Le
-            // not-found est migré : l'item a des ids, il n'est plus
-            // « introuvable », il attend une confirmation.
+            // Mismatch : titre EPG ≠ fiche. Les ids sont CONSERVÉS — la garde lexicale est aveugle
+            // aux titres traduits (« Erreur vitale » = « The Fatal Flaw ») et la reprise S1/S2/S3
+            // échouerait de la même façon. On flague needs-review : décision humaine dans l'éditeur
+            // Emby (retirer l'id si la fiche est fausse, puis re-tagger). Le not-found est migré :
+            // l'item a des ids, il attend une confirmation.
             _logger?.Info("[LLM_AI] OrphanIdentify : audit taggé « {0} » ≠ fiche « {1} » (tmdb={2}) — titre EPG divergent (traduction ? homonyme ?).",
                 itemName, meta.Title ?? "—", meta.TmdbId);
             if (dry)
@@ -1513,11 +1360,10 @@ namespace LLM_AI
                 item.Overview = string.Empty; // synopsis d'Emby (faux) : vidé pour re-remplissage
 
             item.Genres = Array.Empty<string>(); // genres d'Emby (faux) : vidés
-            // Effacer l'année posée par la fiche erronée d'Emby (ex. 2022 de
-            // tmdb 155980) pour qu'elle ne reste pas sur l'item après expiration
-            // de la rétention du store. Pour une série, truth.Year est l'année
-            // de diffusion de l'épisode (pas de la série) → null ; pour un film,
-            // restaurer l'année du guide si valide.
+            // Effacer l'année posée par la fiche erronée d'Emby pour qu'elle ne reste pas sur
+            // l'item après expiration de la rétention du store. Série : truth.Year est l'année de
+            // diffusion de l'épisode (pas de la série) → null ; film : restaurer l'année du guide
+            // si valide.
             bool isSeriesItem = item is Series
                 || (item != null && item.GetType().Name.IndexOf("Series", StringComparison.OrdinalIgnoreCase) >= 0);
             item.ProductionYear = isSeriesItem
@@ -1543,31 +1389,17 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  SB — ancrage bibliothèque (dossier frère). Emby type l'import DVR
-        //  d'après le titre EPG du programme : chaque variation de titre
-        //  (suffixe « (année) », traduction, renommage du guide) enfante un
-        //  NOUVEAU dossier — Emby ne fusionne jamais par fiche, l'identité
-        //  est le dossier. Un enregistrement est donc souvent le double
-        //  d'une œuvre déjà identifiée en bibliothèque, possiblement dans
-        //  une autre bibliothèque. Sans ancrage, S1/S2/S3 ré-identifient
-        //  l'œuvre DEPUIS LES BANQUES et peuvent diverger de la fiche du
-        //  dossier existant (cas réels 2026-10-06 : « Les enquêtes de Vera
-        //  (2020) » porte la fiche entière de « Les enquêtes de Dan
-        //  Sommerdahl » ; « La recrue FBI » porte la fiche de « The
-        //  Rookie » ; « Élémentaire » 2022 porte le TMDB d'Elementary). La
-        //  source la plus fiable est la bibliothèque elle-même : la
-        //  curation de l'usager. Un dossier frère homonyme (± « (année) »,
-        //  parenthèses et bruit EPG retirés) portant une fiche la propose
-        //  comme candidat n° 0 — la porte commune décide (titre/année/
-        //  juge). Rejet → la chaîne S0→S1→S2→S3 suit son cours (reboot
-        //  homonyme, traduction du titre…). Fiche du frère illisible dans
-        //  le kind de la passe (fiche croisée) : pas d'ancrage — le repli
-        //  de type s'en charge, doctrine inchangée. Effet systémique :
-        //  les fiches CONVERGENT — deux dossiers d'une même œuvre portent
-        //  la même fiche, le filtre natif « Doublons » d'Emby (même id
-        //  TVDB) devient fiable ; le signalement « même œuvre en deux
-        //  dossiers » tombe gratuitement au log via la garde « fiche déjà
-        //  portée » (FicheConflictGateAsync).
+        //  SB — ancrage bibliothèque (dossier frère). Emby type l'import DVR d'après le titre EPG :
+        //  chaque variation de titre (suffixe « (année) », traduction, renommage du guide) enfante
+        //  un NOUVEAU dossier, souvent le double d'une œuvre déjà identifiée, possiblement dans une
+        //  autre bibliothèque. Sans ancrage, S1/S2/S3 ré-identifient depuis les banques et peuvent
+        //  diverger de la fiche du dossier existant. Un dossier frère homonyme (± « (année) »,
+        //  parenthèses et bruit EPG retirés) portant une fiche la propose comme candidat n° 0 — la
+        //  porte commune décide (titre/année/juge) ; rejet → la chaîne S0→S1→S2→S3 suit son cours.
+        //  Fiche du frère illisible dans le kind de la passe (fiche croisée) : pas d'ancrage, le
+        //  repli de type s'en charge. Effet systémique : les fiches CONVERGENT (filtre natif «
+        //  Doublons » d'Emby fiable) et le signalement « même œuvre en deux dossiers » tombe au log
+        //  via la garde « fiche déjà portée » (FicheConflictGateAsync).
         // ------------------------------------------------------------------
 
         private async Task<TmdbMeta> ResolveViaSiblingAsync(BaseItem item, PluginConfiguration cfg,
@@ -1613,15 +1445,10 @@ namespace LLM_AI
                 if (!HasItemProviderId(sib, "tmdb") && !HasItemProviderId(sib, "imdb")
                     && !HasItemProviderId(sib, "tvdb")) continue;
 
-                // Garde « vraie sœur » (v2.19.3), séries uniquement (un
-                // dossier film sans média ne crée pas d'item) : un frère
-                // jumeau sans épisode propose l'état DVR d'un événement
-                // passé (miroir NFO), pas une curation — son fanion de
-                // preuve lexicale (siblingLexicalProof) serait sinon
-                // automatique pour toute fiche d'homonyme : le jumeau porte
-                // par construction le titre de la série. Écarté avec trace ;
-                // la chaîne S0→S1→S2→S3 suit son cours (S1 titre exact
-                // retrouvera la même fiche si elle est juste).
+                // Garde « vraie sœur » (v2.19.3), séries uniquement : un frère jumeau sans épisode
+                // propose l'état DVR d'un événement passé (miroir NFO), pas une curation — son
+                // fanion de preuve lexicale (siblingLexicalProof) serait sinon automatique pour
+                // toute fiche d'homonyme. Écarté avec trace ; la chaîne S0→S1→S2→S3 suit son cours.
                 if (string.Equals(kind, "series", StringComparison.OrdinalIgnoreCase)
                     && !HasAnyEpisode(sib, ct))
                 {
@@ -1720,9 +1547,9 @@ namespace LLM_AI
                 };
                 if (meta.TmdbId <= 0 && string.IsNullOrWhiteSpace(meta.ImdbId) && string.IsNullOrWhiteSpace(meta.TvdbId))
                     continue;
-                trace.SawCandidates = true; // une banque (Emby) a surface un candidat identifié
+                trace.SawCandidates = true; // une banque (Emby) a fait remonter un candidat identifié
 
-                // Porte renforcée : titre lexicale + année + juge synopsis.
+                // Porte renforcée : titre lexical + année + juge synopsis.
                 if (!await AcceptCandidateAsync(Plugin.Instance?.Configuration, meta, epgTitle,
                         gateYear, epgOverview, true, cleanTitle, ct, item,
                         trace: trace, stageLabel: "S0").ConfigureAwait(false))
@@ -1785,7 +1612,7 @@ namespace LLM_AI
             if (!string.IsNullOrWhiteSpace(guess.ImdbId))
             {
                 var m = await _tmdb.FindByExternalIdAsync(guess.ImdbId.Trim(), "imdb_id", kind, userTmdb, ct, overviewChain).ConfigureAwait(false);
-                if (m != null) trace.SawCandidates = true; // fiche réelle reléguée, même rejetée
+                if (m != null) trace.SawCandidates = true; // fiche réelle remontée, même rejetée
                 if (await AcceptCandidateAsync(cfg, m, epgTitle, expectedYear, overview, false, null, ct, item, corroborateNoSynopsis: true, gateYear: gateYear, webCtx: webCtx, trace: trace, stageLabel: "S2").ConfigureAwait(false))
                     return m;
             }
@@ -1818,35 +1645,20 @@ namespace LLM_AI
                 {
                     int? y = guess.Year ?? year;
                     var m = await _tmdb.LookupMetaMultiLangAsync(ot, kind, y, langs, ct, overviewChain).ConfigureAwait(false);
-                    // Cascade annuelle (miroir de S1) : l'année proposée par le
-                    // LLM peut être fausse pour une œuvre récente qu'il ne
-                    // connaît pas — le filtre primary_release_year rend alors
-                    // la vraie fiche invisible (cas réel 2026-09-20 : « La
-                    // foudre, un éclair de génie », fiche movie 2026, l'année
-                    // devinée ≠ 2026 → 0 résultat à chaque passe). Rejouer
-                    // SANS filtre d'année : la porte d'acceptation reste
-                    // chargée de valider (titre exigé ; garde d'année sauf
-                    // titre exact sans année fiable, voir plus bas).
+                    // Cascade annuelle (miroir de S1) : l'année proposée par le LLM peut être
+                    // fausse pour une œuvre récente qu'il ne connaît pas — primary_release_year
+                    // rend alors la vraie fiche invisible. Rejouer SANS filtre d'année : la porte
+                    // d'acceptation reste chargée de valider.
                     if (m == null && y.HasValue)
                         m = await _tmdb.LookupMetaMultiLangAsync(ot, kind, null, langs, ct, overviewChain).ConfigureAwait(false);
                     if (m != null) trace.SawCandidates = true;
-                    // Porte : l'année devinée par le LLM n'est indicative que
-                    // quand l'item n'a pas d'année fiable (gateYear null) —
-                    // une œuvre récente que le LLM ne connaît pas reçoit une
-                    // année fausse (2017 pour un doc de 2026) qui rejetterait
-                    // la vraie fiche trouvée par la cascade. Titre EXACT —
-                    // ancré sur le TITRE DU GUIDE, pas sur la proposition :
-                    // la fiche trouvée via une proposition la « confirme »
-                    // toujours (cercle vicieux, cas réel 2026-09-20 : le LLM
-                    // a proposé « Flash of Genius » (hallucination sur
-                    // « foudre, éclair de génie ») et la fiche 14914 portait
-                    // ce même titre — égalité circulaire) = preuve plus
-                    // forte que l'année devinée ; le tag needs-review +
-                    // l'audit restent le filet. Garde d'année conservée pour
-                    // les correspondances lâches (homonymes d'époques
-                    // différentes), et un match lâche sans synopsis est
-                    // rejeté (voir plus bas : rien n'arbitre alors la
-                    // proposition du LLM).
+                    // Porte : l'année devinée par le LLM n'est indicative que quand l'item n'a pas
+                    // d'année fiable (gateYear null). Titre EXACT ancré sur le TITRE DU GUIDE, pas
+                    // sur la proposition (une fiche trouvée via une proposition la « confirme »
+                    // toujours : égalité circulaire) = preuve plus forte que l'année devinée ; le
+                    // tag needs-review + l'audit restent le filet. Garde d'année conservée pour les
+                    // correspondances lâches, et un match lâche sans synopsis est rejeté (voir plus
+                    // bas).
                     int? gateForCandidate = expectedYear;
                     if (!gateYear.HasValue && m != null)
                     {
@@ -1858,14 +1670,9 @@ namespace LLM_AI
                         }
                         else if (string.IsNullOrWhiteSpace(overview))
                         {
-                            // Titre lâche (inclusion/sous-séquence) + ni année
-                            // fiable ni synopsis = aucune preuve décisive. Cas
-                            // réel 2026-09-20 : le LLM a proposé « The
-                            // Lightning Thief » (hallucination sémantique sur
-                            // « foudre ») et l'inclusion dans « Percy Jackson
-                            // & the Olympians: The Lightning Thief » (année
-                            // devinée = année de la fiche, cohérente-fausse)
-                            // a fait appliquer la mauvaise fiche.
+                            // Titre lâche (inclusion/sous-séquence) + ni année fiable ni synopsis =
+                            // aucune preuve décisive : une hallucination sémantique du LLM serait
+                            // sinon appliquée par simple inclusion de titre.
                             trace?.RecordCandidate("S2", m, "faible", "S2 — proposition LLM",
                                 "titre proposé « " + ot + " »", false,
                                 "titre lâche sans année fiable ni synopsis comparable", trace?.CrossKind ?? false);
@@ -1934,10 +1741,8 @@ namespace LLM_AI
             string overview, string userTmdb, BaseItem item, PipelineTrace trace, CancellationToken ct,
             IReadOnlyList<string> overviewChain = null, WebEvidenceContext webCtx = null)
         {
-            // Requête web sans titre = année seule («  2026 ») : des
-            // résultats existent pour n'importe quoi et leurs ids sont du
-            // bruit d'année — annulée (le filet de porte rejeterait de
-            // toute façon tout candidat sur titre vide).
+            // Requête web sans titre = année seule : ses résultats sont du bruit d'année — annulée
+            // (le filet de porte rejetterait de toute façon tout candidat sur titre vide).
             if (string.IsNullOrWhiteSpace(cleanTitle))
             {
                 _logger?.Info("[LLM_AI] OrphanIdentify : S3 « {0} » — recherche web annulée : titre du guide vide.",
@@ -2262,30 +2067,21 @@ namespace LLM_AI
             string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + "…");
 
         // ------------------------------------------------------------------
-        //  Porte d'acceptation d'un candidat TMDB : année + juge sémantique.
-        //  Acceptation : année compatible ET (pas de synopsis à comparer, OU
-        //  juge LLM confirme que les synopsis décrivent la même œuvre).
-        //  Un candidat rejeté n'arrête jamais la chaîne (« on continue »).
-        //  Optionnellement, garde de titre lexicale (voies par titre).
-        //  Voies LLM/web (S2 par id, S2 par titre proposé, S3 web) sans
-        //  synopsis comparable : corroboration exigée (corroborateNoSynopsis)
-        //  ANCRÉE SUR LE TITRE DU GUIDE, pas sur la proposition du LLM —
-        //  une fiche choisie PAR la proposition la « confirme » toujours
-        //  (cercle vicieux, cas réel 2026-09-20 : id halluciné tt1054588 →
-        //  « Un Éclair de génie », suffixe du titre EPG + année devinée
-        //  cohérente-fausse). Sans année fiable (gateYear) ni synopsis :
-        //  seule l'ÉGALITÉ EXACTE du titre du guide est une preuve.
-        //  gateYear = année fiable de l'item (null si soft/absente) — sert à
-        //  distinguer « année corroborante » de « année devinée (circulaire) ».
-        //  siblingAnchor = candidat du dossier frère (SB) : règle d'année
-        //  dédiée séries (un enregistrement ne peut pas précéder la série :
-        //  année item ≥ année fiche − 1 — les saisons d'une série longue se
-        //  diffusent des années après la première, « Les enquêtes de Vera
-        //  (2020) » = la série fichée 2011), garde lexicale pure (l'année est
-        //  arbitrée à part) et rejet des frères homonymes d'une AUTRE époque
-        //  sans synopsis à arbitrer (reboot/homonyme — « Les Schtroumpfs »
-        //  1976 vs 2021). Toute acceptation passe ensuite la garde « fiche
-        //  déjà portée » (FicheConflictGateAsync) — voir sa documentation.
+        //  Porte d'acceptation d'un candidat TMDB : année + juge sémantique. Acceptation : année
+        //  compatible ET (pas de synopsis à comparer, OU juge LLM confirme que les synopsis
+        //  décrivent la même œuvre). Un candidat rejeté n'arrête jamais la chaîne. Optionnellement,
+        //  garde de titre lexicale (voies par titre). Voies LLM/web (S2 par id, S2 par titre
+        //  proposé, S3 web) sans synopsis comparable : corroboration exigée (corroborateNoSynopsis)
+        //  ANCRÉE SUR LE TITRE DU GUIDE, pas sur la proposition du LLM (une fiche choisie PAR la
+        //  proposition la « confirme » toujours : cercle vicieux). Sans année fiable (gateYear) ni
+        //  synopsis : seule l'ÉGALITÉ EXACTE du titre du guide est une preuve. gateYear = année
+        //  fiable de l'item (null si soft/absente).
+        //  siblingAnchor = candidat du dossier frère (SB) : règle d'année dédiée séries (année item
+        //  ≥ année fiche − 1 : les saisons d'une série longue se diffusent des années après la
+        //  première), garde lexicale pure (l'année est arbitrée à part) et rejet des frères
+        //  homonymes d'une AUTRE époque sans synopsis à arbitrer (reboot/homonyme). Toute
+        //  acceptation passe ensuite la garde « fiche déjà portée » (FicheConflictGateAsync) — voir
+        //  sa documentation.
         // ------------------------------------------------------------------
 
         private async Task<bool> AcceptCandidateAsync(PluginConfiguration cfg, TmdbMeta m,
@@ -2299,15 +2095,9 @@ namespace LLM_AI
             string st = stageLabel ?? (siblingAnchor ? "SB" : "?");
             bool ck = trace?.CrossKind ?? false;
 
-            // Titre du guide vide : AUCUNE corroboration n'est possible.
-            // Le bras « année corroborante » de la voie sans synopsis
-            // (titleOk || yearsOk) matcherait n'importe quelle fiche de la
-            // même année (cas réel 2026-11-10 : « Eleições 2026 » acceptée
-            // sur la seule année corroborante 2026, requête web «  2026 »
-            // issue d'un titre vide passé jusqu'ici). Un titre vide n'est jamais
-            // une preuve — filet indépendant des entrées du pipeline : la
-            // défense en profondeur fait respecter ce que la coalescence
-            // prévient.
+            // Titre du guide vide : AUCUNE corroboration possible (le bras « année corroborante »
+            // matcherait n'importe quelle fiche de la même année). Un titre vide n'est jamais une
+            // preuve — filet indépendant des entrées du pipeline (défense en profondeur).
             if (string.IsNullOrWhiteSpace(epgTitle))
             {
                 trace?.RecordCandidate(st, m, "faible", st, null, false,
@@ -2319,22 +2109,14 @@ namespace LLM_AI
 
             bool seriesKind = string.Equals(m.Kind, "series", StringComparison.OrdinalIgnoreCase);
 
-            // Année-thème (piège de terrain 2026-10-13, « 1945: l'année qui a
-            // changé l'histoire ») : le guide porte l'année-SUJET d'un
-            // documentaire (ProductionYear=1945 pour une œuvre de 2020 SUR
-            // l'année 1945) — ≥ 1900, elle échappe au garde « année aberrante »
-            // et empoisonne toute la chaîne (filtre year=1945 → 0 candidat S1 ;
-            // garde YearCompatible(1945, 2020) → rejet de la VRAIE fiche
-            // proposée par S2 ; requête S3 « titre + 1945 » → mauvaise œuvre).
-            // Un enregistrement DVR ne peut pas PRÉCÉDER son œuvre : une
-            // fiche postérieure de plus d'un an à l'année de l'item désigne
-            // une année-thème, pas une vraie année de diffusion. L'année de
-            // l'item devient non fiable POUR CE CANDIDAT : garde d'année
-            // passée, preuve par la doctrine « sans année fiable » (égalité
-            // exacte du titre du guide, ou juge synopsis). Un homonyme d'une
-            // autre époque reste rejeté par le titre (« 1945: The Year that
-            // Changed the World » ≠ titre du guide). L'ancrage frère (séries)
-            // garde sa règle dédiée (année antérieure = autre œuvre).
+            // Année-thème : le guide peut porter l'année-SUJET d'un documentaire
+            // (ProductionYear=1945 pour une œuvre de 2020 SUR l'année 1945) ; ≥ 1900, elle échappe
+            // au garde « année aberrante » et ferait rejeter la VRAIE fiche. Un enregistrement DVR
+            // ne peut pas PRÉCÉDER son œuvre : une fiche postérieure de plus d'un an à l'année de
+            // l'item désigne une année-thème. L'année devient non fiable POUR CE CANDIDAT : garde
+            // d'année passée, doctrine « sans année fiable » (égalité exacte du titre du guide, ou
+            // juge synopsis). Un homonyme d'une autre époque reste rejeté par le titre. L'ancrage
+            // frère (séries) garde sa règle dédiée.
             int? itemYear = gateYear ?? epgYear;
             if (!siblingAnchor && itemYear.HasValue && itemYear.Value >= 1900
                 && m.Year.HasValue && m.Year.Value >= 1900
@@ -2348,12 +2130,10 @@ namespace LLM_AI
                 gateYear = null;
             }
 
-            // Garde-fou année (deux œuvres d'époques différentes). Rejet
-            // logué : ce garde est silencieux sinon, et un « 0 si inconnu »
-            // du LLM y a déjà caché une fiche correcte (cas 2026-09-20).
-            // Ancrage frère (séries) : règle dédiée — un enregistrement ne
-            // peut pas PRÉCÉDER la première diffusion de sa série, mais il
-            // peut la suivre de longtemps (saisons d'une série longue).
+            // Garde-fou année (deux œuvres d'époques différentes). Rejet logué : ce garde est
+            // silencieux sinon, et un « 0 si inconnu » du LLM y a déjà caché une fiche correcte.
+            // Ancrage frère (séries) : règle dédiée — un enregistrement ne peut pas PRÉCÉDER la
+            // première diffusion de sa série, mais peut la suivre de longtemps.
             bool yearOk = siblingAnchor && seriesKind
                 ? AnchorSeriesYearCompatible(epgYear, m.Year)
                 : YearCompatible(epgYear, m.Year);
@@ -2383,14 +2163,11 @@ namespace LLM_AI
                 return false;
             }
 
-            // Pas de synopsis à comparer : acceptation sur année (+titre) —
-            // conserve le comportement EPG sans synopsis. Sur les voies
-            // LLM/web (S2 par id, S2 par titre proposé, S3 web), un id ou un
-            // titre PROPOSÉ n'est pas une preuve : la fiche trouvée via cette
-            // proposition la valide toujours (cercle vicieux). Sans année
-            // fiable ni synopsis comparable, seule l'égalité EXACTE du titre
-            // du guide avec la fiche est décisive ; avec une année fiable, la
-            // garde lexicale (titre du guide) ou l'année corroborante suffit.
+            // Pas de synopsis à comparer : acceptation sur année (+titre), comportement EPG
+            // historique. Sur les voies LLM/web, un id ou un titre PROPOSÉ n'est pas une preuve (la
+            // fiche trouvée via la proposition la valide toujours). Sans année fiable ni synopsis
+            // comparable, seule l'égalité EXACTE du titre du guide décide ; avec une année fiable,
+            // la garde lexicale (titre du guide) ou l'année corroborante suffit.
             if (string.IsNullOrWhiteSpace(epgSynopsis) || string.IsNullOrWhiteSpace(m.Overview))
             {
                 // Ancrage frère (séries) sans synopsis : un écart d'époque
@@ -2466,17 +2243,12 @@ namespace LLM_AI
                 return false;
             }
 
-            // v2.19.2 — preuve lexicale de l'ancrage frère (séries) : la
-            // fiche est proposée PAR le dossier frère de l'usager et porte
-            // la même clé de titre que le titre de recherche (l'année est
-            // déjà arbitrée par AnchorSeriesYearCompatible ci-dessus). Le
-            // juge comparerait un synopsis d'ÉPISODE à l'overview de la
-            // SÉRIE — granularité qui tuait les propositions SB à titre
-            // égal (faux négatifs 2026-11-10). Contournement → porte
-            // « fiche déjà portée » avec le fanion de preuve : le porteur
-            // au titre divergent est le frère (ou son jumeau de l'autre
-            // racine), la divergence = titre d'épisode vs série, pas un
-            // conflit d'œuvre.
+            // v2.19.2 — preuve lexicale de l'ancrage frère (séries) : la fiche est proposée PAR le
+            // dossier frère de l'usager et porte la même clé de titre que le titre de recherche
+            // (année déjà arbitrée par AnchorSeriesYearCompatible). Le juge comparerait un synopsis
+            // d'ÉPISODE à l'overview de la SÉRIE (faux négatifs) ; contournement → porte « fiche
+            // déjà portée » avec le fanion de preuve : la divergence de titre = épisode vs série,
+            // pas un conflit d'œuvre.
             if (siblingAnchor && seriesKind
                 && SameTitleKey(matchTitle).Length > 0
                 && SameTitleKey(matchTitle) == SameTitleKey(m.Title))
@@ -2524,37 +2296,25 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Garde « fiche déjà portée » (fiche-conflict). Contrepartie ACTIVE
-        //  du filtre natif « Doublons » d'Emby (passif, aveugle aux langues
-        //  et aux fiches TVDB divergentes, un seul item marqué par groupe) :
-        //  AVANT d'écrire un candidat, qui d'autre dans la bibliothèque
-        //  porte DÉJÀ cette fiche (tmdb/tvdb/imdb, requête indexée
-        //  AnyProviderIdEquals — plomberie du repli IMDb d'EnrichWithLibrary) ?
+        //  Garde « fiche déjà portée » (fiche-conflict). Contrepartie ACTIVE du filtre natif «
+        //  Doublons » d'Emby (passif, aveugle aux langues et aux fiches TVDB divergentes) : AVANT
+        //  d'écrire un candidat, qui d'autre dans la bibliothèque porte DÉJÀ cette fiche
+        //  (tmdb/tvdb/imdb, requête indexée AnyProviderIdEquals) ?
         //  <list type="bullet">
-        //  <item>aucun autre porteur → passage (fiche neuve pour la
-        //  bibliothèque) ;</item>
-        //  <item>porteur au MÊME titre (± « (année) », bruit EPG retiré —
-        //  SameTitleKey) → passage + log « même œuvre en deux dossiers » —
-        //  le signalement de doublons tombe gratuitement, en passant ; la
-        //  fusion manuelle reste à l'usager (le plugin ne touche jamais les
-        //  fichiers) ;</item>
-        //  <item>porteur au titre DIVERGENT → le juge LLM arbitre le synopsis
-        //  EPG contre l'overview du porteur (tout en processus, zéro web) :
-        //  même œuvre (renommage/traduction — « Retour à Sanditon » vs
-        //  « Bienvenue à Sanditon ») → passage ; œuvres différentes (« La
-        //  recrue FBI » vs « The Rookie ») ou juge indisponible/sans synopsis
-        //  à arbitrer → REJET par prudence (needs-review en fin de chaîne,
-        //  doctrine de la porte).</item>
+        //  <item>aucun autre porteur → passage ;</item>
+        //  <item>porteur au MÊME titre (± « (année) », bruit EPG retiré — SameTitleKey) → passage +
+        //  log « même œuvre en deux dossiers » ; la fusion manuelle reste à l'usager (le plugin ne
+        //  touche jamais les fichiers) ;</item>
+        //  <item>porteur au titre DIVERGENT → le juge LLM arbitre le synopsis EPG contre l'overview
+        //  du porteur : même œuvre (renommage/traduction) → passage ; œuvres différentes, juge
+        //  indisponible ou aucun synopsis à arbitrer → REJET par prudence (needs-review en fin de
+        //  chaîne).</item>
         //  </list>
-        //  judgeConfirmed=true (le juge de la porte vient de confirmer le
-        //  synopsis EPG contre la fiche) : la fiche décrit notre item — le
-        //  porteur divergent est probablement un renommage (ou une fiche
-        //  erronée SUR le porteur, problème préexistant) → passage + log.
-        //  Garde déterministe préalable : la fiche contredit un id déjà
-        //  porté par l'item → rejet (défensif : l'item est orphelin en
-        //  principe, mais la reversion d'audit RevertToEpgAsync est
-        //  best-effort — un retrait d'id échoué y laisse le pipeline tourner
-        //  sur un item qui porte encore l'ancienne fiche rejetée).
+        //  judgeConfirmed=true (le juge de la porte vient de confirmer le synopsis EPG contre la
+        //  fiche) : le porteur divergent est probablement un renommage (ou une fiche erronée SUR le
+        //  porteur, problème préexistant) → passage + log. Garde déterministe préalable : la fiche
+        //  contredit un id déjà porté par l'item → rejet (défensif : la reversion d'audit
+        //  RevertToEpgAsync est best-effort).
         // ------------------------------------------------------------------
 
         private async Task<bool> FicheConflictGateAsync(PluginConfiguration cfg, TmdbMeta m,
@@ -2607,13 +2367,11 @@ namespace LLM_AI
                     continue;
                 }
 
-                // Preuve lexicale d'ancrage frère (v2.19.2) : le titre du
-                // guide est un titre d'ÉPISODE, le porteur est le frère qui
-                // a PROPOSÉ la fiche (ou son jumeau de l'autre racine) — la
-                // divergence de titre est l'artefact de granularité
-                // épisode-vs-série, pas un conflit d'œuvre. Pas de juge
-                // ici non plus : c'est exactement la comparaison qui
-                // produisait les faux négatifs.
+                // Preuve lexicale d'ancrage frère (v2.19.2) : le titre du guide est un titre
+                // d'ÉPISODE, le porteur est le frère qui a PROPOSÉ la fiche (ou son jumeau de
+                // l'autre racine) — divergence de granularité épisode-vs-série, pas un conflit
+                // d'œuvre. Pas de juge ici non plus : c'est cette comparaison qui produisait les
+                // faux négatifs.
                 if (siblingLexicalProof)
                 {
                     _logger?.Info("[LLM_AI] OrphanIdentify : fiche (tmdb={0}) déjà portée par « {1} » ({2}) — preuve lexicale de l'ancrage frère : titre du guide = épisode, porteur = la série, même œuvre.",
@@ -2710,15 +2468,12 @@ namespace LLM_AI
             return result;
         }
 
-        /// <summary>Conflit déterministe : le candidat porte un id provider
-        /// DIFFÉRENT de celui que l'item porte déjà (tmdb/imdb/tvdb présents
-        /// des deux côtés, valeurs différentes). Retourne la description du
-        /// conflit, null si aucun. Défensif : le pipeline ne traite en
-        /// principe que des orphelins (aucun id), mais la reversion d'audit
-        /// (<c>RevertToEpgAsync</c>) est best-effort — un retrait d'id échoué
-        /// y laisse l'ancienne fiche rejetée sur l'item pendant la reprise
-        /// S1/S2/S3, et écrire un candidat contradictoire dessus serait une
-        /// fiche de plus à réparer.</summary>
+        /// <summary>Conflit déterministe : le candidat porte un id provider DIFFÉRENT de celui que
+        /// l'item porte déjà (tmdb/imdb/tvdb présents des deux côtés, valeurs différentes).
+        /// Retourne la description du conflit, null si aucun. Défensif : le pipeline ne traite en
+        /// principe que des orphelins, mais la reversion d'audit (<c>RevertToEpgAsync</c>) est
+        /// best-effort — un retrait d'id échoué laisserait l'ancienne fiche rejetée sur
+        /// l'item.</summary>
         private static string FindItemIdConflict(BaseItem item, TmdbMeta m)
         {
             if (item == null || m == null) return null;
@@ -2787,23 +2542,14 @@ namespace LLM_AI
                 setGenres = true;
             }
 
-            // --- ProductionYear : seulement si absente (v2.20.19). L'année
-            // posée est celle de l'ŒUVRE portée par la fiche VALIDÉE
-            // (release_date/first_air_date TMDB : sortie d'un film,
-            // première diffusion d'une série) — pas l'année de diffusion
-            // EPG. Fill-if-empty strict : une année déjà présente (curation
-            // de l'usager, année EPG d'un film, année-thème du guide — 1945
-            // pour un documentaire de 2020) n'est JAMAIS écrasée. Bonus
-            // structurel : l'année d'item devient l'année FIABLE de la
-            // fiche validée pour les gardes des passes suivantes (les
-            // incidents passés — année-artefact résiduelle, année-thème —
-            // venaient d'années fausses ; YearCompatible continue de
-            // tolérer les séries longues). PAS de verrou dédié : l'enum
-            // MetadataFields du SDK Emby 4.10 n'a pas de membre
-            // ProductionYear (vérifié par réflexion sur 4.10.2.0) ; la
-            // protection vient du tag llmai-identified (l'item identifié
-            // n'est jamais re-traité) et des téléchargeurs natifs
-            // décochés sur la bibliothèque des enregistrements.
+            // --- ProductionYear : seulement si absente (v2.20.19). L'année posée est celle de
+            // l'ŒUVRE portée par la fiche VALIDÉE (release_date/first_air_date TMDB), pas l'année
+            // de diffusion EPG. Fill-if-empty strict : une année déjà présente (curation de
+            // l'usager, année-thème du guide) n'est JAMAIS écrasée ; l'année d'item devient ainsi
+            // l'année FIABLE pour les gardes des passes suivantes. PAS de verrou dédié : l'enum
+            // MetadataFields du SDK Emby 4.10 n'a pas de membre ProductionYear ; la protection
+            // vient du tag llmai-identified et des téléchargeurs natifs décochés sur la
+            // bibliothèque des enregistrements.
             if ((!item.ProductionYear.HasValue || item.ProductionYear.Value <= 0)
                 && meta.Year.HasValue && meta.Year.Value > 0)
             {
@@ -2973,7 +2719,7 @@ namespace LLM_AI
         }
 
         /// <summary>Garde d'année : accepte si l'une des deux années est
-        /// inconnue ou aberrante (< 1900 — « 0 si inconnu » du LLM, gracenote
+        /// inconnue ou aberrante (&lt; 1900 — « 0 si inconnu » du LLM, gracenote
         /// Year=1 : doctrine « année aberrante = inconnue »), ou si elles
         /// diffèrent d'au plus un an.</summary>
         internal static bool YearCompatible(int? expected, int? actual)
@@ -3008,13 +2754,10 @@ namespace LLM_AI
             sb.Clear();
             foreach (var c in t)
             {
-                // Ligature « œ » dépliée en « oe » — « Coup de cœur » (EPG/UI)
-                // et « Coup de coeur » (Répertoire des films classés, NFO,
-                // noms de dossier) sont le même mot : sans le pliage, les clés
-                // divergent (« coupdecœur » ≠ « coupdecoeur ») et les gardes
-                // de titre exacte ratent le match (pont MCC v2.22.1). Pliage
-                // au sens unique tolérant uniquement : variantes de
-                // l'orthographe du même mot, aucune autre sémantique.
+                // Ligature « œ » dépliée en « oe » : « Coup de cœur » (EPG/UI) et « Coup de coeur »
+                // (NFO, noms de dossier) sont le même mot — sans pliage, les clés divergent et les
+                // gardes de titre exacte ratent le match. Pliage à sens unique, variantes
+                // d'orthographe seulement.
                 if (c == 'œ') sb.Append("oe");
                 else if (char.IsLetterOrDigit(c)) sb.Append(c);
             }
@@ -3617,17 +3360,12 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Notification « fiche croisée » (même pattern que
-        //  RecordingDiskManager.NotifyTagPass / LlmScheduledTask) : les
-        //  items tagués llmai-cross-kind sont filtrables dans Emby ; le
-        //  déplacement du fichier dans la bibliothèque de son type reste une
-        //  action de l'usager (le plugin ne déplace jamais de média).
-        //  v2.4.3 : description courte et NOMINATIVE (l'œuvre en cause y
-        //  est nommée — vécu 2026-10-13 : la cloche ne disait pas quel
-        //  vidéo était en cause) ; le lien de la cloche est un lien
-        //  profond — fiche Emby de l'œuvre pour un item unique, file
-        //  « cross-kind » de la page de configuration (section dépliée
-        //  par &section=crosskind) sinon.
+        //  Notification « fiche croisée » (même pattern que RecordingDiskManager.NotifyTagPass /
+        //  LlmScheduledTask) : les items tagués llmai-cross-kind sont filtrables dans Emby ; le
+        //  déplacement du fichier dans la bibliothèque de son type reste une action de l'usager (le
+        //  plugin ne déplace jamais de média). Description courte et NOMINATIVE ; le lien de la
+        //  cloche est un lien profond — fiche Emby de l'œuvre pour un item unique, file «
+        //  cross-kind » de la page de configuration (section dépliée par &section=crosskind) sinon.
         // ------------------------------------------------------------------
 
         /// <summary>Notification cloche « fiche croisée » — nominative :
@@ -3679,14 +3417,11 @@ namespace LLM_AI
 
             string url = await ResolveCrossKindUrlAsync(cfg, host, items, logger).ConfigureAwait(false);
 
-            // Le lien voyage AUSSI dans la description (cas de terrain
-            // 2026-10-13, Emby.Webhooks 1.0.39) : le consommateur du canal
-            // de lecture rend Title+Description mais IGNORE le champ Url
-            // de la notification Emby — une URL nue en fin de description
-            // est affichée par tout canal qui rend la description (et
-            // auto-liée par la plupart). Le champ Url reste posé pour les
-            // clients qui l'honorent. LF seul : les payloads webhook/JSON
-            // n'ont pas à trimballer de CR.
+            // Le lien voyage AUSSI dans la description : le consommateur du canal de lecture (ex.
+            // Webhooks) rend Title+Description mais IGNORE le champ Url — une URL nue en fin de
+            // description est affichée par tout canal qui rend la description. Le champ Url reste
+            // posé pour les clients qui l'honorent. LF seul : les payloads webhook/JSON n'ont pas à
+            // trimballer de CR.
             if (!string.IsNullOrWhiteSpace(url))
                 desc = desc + "\n" + url;
 

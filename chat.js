@@ -126,8 +126,8 @@ define([], function () {
     }
 
     // Extension v1.13.9.5 : blocs clôturés ```lang … ``` rendus en conteneur
-    // avec boutons Copier / Demander l'enregistrement (portage du pattern
-    // _renderCodeBlock de llm_core, repli execCommand pour HTTP non-localhost).
+    // avec boutons Copier / Demander l'enregistrement (repli
+    // execCommand pour HTTP non-localhost).
     var CODE_EXT = {
         javascript: "js", js: "js", python: "py", py: "py", php: "php",
         html: "html", css: "css", bash: "sh", sh: "sh", shell: "sh",
@@ -556,7 +556,7 @@ define([], function () {
                     once(chatSendBtn, "click", sendChat);
                 }
 
-                // Annonce au changement de mode (v1.13.9, pattern llm_core) :
+                // Annonce au changement de mode (v1.13.9) :
                 // la page envoie automatiquement une note [Admin] pour que le
                 // LLM annonce le champ visé et le texte courant AVANT toute
                 // proposition — l'ancrage read-modify-write dès l'entrée en
@@ -1138,9 +1138,8 @@ define([], function () {
                         }
                         banner.hidden = false;
 
-                        // Branché UNE fois (once) — remplace la garde ad-hoc
-                        // _llmaiWired qui protégeait déjà ce bouton contre le
-                        // viewshow multiple.
+                        // Branché UNE fois (once) : protège ce bouton contre les viewshow
+                        // multiples.
                         var resumeBtn = pane.querySelector("#btnResumeChat");
                         once(resumeBtn, "click", function () {
                                 if (chatBusy) return;

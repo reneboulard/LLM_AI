@@ -15,7 +15,7 @@ using MediaBrowser.Model.Session;
 namespace LLM_AI
 {
     /// <summary>
-    /// Outil <b>record_program</b> du chat externe (v1.13.23, human-in-the-loop
+    /// Outil <b>record_program</b> du chat externe (human-in-the-loop
     /// à PIN) : l'usager demande un enregistrement, le LLM appelle l'action
     /// <c>record</c> — qui ne crée RIEN mais dépose une réservation dans le
     /// bucket serveur (<see cref="RecordingPendingStore"/>) avec un code à
@@ -168,13 +168,11 @@ namespace LLM_AI
                 return Json(new { error = "Cet enregistrement n'est pas autorisé pour cet usager." });
             }
 
-            // v2.20.5 — pré-vérif Dedup au DÉPÔT (vécu prod 2026-11-13
-            // « Excalibur ») : un timer existant n'était découvert qu'au
-            // CONFIRM — l'usager traversait toute la danse du code
-            // (réservation + code à l'écran + saisie) pour apprendre un
-            // refus déjà certain, avec une consigne qui le faisait
-            // reboucler. Mêmes critères EXACTS que le confirm
-            // (AutoProgrammer : id programme + nom normalisé). Le confirm
+            // Pré-vérif dedup au DÉPÔT : l'usager apprend un refus déjà
+            // certain AVANT d'entrer dans la danse du code (réservation +
+            // code à l'écran + saisie — re-demander rebouclerait sur le
+            // même refus). Mêmes critères EXACTS que le confirm
+            // (AutoProgrammer : id programme + nom normalisé) ; le confirm
             // garde sa vérification (défense en profondeur : un timer
             // peut naître entre les deux).
             var dupIds = new HashSet<string>();
@@ -195,13 +193,10 @@ namespace LLM_AI
                 });
             }
 
-            // v2.20.10 — budget du jour épuisé : refus IMMÉDIAT au dépôt,
-            // AVANT tout code affiché (même classe de défaut que la
-            // pré-vérif dedup v2.20.5 : sans ce pré-check, l'usager
-            // traversait toute la danse du code — code affiché, saisie —
-            // pour apprendre un refus déjà certain à la confirmation).
+            // Budget du jour épuisé : refus IMMÉDIAT au dépôt, AVANT tout
+            // code affiché (même classe de défaut que la pré-vérif dedup).
             // Lecture seule : la consommation reste à la confirmation, le
-            // quota ne compte que les créations réelles (inchangé).
+            // quota ne compte que les créations réelles.
             string quotaError;
             if (RecordingPendingStore.QuotaFull(_user.Name,
                     _cfg.ExternalChatRecordingMaxPerDay, out quotaError, LangKey()))
@@ -300,7 +295,7 @@ namespace LLM_AI
                 RecordingPendingStore.RefundCreation(_user.Name);  // pas un effet réel
                 bool alreadyScheduled = outcome == AutoProgrammer.OneOutcome.Dedup;
                 // Notice hors bande : affichée à l'écran de l'app — langue de
-                // l'usager. v2.20.5 : le cas « déjà programmé » a son propre
+                // l'usager. Le cas « déjà programmé » a son propre
                 // message (re-demander rebouclerait sur le même refus).
                 RecordingPendingStore.SetTurnNotice(_user.Name, alreadyScheduled
                     ? string.Format(System.Globalization.CultureInfo.CurrentUICulture,
@@ -330,13 +325,12 @@ namespace LLM_AI
 
         /// <summary>
         /// Interception DÉTERMINISTE de la confirmation par l'endpoint
-        /// (v1.13.23, anti-menteur). Si une réservation est en attente pour
+        /// (anti-menteur). Si une réservation est en attente pour
         /// l'usager et que le message contient exactement UN code à 4
         /// chiffres isolé (message court — le geste de l'usager), la
         /// confirmation est traitée ICI : le modèle n'a AUCUN rôle dans la
         /// transaction (il ne peut ni se confirmer lui-même, ni noyer un
-        /// refus dans une réponse optimiste — les deux modes de mensonge
-        /// constatés en test live). La réponse retournée est VÉRIDIQUE,
+        /// refus dans une réponse optimiste). La réponse retournée est VÉRIDIQUE,
         /// composée côté serveur ; les refus réutilisent la notice du store
         /// (compteur d'essais inclus). Retourne null si rien n'est à
         /// intercepter (pas de réservation, message sans code isolé) — le
@@ -404,9 +398,9 @@ namespace LLM_AI
                 RecordingPendingStore.RefundCreation(user.Name);   // pas un effet réel
                 logger.Info("[LLM_AI] [CHAT-EXT] record_program confirm intercepté (échec {0}) — usager {1}, « {2} ».",
                     outcome, user.Name, pending.Title);
-                // v2.20.5 : le cas « déjà programmé » n'est pas un échec à
-                // corriger par l'usager — re-demander rebouclerait sur le
-                // même refus. Message dédié (i18n, va DIRECTEMENT à l'écran).
+                // Le cas « déjà programmé » n'est pas un échec à corriger
+                // par l'usager — re-demander rebouclerait sur le même
+                // refus. Message dédié (i18n, va DIRECTEMENT à l'écran).
                 if (outcome == AutoProgrammer.OneOutcome.Dedup)
                     return string.Format(
                         System.Globalization.CultureInfo.CurrentUICulture,
@@ -510,7 +504,7 @@ namespace LLM_AI
         }
 
         private static bool SessionUserMatches(SessionInfo s, User user)
-            => SessionUserMatch.Matches(s, user); // v2.7.4 : source de vérité partagée
+            => SessionUserMatch.Matches(s, user); // source de vérité partagée
 
         private static bool UserListed(List<string> list, string user)
         {

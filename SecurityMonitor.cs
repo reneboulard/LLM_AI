@@ -155,7 +155,7 @@ namespace LLM_AI
         private static readonly JsonSerializerOptions s_json = new JsonSerializerOptions
         {
             // Résolveur explicite obligatoire pour sérialiser des JsonNode
-            // (même gotcha .NET 8 que WebFetchTool).
+            // (gotcha .NET 8).
             TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver()
         };
     }

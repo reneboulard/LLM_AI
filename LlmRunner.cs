@@ -149,7 +149,7 @@ namespace LLM_AI
         /// Construit la liste d'outils exposés au LLM pour un run. Les outils
         /// optionnels ne sont inclus que si la config correspondante est active.
         /// </summary>
-        /// <param name="runUser">Usager porteur du run ( Tonight uniquement ;
+        /// <param name="runUser">Usager porteur du run (Tonight uniquement ;
         /// null pour la tâche planifiée et le chat) — transposé au tool
         /// <c>get_emby_info</c> pour la gate EPG (v1.13.12.0).</param>
         public List<ILlmTool> BuildTools(PluginConfiguration cfg, User runUser = null)
@@ -161,10 +161,7 @@ namespace LLM_AI
             };
             if (!string.IsNullOrWhiteSpace(cfg.TmdbApiKey))
                 tools.Add(new TmdbLookupTool(_logger));
-            // mcc_lookup : consultation explicite du Répertoire des films
-            // classés (Québec) — même opt-in sémantique que le pont MCC
-            // (rang fr-CA de TmdbLangPriority, décision usager 2026-11-20).
-            // Un install sans le rang ne paie ni le tool ni son token de prompt.
+            // mcc_lookup : consultation du Répertoire (Québec) — même opt-in que le pont MCC.
             if (MccClient.IsEnabledForInstall)
                 tools.Add(new MccLookupTool(_logger));
             if (!string.IsNullOrWhiteSpace(cfg.TvdbApiKey) ||
@@ -238,7 +235,7 @@ namespace LLM_AI
 
                 // Nettoie (balises markdown ```json … ```) puis enrichit (match
                 // titres vs résultats epg_series/epg_movies → id/channel_id/
-                // rating/image_url). Portage C# du matching par titre PHP.
+                // rating/image_url).
                 var payload = ExtractJsonPayload(reply);
                 payload = EnrichRecommendations(payload, toolResults);
                 return (payload, true);
@@ -257,11 +254,8 @@ namespace LLM_AI
 
         // ------------------------------------------------------------------
         //  Synthèse LLM sans outils (un seul appel, repli multi-backend).
-        //  Path générique partagé : la boucle de rétroaction hebdo
-        //  (RecoAnalysisTask) l'utilise pour produire la directive de
-        //  recommandation à partir d'un tableau de corrélations construit
-        //  en C# — même forme que la synthèse déterministe de l'audit
-        //  (rassemblement C# + un passage LLM sans outils).
+        //  Path générique pour produire une synthèse depuis des données C# :
+        //  boucle de rétroaction (RecoAnalysisTask), audit déterministe.
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -305,15 +299,10 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Audit santé système (endpoint à la demande /Plugins/LLMAI/Audit).
-        //  Path séparé de la recommandation : mêmes backends LLM (ResolveBackends
-        //  réutilisé), mais outils dédiés (system_audit seul), system prompt
-        //  spécifique (intro + workflow d'audit, sans le « lecture seule » ni
-        //  le format de recommandation), et AUCUN enrichissement de reco —
-        //  l'audit retourne un rapport Markdown brut. Le constructeur de
-        //  LlmRunner est inchangé : les services d'audit (sessions, tasks,
-        //  notifications) sont passés en paramètre par l'endpoint, qui les
-        //  reçoit par DI — zéro ripple pour LlmScheduledTask / TonightService.
+        //  Path séparé de la recommandation : mêmes backends LLM, mais outils
+        //  dédiés (system_audit), system prompt spécifique (sans « lecture seule »
+        //  ni format de reco), et AUCUN enrichissement de reco. Les services
+        //  d'audit sont passés en paramètre par l'endpoint (DI).
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -448,7 +437,7 @@ namespace LLM_AI
         /// <summary>
         /// Workflow de synthèse : croiser les constats puis produire le rapport
         /// Markdown (mêmes attendus que le mode boucle : gravité + actions).
-        /// La remédiation y est report-only — l'LLM n'a pas d'outil pour
+        /// La remédiation y est report-only — le LLM n'a pas d'outil pour
         /// l'exécuter en mode synthèse.
         /// </summary>
         internal const string AUDIT_SYNTHESIS_WORKFLOW =
@@ -571,30 +560,17 @@ namespace LLM_AI
                     return await RunAuditDeterministicAsync(cfg, label, userPrompt, backends,
                         ollamaCloudKey, geminiKey, sessions, tasks, notifications, ct).ConfigureAwait(false);
 
-                // Mode boucle agent (cloud / modèle costaud) : l'LLM appelle
+                // Mode boucle agent (cloud / modèle costaud) : le LLM appelle
                 // lui-même system_audit de façon adaptative. Agent avec intro +
                 // workflow d'audit ; formatSection="" supprime le bloc « FORMAT
                 // DES RECOMMANDATIONS » (l'audit = Markdown, pas un tableau JSON).
                 var tools = BuildAuditTools(cfg, sessions, tasks, notifications);
 
-                // Langue du rapport : règle usager 2026-10-01 —
-                // ResponseLanguage (choix explicite) → langue de l'interface
-                // Emby (« Auto ») → anglais. La directive est TOUJOURS
-                // injectée : sans elle, un modèle a dérivé en chinois
-                // (terrain 2026-10-01). Elle ne suffit PAS seule sur ce
-                // path : terrain 2026-10-02 (UICulture en-US, prompt d'audit
-                // anglais, gemma4:latest priorité 1) — rapport pourtant EN
-                // FRANÇAIS : tout ce que le plugin injecte (workflow,
-                // descriptions d'outils, sorties des sondes) est français,
-                // la boucle agent se termine sur des résultats d'outils
-                // français (récence au moment où le rapport s'écrit) et la
-                // directive — noyée en fin de system prompt, elle-même
-                // rédigée en français — perd. Correctif validé sur le
-                // terrain le même jour (l'usager l'a d'abord testé en le
-                // collant à la fin du prompt d'audit configuré) : l'exigence
-                // de langue est réinjectée en FIN de user prompt (récence +
-                // quirk documenté : gemma suit le user prompt) via
-                // AppendAuditLangRequirement.
+                // Langue du rapport : ResponseLanguage → interface Emby → anglais. La
+                // directive seule ne suffit pas : le contexte est massivement français
+                // (workflow, outils, sondes) et une directive noyée en fin de system
+                // prompt perd. L'exigence est donc réinjectée en FIN de user prompt
+                // (récence + le modèle suit le user prompt) via AppendAuditLangRequirement.
                 string langName = I18n.ResolveProseLangName(cfg, _host);
                 var agent = new LlmAgentService(backends, cfg.RagDirectives, AUDIT_WORKFLOW,
                     ollamaCloudKey, geminiKey, _json, _logger, cfg.DebugVerbose,
@@ -603,12 +579,10 @@ namespace LLM_AI
                 var (reply, _) = await agent.RunAsync(
                     AppendAuditLangRequirement(userPrompt, langName), tools, ct).ConfigureAwait(false);
                 reply = SanitizeReport(reply);
-                // Filet liens profonds (v2.22.3) : le prompt d'audit configuré
-                // déclenche links_check à chaque audit → le rapport porte les
-                // mêmes liens profonds que le chat, donc la même classe de
-                // dérive (v2.6.9 absolutisation + v2.22.3 encodage %XX).
-                // Résout le serverId SANS injecter le bloc chat dans le
-                // workflow d'audit (seul l'effet de bord arme le filet).
+                // Filet liens profonds : le prompt d'audit configuré déclenche links_check,
+                // le rapport porte les mêmes liens que le chat (→ même classe de dérive
+                // absolutisation/encodage). Résout le serverId sans injecter le bloc
+                // chat dans le workflow d'audit (seul l'effet de bord arme le filet).
                 await BuildDeepLinkBlockAsync().ConfigureAwait(false);
                 reply = NormalizeDeepLinks(reply, label);
 
@@ -629,27 +603,14 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>
-        /// Réinjecte l'exigence de langue de l'audit EN FIN de user prompt —
-        /// les DEUX modes, les TROIS sites : boucle agent (single), doses
-        /// déterministes, assemblage final. Pourquoi la directive de system
-        /// prompt (<see cref="LlmAgentService.BuildLanguageDirective"/>) ne
-        /// suffit pas sur le path audit : tout ce que le plugin injecte —
-        /// workflow, descriptions d'outils, sorties des sondes — est en
-        /// français, la boucle agent se termine sur des résultats d'outils
-        /// français (récence au moment où le rapport s'écrit) et la
-        /// directive (elle-même en français) perd. Terrain 2026-10-02 :
-        /// UICulture en-US + prompt d'audit anglais → rapport pourtant en
-        /// français (gemma4:latest, priorité 1). Validé le même jour : la
-        /// même exigence collée en fin de user prompt tient (récence + quirk
-        /// documenté : gemma suit le user prompt). L'exigence est rédigée
-        /// DANS la langue cible pour l'anglais (la phrase elle-même est un
-        /// signal de langue) ; pour toute autre valeur (libre, ex.
-        /// « Nederlands ») gabarit français — même compromis que
-        /// <see cref="LlmAgentService.BuildLanguageDirective"/>. Les valeurs
-        /// de sondes restent VERBATIM (règles de fidélité) : l'exigence
-        /// interdit explicitement de les traduire.
-        /// </summary>
+        /// Réinjecte l'exigence de langue de l'audit EN FIN de user prompt (modes
+        /// boucle/déterministe, doses/assemblage). Pourquoi la directive de system
+        /// prompt ne suffit pas sur ce path : le contexte est massivement français
+        /// (workflow, outils, sondes) et la directive perd. La même exigence collée
+        /// en fin de user prompt tient (récence + le modèle suit le user prompt).
+        /// L'exigence est rédigée DANS la langue cible pour l'anglais (signal de
+        /// langue) ; pour toute autre valeur, gabarit français. Les sondes restent
+        /// VERBATIM.
         internal static string AppendAuditLangRequirement(string userPrompt, string langName)
         {
             if (string.IsNullOrWhiteSpace(langName)) return userPrompt ?? string.Empty;
@@ -673,13 +634,9 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Chat interactif (endpoint POST /Plugins/LLMAI/Chat). Comme pour
-        //  l'audit, path séparé de la recommandation : mêmes backends LLM
-        //  (ResolveBackends réutilisé, priorités configurables par l'usager),
-        //  TOUS les outils déjà disponibles (BuildTools + system_audit —
-        //  zéro nouvel outil), system prompt d'assistant général, et réponse
-        //  brute en Markdown (pas d'extraction JSON ni d'enrichissement de
-        //  recommandations).
+        //  Path séparé de la recommandation : mêmes backends, TOUS les outils déjà
+        //  disponibles (BuildTools + system_audit), system prompt d'assistant
+        //  général, réponse Markdown brute (pas d'extraction/enrichissement).
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -722,16 +679,11 @@ namespace LLM_AI
             "explique comment la réaliser dans l'UI Emby.";
 
         /// <summary>
-        /// Bloc « HEURE ACTUELLE » du chat (v1.13.21.1) : le LLM n'a AUCUN
-        /// accès à l'horloge (aucun tool « heure ») — sans ancre, il déduisait
-        /// « maintenant » des horaires EPG servis en UTC et se croyait
-        /// plusieurs heures plus tard qu'il ne l'est (incident live : « il
-        /// est 5 h plus tard », programme déclaré terminé alors qu'il n'avait
-        /// pas commencé, donc « non disponible »). Recalculé à CHAQUE tour
-        /// (RunChatAsync est appelé par tour) — jamais mis en cache : une
-        /// conversation qui traverse minuit ou une veille longue doit rester
-        /// juste. L'heure est donnée en heure locale du serveur (celle de
-        /// l'usager du foyer) avec son décalage UTC explicite.
+        /// Bloc « HEURE ACTUELLE » : le LLM n'a pas accès à l'horloge ; sans
+        /// ancre, il déduit « maintenant » des horaires EPG (UTC) et se croit
+        /// plusieurs heures plus tard. Recalculé à CHAQUE tour (jamais en cache) :
+        /// une conversation qui traverse minuit ou une veille longue reste juste.
+        /// Heure locale du serveur avec son décalage UTC explicite.
         /// </summary>
         private static string BuildTimeBlock()
         {
@@ -761,11 +713,9 @@ namespace LLM_AI
         /// Le serverId est résolu une fois via <c>GetPublicSystemInfo</c> (le
         /// chemin fiable — <c>GetSystemInfo</c> lève une NRE sur certains hôtes
         /// Windows) ; vide = bloc omis (fail-open, jamais de lien fabriqué).
-        /// v2.6.9 : le gabarit interdit EXPLICITEMENT tout préfixe d'hôte
-        /// (dérive prod 2026-10-24 : un petit modèle a « absolutisé » le lien
-        /// avec un domaine inventé — emby.example.com) et
-        /// <see cref="NormalizeDeepLinks"/> (filet serveur, même philosophie
-        /// que <see cref="SanitizeReport"/>) réécrit ce qui passe quand même.
+        /// Le gabarit interdit EXPLICITEMENT tout préfixe d'hôte (un petit modèle a
+        /// « absolutisé » le lien avec un domaine inventé) et <see cref="NormalizeDeepLinks"/>
+        /// (filet serveur) réécrit ce qui passe quand même.
         /// </summary>
         private string _deepLinkBlock;
 
@@ -811,33 +761,19 @@ namespace LLM_AI
             return _deepLinkBlock;
         }
 
-        /// <summary>
-        /// Filet « liens profonds » du chat (v2.6.9) : le gabarit du bloc
-        /// LIENS PROFONDS est RELATIF, mais les petits modèles l'« absolutisent »
-        /// parfois (vécu prod 2026-10-24 : https://emby.example.com/… — un
-        /// domaine placeholder des données d'entraînement, avec serverId et id
-        /// pourtant correctement recopiés). Or la page chat (garde même origine)
-        /// et l'app compagnon (parseur SHOW_RE) ne reconnaissent QUE la forme
-        /// relative : un hôte inventé = lien mort et bouton de projection
-        /// absent. Ce filet réécrit tout lien fiche vers la forme canonique
-        /// relative AVEC le vrai serverId — rattrape au passage un serverId
-        /// altéré, une casse déviante et les entités &amp;. Purement
-        /// syntaxique : la validité d'un id reste la responsabilité du modèle
-        /// (règle « jamais d'id inventé » du prompt) — les gardes du clic
-        /// (garde même origine, PermissionGate) restent l'autorité. Ne compte
-        /// que ce qui diffère réellement, avec une ligne de log greppable.
-        /// Sans serverId résolu (bloc omis) : no-op, fail-open. v2.22.3 :
-        /// une première passe <see cref="RepairEncodedDeepLinks"/> rattrape
-        /// la dérive ENCODAGE %XX (un href percent-encodé ne matche pas le
-        /// gabarit littéral ci-dessous et traverserait ce filet en silence).
-        /// </summary>
+        /// Filet « liens profonds » : le gabarit du bloc est RELATIF, mais les
+        /// petits modèles l'« absolutisent » parfois avec un domaine inventé. Or la
+        /// page chat (garde même origine) et l'app compagnon ne reconnaissent QUE la
+        /// forme relative (hôte inventé = lien mort, bouton de projection absent).
+        /// Ce filet réécrit tout lien fiche vers la forme canonique.
+        /// <see cref="RepairEncodedDeepLinks"/> rattrape en amont la dérive ENCODAGE
+        /// %XX (un href encodé ne matche pas le gabarit littéral et traverserait).
         internal string NormalizeDeepLinks(string text, string label)
         {
             if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(_deepLinkServerId))
                 return text;
-            // Passe encodage %XX (v2.22.3, dérive prod 2026-11-20) : AVANT
-            // la passe absolutisation — un href encodé ne matche pas le
-            // gabarit littéral ci-dessous et la traverserait en silence.
+            // Passe encodage %XX : AVANT la passe absolutisation — un href encodé
+            // ne matche pas le gabarit littéral et le traverserait en silence.
             int encFixed = 0;
             string result = RepairEncodedDeepLinks(text, _deepLinkServerId, out encFixed);
             if (encFixed > 0)
@@ -868,18 +804,13 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Rattrap des liens profonds PERCENT-ENCODÉS par le modèle (classe
-        /// de dérive v2.6.9, variante v2.22.3, prod 2026-11-20 : le gabarit
+        /// Rattrape des liens profonds PERCENT-ENCODÉS par le modèle (gabarit
         /// relatif ressorti encodé en %XX ET massacré — « #!/item » rendu
-        /// « //#/item », le « ! » perdu — lien mort ET invisible pour la
-        /// garde même origine du chat). Pur et testable par réflexion :
-        /// tout href markdown contenant des séquences %XX est DÉCODÉ puis
-        /// QUALIFIÉ (« web/index.html » ET « id= ») puis RECONSTRUIT en
-        /// forme canonique avec le VRAI serverId — jamais corrigé à
-        /// moitié, la copie du modèle n'est jamais recyclée. Combine les
-        /// classes : une URL absolutisée ET encodée retombe ici et ressort
-        /// canonique. Hors qualification (URL externe légitime, pas d'id) :
-        /// href INTACT (fail-open).
+        /// « //#/item », le « ! » perdu — lien mort et invisible pour la garde même
+        /// origine du chat). Pur et testable : tout href markdown avec des %XX est
+        /// DÉCODÉ, QUALIFIÉ (« web/index.html » et « id= ») puis RECONSTRUIT en
+        /// forme canonique avec le VRAI serverId. Une URL absolutisée ET encodée
+        /// retombe ici et ressort canonique. Hors qualification : href INTACT.
         /// </summary>
         internal static string RepairEncodedDeepLinks(string text, string serverId, out int fixedCount)
         {
@@ -956,7 +887,7 @@ namespace LLM_AI
                 // Agent chat : intro + workflow dédiés ; formatSection=""
                 // supprime le bloc « FORMAT DES RECOMMANDATIONS » (le chat
                 // produit du Markdown libre, pas un tableau JSON de recos).
-                // Mémoire réflexive (Phase C) : la fiche mémoire (si active)
+                // Mémoire réflexive : la fiche mémoire (si active)
                 // est accolée au workflow — tendance générale de fond, sans
                 // exclure la diversité ; vide = inchangé (fail-open).
                 // Mémoire de conversation (chat_memory) : résumé de la
@@ -1024,12 +955,9 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Filet de formatage des rapports (v1.13.9.13) : les petits modèles
         //  émettent de la notation math LaTeX ($\rightarrow$) et du HTML cru
-        //  (<code>) que la restitution Markdown rend illisible (flèches
-        //  « $ ightarrow$ », balises visibles). Le prompt interdit désormais
-        //  ces notations ; ce filet rattrape ce qui passe quand même — même
-        //  philosophie que RepairUnescapedQuotes pour le JSON des outils.
+        //  (<code>) que la restitution Markdown rend illisible. Le prompt
+        //  interdit ces notations ; ce filet rattrape ce qui passe quand même.
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -1043,12 +971,9 @@ namespace LLM_AI
         internal static string SanitizeReport(string text)
         {
             if (string.IsNullOrEmpty(text)) return text;
-            // Normalisation des fins de ligne + retrait des CR isolés : un
-            // LaTeX « \rightarrow » qui passe par un décodage JSON d'un petit
-            // modèle est dégradé en « \r » (retour chariot) + « ightarrow » —
-            // le backslash a disparu, le CR isolé n'est qu'un déchet (vu en
-            // production dans un rapport d'audit : « $ ightarrow$ »). On le
-            // retire AVANT les mappings, sinon aucun ne reconnaît le fragment.
+            // Normalisation des fins de ligne + retrait des CR isolés : un LaTeX
+            // « \rightarrow » dégradé par un décodage JSON devient « \r » + « ightarrow »
+            // (backslash disparu, CR isolé = déchet). Retrait AVANT les mappings.
             string s = text.Replace("\r\n", "\n").Replace("\r", "");
             s = Regex.Replace(s, @"\\(?:longrightarrow|Longrightarrow)\b", "→");
             s = Regex.Replace(s, @"\\(?:rightarrow|to)\b", "→");
@@ -1073,7 +998,7 @@ namespace LLM_AI
         /// Conçu pour un modèle local/modeste (gemma4) : on retire du LLM
         /// l'orchestration multi-outils pour ne lui laisser que la synthèse de
         /// texte fourni. La remédiation y est report-only (pas d'outil pour
-        /// l'exécuter). Replie multi-backend via <see cref="ChatWithFallbackAsync"/>.
+        /// l'exécuter). Repli multi-backend via <see cref="ChatWithFallbackAsync"/>.
         /// </summary>
         private async System.Threading.Tasks.Task<string> RunAuditDeterministicAsync(
             PluginConfiguration cfg, string label, string userPrompt,
@@ -1157,7 +1082,7 @@ namespace LLM_AI
                 doseNo++;
 
                 // Jalon de progression du run détaché (v1.14.2) : la page de
-                // config pole ?Status=true et affiche « Dose 3/7 — … ». No-op
+                // config interroge ?Status=true et affiche « Dose 3/7 — … ». No-op
                 // hors run détaché (appel depuis la tâche planifiée, tests).
                 // Localisé dans la langue d'INTERFACE (v1.15.0.5) : titre
                 // d'affichage EN hors interface FR — le rapport, lui, garde
@@ -1245,7 +1170,7 @@ namespace LLM_AI
                     "\n(Assemblage final indisponible : " + ex.Message + " — les blocs de sections sont fournis tels quels.)";
             }
             reply = SanitizeReport(reply);
-            // Filet liens profonds (v2.22.3) : même rattrap que le chat —
+            // Filet liens profonds (v2.22.3) : même rattrapage que le chat —
             // une dose pourrait rendre cliquable un lien d'une sonde
             // (ex. fiche Emby de links_check). Fail-open sans serverId.
             await BuildDeepLinkBlockAsync().ConfigureAwait(false);
@@ -1297,7 +1222,7 @@ namespace LLM_AI
         /// <summary>
         /// Complément de système-prompt pour l'assemblage final dosé : l'entrée
         /// n'est pas le digest brut mais les blocs déjà rédigés + les FAITS
-        /// ÉTABLIS pré-calculés. Replace le cadrage « JSON brut » du rôle de
+        /// ÉTABLIS pré-calculés. Remplace le cadrage « JSON brut » du rôle de
         /// synthèse sans toucher les règles de fidélité (qui restent valables :
         /// le bloc est fidèle par construction, l'omission y est interdite).
         /// </summary>
@@ -1352,11 +1277,9 @@ namespace LLM_AI
         /// Croisements déterministes de l'audit dosé : sonde de mots de passe
         /// triviaux (security_check.password_probe) × comptages d'authentifi-
         /// cation du journal (log_scan, motif « authentification »). Produit
-        /// les « FAITS ÉTABLIS » de l'assemblage : le croisement était à la
-        /// charge du LLM (deux sections lointaines à re-croiser — dérives
-        /// constatées en terrain) ; ici le plugin calcule la lecture, le LLM
-        /// la cite. Tolérant : donnée absente ou inattendue → « non calculable »,
-        /// jamais une erreur (compat 4.9.x et pannes de sondes).
+        /// les « FAITS ÉTABLIS » de l'assemblage : le croisement était à la charge
+        /// du LLM (deux sections lointaines à re-croiser) ; ici le plugin calcule,
+        /// le LLM cite. Tolérant : donnée absente/inattendue → « non calculable ».
         /// </summary>
         private static string BuildAuditCrossFacts(List<(string Title, string Body)> sections)
         {
@@ -1832,11 +1755,9 @@ namespace LLM_AI
                     if (tmdbId.HasValue) g.TmdbId = tmdbId.Value;
                     g.TvdbId = StrId(r, "tvdb_id");
                     g.OriginalTitle = StrId(r, "original_title");
-                    // Convention du prompt : « 0 si inconnu ». 0 doit rester
-                    // null : sinon la porte reçoit expectedYear=0 et
-                    // YearCompatible(0, 2026) rejette la vraie fiche (cas réel
-                    // 2026-09-20 : « La foudre, un éclair de génie » — fiche
-                    // trouvée par la recherche, rejetée par la garde d'année).
+                    // Convention du prompt « 0 si inconnu ». 0 doit rester null : sinon la
+                    // porte reçoit expectedYear=0 et YearCompatible(0, 2026) rejette la
+                    // vraie fiche (une fiche trouvée est rejetée par la garde d'année).
                     int? guessYear = IntId(r, "year");
                     if (guessYear.HasValue && guessYear.Value > 0) g.Year = guessYear.Value;
                     g.Confidence = StrId(r, "confidence");
@@ -1850,11 +1771,9 @@ namespace LLM_AI
             e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
 
         /// <summary>
-        /// Entier tolérant depuis la sortie brute du LLM : <c>TryGetInt32</c>
-        /// LÈVE InvalidOperationException sur une valeur en chaîne (piège .NET
-        /// documenté 2026-10-01 — le « Try » ne couvre que la conversion), ce
-        /// qui jetait tout le reste du guess ; on accepte donc aussi "2026"
-        /// encodé en chaîne.
+        /// Entier tolérant depuis la sortie brute du LLM : <c>TryGetInt32</c> LÈVE sur
+        /// une valeur en chaîne (piège .NET qui jetait tout le guess) ; on accepte
+        /// donc aussi "2026" encodé en chaîne.
         /// </summary>
         private static int? IntId(JsonElement e, string name)
         {
@@ -1916,12 +1835,10 @@ namespace LLM_AI
 
             var s = reply.Trim();
 
-            // Balises de code markdown ```json … ``` — même précédées de prose :
-            // vécu 2026-09-01, glm-5.3:cloud préface parfois son tableau d'un
-            // commentaire (« Tonight's EPG is thin… ») AVANT le bloc fenced, et
-            // l'ancien StartsWith("```") ratait alors la paire. On prend le
-            // contenu entre la fin de la ligne d'ouverture de la PREMIÈRE
-            // balise et la DERNIÈRE balise fermante.
+            // Balises de code ```json … ```, même précédées de prose : le modèle préface
+            // parfois son tableau d'un commentaire AVANT le bloc, et StartsWith("```")
+            // ratait alors la paire. On prend le contenu entre la fin de la ligne
+            // d'ouverture de la PREMIÈRE balise et la DERNIÈRE balise fermante.
             int fenceOpen = s.IndexOf("```", StringComparison.Ordinal);
             if (fenceOpen >= 0)
             {
@@ -1952,9 +1869,7 @@ namespace LLM_AI
         /// l'ancienne version gardait le « ç », donc la variante accentuée EPG
         /// et la variante non accentuée bibliothèque ne matchaient pas) +
         /// minuscules + retrait de tout ce qui n'est pas alphanumérique.
-        /// Équivalent C# du <c>preg_replace('/[^a-z0-9]/i',''</c> +
-        /// <c>mb_strtolower</c> du PHP (absent_series.php / ai_section.php) et
-        /// du <c>Norm</c> de <see cref="GetEmbyInfoTool"/>. « Star Trek » et
+        /// Équivalent du <c>Norm</c> de <see cref="GetEmbyInfoTool"/>. « Star Trek » et
         /// « star-trek! » → « startrek ».
         /// </summary>
         public static string NormTitle(string s)
@@ -2006,7 +1921,7 @@ namespace LLM_AI
                             merged.Add(item.DeepClone());
                     }
                     // Non-tableau (Markdown) : ignoré — on garde les items de
-                    // l'autre run. On ne mélange pas du prose dans le JSON.
+                    // l'autre run. On ne mélange pas de prose dans le JSON.
                 }
                 catch
                 {
@@ -2087,22 +2002,17 @@ namespace LLM_AI
         /// ont « passé » la validation anti-hallucination par simple match de
         /// titre — puis cartographiées en .strm/badges/cloche comme des recos
         /// actionnables. Un titre qui ne matche QUE ces sources est désormais
-        /// intracable → écarté (le filtre empêche aussi une entrée Showbizz de
+        /// intraçable → écarté (le filtre empêche aussi une entrée Showbizz de
         /// occuper la clé de titre d'une vraie entrée EPG et d'en masquer l'id).
         /// </para>
-        /// <para>Portage C# du matching par titre du PHP : on construit une
-        /// lookup <c>norm(title) → EpgMatch</c>, puis pour chaque reco on
-        /// cherche <c>norm(reco.title)</c>. Si pas de match (titre rewordé ou
-        /// traduit par le LLM — cas vécu : titres TMDB anglais au lieu des
-        /// titres EPG), un <b>repli chaîne+heure</b>
-        /// (<see cref="FindByChannelStart"/>) rattache la reco au programme
-        /// EPG diffusé sur la même chaîne à la même heure. Une reco
-        /// <b>intracable</b> au pool EPG (ni titre, ni chaîne+heure, ni id
-        /// recopié du pool) est <b>écartée</b> du payload avec un Warn —
-        /// validation stricte contre les hallucinations : on ne publie que
-        /// ce qui peut être rattaché à un programme que le plugin a lui-même
-        /// fourni au LLM. Retourne le payload inchangé si ce n'est pas un
-        /// tableau JSON.</para>
+        /// <para>Repli chaîne+heure (<see cref="FindByChannelStart"/>) : le
+        /// LLM reformule parfois le titre (ex. titres TMDB anglais vs EPG
+        /// français) mais recopie bien <c>channel</c>/<c>start</c>. Une chaîne
+        /// ne diffusant qu'un programme à une heure donnée, la clé (chaîne, heure)
+        /// rattache la reco même si le titre est cassé.</para>
+        /// <para>Une reco <b>intraçable</b> au pool EPG (ni titre, ni chaîne+heure,
+        /// ni id recopié du pool) est <b>écartée</b> (validation stricte contre les
+        /// hallucinations).</para>
         /// </summary>
         public string EnrichRecommendations(string payload,
             List<(string tool, string result)> toolResults)
@@ -2150,17 +2060,12 @@ namespace LLM_AI
                         string channelId = item.TryGetProperty("channel_id", out var cidEl) && cidEl.ValueKind == JsonValueKind.String
                             ? cidEl.GetString() : null;
 
-                        // POOL EPG STRICT (fix 2.6.10) : sans channel_id, ce
-                        // résultat titré n'est PAS un programme du guide
-                        // (new_releases/Showbizz, web_search, tmdb_lookup). Un
-                        // titre hors-guide n'est pas enregistrable : l'admettre
-                        // dans le pool ferait « passer » la validation à une
-                        // reco qui ne peut aboutir à aucun timer (vécu prod
-                        // 2026-10-25 : 3 séries Showbizz hors-guide,
-                        // chaînes inventées par le LLM, .strm/badges/cloche
-                        // posés pour du vide). On l'écarte AVANT toute clé —
-                        // y compris le lookup de titre, où une entrée hors-EPG
-                        // masquerait l'id d'une vraie entrée EPG homonyme.
+                        // POOL EPG STRICT : sans channel_id, ce résultat titré n'est PAS un
+                        // programme du guide (new_releases, web_search, tmdb_lookup). Un titre
+                        // hors-guide n'est pas enregistrable : l'admettre dans le pool ferait
+                        // « passer » la validation à une reco sans timer possible. On l'écarte
+                        // AVANT toute clé, y compris le lookup de titre (où une entrée hors-EPG
+                        // masquerait l'id d'une vraie entrée EPG homonyme).
                         if (string.IsNullOrEmpty(channelId))
                         {
                             nonEpgSkipped++;
@@ -2251,7 +2156,7 @@ namespace LLM_AI
 
                 if (!obj.TryGetPropertyValue("title", out var titleNode) || titleNode == null)
                 {
-                    // Reco sans titre : intracable par construction → écartée.
+                    // Reco sans titre : intraçable par construction → écartée.
                     dropped.Add("(sans titre)");
                     toRemove.Add(node);
                     continue;
@@ -2287,14 +2192,9 @@ namespace LLM_AI
                 }
                 else
                 {
-                    // Repli chaîne+heure : le LLM a parfois reformulé/traduit le
-                    // titre (cas vécu 2026-08-31 : ResponseLanguage=English →
-                    // titres TMDB anglais au lieu des titres EPG français) alors
-                    // qu'il recopie correctement channel/start (champs
-                    // OBLIGATOIRES du format). Une chaîne ne diffuse qu'un
-                    // programme à une heure donnée : la clé (chaîne normalisée,
-                    // ±10 min) rattache la reco au bon programme même avec un
-                    // titre cassé.
+                    // Repli chaîne+heure : le LLM reformule/traduit parfois le titre
+                    // mais recopie correctement channel/start. La clé (chaîne normalisée,
+                    // ±10 min) rattache la reco même avec un titre cassé.
                     var fb = FindByChannelStart(entries, JsonStr(obj, "channel"), JsonStr(obj, "start"));
                     if (fb != null)
                     {
@@ -2335,15 +2235,11 @@ namespace LLM_AI
                         }
                         else
                         {
-                            // INTRACABLE : ni le titre, ni la (chaîne, heure), ni
-                            // l'id ne rattachent cette reco à une entrée EPG que
-                            // le plugin a lui-même fournie au LLM. Presque
-                            // certainement une hallucination (programme jamais
-                            // dans le pool) ou une reco entièrement reformulée —
-                            // dans les deux cas elle n'est pas programmable et ne
-                            // passerait de toute façon aucun garde-fou du record
-                            // bucket. On l'écarte du payload (validation stricte)
-                            // plutôt que d'afficher une carte morte.
+                            // INTRAÇABLE : ni le titre, ni la (chaîne, heure), ni
+                            // l'id ne rattachent cette reco à une entrée EPG fournie
+                            // au LLM. Probablement une hallucination ou une reco entièrement
+                            // reformulée ; dans les deux cas, non programmable, écartée
+                            // (validation stricte) plutôt que d'afficher une carte morte.
                             dropped.Add(title);
                             toRemove.Add(node);
                         }
@@ -2351,7 +2247,7 @@ namespace LLM_AI
                 }
             }
 
-            // Éviction des recos intracables (collectées pendant la boucle —
+            // Éviction des recos intraçables (collectées pendant la boucle —
             // on ne retire pas un JsonNode pendant qu'on énumère son parent).
             foreach (var n in toRemove)
                 arr.Remove(n);
@@ -2448,12 +2344,10 @@ namespace LLM_AI
                 BaseItem libItem = FindLibraryItem(title, key);
                 string libId = libItem?.InternalId.ToString();
 
-                // Repli IMDb : si le titre ne matche pas mais que le LLM a
-                // établi l'id IMDb du contenu (via ses outils), on cherche
-                // l'item bibliothèque par ProviderId — indépendant du titre
-                // (le titre EPG peut différer du titre de bibliothèque :
-                // « Comment tuer son mari en 10 leçons » vs titre original).
-                // Trouvé = possédé → library_id → exclue du record bucket.
+                    // Repli IMDb : si le titre ne matche pas mais que le LLM a établi
+                    // l'id IMDb, on cherche l'item par ProviderId — indépendant du titre
+                    // (le titre EPG peut différer du titre bibliothèque). Trouvé =
+                    // possédé → library_id → exclu du record bucket.
                 if (string.IsNullOrEmpty(libId))
                 {
                     string imdbId = NormalizeImdbId(JsonStr(obj, "imdb_id"));
@@ -2474,12 +2368,12 @@ namespace LLM_AI
 
                 if (isLib)
                 {
-                    // Always backfill/overwrite with the real libId to prevent hallucinated GUIDs from breaking validation
+                    // Toujours renseigner/écraser avec le vrai libId : évite qu'un GUID halluciné ne casse la validation
                     obj["id"] = libId;
                 }
                 else
                 {
-                    // source live : library_id for the button "Watch (library)".
+                    // source live : library_id pour le bouton « Regarder (bibli.) ».
                     obj["library_id"] = libId;
                 }
                 if (string.IsNullOrEmpty(JsonStr(obj, "image_url")))
@@ -2534,7 +2428,7 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 // Échec de requête bibliothèque ≠ « introuvable » : le tracer
-                // (AGENTS.md : ex.ToString() dans les catch de requête).
+                // (ex.ToString() dans les catch de requête).
                 _logger?.Warn("[LLM_AI] Recherche approchée « {0} » en bibliothèque échouée : {1}", title, ex.ToString());
             }
             return null;

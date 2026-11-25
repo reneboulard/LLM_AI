@@ -16,7 +16,7 @@
 //   translateView  -> parcourt le DOM et applique data-i18n / data-i18n-html /
 //                     data-i18n-ph / data-i18n-label / data-i18n-title.
 //
-// Overlay communautaire (v1.16.0, plan P3) : init() fait AUSSI un fetch de
+// Overlay communautaire (v1.16.0) : init() fait AUSSI un fetch de
 // GET /Plugins/LLMAI/I18n (endpoint du plugin, en parallèle de la détection)
 // — via ApiClient.ajax (jeton Emby attaché ; un fetch NU y reçoit 401,
 // constat terrain 2026-10-04, voir fetchOverlayWeb). Le payload
@@ -27,7 +27,7 @@
 // pas dans la DLL — la validation est donc ici, par clé, au merge : clé
 // inconnue du dictionnaire EN natif, placeholders {n} ou balises HTML
 // divergents de l'EN natif → clé sautée + console.warn (miroir exact des
-// règles 4-5 du kit/chargeur). Échec fetch (plugin < v1.16.0 → 404, hôte
+// règles de validation du chargeur serveur). Échec fetch (plugin < v1.16.0 → 404, hôte
 // injoignable, réponse non-JSON) → null silencieux : natif inchangé
 // (fail-open symétrique du chargeur) ; un statut HTTP ≠ 404 est signalé
 // console.warn (la panne 401 initiale était totalement invisible).
@@ -77,7 +77,7 @@ define([], function () {
             "cfg.notifyrecos.flag": "Notification « N nouvelles recommandations » à la fin de la tâche",
             "cfg.notifyrecos.desc": "À la fin de chaque exécution réussie de la tâche recommandations, tous les usagers reçoivent une notification persistante. C'est la seule notification « générale » du plugin : Emby ne peut pas la filtrer par usager côté livraison (tout-ou-rien par usager), la granularité vit donc ici. Décochez pour la couper pour tout le monde — la notification d'échec (admins) reste inconditionnelle.",
             "cfg.apikeys.h": "Clés API — services externes",
-            "cfg.apikeys.desc": "Clés des services web auxquels l'extension peut faire appel. Un champ vide désactive le service correspondant : l'LLM ne le voit plus.",
+            "cfg.apikeys.desc": "Clés des services web auxquels l'extension peut faire appel. Un champ vide désactive le service correspondant : le LLM ne le voit plus.",
             "cfg.tmdb.label": "Clé API TMDB",
             "cfg.tmdb.test": "Tester la clé TMDB",
             "cfg.keys.test.title": "Clé testée telle qu'enregistrée — enregistrez la page avant de tester une nouvelle clé.",
@@ -116,7 +116,7 @@ define([], function () {
             "cfg.rag.label": "Prompt système (directives de l'agent)",
             "cfg.rag.desc": "Instructions envoyées au LLM au début de chaque appel.",
             "cfg.debug.label": "Mode debug (journal complet de l'agent)",
-            "cfg.debug.desc": "Écrit dans le journal Emby tout ce que voit l'LLM : prompts complets, réponses, résultats d'outils. À activer ponctuellement pour comprendre un comportement. Désactivé par défaut.",
+            "cfg.debug.desc": "Écrit dans le journal Emby tout ce que voit le LLM : prompts complets, réponses, résultats d'outils. À activer ponctuellement pour comprendre un comportement. Désactivé par défaut.",
             "cfg.sched.series.label": "Tâche planifiée Séries — planification et prompt",
             "cfg.sched.series.ph": "10 3 * * * | Recommande des enregistrements de SÉRIES : …",
             "cfg.sched.series.desc": "Format : « planification | prompt de la tâche ». Planification (crontab restreint, heure locale du serveur) : « MM HH * * * » = tous les jours, « MM HH * * D » = chaque semaine le jour D (D : 0=dimanche…6=samedi), « 0 */N * * * » = toutes les N heures. Le texte après le « | » est envoyé au LLM pour le run séries (premières S01E01 et nouvelles saisons). La tâche est aussi déclenchable manuellement dans « Tâches planifiées ».",
@@ -1089,7 +1089,7 @@ define([], function () {
             // (served by ChatContexts).
             "chat.ctx.current.title": "Current prompt text (click to expand)",
             "chat.ctx.current.empty": "empty — no directive currently saved",
-            // Automatic announcement on mode change (the \"You\" turn of
+            // Automatic announcement on mode change (the "You" turn of
             // the thread — seen by the user AND re-read by the LLM) +
             // send errors (timeout / connection): follow the page language.
             "chat.mode.selected": "[Admin] I selected the mode \"{0}\". The current prompt text is shown above and injected into your context: work on it (read-modify-write), never regenerate from memory.",
@@ -1257,7 +1257,7 @@ define([], function () {
     // ------------------------------------------------------------------
     var lang = null;
 
-    // Data-driven (v1.16.0, plan P3) : itère les clés de STRINGS (ordre
+    // Data-driven (v1.16.0) : itère les clés de STRINGS (ordre
     // d'insertion : fr, en, puis les langues ajoutées par l'overlay) et rend
     // la première dont le préfixe de locale correspond. « fr-CA » → fr,
     // « es-ES » → es si la langue a été chargée depuis l'overlay (sinon la
@@ -1274,11 +1274,11 @@ define([], function () {
     }
 
     // ------------------------------------------------------------------
-    //  Overlay de traductions communautaires (v1.16.0, plan P3)
+    //  Overlay de traductions communautaires (v1.16.0)
     // ------------------------------------------------------------------
     // GET /Plugins/LLMAI/I18n sert les tranches web du fichier administré
     // LLM_AI_i18n.json (chargeur I18nOverlay.cs). La validation est ICI, par
-    // clé, au merge (miroir exact des règles 4-5 du kit validate_i18n.js) :
+    // clé, au merge (miroir exact des règles de validation du chargeur serveur) :
     // multiset des placeholders {n} (trié, joint ',') et multiset des
     // balises HTML (/<\/?[a-zA-Z][^>]*>/g, trié, joint '|') comparés à
     // l'EN NATIF (la référence de contrat — jamais à un patch qui précède).
@@ -1314,7 +1314,7 @@ define([], function () {
     // AUCUN en-tête de fraîcheur et l'overlay est éditable live (le serveur
     // re-scanne à chaque GET — même garantie que l'ancien no-store).
     // Repli fetch nu si ApiClient est absent (contexte hors dashboard,
-    // harnais) — 404 (plugin < v1.16.0, endpoint absent) et hôte injoignable
+    // tests) — 404 (plugin < v1.16.0, endpoint absent) et hôte injoignable
     // restent silencieux : natif inchangé (fail-open symétrique du chargeur).
     function warnFetch(status) {
         try { console.warn("[LLM_AI i18n] overlay non chargé — HTTP " + status
@@ -1414,7 +1414,7 @@ define([], function () {
         }
     }
 
-    // Détecte la localeEmby/navigateur : promesse TOUJOURS résolue (jamais
+    // Détecte la locale Emby/navigateur : promesse TOUJOURS résolue (jamais
     // rejetée — l'i18n ne doit pas casser l'UI). globalize.getCurrentLocale()
     // (source de vérité Emby) via Emby.importModule, repli navigator.language,
     // repli "".

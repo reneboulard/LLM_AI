@@ -34,18 +34,12 @@ namespace LLM_AI
     /// <item><c>POST /Plugins/LLMAI/Show</c> — navigation
     ///   ({Token, User, ItemId}) : la session active de l'usager reçoit
     ///   <c>DisplayContent</c> (repli <c>DisplayMessage</c> si le client ne
-    ///   la déclare pas — cf. validé live 2026-09-13 sur « Emby for
-    ///   Android » : route REST <c>POST /Sessions/{Id}/Command</c>, le
-    ///   plugin, lui, passe par <c>ISessionManager.SendGeneralCommand</c>).</item>
-    /// <item><c>GET /Plugins/LLMAI/I18nExt</c> (v1.16.0, plan P2b) — chaînes
-    ///   de la section « ext » de l'overlay communautaire pour la langue
-    ///   résolue (cascade UICulture) + méta <c>_lang</c> : traduction du
-    ///   chrome de la page <c>ext.*</c> et des messages serveur Python
-    ///   <c>srv.*</c>. Familles servie OVERLAY-SEUL : le pivot natif
-    ///   <see cref="I18n.EnExtDict"/> complète PAR CLÉ pour toute langue
-    ///   ≠ fr (v1.17.1.4 — fresh install EN rendue EN ; repli fr = littéraux
-    ///   du .py). Même gate (loopback sans XFF + secret) SANS la liste
-    ///   d'usagers — cf. handler Get(I18nExtRequest).</item>
+    ///   la déclare pas).</item>
+    /// <item><c>GET /Plugins/LLMAI/I18nExt</c> — chaînes de la section
+    ///   « ext » de l'overlay communautaire pour la langue résolue + méta
+    ///   <c>_lang</c>. Servie OVERLAY-SEUL : <see cref="I18n.EnExtDict"/>
+    ///   complète PAR CLÉ pour toute langue ≠ fr. Même gate (loopback sans
+    ///   XFF + secret) SANS la liste d'usagers.</item>
     /// </list>
     /// Sécurité (design validé 2026-09-13) :
     /// <list type="bullet">
@@ -330,7 +324,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Requête GET <c>/Plugins/LLMAI/I18nExt</c> (v1.16.0, plan P2b) :
+        /// Requête GET <c>/Plugins/LLMAI/I18nExt</c> (v1.16.0) :
         /// traductions communautaires de l'écosystème chat externe (chrome
         /// <c>ext.*</c> de la page + messages <c>srv.*</c> du serveur Python),
         /// section « ext » de LLM_AI_i18n.json. Appelée par
@@ -384,10 +378,8 @@ namespace LLM_AI
                     string.Format(CultureInfo.InvariantCulture,
                         I18n.S("err.chatext.toolong", lang), MaxMessageChars) };
 
-            // Anti-spam (v1.13.21.2) : fenêtres glissantes PAR USAGER RÉSOLU
-            // (pas d'IP : tout arrive du loopback de l'app compagnon), puis
-            // verrou « un tour LLM à la fois ». Un tour refusé n'est pas
-            // compté ; le compteur est en mémoire (reset au restart Emby).
+            // Anti-spam par usager résolu (pas d'IP : tout arrive du loopback),
+            // puis verrou « un tour LLM à la fois ». Un tour refusé n'est pas compté.
             if (!ChatRateLimiter.TryConsumeTurn(user.Name,
                     cfg.ExternalChatMaxPerMinute, cfg.ExternalChatMaxPerDay,
                     out string rateError, lang))
@@ -439,24 +431,16 @@ namespace LLM_AI
             var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager,
                 _liveTv, ApplicationHost);
 
-            // Contrainte parentale ANNONCÉE (pattern Watch Tonight v1.13.12 :
-            // le dire en amont, l'imposer en aval — get_emby_info reçoit le
-            // ParentalUser qui l'impose mécaniquement de toute façon).
+            // Contrainte parentale annoncée en amont ; get_emby_info l'impose aussi en aval.
             var parentalNote = PermissionGate.DescribeForPrompt(user) ?? "";
 
-            // Canal de livraison : l'app signale-t-elle que la lecture
-            // automatique (synthèse vocale) est active ? Si oui, un bloc
-            // de formulation ORALE s'ajoute au bloc de projection (par
-            // tour — la bascule 🔊 est par tour, pas par session).
+            // Synthèse vocale active (bascule par tour) : ajoute le bloc de formulation orale.
             string extraWorkflow = ExternalWorkflowBlock + (req.Tts
                 ? ExternalTtsBlock : string.Empty);
 
-            // Tool d'enregistrement (v1.13.23) : portes CUMULATIVES — opt-in +
-            // liste DÉDIÉE d'usagers + droit natif d'enregistrer. Absent du
-            // chemin : le chat reste lecture seule — MAIS v2.20.9 : le refus
-            // n'est plus muet. Une note DÉDIÉE (raison exacte par cas) est
-            // injectée au flux de travail du tour : le modèle relaye la
-            // raison au lieu d'improviser « je ne peux pas ».
+            // Tool d'enregistrement : portes CUMULATIVES (opt-in + liste dédiée + droit
+            // natif). Sinon le chat reste lecture seule, mais le refus n'est pas muet :
+            // une note injectée donne la raison exacte au modèle (sinon il improvise).
             List<ILlmTool> extraTools = null;
             if (cfg.ExternalChatRecordingsEnabled
                 && UserListedFor(cfg.ExternalChatRecordingUsers, user.Name)
@@ -471,14 +455,9 @@ namespace LLM_AI
             }
             else
             {
-                // v2.20.9 — raison évaluée dans l'ORDRE de la chaîne de
-                // privilège (case → liste → droit natif) : le message nomme
-                // la PREMIÈRE porte qui manque. Cas « listé mais sans droit
-                // Emby » : DÉSAJUSTEMENT de config (l'admin a manifesté
-                // l'intention d'autoriser, le droit natif manque) → Warn
-                // greppable pour l'admin, en plus du message usager. Le
-                // refus reste fail-closed : l'outil n'est pas construit et
-                // l'interception du code re-vérifie les trois portes.
+                // Raison = PREMIÈRE porte manquante (case → liste → droit natif). « Listé
+                // sans droit Emby » est un désajustement de config : Warn pour l'admin.
+                // Fail-closed : l'outil n'est pas construit, l'interception re-vérifie.
                 string reason;
                 if (!cfg.ExternalChatRecordingsEnabled)
                     reason = "la fonction n'est pas activée sur ce serveur";
@@ -502,21 +481,15 @@ namespace LLM_AI
                 Logger.Info("[LLM_AI] [CHAT-EXT] Canal de livraison : synthèse vocale (bloc de formulation orale injecté) — usager {0}.",
                     user.Name);
 
-            // Instant de DÉBUT du tour : le code du bucket n'est joint à la
-            // réponse que si CE tour en a produit une (jamais re-servi d'un
-            // vieux pending).
+            // Le code du bucket n'est joint que s'il a été créé pendant CE tour.
             long turnStartTicks = DateTimeOffset.UtcNow.Ticks;
 
             string reply;
             try
             {
-                // Interception DÉTERMINISTE de la confirmation (v1.13.23,
-                // anti-menteur) : si une réservation existe pour l'usager et
-                // que le message porte un code à 4 chiffres isolé, la
-                // confirmation est traitée ICI — le modèle n'a AUCUN rôle
-                // (ni auto-confirmation, ni refus noyé dans une réponse
-                // optimiste : les deux modes de mensonge constatés en test
-                // live). Sinon : chemin normal, tool record_program.
+                // Confirmation DÉTERMINISTE (anti-menteur) : réservation en attente + code à
+                // 4 chiffres isolé → traité ICI, le modèle n'a aucun rôle (il pourrait
+                // s'auto-confirmer ou noyer un refus dans une réponse optimiste).
                 string intercepted = await RecordingChatTool.TryConfirmFromMessageAsync(
                     cfg, user, _liveTv, LibraryManager, ApplicationHost, _sessions,
                     message, Logger, turnStartTicks, ct).ConfigureAwait(false);
@@ -570,32 +543,20 @@ namespace LLM_AI
                 Reply = reply,
                 Date = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture),
                 Session = savedSession,
-                // Canal HORS BANDE du code (human-in-the-loop) : le PIN généré
-                // par le tool n'est jamais vu du LLM — il ne transite que par
-                // ce champ, affiché par l'app compagnon à l'écran. Null si le
-                // tour n'a pas créé de réservation (jamais re-servi d'un
-                // vieux pending : créé après le début du tour seulement).
+                // Canal HORS BANDE : le PIN n'est jamais vu du LLM ; null si ce tour
+                // n'a pas créé de réservation.
                 ConfirmCode = RecordingPendingStore.GetFreshCode(user.Name, turnStartTicks),
                 // Notice anti-menteur (hors bande) : le refus de confirmation
                 // s'affiche à l'écran, indépendamment du texte du modèle.
                 Notice = RecordingPendingStore.GetFreshNotice(user.Name, turnStartTicks),
-                // Contenu du bucket affiché AVEC le code (fermeture de la
-                // dernière hypothèse de confiance) : la ligne ci-dessous
-                // décrit CE QUE L'ENDPOINT A DÉPOSÉ dans le bucket, résolu
-                // dans la langue de l'usager — ce que l'usager voit à l'écran
-                // EST la réservation, aucune supposition. Null si rien en
-                // attente (jamais re-servi d'un vieux pending : purge au
-                // passage par DescribePending).
+                // Ce que l'endpoint a réellement déposé dans le bucket, affiché avec le code.
                 ConfirmPending = PendingLine(cfg, ApplicationHost,
                     RecordingPendingStore.DescribePending(user.Name))
             };
         }
 
-        /// <summary>Ligne de contenu du bucket (« ⏳ À confirmer : … »),
-        /// résolue dans la langue de l'usager (cascade <see cref="I18n"/>) —
-        /// jointe au DTO à chaque tour où une réservation est en attente,
-        /// SANS le code (il reste dans le store ; le canal du code reste
-        /// <c>ConfirmCode</c>).</summary>
+        /// <summary>Ligne de contenu du bucket (« ⏳ À confirmer : … »), localisée,
+        /// SANS le code (qui passe par <c>ConfirmCode</c>).</summary>
         private static string PendingLine(PluginConfiguration cfg,
             IServerApplicationHost host, RecordingPendingStore.PendingView p)
         {
@@ -736,7 +697,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Handler — i18n du chat externe (v1.16.0, plan P2b)
+        //  Handler — i18n du chat externe (v1.16.0)
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -748,16 +709,10 @@ namespace LLM_AI
         /// <c>window.LLMAI_EXT_I18N = {…}</c> ; la page applique ensuite le
         /// repli par clé sur ses littéraux FR embarqués (fail-open — jamais
         /// d'échec dur).
-        /// <para><b>Blindage v1.17.1.4</b> : l'overlay est la seule voie de
-        /// service de cette famille (le pivot <see cref="I18n.EnExtDict"/>
-        /// n'est JAMAIS consulté en dessous) — complété par clé avec le
-        /// natif EN pour toute langue ≠ fr : sans lui, une fresh install à
-        /// culture d'affichage EN rendait le chat externe en français
-        /// (littéraux embarqués du .py tout en déclarant `_lang` "en").
-        /// fr reste FR-first : son repli = les littéraux auteur du .py
-        /// (décision v1.16.0 P2b/P3b). Conséquence : la section « en » du
-        /// fichier devient un simple choix (identique au pivot tant qu'elle
-        /// suit les versions ; périmée si oubliée) — plus une condition.</para>
+        /// <para>L'overlay est la seule voie de service de cette famille : il est
+        /// complété par clé avec le natif EN (<see cref="I18n.EnExtDict"/>) pour
+        /// toute langue ≠ fr, sinon le chat externe s'afficherait en français.
+        /// fr reste FR-first (repli = littéraux du .py).</para>
         /// </summary>
         public object Get(I18nExtRequest req)
         {
@@ -778,14 +733,9 @@ namespace LLM_AI
             {
                 foreach (var kv in dict) payload[kv.Key] = kv.Value;
             }
-            // Blindage v1.17.1.4 : cette famille est SERVIE overlay-seul —
-            // le pivot natif s_ext[en] n'est jamais consulté en dessous ; sans
-            // ce complément, une fresh install sans fichier à culture d'affi-
-            // chage EN (ou toute langue ≠ fr sans section ext) rendait le
-            // chat externe en littéraux FR. Complément PAR CLÉ (une traduction
-            // communautaire partielle ne perd donc que ses trous) — sauf fr :
-            // le repli fr reste le .py FR-first (décision v1.16.0), un pas
-            // vers l'anglais serait une régression pour sa cascade native.
+            // Famille servie overlay-seul : sans ce complément PAR CLÉ (les trous d'une
+            // traduction partielle seuls retombent en EN), toute langue ≠ fr sans
+            // section ext rendrait des littéraux FR. Sauf fr : repli = .py FR-first.
             if (!string.Equals(lang, I18n.Fr, StringComparison.Ordinal))
             {
                 var enDict = I18n.EnExtDict;
@@ -800,11 +750,11 @@ namespace LLM_AI
         }
 
         /// <summary>Réponse avec <c>Cache-Control: no-store</c> (les chaînes
-        /// servent le rendu immédiat d'une page hors Emby ; aucune
+        /// servent le rendu immédiat d'une page hors Emby ; aucun
         /// intermédiaire ne doit les garder — le force-refresh du loader sert
         /// du frais au GET). Fabriquée par l'usine hôte
         /// (<see cref="BaseApiService.ResultFactory"/>, pattern du contrôleur
-        /// Emby — l'app compagne annonce Accept: application/json, la
+        /// Emby — l'app compagnon annonce Accept: application/json, la
         /// négociation sérialise le DTO en JSON).</summary>
         private object NoStore(object payload)
         {
@@ -910,7 +860,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Comparaison à temps constant (anti-orchestration de timing) —
+        /// Comparaison à temps constant (contre les attaques par mesure du temps de réponse) —
         /// même implémentation que <see cref="ActivateApiService"/>.
         /// </summary>
         private static bool ConstantTimeEquals(string a, string b)

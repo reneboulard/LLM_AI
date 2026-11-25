@@ -44,7 +44,7 @@ namespace LLM_AI
     /// série si elle n'a jamais été traitée par le plugin (les ids d'Emby ne
     /// valent pas preuve d'audit), et l'adhésion DVR est testée contre TOUTES
     /// les racines d'enregistrement (films ET séries distinctes).</para>
-    /// <para><b>Decouplage</b> : les événements se contentent d'upserter la
+    /// <para><b>Découplage</b> : les événements se contentent d'upserter la
     /// vérité dans <c>recording_validate.json</c> (<see cref="RecordingValidateStore"/>,
     /// pattern <see cref="EpgSnapshotStore"/>) — jamais de travail lourd dans
     /// le thread d'événement. Une boucle d'arrière-plan unique traite les
@@ -159,24 +159,11 @@ namespace LLM_AI
                     return;
                 if (!IsUnderRecordingPath(item.Path)) return;
 
-                // Filet « chemin seul » (v2.19.0, cas « De souche » 2026-11-10) :
-                // NE JAMAIS figer les métadonnées de l'item (nom, synopsis, année).
-                // À l'import, ces champs dérivent de la fiche que les providers
-                // natifs viennent de poser (souvent avant l'événement) — les figer
-                // comme « vérité » rend l'audit CIRCULAIRE : le juge compare la
-                // fiche à elle-même et « valide » ce qu'Emby a posé, quelle que
-                // soit sa justesse (cas réel : série « De souche » importée sur
-                // « 80' douche comprise » — recherche TVDB floue, année du guide
-                // 2023 coïncidante — validée + taggée llmai-identified à tort à
-                // 10 h 30, pendant que la vraie vérité EPG (2026, synopsis du
-                // guide) figée à la fin de l'enregistrement n'atteignait jamais
-                // le juge). Le filet ne pose que le chemin : son rôle est de
-                // comptabiliser l'import (ligne de log) et de laisser la vérité
-                // du guide atterrir par l'événement de fin — même clé pour un
-                // film (l'upsert complète les champs manquants), vérité de
-                // l'épisode relayée à sa série par la branche épisode (v2.18.0).
-                // Sans vérité (fin jamais tirée) : audit reporté (« pas de
-                // synopsis EPG à comparer »), jamais de validation circulaire.
+                // Filet « chemin seul » : NE JAMAIS figer les métadonnées de l'item (nom,
+                // synopsis, année). À l'import elles dérivent de la fiche native d'Emby :
+                // les figer en « vérité » rend l'audit CIRCULAIRE (le juge valide la fiche
+                // contre elle-même). Le filet ne pose que le chemin et laisse la vérité du
+                // guide arriver par l'événement de fin. Sans vérité : audit reporté.
                 RecordingValidateStore.Upsert(new RecordingValidateStore.Entry
                 {
                     Path = item.Path,
@@ -243,13 +230,9 @@ namespace LLM_AI
             bool dry = cfg.OrphanIdentifyDryRun;
             bool verbose = cfg.DebugVerbose;
 
-            // Exclusions par titre (v2.20.20) : mêmes liste et matching que
-            // la passe 04 h (chargement partagé). La garde vit aux deux
-            // branches ci-dessous (relais épisode→série et branche directe)
-            // — le filet d'import et le figeage de la vérité EPG restent
-            // volontairement actifs : la vérité différée survit au store
-            // (doctrine v2.17.0), donc une entrée retirée de la liste
-            // redevient identifiable à la passe 04 h suivante.
+            // Exclusions par titre : mêmes liste et matching que la passe 04 h. La garde
+            // vit aux deux branches ci-dessous ; le filet d'import et le figeage de la
+            // vérité EPG restent actifs (la vérité différée survit au store).
             var excludedTitles = OrphanIdentifyTask.ParseExcludedTitles(cfg);
 
             // Une seule requête bibliothèque par cycle, filtrage par chemin en mémoire.
@@ -305,14 +288,9 @@ namespace LLM_AI
                 {
                     var series = TryResolveParentSeries(item);
 
-                    // Exclusion par titre (v2.20.20) : même contrat que la
-                    // passe 04 h — aucun appel d'identification, aucune
-                    // étiquette. Le titre testé est celui de la SÉRIE
-                    // (l'item audité par le relais), pas celui de
-                    // l'épisode ; sans série résoluble l'audit n'a de toute
-                    // façon pas lieu. Gel (pas de retrait) : la vérité
-                    // différée survit pour la passe 04 h si l'entrée est
-                    // retirée de la liste un jour.
+                    // Exclusion par titre : aucun appel d'identification, aucune étiquette.
+                    // Titre testé = celui de la SÉRIE (item audité par le relais). Gel, pas
+                    // retrait : la vérité différée survit pour la passe 04 h.
                     var seriesExcludedBy = series != null
                         ? OrphanIdentifyTask.MatchExcludedTitle(series.Name, excludedTitles)
                         : null;
@@ -325,18 +303,10 @@ namespace LLM_AI
                         continue;
                     }
 
-                    // Sauvetage (v2.18.0) : les ids d'Emby ne sont PAS une
-                    // preuve d'audit — une série fichée à tort « a des ids ».
-                    // Si la série n'a JAMAIS été traitée par le plugin (aucun
-                    // de ses tags), l'audit part MAINTENANT avec la vérité de
-                    // l'épisode, au lieu de geler l'entrée en croyant la
-                    // série couverte. Cas réel 2026-11-09 : « De souche »
-                    // fichée « Immigrants de souche » par Emby — l'entrée au
-                    // bon synopsis gelée « couverte par sa série (déjà
-                    // auditée) » alors que la série n'avait jamais été
-                    // auditée (le filet d'import série ne passait pas la
-                    // garde DVR mono-racine, et l'entrée RecordingEnded
-                    // seule détenait la vérité).
+                    // Sauvetage (v2.18.0) : les ids d'Emby ne prouvent pas un audit (une
+                    // série mal fichée en a). Si la série n'a JAMAIS été traitée par le
+                    // plugin (aucun de ses tags), l'audit part MAINTENANT avec la vérité de
+                    // l'épisode au lieu de geler l'entrée en croyant la série couverte.
                     OrphanResolver.Status auditStatus = OrphanResolver.Status.Skipped;
                     bool ranAudit = false;
                     if (series != null && !IsSeriesAudited(series))
@@ -375,10 +345,8 @@ namespace LLM_AI
                         }
                     }
 
-                    // Gel (inchangé, volontaire) : l'entrée reste dans le
-                    // store jusqu'à la rétention — c'est la vérité DIFFÉRÉE
-                    // que la passe 04 h consomme pour le repli film de la
-                    // série (MostRecentDeferredTruth).
+                    // Gel volontaire : la vérité DIFFÉRÉE reste dans le store jusqu'à la
+                    // rétention (la passe 04 h la consomme, MostRecentDeferredTruth).
                     entry.Attempts = RecordingValidateStore.MaxAttempts;
                     RecordingValidateStore.Upsert(entry);
 
@@ -397,11 +365,8 @@ namespace LLM_AI
                     continue;
                 }
 
-                // Exclusion par titre (v2.20.20) : même contrat que la passe
-                // 04 h — aucun appel d'identification (S0/S1/S2/S3, LLM,
-                // web), aucune étiquette. Gel (pas de retrait) : la vérité
-                // différée survit 7 j pour la passe 04 h si l'entrée est
-                // retirée de la liste un jour.
+                // Exclusion par titre : aucun appel d'identification, aucune étiquette.
+                // Gel, pas retrait : la vérité différée survit 7 j pour la passe 04 h.
                 var excludedBy = OrphanIdentifyTask.MatchExcludedTitle(item.Name, excludedTitles);
                 if (excludedBy != null)
                 {
@@ -476,9 +441,7 @@ namespace LLM_AI
         /// <summary>La série a-t-elle déjà été TRAITÉE par le plugin (un de ses
         /// tags : identifiée, à réviser, introuvable, fiche croisée) — les ids
         /// provider d'Emby ne sont PAS une preuve d'audit : une fiche fausse
-        /// en pose aussi (piège « déjà auditée » du 2026-11-09, où la mauvaise
-        /// fiche posée par Emby valait « série auditée »). Un épisode en
-        /// hérite, pas d'audit séparé.</summary>
+        /// en pose aussi. Un épisode en hérite, pas d'audit séparé.</summary>
         private static bool IsSeriesAudited(BaseItem series)
         {
             if (series == null) return false;
@@ -494,14 +457,9 @@ namespace LLM_AI
         }
 
         /// <summary>L'item vit-il sous l'une des racines d'enregistrements
-        /// DVR ? Pluriel (v2.18.0) : une install peut avoir des racines films
-        /// ET séries distinctes — la forme singulière n'en exposait que la
-        /// PREMIÈRE, et le filet d'import ignorait toute l'autre moitié des
-        /// enregistrements (cas réel 2026-11-09, production : racines films et
-        /// séries distinctes — le film du même soir, côté racine films,
-        /// recevait son filet ; la série « De souche », côté racine séries,
-        /// jamais, et sa mauvaise fiche d'Emby n'a donc jamais été auditée).
-        /// Adhésion = sous N'IMPORTE QUELLE racine, avec frontière de
+        /// DVR ? Pluriel : une install peut avoir des racines films ET séries
+        /// distinctes, une seule racine ferait ignorer l'autre moitié des
+        /// enregistrements. Adhésion = sous N'IMPORTE QUELLE racine, avec frontière de
         /// séparateur.</summary>
         private bool IsUnderRecordingPath(string itemPath)
         {

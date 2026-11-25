@@ -34,20 +34,16 @@ namespace LLM_AI
     /// Contrat de sortie du LLM (v2.12.0) : tableau JSON brut qui classe
     /// CHAQUE candidat — <c>[{ "id": "147321", "section":
     /// "delete|can_delete|keep", "reason": "…" }]</c>, id = InternalId en
-    /// chaîne, exactement UNE entrée par candidat. Repris d'emby-delete.sh /
-    /// emby-delete-series.sh (vécu prod : le MÊME modèle local classe
-    /// correctement sous ce contrat mais répondait « - » / « Aucun. » sous
-    /// l'ancien contrat de sélection conservatrice — l'échappatoire « vide
-    /// [] si rien ne se justifie » est le chemin de moindre résistance d'un
-    /// petit modèle). Rétro-compat : une réponse SANS champ « section » sur
+    /// chaîne, exactement UNE entrée par candidat (un contrat strict évite
+    /// qu'un petit modèle ne choisisse la facilité de répondre « Aucun. »).
+    /// Rétro-compat : une réponse SANS champ « section » sur
     /// toutes les entrées = ancien contrat [{id, reason}] (prompt stocké
     /// d'une install existante) → entrées traitées comme propositions de
     /// suppression, comportement v2.10.x inchangé.
     ///
-    /// Run « liste fermée » (v2.12.0) : AUCUN outil injecté (la liste est
-    /// complète dans le message ; manifest + protocole tool-calling
-    /// déroutent les petits modèles) et AUCUNE directive RAG de
-    /// recommandation. AUCUN enrichissement de reco ici
+    /// Run « liste fermée » : AUCUN outil injecté (la liste est
+    /// complète dans le message) et AUCUNE directive RAG de recommandation.
+    /// AUCUN enrichissement de reco ici
     /// (<see cref="LlmRunner.EnrichRecommendations"/> matche des titres
     /// EPG) : le parse se fait directement sur le payload extrait.
     ///
@@ -166,8 +162,7 @@ namespace LLM_AI
                 logger.Info("[LLM_AI] [LibReview] {0} favori(s) protégé(s) — exclus des pools.", favIds.Count);
             int favExcluded = 0;
 
-            // ---- Pool FILMS : deux familles (v2.11.0, critères repris de
-            //      emby-delete.sh) — (a) movies VUS par au moins un usager, du
+            // ---- Pool FILMS : deux familles (v2.11.0) — (a) movies VUS par au moins un usager, du
             //      plus ancien visionnage d'abord ; (b) movies JAMAIS VUS par
             //      personne ET ajoutés il y a plus de LibReviewUnplayedMinDays,
             //      triés par note croissante (les « canards boîteux » d'abord).
@@ -176,8 +171,7 @@ namespace LLM_AI
                 cfg.LibReviewUnplayedMinDays, ref favExcluded, excludedMovieIds, ref libExcluded, logger, ct);
             // ---- Pool SÉRIES : séries partiellement vues, hors kept, hors
             //      favoris, hors séries à enregistrer (SeriesTimers + timers
-            //      programmés — même règle que emby-delete-series.sh :
-            //      exclusion stricte par titre normalisé EXACT), capées.
+            //      programmés — exclusion stricte par titre normalisé EXACT), capées.
             int timerExcluded = 0;
             var seriesPool = CollectSeries(library, users, userData, liveTv, kept, favIds, cap,
                 ref timerExcluded, ref favExcluded, excludedSeriesIds, ref libExcluded, logger, ct);
@@ -202,17 +196,15 @@ namespace LLM_AI
             string seriesPrompt = ParsePrompt(cfg.LibReviewTaskSeries);
             if (!string.IsNullOrWhiteSpace(brief))
             {
-                if (!string.IsNullOrWhiteSpace(moviesPrompt)) moviesPrompt += "\n\nCONSigne de l'administrateur pour ce run :\n" + brief.Trim();
+                if (!string.IsNullOrWhiteSpace(moviesPrompt)) moviesPrompt += "\n\nConsigne de l'administrateur pour ce run :\n" + brief.Trim();
                 if (!string.IsNullOrWhiteSpace(seriesPrompt)) seriesPrompt += "\n\nConsigne de l'administrateur pour ce run :\n" + brief.Trim();
             }
 
-            // v2.11.0 (étendu v2.13.0) — profil de goûts injecté au prompt
-            // (historique + favoris, repris d'emby-delete.sh) : permet au
-            // LLM de justifier « sans lien avec les goûts constatés ».
-            // v2.13.0 : l'usager du profil est DÉSIGNABLE en config
-            // (LibReviewTasteUser, même mécanique que l'usager Tonight) et
-            // le run SÉRIES reçoit AUSSI un profil (épisodes vus groupés par
-            // série + séries favorites, comme emby-delete-series.sh).
+            // Profil de goûts (historique + favoris) injecté au prompt pour
+            // permettre au LLM de justifier « sans lien avec les goûts
+            // constatés ». L'usager du profil est désignable en config
+            // (LibReviewTasteUser) ; le run SÉRIES reçoit aussi un profil
+            // (épisodes vus groupés par série + séries favorites).
             User tasteUser = cfg.LibReviewTasteProfile
                 ? ResolveTasteUser(users, cfg, logger)
                 : null;
@@ -298,11 +290,11 @@ namespace LLM_AI
             string ollamaCloudKey = LlmRunner.ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
             string geminiKey = LlmRunner.ResolveKey(cfg.GeminiApiKey, "GEMINI_API_KEY");
 
-            // v2.12.0 (P3) — run « liste fermée » : ragDirectives null (les
+            // v2.12.0 — run « liste fermée » : ragDirectives null (les
             // directives RAG sont celles de la RECOMMANDATION — « vérifie
             // avec les outils avant d'affirmer » contredit le classement
             // d'une liste déjà fournie), finalArrayKey « id » + gabarit de
-            // renvoi pour la réparation v2.12.0 (P2).
+            // renvoi pour la réparation v2.12.0.
             var agent = new LlmAgentService(backends, null, "",
                 ollamaCloudKey, geminiKey, json, logger, cfg.DebugVerbose,
                 roleIntro: ROLE_INTRO,
@@ -310,12 +302,10 @@ namespace LLM_AI
                 responseLanguage: proseLang,
                 finalArrayKey: "id",
                 finalRepairHint: REPAIR_GABARIT);
-            // v2.12.0 (P3) : AUCUN outil — la liste des candidats est déjà
-            // complète dans le user prompt. Manifest + protocole tool-calling
-            // déroutaient les petits modèles locaux (prod 2026-11-02 :
-            // ministral-3:14b « - » / « Aucun. » sous le plugin alors que le
-            // MÊME modèle classe via emby-delete*.sh sans aucun outil) ;
-            // la boucle agent tourne ici à 1 itération, comme un appel plat.
+            // v2.12.0 : AUCUN outil — la liste des candidats est déjà
+            // complète dans le user prompt (le protocole tool-calling peut
+            // dérouter les petits modèles locaux). La boucle agent tourne
+            // ici à 1 itération, comme un appel plat.
             var tools = new List<ILlmTool>();
 
             string fullUser = userPrompt.Trim() + "\n\n### CANDIDATS (" + kind.ToUpperInvariant() + ")\n" +
@@ -327,12 +317,10 @@ namespace LLM_AI
             var (reply, _toolResults) = await agent.RunAsync(fullUser, tools, ct).ConfigureAwait(false);
             logger.Info("[LLM_AI] [{0}] Réponse brute (tronquée) :\n{1}", label, Truncate(reply, 1500));
 
-            // v2.10.5 (rôle affiné v2.12.0) : tolérance « réponse courte » —
-            // un petit modèle local peut répondre « - » ou « Aucun. » au lieu
-            // de [] (vu en prod 2026-11-02, ministral-3:14b, run FILMS/SÉRIES
-            // → 0 proposition). La réparation v2.12.0 (P2) a déjà relancé le
-            // modèle (borné) DANS la boucle avant d'arriver ici : cette
-            // tolérance n'est plus que le DERNIER filet (échec après relances).
+            // Tolérance « réponse courte » : un petit modèle local peut
+            // répondre « - » ou « Aucun. » au lieu de []. La réparation a
+            // déjà relancé le modèle dans la boucle avant d'arriver ici :
+            // cette tolérance n'est plus que le dernier filet.
             // Toute réponse SANS tableau JSON = liste vide valide (côté sûr :
             // aucune suppression proposée), et on logue le début pour
             // diagnostiquer. Jamais d'invention de propositions ici.
@@ -352,13 +340,12 @@ namespace LLM_AI
         /// partir du pool passé à ValidateAndAdd ; pour les séries, passé
         /// explicitement). Id inconnu → écarté + log (hallucination).
         /// v2.12.0 : section normalisée delete|can_delete|keep, défaut
-        /// « keep » (côté sûr — jamais de suppression proposée sur ambigüité).
+        /// « keep » (côté sûr — jamais de suppression proposée sur ambiguïté).
         /// RÉTRO-COMPAT : si AUCUNE entrée ne porte de champ « section », la
         /// réponse vient de l'ancien contrat [{id, reason}] (prompt stocké
         /// d'une install existante) → toutes les entrées sont des
-        /// PROPOSITIONS de suppression (comportement v2.10.x inchangé —
-        /// leçon v2.6.10 : le filet serveur doit couvrir le prompt stocké,
-        /// pas seulement celui par défaut).
+        /// PROPOSITIONS de suppression (le filet serveur doit couvrir
+        /// le prompt stocké, pas seulement celui par défaut).
         /// </summary>
         private static List<LibReviewEntry> ParseProposals(string payload, string kind,
             HashSet<string> knownIds, ILibraryManager library, ILogger logger)
@@ -441,8 +428,7 @@ namespace LLM_AI
         /// <summary>
         /// Ajoute les entrées validées au rapport (dédup par id) + journalise
         /// la ventilation par section et la complétude du classement
-        /// (v2.12.0 — visibilité : un run qui classe moins de candidats que
-        /// le pool doit se VOIR, même leçon que la règle « 0 toast(s) »).
+        /// (un run qui classe moins de candidats que le pool doit être visible au log).
         /// </summary>
         private static void ValidateAndAdd(LastLibReviewReport report, List<LibReviewEntry> entries,
             List<PoolItem> pool, string kind, ILogger logger)
@@ -487,7 +473,7 @@ namespace LLM_AI
             public string LastPlayed { get; set; }
             public int EpisodeCount { get; set; }
             public int UnwatchedCount { get; set; }
-            // v2.10.6 — mêmes motifs que emby-delete-series.sh : le LLM justifie
+            // v2.10.6 — le LLM justifie
             // mieux quand il voit rating/année/statut/genres/synopsis.
             public double? CommunityRating { get; set; }
             public int? ProductionYear { get; set; }
@@ -641,11 +627,9 @@ namespace LLM_AI
                     throw new InvalidOperationException(
                         "Gestion bibliothèque : la bibliothèque .strm « " + strmName + " » (StrmLibraryName) est introuvable — run annulé (fail-closed : elle ne doit jamais être évaluée).");
             }
-            // Racines DVR (v2.16.2 — PLURIEL : une install peut avoir un
-            // dossier films ET un dossier séries distincts ; la forme
-            // singulière n'en expose qu'une — signalement terrain : une
-            // médiathèque d'enregistrements TV passait au travers du
-            // fail-closed).
+            // Racines DVR (PLURIEL : une install peut avoir plusieurs dossiers
+            // d'enregistrement distincts ; la forme singulière n'en
+            // expose qu'une et peut laisser passer une médiathèque).
             var dvrRoots = new List<string>();
             try
             {
@@ -695,7 +679,7 @@ namespace LLM_AI
                 ct.ThrowIfCancellationRequested();
                 if (byItemId.TryGetValue(raw, out var existing))
                 {
-                    existing.AutoReason = existing.AutoReason; // déjà auto : rien à changer
+                    // déjà auto : rien à changer
                     continue;
                 }
                 var f = folders.FirstOrDefault(x => x != null
@@ -791,9 +775,8 @@ namespace LLM_AI
         /// moitié du plafond pour les films VUS (union des usagers, du plus
         /// ancien visionnage d'abord), moitié pour les films JAMAIS VUS par
         /// personne et ajoutés il y a plus de <paramref name="unplayedMinDays"/>
-        /// jours (triés par note croissante — « canards boîteux » en tête, repris
-        /// de emby-delete.sh). Si unplayedMinDays &lt;= 0 : pool vus seul
-        /// (comportement < v2.11.0).
+        /// jours (triés par note croissante — « canards boîteux » en tête). Si unplayedMinDays &lt;= 0 : pool vus seul
+        /// (comportement &lt; v2.11.0).
         /// </summary>
         private static List<PoolItem> CollectMovies(ILibraryManager library, IUserManager users,
             IUserDataManager userData, HashSet<string> kept, HashSet<string> favIds, int cap,
@@ -817,7 +800,7 @@ namespace LLM_AI
             }
 
             // (b) Films JAMAIS vus (intersection des IsUnplayed de tous les
-            // usagers — même règle qu'emby-delete.sh : « IsUnplayed » exige un
+            // usagers — « IsUnplayed » exige un
             // UserId, on boucle sur les usagers), ajoutés avant la coupure.
             if (unplayedMinDays > 0 && list.Count < cap)
             {
@@ -859,13 +842,11 @@ namespace LLM_AI
 
         /// <summary>
         /// Items d'un type donné JAMAIS vus par AUCUN usager — sémantique robuste
-        /// (v2.11.2) : union des listes « IsPlayed=true » de tous les usagers
-        /// (set des « vus »), puis complément dans la bibliothèque complète.
-        /// PAS une intersection des « IsUnplayed » : un film invisible pour un
-        /// usager à accès restreint n'apparaît pas dans sa liste non-vus et
-        /// disparaîtrait faussement de l'intersection (constaté au banc :
-        /// 4 usagers restreints → intersection = 2 films au lieu de ~3300).
-        /// Filtre ensuite DateCreated &lt; <paramref name="cutoff"/>.
+        /// (union des listes « IsPlayed=true » de tous les usagers), puis
+        /// complément dans la bibliothèque complète. PAS une intersection des
+        /// « IsUnplayed » : un film invisible pour un usager à accès
+        /// restreint disparaîtrait faussement de l'intersection. Filtre
+        /// ensuite DateCreated &lt; <paramref name="cutoff"/>.
         /// </summary>
         private static List<BaseItem> CollectNeverSeenPerUser(ILibraryManager library, IUserManager users,
             string[] types, DateTimeOffset cutoff, ILogger logger, CancellationToken ct)
@@ -936,9 +917,8 @@ namespace LLM_AI
         /// Noms normalisés (FoldAscii + minuscules + non-alnum retiré, via
         /// <see cref="GetEmbyInfoTool.Norm"/>) des séries « à enregistrer » :
         /// SeriesTimers (récurrents) + Timers programmés (SeriesName sinon Name).
-        /// Même règle qu'emby-delete-series.sh : exclusion STRICTE par titre
-        /// normalisé exact (les correspondances partielles préfixe/contenu ne
-        /// sont qu'un drapeau « limite timer » dans le script, JAMAIS une
+        /// Exclusion STRICTE par titre normalisé exact
+        /// (les correspondances partielles préfixe/contenu ne sont JAMAIS une
         /// exclusion).
         /// </summary>
         private static HashSet<string> TimerSeriesNames(ILiveTvManager liveTv)
@@ -972,8 +952,7 @@ namespace LLM_AI
         /// <summary>
         /// Séries partiellement vues (au moins un épisode vu par un usager),
         /// hors kept, HORS séries à enregistrer (titres des timers, exclusion
-        /// exacte par <see cref="GetEmbyInfoTool.Norm"/> — v2.10.2, même règle
-        /// qu'emby-delete-series.sh : « Découverte » ou toute série en cours
+        /// exacte par <see cref="GetEmbyInfoTool.Norm"/> — v2.10.2 : « Découverte » ou toute série en cours
         /// d'enregistrement ne doit JAMAIS être proposée), capées. Pour chaque
         /// série : nombre d'épisodes, non vus, taille totale, dernier visionnage.
         /// <paramref name="timerExcluded"/> reçoit le nombre de séries retirées
@@ -1081,8 +1060,9 @@ namespace LLM_AI
                 });
                 if (list.Count >= cap) break;
             }
-            // Séries les plus anciennement vues d'abord (candidats les plus mûrs).
-            return list.OrderByDescending(p => p.LastPlayed).ToList();
+            // Séries les plus anciennement vues d'abord (candidats les plus mûrs),
+            // comme le pool films ; dernier visionnage inconnu en dernier.
+            return list.OrderBy(p => string.IsNullOrEmpty(p.LastPlayed) ? "9999-12-31" : p.LastPlayed, StringComparer.Ordinal).ToList();
         }
 
         /// <summary>Dernier visionnage connu d'un item (union des usagers, via IUserDataManager).</summary>
@@ -1184,13 +1164,6 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Profil de goûts du premier administrateur (v2.11.0, repris
-        /// d'emby-delete.sh avec René) : films vus récemment (nom, année,
-        /// genres, 60 max) + favoris. Injecté dans le prompt du run films
-        /// pour permettre des justifications « sans lien avec les goûts ».
-        /// Best-effort : jamais d'exception.
-        /// </summary>
-        /// <summary>
         /// Résout l'usager du profil de goûts (v2.13.0, même mécanique que
         /// l'usager Tonight) : champ
         /// <see cref="PluginConfiguration.LibReviewTasteUser"/> — nom exact
@@ -1232,10 +1205,9 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Profil de goûts FILMS (v2.11.0, repris d'emby-delete.sh) :
+        /// Profil de goûts FILMS (v2.11.0) :
         /// historique de visionnage (nom (année) [genres]) + favoris de
-        /// l'usager résolu par <see cref="ResolveTasteUser"/> (avant
-        /// v2.13.0 : premier admin hardcodé). Coupé à 6000 car.
+        /// l'usager résolu par <see cref="ResolveTasteUser"/>. Coupé à 6000 car.
         /// </summary>
         private static string BuildTasteProfile(ILibraryManager library, User user, ILogger logger)
         {
@@ -1287,8 +1259,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Profil de goûts SÉRIES (v2.13.0, repris d'emby-delete-series.sh,
-        /// qui injecte l'historique séries du propriétaire) : épisodes vus
+        /// Profil de goûts SÉRIES (v2.13.0) : épisodes vus
         /// GROUPÉS par série — « série (année) [genres] — N épisode(s)
         /// vu(s) » — + séries favorites. Résolution de la fiche série par
         /// SeriesId (patron <c>CollectFavoriteIds</c>), repli SeriesName de
@@ -1314,8 +1285,7 @@ namespace LLM_AI
                 };
                 // Groupement par SÉRIE (clé = SeriesId, repli SeriesName) :
                 // le run séries juge des SÉRIES entières, le LLM doit voir
-                // la position réelle du foyer série par série (le motif du
-                // script : « épisodes vus groupés par série »).
+                // la position réelle du foyer série par série.
                 var bySeries = new Dictionary<string, int>();
                 var seriesMeta = new Dictionary<string, (long sid, string name)>();
                 foreach (var it in library.GetItemList(q) ?? Array.Empty<BaseItem>())

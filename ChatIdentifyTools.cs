@@ -19,7 +19,7 @@ using MediaBrowser.Model.Serialization;
 namespace LLM_AI
 {
     /// <summary>
-    /// Outils d'identification assistée dans le chat administrateur (v2.21.0) :
+    /// Outils d'identification assistée dans le chat administrateur :
     /// <list type="bullet">
     /// <item><see cref="IdentifyListTool"/> (<c>identify_list</c>, lecture seule) :
     /// liste les items à identifier (needs-review, not-found, orphelins) et à
@@ -30,7 +30,7 @@ namespace LLM_AI
     /// mémorise l'instantané de preuves côté serveur pour la session.</item>
     /// <item><see cref="IdentifyProposeTool"/> (<c>identify_propose</c>, deux
     /// phases) : dépose une carte Approuver/Refuser enrichie d'un diff visuel
-    /// serveur-side (posters côte à côte, preuve, changements, indices) ;
+    /// côté serveur (posters côte à côte, preuve, changements, indices) ;
     /// l'approbation ré-valide anti-TOCTOU et applique via
     /// <see cref="OrphanResolver.ApplyAsync"/> (mode remplacement inclus).</item>
     /// <item><see cref="IdentifyUndoTool"/> (<c>identify_undo</c>, deux phases) :

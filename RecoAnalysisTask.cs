@@ -20,7 +20,7 @@ namespace LLM_AI
     /// <summary>
     /// Tâche planifiée hebdomadaire de la boucle de rétroaction des
     /// recommandations (opt-in <see cref="PluginConfiguration.RecoFeedbackEnabled"/>,
-    /// défaut dimanche 4 h). Pour chaque usager :
+    /// défaut dimanche 4 h 10). Pour chaque usager :
     /// <list type="bullet">
     /// <item>construit en C# (déterministe, zéro LLM pour le rassemblement)
     ///   le tableau de corrélation de la semaine : recommandations de
@@ -86,7 +86,7 @@ namespace LLM_AI
 
         public bool IsHidden => false;
 
-        /// <summary>Reflete l'opt-in config : la tâche n'est planifiée par
+        /// <summary>Reflète l'opt-in config : la tâche n'est planifiée par
         /// Emby que si la boucle de rétroaction est activée (le planificateur
         /// Emby relit cette propriété ; un lancement manuel passe quand même
         /// dans <see cref="Execute"/> qui re-vérifie).</summary>
@@ -472,7 +472,7 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Trigger par défaut : hebdomadaire le dimanche à 4 h du matin —
+        /// Trigger par défaut : hebdomadaire le dimanche à 4 h 10 du matin —
         /// après le nettoyage nocturne « AI Tonight » (3 h) et la passe
         /// d'identification des orphelins (4 h), avant les runs diurnes de
         /// la journée. L'utilisateur peut l'ajuster dans le planificateur

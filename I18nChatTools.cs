@@ -9,7 +9,7 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     /// <summary>Résolution des natives + overlay et plomberie de réponse pour
-    /// les tools d'atelier (T1d) — partagée par <see cref="I18nSearchTool"/>,
+    /// les tools d'atelier — partagée par <see cref="I18nSearchTool"/>,
     /// <see cref="I18nGetTool"/> et <see cref="I18nSetKeyTool"/> : une clé
     /// d'interface vit dans UNE famille
     /// (web | server | ext) déterminée par les natives EN ; l'overlay ne
@@ -140,15 +140,10 @@ namespace LLM_AI
             return sig.Length <= 60 ? sig : sig.Substring(0, 57) + "…";
         }
 
-        /// <summary>Raison de refus structurel — la MÊME consigne que la
-        /// campagne : native NUE → nommer le dés-échappement (terrain
-        /// cfg.crosskind.convert.hint) ; sinon multisets de balises
-        /// attendu/reçu bornés + la règle « raccourcir le texte oui, le
-        /// contrat de balises non » (terrain 2026-10-04,
-        /// cfg.orphan.firstpass.desc : 4 dépôts refusés d'affilée — le
-        /// modèle abandonnait au lieu de re-poser la balise sur son texte
-        /// écourté, faute d'inventaire explicite dans la raison générique).
-        /// </summary>
+        /// <summary>Raison de refus structurel. Pour une native sans balise,
+        /// nomme le risque de dés-échappement d'entités (ex: &lt; en &lt;).
+        /// Pour les autres, rappelle la règle : le texte se raccourcit, mais
+        /// le contrat de balises est immuable.</summary>
         internal static string RefusalReason(I18nDoses.Verdict verdict, string en, string val)
         {
             if (verdict == I18nDoses.Verdict.TagMismatch)
@@ -171,18 +166,11 @@ namespace LLM_AI
         }
 
         /// <summary>Construit le bloc « contract » de la réponse
-        /// <c>i18n_get</c> pour une clé (null = bloc OMIS : rien
-        /// d'immuable, le contrat doit rester un signal, pas du bruit —
-        /// une clé de texte simple n'en porte pas). C'est la pièce
-        /// proactive de l'atelier : le modèle lit le contrat AVANT de
-        /// construire la valeur, au lieu de découvrir la règle dans un
-        /// refus. Miroir des doses « tags » de la campagne (DoseUser) —
-        /// terrain 2026-10-04 : sans inventaire explicite, le modèle
-        /// « retouche » les balises de mémoire (4 dépôts refusés
-        /// d'affilée puis abandon) ; l'inventaire liste EXACTEMENT ce
-        /// que la porte <see cref="I18nDoses.Validate"/> exigera au
-        /// <c>i18n_set_key</c> (même regex, même comptage) — le refus
-        /// motivé reste le filet, le contrat est la prévention.</summary>
+        /// <c>i18n_get</c> (omis si la clé est simple). Le modèle lit ce
+        /// contrat AVANT de traduire, au lieu de découvrir la règle dans un
+        /// refus. L'inventaire (balises, {n}) liste ce que la validation
+        /// <see cref="I18nDoses.Validate"/> exigera au dépôt : le contrat est
+        /// la prévention, le refus motivé le filet.</summary>
         internal static object ContractFor(string family, string en)
         {
             if (en == null) return null;
@@ -216,9 +204,9 @@ namespace LLM_AI
                 }
                 else if (en.Contains("&lt;"))
                 {
-                    // Piège attesté (cfg.crosskind.convert.hint, 5 refus
-                    // d'affilée en campagne) : le modèle dés-échappe
-                    // l'entité → balise vraie → porte divergente.
+                    // Piège : un modèle peut dés-échapper une entité HTML
+                    // (ex: &lt;movie&gt; en <movie>), créant une balise
+                    // invalide qui sera refusée. La règle prévient.
                     rules.Add("entités HTML immuables : recopie &lt; &gt; &amp; " +
                               "À L'IDENTIQUE — les dés-échapper (ex. &lt;movie&gt; " +
                               "devient <movie>) crée une balise vraie et le dépôt " +
@@ -258,7 +246,7 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Tool de chat <c>i18n_get</c> (v1.17.0 T1d — atelier de langues) :
+    /// Tool de chat <c>i18n_get</c> (v1.17.0 — atelier de langues) :
     /// lecture COMPLÈTE d'une clé d'interface — natives EN + FR (l'intention
     /// du mainteneur), valeurs d'overlay par langue avec leur verdict
     /// structurel (le chargeur les servira ou les laissera tomber), et
@@ -341,12 +329,9 @@ namespace LLM_AI
                     ["natives"] = new { en, fr },
                     ["overlay"] = overlay
                 };
-                // Contrat structurel (v1.17.1.0) : la native porte des
-                // éléments immuables (balises, {n}, sauts de ligne,
-                // entités, ext = brut) — le bloc liste l'inventaire EXACT
-                // que la porte Validate exigera au dépôt + la directive à
-                // suivre. Omis pour une clé sans contrainte : un contrat
-                // partout n'est plus un signal.
+
+                // Ajoute le contrat structurel (balises, {n}, etc.) si la
+                // native en porte, pour guider le modèle. Omis si simple.
                 var contract = I18nChatKeys.ContractFor(sec, en);
                 if (contract != null) resp["contract"] = contract;
 
@@ -366,35 +351,27 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Tool de chat <c>i18n_set_key</c> (v1.17.0 T1d ; DÉPÔT deux phases
-    /// depuis v1.17.0.2) : propose la correction d'UNE clé pour UNE langue
-    /// générée — validation structurelle DÉTERMINISTE en C# (placeholders
-    /// {n}/balises identiques à la native EN, texte brut strict pour la
-    /// famille ext, clé réelle, code langue normalisé), puis sérialisation
-    /// dans <see cref="ChatI18nStore"/> : l'écriture n'a lieu qu'au clic
-    /// « Approuver » de l'admin (endpoint déterministe, gates re-courues,
-    /// .bak + re-scan) — le LLM n'a AUCUN chemin d'écriture direct. Le dépôt
-    /// exige le mode déroulant « Éditer — Atelier de langues » (décision
-    /// usager 2026-10-04) — hors mode : refus avec la consigne. L'identique-EN
-    /// légitime (marques, icônes) passe avec un avertissement. Depuis
-    /// v1.17.1.0, <see cref="I18nGetTool"/> sert le contrat structurel de
-    /// la clé (bloc « contract » : inventaire exact + directive) : le
-    /// modèle recopie un contrat LISTÉ, il ne « retouche » pas les balises
-    /// de mémoire — la porte, elle, ne change pas.
+    /// Tool de chat <c>i18n_set_key</c> (DÉPÔT en deux phases) : propose
+    /// la correction d'UNE clé pour UNE langue. La proposition subit une
+    /// validation structurelle déterministe en C# (placeholders, balises
+    /// identiques à la native EN, etc.). L'écriture réelle n'a lieu qu'au
+    /// clic « Approuver » de l'admin sur la carte générée, garantissant
+    /// qu'aucun chemin d'écriture direct n'est exposé au LLM. Le dépôt
+    /// exige que le mode « Éditer — Atelier de langues » soit actif.
+    /// Pour guider le modèle, <see cref="I18nGetTool"/> fournit le contrat
+    /// structurel à respecter.
     /// </summary>
     /// <remarks>
-    /// Différent du pattern plugin_prompts (deux phases + carte) : l'atelier
-    /// écrit directement — comme la génération (626 clés sans carte) — avec
-    /// les mêmes gates ; le .bak du fichier protège, le log + SecurityMonitor
-    /// tracent, et l'admin relit via i18n_get. Le chemin FR natif (web/server)
-    /// est ÉCRITABLE ici (repli : le fr d'overlay remplace la native à
-    /// l'exécution ; le contexte FR des doses lit les NATIVES — dérive mineure
-    /// assumée de revue).
+    /// Contrairement au pattern <c>plugin_prompts</c> qui utilise toujours
+    /// une carte, l'atelier peut écrire directement après approbation, avec
+    /// les mêmes garanties (validation, .bak, journalisation). Les
+    /// corrections sur les langues natives (fr, en) sont possibles, bien
+    /// qu'elles ne vivent que dans l'overlay et non dans le code source.
     /// </remarks>
     internal sealed class I18nSetKeyTool : ILlmTool
     {
         /// <summary>Plafond raisonnable d'une valeur d'interface (les natives
-        /// les plus longues ≪ ; protège le fichier et l'attention des doses).</summary>
+        /// les plus longues font ~1050 caractères ; protège le fichier et l'attention des doses).</summary>
         internal const int MaxValueChars = 2000;
 
         private readonly string _sessionId, _userId, _contextId;
@@ -453,11 +430,10 @@ namespace LLM_AI
                         detail = "value dépasse " + MaxValueChars + " caractères (" + value.Length +
                                  ") — une valeur d'interface ne l'exige jamais." }));
 
-                // MODE EXCLUSIF (décision usager 2026-10-04) : la modification
-                // des chaînes exige la sélection du mode « Éditer — Atelier
-                // de langues » dans le dropdown de la page chat — miroir de la
-                // validation champ ↔ mode des prompts (v1.13.9). Le refus est
-                // une CONSIGNE : le modèle relit l'invite au tour suivant.
+                // Le dépôt de nouvelles valeurs i18n exige que l'utilisateur
+                // ait explicitement sélectionné le mode « Éditer — Atelier de
+                // langues » pour éviter les modifications accidentelles. Le
+                // refus est une consigne pour le modèle.
                 var mode = ChatContexts.Find(_contextId);
                 if (mode == null || !string.Equals(mode.Id, ChatContexts.I18nEditModeId,
                         StringComparison.Ordinal))
@@ -483,13 +459,9 @@ namespace LLM_AI
                                  "(web/server/ext) est éditable.",
                         hints = I18nChatKeys.Hints(key, _logger) }));
 
-                // Validation structurelle DÉTERMINISTE (le même mur que le
-                // chargeur et que la campagne de génération — le LLM ne
-                // contourne pas : refus motivé, aucune écriture). La raison
-                // est la MÊME que la campagne ET est loggée — terrain
-                // 2026-10-04 : 4 dépôts refusés d'affilée n'ont laissé
-                // AUCUNE trace loggable, le diagnostic ne tenait qu'à la
-                // prose (paraphrase) du modèle.
+                // Validation structurelle déterministe. Le LLM ne peut pas
+                // la contourner. La raison exacte du refus est loggée pour
+                // faciliter le diagnostic, en plus d'être envoyée au modèle.
                 var verdict = I18nDoses.Validate(en, value);
                 if (verdict != I18nDoses.Verdict.Ok)
                 {
@@ -677,7 +649,7 @@ namespace LLM_AI
 
         /// <summary>Extrait borné autour de la 1re occurrence (≤ 140 car.,
         /// ellipses) — les lignes de résultat restent lisibles ; la valeur
-        /// COMPLETE s'obtient par i18n_get.</summary>
+        /// COMPLÈTE s'obtient par i18n_get.</summary>
         private static string Snip(string v, int idx)
         {
             const int Cap = 140, Before = 40;

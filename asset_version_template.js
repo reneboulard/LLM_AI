@@ -8,12 +8,11 @@
 // PROBLÈME : Emby sert les ressources web/ConfigurationPage avec
 // Cache-Control: public, sans max-age ni Last-Modified — le navigateur peut
 // resservir un JS périmé depuis son cache disque sans jamais revalider
-// (d'où le « hard reset » (Ctrl+Shift+R) nécessaire après chaque déploiement
-// de DLL). L'ETag présent est correct (il suit l'assembly) mais rien ne
-// force le navigateur à l'envoyer ; il n'est en outre PAS dérivé du contenu
-// (même ETag pour des ressources de contenus différents, v1.13.4.3).
+// (d'où le Ctrl+Shift+R nécessaire après chaque déploiement de DLL). L'ETag
+// présent est correct (il suit l'assembly) mais rien ne force le navigateur
+// à l'envoyer ; il n'est en outre PAS dérivé du contenu.
 //
-// SOLUTION (1re couche, v1.13.4.3) : config.js / chat.js /
+// SOLUTION (1re couche) : config.js / chat.js /
 // recommendations.js chargent les ressources dont ILS ont le contrôle
 // (LLMAII18n, LLMAIAssetVersion, LLMAIBg) avec un paramètre ?v= de bust PAR
 // SESSION navigateur (jeton sessionStorage) → lecture réseau garantie à
@@ -40,7 +39,7 @@ define([], function () {
     var PAGE_NAMES = [
         "LLMAIConfigPage", "LLMAIConfigPageJS", "LLMAII18n",
         "LLMAIRecommendationsPage", "LLMAIRecommendationsPageJS",
-        // v2.9.0 : "LLMAIChatPage" (page autonome) supprimée — seul le
+        // "LLMAIChatPage" (page autonome) supprimée — seul le
         // module chat.js reste servi (chargé en lazy par config.js).
         "LLMAIChatPageJS", "LLMAIBg", "LLMAIAssetVersion"
     ];
@@ -70,7 +69,7 @@ define([], function () {
             // on ne fait rien — la page reste pleinement fonctionnelle.
             if (!serverVersion) return false;
 
-            // Détection par version serveur mémorisée (v1.13.4.3) : depuis le
+            // Détection par version serveur mémorisée : depuis le
             // bust ?v= par session, ce module est lui-même toujours frais —
             // comparer VERSION (gravée) au serveur ne détecterait plus rien.
             // On mémorise la version serveur vue : un déploiement pendant la

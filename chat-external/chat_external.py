@@ -229,7 +229,7 @@ def plugin_show(user, item_id):
 
 
 # ---------------------------------------------------------------------------
-# i18n de l'écosystème chat externe (overlay communautaire, v1.16.0 P3b)
+# i18n de l'écosystème chat externe (overlay communautaire)
 # ---------------------------------------------------------------------------
 # Le plugin expose GET /Plugins/LLMAI/I18nExt (gate loopback + secret partagé)
 # qui sert la section « ext » de l'overlay LLM_AI_i18n.json pour la langue
@@ -382,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/api/i18n.js":
             # Traductions de l'overlay (section ext, langue résolue côté
-            # plugin) — le Python ne valide rien, il replie les JSON
+            # plugin) — le Python ne valide rien, il relaie les JSON
             # validés par le chargeur ; échec → {} (repli FR de la page).
             body = ("window.LLMAI_EXT_I18N = "
                     + json.dumps(ext_i18n(), ensure_ascii=False,
@@ -404,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # Drainer TOUJOURS le corps avant de répondre (même 401/404) :
-        # sans quoi les octets non lus sont reinterprétés comme une nouvelle
+        # sans quoi les octets non lus sont réinterprétés comme une nouvelle
         # requête sur la connexion keep-alive (désalignement 400).
         body = self.read_body()
         if self.path == "/api/login":
@@ -675,7 +675,7 @@ var user = "", session = "", chatHistory = [], busy = false;
 
 // -- utilitaires ------------------------------------------------------------
 function $(id) { return document.getElementById(id); }
-// i18n (v1.16.0, plan P3b) : la page embarque ses littéraux FR (repli par
+// i18n : la page embarque ses littéraux FR (repli par
 // clé) ; l'overlay communautaire du plugin — servi par /api/i18n.js, langue
 // résolue CÔTÉ PLUGIN (cascade UICulture, l'app ne décide rien) — les
 // remplace par clé si présent. Bulles déjà rendues non re-localisées en

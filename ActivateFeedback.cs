@@ -17,7 +17,7 @@ namespace LLM_AI
 {
     /// <summary>
     /// Retour visuel de l'activation d'une carte <c>.strm</c> (endpoint
-    /// <c>/Plugins/LLMAI/Activate</c>, v1.12) : <b>toast Emby</b> au client qui
+    /// <c>/Plugins/LLMAI/Activate</c>) : <b>toast Emby</b> au client qui
     /// lit la carte + <b>suppression de la carte par Emby</b> en cas de succès.
     /// </summary>
     /// <remarks>
@@ -29,7 +29,7 @@ namespace LLM_AI
     /// <see cref="ISessionManager.Sessions"/> : celle dont l'item en cours
     /// (<c>FullNowPlayingItem.Path</c>, repli <c>NowPlayingItem.Path</c>) est le
     /// fichier <c>.strm</c> de la carte. Aucune cloche/notification : l'usager a
-    /// cliqué la carte, le toast suffit (choix design v1.12). Session
+    /// cliqué la carte, le toast suffit (choix design). Session
     /// introuvable (client qui n'expose pas NowPlayingItem, lecture côté
     /// transcodeur seul…) → on logue et on abandonne.</para>
     /// <para><b>Suppression</b> : JAMAIS de suppression directe de fichier par
@@ -37,9 +37,8 @@ namespace LLM_AI
     /// <c>ILibraryManager.FindByPath(strm)</c> puis
     /// <c>DeleteItem(item, DeleteOptions { DeleteFileLocation = true })</c>,
     /// ce qui retire l'item de la bibliothèque ET le fichier <c>.strm</c> par le
-    /// pipeline d'Emby (diffusion LibraryUpdate). Constaté sur ce serveur :
-    /// Emby retire le <b>dossier de carte entier</b> (<c>.strm</c>, <c>.nfo</c>,
-    /// marker, poster). La suppression est
+    /// pipeline d'Emby (Emby retire aussi le <b>dossier de carte entier</b> :
+    /// <c>.strm</c>, <c>.nfo</c>, marker, poster). La suppression est
     /// DIFFÉRÉE (~60 s) pour ne pas couper la lecture du clip en cours.</para>
     /// <para><b>Anti-doublon</b> : UNE lecture de carte génère PLUSIEURS appels
     /// GET à Activate (sonde ffprobe, requêtes Range du lecteur…) — le cache
@@ -171,7 +170,7 @@ namespace LLM_AI
         /// OrdinalIgnoreCase, chemin trimé, sur <c>FullNowPlayingItem.Path</c>
         /// puis repli <c>NowPlayingItem.Path</c>). Null si rien en <see cref="SessionWait"/>.
         /// </summary>
-        /// <remarks>Internal (v1.13.11.0) : réutilisé par le gate de permission
+        /// <remarks>Internal : réutilisé par le gate de permission
         /// d'<c>ActivateApiService</c> pour identifier le lecteur d'une carte
         /// .strm (les requêtes .strm ne portent pas l'auth Emby).</remarks>
         internal static async Task<SessionInfo> FindPlayingSessionAsync(
@@ -279,13 +278,11 @@ namespace LLM_AI
         /// Résout le titre d'affichage du programme EPG pointé par
         /// <paramref name="programId"/> (une requête in-process par
         /// activation — même mécanique que
-        /// StrmLibraryGenerator.TryGetEpgProgram). Un épisode de série
+        /// StrmLibraryGenerator.TryGetEpgProgram). Le <c>Name</c> du
+        /// programme EPG est le titre d'ÉPISODE seul : un épisode de série
         /// porte la série ET sa position (« Série — S02E05 « Titre » »,
-        /// <see cref="GetEmbyInfoTool.ProgramDisplayTitle"/>) — le
-        /// <c>Name</c> du programme EPG est le titre d'ÉPISODE seul (vécu
-        /// v2.6.6 : « Marathon interminable » au lieu de la série ;
-        /// unification v2.7.1 avec la convention
-        /// <c>SeriesName ?: Name</c> de <c>GetEmbyInfoTool</c>).
+        /// <see cref="GetEmbyInfoTool.ProgramDisplayTitle"/>). Un
+        /// affichage limité au seul nom d'épisode masque la série.
         /// Repli : programId brut.
         /// </summary>
         public static string ResolveProgramTitle(ILibraryManager library, string programId)

@@ -164,26 +164,19 @@ namespace LLM_AI
         /// <summary>
         /// Pont MCC (Répertoire des films classés du Québec) — UNIQUEMENT sur
         /// l'échec de la recherche TMDB : un titre de distribution québécois
-        /// n'est PAS un titre TMDB (« Coup de coeur » → « aucun film », incident
-        /// 2026-11-20 prod) ; le répertoire gouvernemental porte la v.o.
-        /// (« The Love Punch », film/coup-de-coeur-386579). Si une v.o.
-        /// UNAMBIGUE existe (voir <see cref="MccClient.TryGetOriginalTitleAsync"/>),
-        /// la même recherche est relancée par ce titre original (SANS année —
-        /// doctrine cascade v2.4.4 : une année de surface instable ne doit pas
-        /// cacher la fiche) et, si elle résout, la fiche est servie avec le
-        /// marqueur <c>vo_bridge</c> (indexe de narration pour le LLM : le
-        /// viewer saura d'où vient la correspondance). Le CAS D'ÉQUIVOQUE réel
-        /// (« Coup de coeur » = fiches MCC 2013 ET 1993 à v.o. distinctes)
-        /// est désambiguïsé par l'année attendue passée par le caller
-        /// (l'année <c>tmdb_lookup</c> — sans année, équivoque → abandon
-        /// honnête). Fail-open intégral :
-        /// MCC muet, équivoque, délai ou indisponible → l'erreur historique
-        /// est retournée telle quelle. Résultat pondéré par l'appelant : la
-        /// fiche bridgeée est CACHÉE sous la requête originale (le titre a
-        /// bel et bien résolu ; le marqueur voyage avec), et traverse ensuite
-        /// les portes/juges de chaque caller comme toute fiche — le pont
-        /// n'ajoute aucune preuve. Coût hors-Québec : ≤ 1 GET de plus sur un
-        /// chemin déjà en échec (v.o. manquante = l'erreur ne change pas).
+        /// n'est PAS un titre TMDB ; le répertoire porte la v.o. Si une v.o.
+        /// non équivoque existe (voir <see cref="MccClient.TryGetOriginalTitleAsync"/>),
+        /// la même recherche est relancée par ce titre original SANS année (une
+        /// année de surface instable ne doit pas cacher la fiche) et, si elle
+        /// résout, la fiche est servie avec un marqueur <c>vo_bridge</c>.
+        /// Équivoque (plusieurs v.o. possibles pour un même titre) →
+        /// désambiguïsée par l'année passée par le caller, sinon abandon
+        /// honnête. Fail-open intégral : MCC muet, équivoque, délai ou
+        /// indisponible → l'erreur historique est retournée telle quelle.
+        /// La fiche bridgeée est cachée sous la requête originale et traverse
+        /// ensuite les portes/juges aval comme toute fiche — le pont n'ajoute
+        /// aucune preuve. Coût hors-Québec : ≤ 1 GET de plus sur un chemin
+        /// déjà en échec (v.o. manquante = l'erreur ne change pas).
         /// </summary>
         private async Task<string> BridgeOnFailureAsync(string result, string key, string lang, string query, string kind,
             int? expectedYear, CancellationToken ct)
@@ -194,15 +187,12 @@ namespace LLM_AI
             errored = errored || result.Contains("\"error\"");
             if (!errored) return result;
 
-            // Gate d'opt-in sémantique (décision usager 2026-11-20 — aucun
-            // champ de config nouveau) : le pont est actif uniquement si la
+            // Gate d'opt-in sémantique : le pont est actif uniquement si la
             // priorité de langue du SYNOPSIS (TmdbLangPriority) porte
-            // « fr-CA » explicitement — le rang déjà significatif de « cet
-            // install traite du contenu canadien-français » (prod :
-            // fr-CA, fr-FR, en-US). Vide, ou « fr » nu (étendu fr-FR par
-            // ToTmdbLang, jamais fr-CA), ou liste sans fr-CA → jamais
-            // consulté, exactement comme fr-CA n'est pas essayé par la
-            // chaîne de synopsis. Calcul sur le chemin d'erreur seulement.
+            // « fr-CA » explicitement (« fr » nu est étendu fr-FR par
+            // ToTmdbLang, jamais fr-CA) — un install sans fr-CA dans cette
+            // liste ne consulte jamais MCC. Calcul sur le chemin d'erreur
+            // seulement.
             var mccLangList = I18n.ParseTmdbLangPriority(Plugin.Instance?.Configuration?.TmdbLangPriority ?? "", out _);
             if (!mccLangList.Any(l => string.Equals(l, "fr-CA", StringComparison.OrdinalIgnoreCase)))
                 return result;
@@ -365,8 +355,8 @@ namespace LLM_AI
         //  de la recherche par titre (LookupMovie/SeriesAsync) et de la
         //  résolution par id externe (FindByExternalIdAsync). Non mis en cache
         //  (le cache est géré par FetchWithCacheAsync au niveau recherche).
-        //  overviewChain (fix #6, champ TmdbLangPriority) : liste de priorité
-        //  des langues du SYNOPSIS — non vide = la fiche est lise UNE fois avec
+        //  overviewChain (champ TmdbLangPriority) : liste de priorité
+        //  des langues du SYNOPSIS — non vide = la fiche est lue UNE fois avec
         //  append_to_response=translations et le synopsis est sélectionné dans
         //  la première langue disponible de la liste (fr-CA avant fr-FR : TMDB
         //  ne fait AUCUN repli croisé, et la langue= du fetch ne peut pas
@@ -385,10 +375,9 @@ namespace LLM_AI
                 .ConfigureAwait(false);
             var d = det.RootElement;
 
-            // Fix #6 : sélection du synopsis dans la table translations
+            // Sélection du synopsis dans la table translations
             // (UNE lecture, en mémoire). Rang retenu ≠ langue du fetch →
-            // ligne greppable (validation terrain : la substitution doit
-            // se lire au journal).
+            // ligne greppable (la substitution doit se lire au journal).
             string overview = Str(d, "overview");
             if (chained)
             {
@@ -434,7 +423,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Sélectionne le synopsis d'une fiche TMDB dans la première langue
-        /// disponible de la chaîne de priorité (fix #6), depuis la table
+        /// disponible de la chaîne de priorité, depuis la table
         /// <c>translations</c> déjà lue par le fetch (zéro requête
         /// supplémentaire). Une entrée de la table porte
         /// <c>iso_639_1</c>/<c>iso_3166_1</c> (famille + région — TMDB y
@@ -586,11 +575,11 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Recherche-liste (dialogue « Identifier » d'Emby, v2.23.0) : la
+        //  Recherche-liste (dialogue « Identifier » d'Emby) : la
         //  recherche renvoie PLUSIEURS candidats (l'utilisateur choisit sa
         //  fiche dans le dialogue), à l'inverse de LookupMovie/SeriesAsync qui
-        //  ne prennent que le premier. Pas de filtre d'année — doctrine
-        //  cascade v2.4.4 : une année de surface (année-thème, année de
+        //  ne prennent que le premier. Pas de filtre d'année — une année de
+        //  surface (année-thème, année de
         //  saison) ne doit jamais MASQUER la fiche ; le caller la garde
         //  comme indice de RANGEMENT. Ne lève pas (repli : liste vide).
         // ------------------------------------------------------------------
@@ -648,7 +637,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Fiche de VALIDATION des liens (validate_links, v2.22.0) : lecture
+        //  Fiche de VALIDATION des liens (validate_links) : lecture
         //  UNE seule par item avec append_to_response=external_ids,translations
         //  (keyset complet — le titre candidat de la comparaison inclut le
         //  titre dans la langue du fetch, l'original et TOUTES les variantes
@@ -704,9 +693,8 @@ namespace LLM_AI
                         foreach (var t in arr.EnumerateArray())
                         {
                             if (t.ValueKind != JsonValueKind.Object) continue;
-                            // Terrain 2026-11-19 (tv/65417) : fr-FR et fr-CA
-                            // arrivent comme DEUX entrées iso_639_1="fr" (le
-                            // fr-CA vide ici) — on accepte aussi une forme
+                            // fr-FR et fr-CA arrivent comme DEUX entrées iso_639_1="fr"
+                            // (fr-CA peut être vide) — on accepte aussi une forme
                             // "fr-XX" défensive au cas où l'API l'émettrait.
                             string iso = Str(t, "iso_639_1");
                             if (string.IsNullOrEmpty(iso)
@@ -721,11 +709,9 @@ namespace LLM_AI
                 catch { /* table illisible → pas de variantes */ }
                 f.FrTitles = frs.Count > 0 ? frs.ToArray() : null;
 
-                // Titres ALTERNATIFS du Canada (iso_3166_1=CA) — le dernier
-                // axe « titre fr » quand la table translations est muette
-                // (terrain 2026-11-19 : « Damned United », « To Rome with
-                // Love » sans TOUTE traduction fr). Côté film la réponse est
-                // titles[], côté série results[] — les deux clés acceptées.
+                // Titres ALTERNATIFS du Canada (iso_3166_1=CA) — dernier
+                // axe « titre fr » quand la table translations est muette.
+                // Côté film la réponse est titles[], côté série results[] — les deux clés acceptées.
                 var als = new List<string>();
                 try
                 {
@@ -932,9 +918,7 @@ namespace LLM_AI
 
         // Garde ValueKind AVANT TryGetInt32 : le « Try » de .NET ne couvre que
         // la conversion numérique, il LÈVE InvalidOperationException sur tout
-        // autre type (chaîne, null, objet). Piège de terrain : « year » du LLM
-        // reçu en chaîne → 2 levées 2026-10-01 (tmdb_lookup) ; même pattern
-        // côté tvdb_search le 2026-09-30. Tolère aussi un nombre encodé en
+        // autre type (chaîne, null, objet). Tolère aussi un nombre encodé en
         // chaîne (ex. "2026") pour ne pas perdre la valeur.
         private static int? IntN(JsonElement e, string name)
         {
@@ -1003,7 +987,7 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Candidat DE LISTE TMDB (recherche « Identifier » v2.23.0) : résultat brut
+    /// Candidat DE LISTE TMDB (recherche « Identifier ») : résultat brut
     /// de <c>/search/movie|tv</c> — pas la fiche détaillée (pas de genres/ids
     /// externes, pas de statut) ; le titre est dans la langue de la recherche,
     /// le titre original est porté tel quel (preuve lexicale contre les

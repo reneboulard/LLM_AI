@@ -26,7 +26,7 @@ namespace LLM_AI
     /// <para><b>2. Passe d'étiquetage</b> (suggestion, jamais destructive) :
     /// quand le seuil est franchi, <see cref="RunTagPassAsync"/> retire
     /// D'ABORD tous les tags « AI Delete » précédents (reset — chaque run
-    /// repart de zéro), puis tag les enregistrements <b>visionnés</b> (par
+    /// repart de zéro), puis tague les enregistrements <b>visionnés</b> (par
     /// n'importe quel usager), du plus ancien au plus récent, jusqu'à ce que
     /// <c>libre + Σ tailles taguées ≥ seuil × marge</c> — c'est-à-dire que la
     /// suppression de tout ce qui est tagué ramènerait le volume au-dessus du
@@ -40,7 +40,7 @@ namespace LLM_AI
     /// <para><b>Scope</b> : seuls les items dont le fichier est sous l'une des
     /// racines d'enregistrements résolues (<c>LiveTvOptions</c> — chemins
     /// string 4.9.x, ids de dossiers 4.10+, repli défaut Emby
-    /// <c>&lt;ProgramData&gt;/data/livetv/recordings</c> — voir
+    /// <c>&lt;DataPath&gt;/livetv/recordings</c> — voir
     /// <see cref="TryResolveRecordingPaths"/>) sont candidats au tag
     /// (v2.18.0 : une install peut avoir des racines films ET séries
     /// distinctes — l'ancienne forme singulière n'en voyait que la
@@ -194,7 +194,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Gate disque MULTI-RACINES (v2.18.0) : mesure l'espace libre du volume
+        /// Gate disque MULTI-RACINES : mesure l'espace libre du volume
         /// de CHAQUE racine (dédoublonné par volume — sur une install, les
         /// racines films et séries vivent souvent sur le MÊME disque, inutile
         /// de le mesurer deux fois) et renvoie true si N'IMPORTE QUEL volume
@@ -400,7 +400,6 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>Taille du fichier si lisible, sinon 0 (best-effort).</summary>
         /// <summary>
         /// Le chemin est-il SOUS ce volume ? Un simple préfixe de chaîne
         /// confondrait « /mnt/rec » et « /mnt/record » : après le préfixe, il faut
@@ -419,6 +418,7 @@ namespace LLM_AI
             return next == '/' || next == '\\';
         }
 
+        /// <summary>Taille du fichier si lisible, sinon 0 (best-effort).</summary>
         private static long FileSizeOrNull(string path, ILogger logger)
         {
             if (string.IsNullOrWhiteSpace(path)) return 0;

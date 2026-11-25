@@ -103,7 +103,7 @@ namespace LLM_AI
             // v2.11.2 — « jamais vu » (pool canards boîteux) + dernier visionnage.
             public bool Unwatched { get; set; }
             public string LastPlayed { get; set; }
-            // v2.10.6 — mêmes motifs que emby-delete-series.sh (affichage carte).
+            // v2.10.6 — motifs d'affichage de la carte (série à supprimer).
             public double? CommunityRating { get; set; }
             public int? ProductionYear { get; set; }
             public string Status { get; set; }

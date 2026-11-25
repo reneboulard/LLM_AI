@@ -44,7 +44,8 @@ namespace LLM_AI
     /// indistinguable d'un nôtre ; documenté.</item>
     /// </list></para>
     /// <para><b>API Emby utilisées</b> (signatures vérifiées par réflexion sur
-    /// <c>MediaBrowser.Controller.dll</c> de cet hôte, Emby 4.9.5.0) :
+    /// <c>MediaBrowser.Controller.dll</c>, Emby 4.9.5.0 ; le code compile aussi
+    /// contre le SDK 4.10.x) :
     /// <see cref="IUserDataManager.GetUserData"/> (User, BaseItem) →
     /// <c>UserItemData</c> (muté en place : <c>IsFavorite</c>, rating
     /// préservés) puis <see cref="IUserDataManager.SaveUserData"/> (User,
@@ -135,7 +136,7 @@ namespace LLM_AI
         /// <summary>
         /// Retire les favoris <b>que nous avons posés</b> (fichier d'état —
         /// cumul des runs depuis le dernier nettoyage réussi) — et seulement
-        /// eux : un item est re-favorisé (retour à non-favori) SI il est
+        /// eux : un item est remis à non-favori SI il est
         /// encore en favori. L'usager de chaque entrée est re-résolu par l'id
         /// stocké dans le fichier d'état (<paramref name="users"/>) ; une
         /// entrée sans usager résolvable est ignorée. Le fichier d'état est

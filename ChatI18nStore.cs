@@ -23,7 +23,7 @@ namespace LLM_AI
     /// configuration du plugin (même maison que <c>chat_pending.json</c>) —
     /// l'approbation survit à un redémarrage du serveur tant qu'elle n'a pas
     /// expiré. Une seule proposition en attente par session de chat (une
-    /// nouvelle dépôt remplace l'ancienne) ; expiration 10 minutes (miroir de
+    /// nouveau dépôt remplace l'ancien) ; expiration 10 minutes (miroir de
     /// <c>ChatPromptStore</c> : même TTL, même liaison usager+session à la
     /// consommation).
     /// </remarks>

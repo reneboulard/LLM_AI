@@ -105,8 +105,7 @@ namespace LLM_AI
         /// <summary>
         /// Emby découvre et instancie l'export <see cref="IImageEnhancer"/> du
         /// plugin au démarrage (même mécanisme de scan d'assembly que
-        /// <c>IScheduledTask</c>/<c>IServerEntryPoint</c>) — vérifié
-        /// empiriquement sur Emby 4.9.5. Le plugin ne doit PAS toucher sa
+        /// <c>IScheduledTask</c>/<c>IServerEntryPoint</c>). Le plugin ne doit PAS toucher sa
         /// propre config dans son ctor, mais l'enrichisseur peut recevoir des
         /// services Emby par DI (ici <see cref="ILibraryManager"/>).
         /// </summary>
@@ -351,8 +350,8 @@ namespace LLM_AI
                     }
                 }
 
-                // Index des épisodes par série possédée (une seule requête —
-                // 3 000 épisodes typiques, projection immédiate en clés).
+                // Index des épisodes par série possédée (une seule requête,
+                // projection immédiate en clés).
                 try
                 {
                     var q = new InternalItemsQuery

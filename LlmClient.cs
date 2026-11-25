@@ -253,8 +253,7 @@ namespace LLM_AI
         /// <see cref="LlmBackend.ProviderType"/>. <paramref name="apiKey"/>
         /// = clé Bearer pour ollama_cloud, clé API Gemini pour gemini,
         /// null pour ollama_local. L'URL par défaut est appliquée si
-        /// <see cref="LlmBackend.Url"/> est vide. Porte la dynamique des 3
-        /// providers de /var/www/llm_core.
+        /// <see cref="LlmBackend.Url"/> est vide.
         /// <para>Gate 429 (voir <see cref="LlmRateLimitGate"/>) : pour les
         /// providers à quotas (gemini, ollama_cloud) un pré-contrôle précède
         /// tout HTTP — backend encore bridé par un 429 récent → throw
@@ -417,8 +416,7 @@ namespace LLM_AI
         /// Appelle POST {baseUrl}/models/{model}:generateContent?key={apiKey}
         /// (Google Gemini) avec conversion du format de messages
         /// (system→systemInstruction, assistant→role "model"). Concatène les
-        /// parts text de candidates[0].content.parts. Portage du
-        /// GeminiProvider.php / dispatch ChatController de /var/www/llm_core.
+        /// parts text de candidates[0].content.parts.
         /// <para>Gate 429 : <paramref name="gateKey"/> non null = backend à
         /// quotas — un HTTP 429 est parsé (motif TPM/RPM/RPD depuis
         /// <c>error.details</c>, fenêtre servie <c>RetryInfo.retryDelay</c>)
@@ -677,9 +675,7 @@ namespace LLM_AI
         /// <summary>
         /// Construit le corps de requête Gemini : <c>contents</c> (rôles
         /// user/model) + <c>systemInstruction</c> (message system). Fusionne
-        /// les tours consécutifs de même rôle (Gemini les rejette), comme le
-        /// <c>GeminiProvider::formatPayload</c> / ChatController de
-        /// /var/www/llm_core.
+        /// les tours consécutifs de même rôle (Gemini les rejette).
         /// </summary>
         private static string BuildGeminiBody(IReadOnlyList<ChatMessage> messages)
         {

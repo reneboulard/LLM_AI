@@ -15,49 +15,28 @@ namespace LLM_AI
     /// <summary>
     /// Pont « titre francisé → titre original (v.o.) » par le Répertoire des
     /// films classés du Québec (MCC) — repertoire.cinema.mcc.gouv.qc.ca.
-    /// <para>Incident 2026-11-20 (prod, item 329735) : « Coup de coeur » n'est
-    /// PAS un titre TMDB (tmdb_lookup → « aucun film » ; la chaîne n'a survécu
-    /// que par la narration web du LLM, de la chance plutôt qu'un mécanisme).
-    /// Le répertoire gouvernemental porte la fiche de DISTRIBUTION québécoise
-    /// avec le titre original : film/coup-de-coeur-386579 → « v.o. : The Love
-    /// Punch » → fiche TMDB 209249. Le pont recherche par le titre QC, récolte
-    /// la v.o., et l'appelant relance TMDB avec.</para>
-    /// <para>Équivoque : le MCC connaît plusieurs œuvres homonymes au TITRE
-    /// EXACT (« Coup de coeur » = 386579/2013 v.o. The Love Punch ET
-    /// 61554/1993 v.o. Danielle Steel's Heartbeat). L'année attendue passée
-    /// par l'appelant (l'année <c>tmdb_lookup</c> du LLM, ou l'année de l'item)
-    /// élimine les fiches incompatibles ±1 (doctrine
-    /// <see cref="OrphanResolver.YearCompatible"/> : année inconnue = pas de
-    /// garde) ; sans année, une équivoque de v.o. conduit à l'abandon honnête
-    /// (null journallisé Warn) — le pont ne devine JAMAIS.</para>
-    /// <para>Usage léger garanti : appelé UNIQUEMENT sur l'échec de la
-    /// recherche TMDB (jamais sur le chemin heureux), ≤ 4 GET de recherche
-    /// (deux surfaces du répertoire, pages bornées —
-    /// <see cref="SearchCardsAsync"/>) + ≤ 2 GET de fiche, fenêtre de temps
-    /// liée 15 s, aucun état persistant
-    /// (cache mémoire 24 h du <see cref="WebResultCache"/> partagé — ne cache
-    /// QUE des v.o. valides, doctrine « jamais d'erreur » ; la clé de cache
-    /// inclut l'année affinée, comme le cache TMDB), fail-open intégral.
-    /// Une installation hors Québec voit au pire un GET de plus sur un chemin
-    /// déjà en échec ; zéro token de prompt, zéro config, zéro i18n.</para>
-    /// <para>Deux surfaces (v2.22.2) : (1) le PONT silencieux ci-dessus —
-    /// zéro token de prompt ; (2) la consultation EXPLICITE — l'outil LLM
-    /// <see cref="MccLookupTool"/> (« le chat doit faire une validation sur
-    /// MCC si nécessaire », décision usager 2026-11-20) et la ligne de
-    /// concordance MCC des cartes identify (calculée côté serveur dans
-    /// <c>ChatIdentifyTools</c>). Les DEUX surfaces partagent le même opt-in
-    /// <see cref="IsEnabledForInstall"/> : un install sans le rang fr-CA ne
-    /// paie ni le tool ni son token de prompt, et la carte n'affiche rien.</para>
-    /// <para>Opt-in sémantique (décision usager 2026-11-20, aucun champ
-    /// nouveau) : actif seulement si
-    /// <see cref="PluginConfiguration.TmdbLangPriority"/> porte un rang
-    /// « fr-CA » explicite — le même signal « contenu canadien-français »
-    /// que la chaîne de synopsis (prod : fr-CA, fr-FR, en-US). Vide, « fr »
-    /// nu (étendu fr-FR), ou liste sans fr-CA → jamais consulté.</para>
-    /// <para>Doctrine anti-hallucination inchangée : la v.o. est un INDICE de
-    /// recherche (classe « fiche trouvée VIA un titre proposé ») — la fiche
-    /// rendue traverse les portes lexicales/le juge existants comme toute
-    /// fiche ; le pont n'ajoute ni preuve ni écriture.</para>
+    /// <para>Certains titres de distribution québécois ne sont pas reconnus
+    /// par TMDB. Ce "pont" utilise le répertoire gouvernemental pour trouver
+    /// le titre original d'une œuvre à partir de son titre québécois,
+    /// permettant à l'appelant de relancer une recherche TMDB avec ce
+    /// titre original.</para>
+    /// <para>Pour gérer les homonymes, le pont utilise l'année attendue
+    /// (fournie par l'appelant) pour désambiguïser les résultats. En cas
+    /// d'ambiguïté persistante, il retourne `null` plutôt que de deviner.</para>
+    /// <para>L'utilisation de ce service est légère : il n'est appelé qu'en
+    /// cas d'échec de la recherche TMDB, intègre un cache de 24h, et est
+    /// conçu pour échouer silencieusement sans impacter la performance.</para>
+    /// <para>Ce client sert deux fonctionnalités : (1) le pont silencieux
+    /// de résolution de titre et (2) la consultation explicite via l'outil
+    /// LLM <see cref="MccLookupTool"/>. Les deux partagent la même logique
+    /// et la même condition d'activation.</para>
+    /// <para>Ce service est activé (opt-in sémantique) uniquement si la
+    /// configuration <see cref="PluginConfiguration.TmdbLangPriority"/>
+    /// contient "fr-CA", signalant une installation qui gère du contenu
+    /// canadien-français.</para>
+    /// <para>Le titre original trouvé est un indice de recherche, pas une
+    /// preuve. La fiche TMDB finalement obtenue est soumise aux mêmes
+    /// validations que n'importe quelle autre.</para>
     /// </summary>
     internal static class MccClient
     {
@@ -66,20 +45,16 @@ namespace LLM_AI
             Timeout = TimeSpan.FromSeconds(8)
         };
 
-        /// <summary>Opt-in sémantique partagé par TOUTES les surfaces MCC
-        /// (pont silencieux, tool <see cref="MccLookupTool"/>, ligne de
-        /// concordance des cartes identify) : actif seulement si
-        /// <see cref="PluginConfiguration.TmdbLangPriority"/> porte un rang
-        /// « fr-CA » explicite — le même signal « contenu
-        /// canadien-français » que la chaîne de synopsis (prod :
-        /// fr-CA, fr-FR, en-US). Vide, « fr » nu (étendu fr-FR), ou liste
-        /// sans fr-CA → jamais consulté, aucun token de prompt payé.</summary>
+        /// <summary>Vérifie si les fonctionnalités liées au MCC sont activées.
+        /// L'activation est sémantique : elle dépend de la présence de "fr-CA"
+        /// dans la configuration <see cref="PluginConfiguration.TmdbLangPriority"/>,
+        /// indiquant que l'installation gère du contenu canadien-français.</summary>
         internal static bool IsEnabledForInstall =>
             I18n.ParseTmdbLangPriority(Plugin.Instance?.Configuration?.TmdbLangPriority ?? "", out _)
                 .Any(l => string.Equals(l, "fr-CA", StringComparison.OrdinalIgnoreCase));
 
         // Cartes de résultat de la page /films/ : h2.entry-title > a[href=
-        // https://repertoire.cinema.mcc.gouv.qc.ca/film/&lt;slug&gt;-&lt;num&gt;/]
+        // https://repertoire.cinema.mcc.gouv.qc.ca/film/<slug>-<num>/]
         // (href absolu en page avancée, parfois relatif + query _rt ailleurs).
         private static readonly Regex _cardRegex = new Regex(
             "entry-title[^>]*>\\s*<a href=\"(?<url>[^\"]*?/film/[^\"]*?[-/](?<num>\\d+)/)\"[^>]*>(?<title>[^<]{2,200})",
@@ -102,10 +77,9 @@ namespace LLM_AI
             "<a href=\"(?<url>[^\"]*?/film/[^\"]*?[-/](?<num>\\d+)/)[^\"]*\"[^>]*rel=\"bookmark\"[^>]*>(?<title>[^<]{2,200})</a>",
             RegexOptions.Compiled);
 
-        /// <summary>Pages de la recherche globale parcourues (borne haute :
-        /// l'ordre de pertinence du site enterre des fiches à titre exact —
-        /// « Sur la route » vit en page 3 ; au-delà, une absence redevient
-        /// une absence, doctrine « jamais une preuve »).</summary>
+        /// <summary>Nombre de pages à parcourir pour la recherche globale.
+        /// Une borne haute est nécessaire car la pertinence des résultats
+        /// diminue rapidement.</summary>
         private const int GlobalSearchPages = 3;
 
         /// <summary>Carte de résultat parsée d'une page de recherche : titre
@@ -119,18 +93,10 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Les DEUX surfaces de recherche du répertoire, cartes à TITRE
-        /// EXACT (clé normalisée) dédoublonnées par URL — chaque surface
-        /// comble le trou de l'autre (terrain 2026-11-20 : « Sur la route »
-        /// 368406 est ABSENTE de la recherche « films » du thème — et sa
-        /// pagination répond 301 — mais visible en page 3 de la recherche
-        /// globale ; « Coup de coeur » est sur les deux).
-        /// <para>(1) <c>/films/?s=…</c> — recherche « films » du thème, page
-        /// 1 seulement, <see cref="_cardRegex"/> ; (2) <c>/?s=…&amp;paged=1…</c>
-        /// — recherche GLOBALE du site, paginée par query string,
-        /// <see cref="_cardRegexGlobal"/>. Une surface en échec (HTTP, délai)
-        /// ne tue pas l'autre — fail-soft ; seule l'annulation de fenêtre se
-        /// propage. <paramref name="cap"/> &gt; 0 borne la collecte.</para>
+        /// Interroge les deux surfaces de recherche du répertoire MCC pour
+        /// trouver des correspondances de titre exact, en dédoublonnant les
+        /// résultats par URL. Deux surfaces sont nécessaires car certaines
+        /// fiches n'apparaissent que dans l'une ou l'autre.
         /// </summary>
         private static async Task<List<Card>> SearchCardsAsync(string title, string norm, int cap, ILogger logger, CancellationToken windowToken)
         {
@@ -162,9 +128,10 @@ namespace LLM_AI
             }
             catch (OperationCanceledException) when (!windowToken.IsCancellationRequested)
             {
-                // piège HttpClient : son timeout propre lève TaskCanceled SANS
-                // annulation de la fenêtre (AGENTS) — cette surface saute,
-                // pas tout l'appel.
+                // Le timeout de HttpClient lève une TaskCanceledException
+                // même si le CancellationToken de la fenêtre n'est pas annulé.
+                // On intercepte ce cas pour passer à la surface suivante
+                // sans annuler toute l'opération.
                 logger?.Info("[LLM_AI] MCC : surface de recherche expirée ({0}) — surface suivante", url);
                 return;
             }
@@ -217,19 +184,17 @@ namespace LLM_AI
             logger?.Info("[LLM_AI] MCC pont : « {0} » sans fiche TMDB → recherche du titre original (Répertoire des films classés)", title);
             try
             {
-                // Garde-fin de la fenêtre : le pont ENTIER (recherche + ≤ 2
-                // fiches) tient dans ~15 s — c'est un repli, pas un service.
+                // Une fenêtre de temps est définie pour l'ensemble de
+                // l'opération (recherche + lecture des fiches) pour garantir
+                // que ce mécanisme de repli ne ralentit pas excessivement
+                // le processus principal.
                 using (var window = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     window.CancelAfter(TimeSpan.FromSeconds(15));
 
-                    // Deux surfaces de recherche (SearchCardsAsync) : l'index
-                    // thématique RATE des fiches à titre exact — « Sur la
-                    // route » 368406 n'y figure nulle part, la recherche
-                    // globale la porte en page 3 (terrain 2026-11-20) ;
-                    // sans la 2e surface, le pont raterait la fiche de son
-                    // propre cas fondateur ET une homonyme invisible lui
-                    // ferait croire à l'univocité.
+                    // Les deux surfaces de recherche sont interrogées pour
+                    // maximiser les chances de trouver une correspondance, car
+                    // certaines fiches ne sont présentes que sur l'une d'elles.
                     var cards = await SearchCardsAsync(title, norm, 6, logger, window.Token).ConfigureAwait(false);
 
                     var fiches = new List<string>();   // URLs de fiches à lire
@@ -269,19 +234,12 @@ namespace LLM_AI
                             voSet[vKey] = (v, FicheYear(text));
                     }
 
-                    // Filtre d'année (AFFINAGE, pas de preuve) : avec une année
-                    // attendue (l'année tmdb_lookup du LLM / de l'item), les
-                    // fiches à année incompatible ±1 sont éliminées — c'est ce
-                    // désambiguïse « Coup de coeur » (MCC 2013 v.o. The Love
-                    // Punch vs MCC 1993 v.o. Danielle Steel's Heartbeat). Une
-                    // v.o. à année illisible reste candidate (doctrine
-                    // « année inconnue = pas de garde »).
-                    // Cascade miroir S2 (leçon 2016-09-20, v2.4.4) : un filtre
-                    // d'année qui élimine TOUT est re-tenté SANS le filtre —
-                    // une année de surface instable (production vs diffusion,
-                    // « 2015 » dit usager vs fiche 2013) ne doit pas tuer le
-                    // pont ; si l'équivoque remonte, abandon honnête (jamais
-                    // un choix à l'aveugle).
+                    // Le filtre par année est utilisé pour désambiguïser les
+                    // résultats, mais si ce filtre élimine tous les candidats
+                    // (par exemple, à cause d'une année de surface incorrecte),
+                    // la recherche est retentée sans le filtre pour ne pas
+                    // écarter à tort une correspondance valide. L'ambiguïté
+                    // restante est gérée par un abandon.
                     List<string> distinct = VoDistinct(voSet, expectedYear);
                     if (distinct.Count == 0 && expectedYear.HasValue)
                     {
@@ -340,18 +298,11 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Consultation EXPLICITE du répertoire (tool <see cref="MccLookupTool"/>
-        /// + concordance des cartes identify) : les fiches à TITRE EXACT des
-        /// deux surfaces de recherche (pages bornées — <see cref="SearchCardsAsync"/>),
-        /// sans filtre d'univocité — contrairement au pont, l'équivoque
-        /// est ici le BUT (le lecteur — LLM ou admin — départage par
-        /// année/synopsis, exactement le geste manuel usager : « Coup de
-        /// coeur » 2013 vs 1993, « Sur la route » 368406 v.o. On the Road).
-        /// Chaque fiche enrichie par ≤ 1 lecture de page (v.o., année, genre,
-        /// synopsis FR). Cache 24 h des listes NON VIDES (doctrine « jamais
-        /// d'erreur » ; un zéro re-roune en direct). Retourne null si
-        /// indisponible/résolu à rien de consultable (fail-open), liste vide
-        /// si aucun titre exact. Seule l'annulation hôte se propage.
+        /// Recherche explicite dans le répertoire MCC, utilisée par l'outil
+        /// LLM <see cref="MccLookupTool"/> et pour la concordance des cartes
+        /// "identify". Contrairement au pont de résolution, cette méthode
+        /// retourne toutes les correspondances exactes, même ambiguës,
+        /// laissant à l'utilisateur ou au LLM le soin de les départager.
         /// </summary>
         internal static async Task<List<MccFiche>> LookupFichesAsync(string title, int max, ILogger logger, CancellationToken ct)
         {
@@ -363,7 +314,7 @@ namespace LLM_AI
             if (WebResultCache.TryGet(cacheKey, out var cachedJson) && !string.IsNullOrEmpty(cachedJson))
             {
                 try { return JsonSerializer.Deserialize<List<MccFiche>>(cachedJson); }
-                catch { /* cache corrompu : re-roune en direct */ }
+                catch { /* cache corrompu : relancé en direct */ }
             }
 
             logger?.Info("[LLM_AI] MCC consultation : « {0} » (Répertoire des films classés)", title);
@@ -385,7 +336,7 @@ namespace LLM_AI
                     if (list.Count == 0)
                     {
                         logger?.Info("[LLM_AI] MCC consultation : aucun titre exact « {0} » au répertoire", title);
-                        return new List<MccFiche>(); // vide = fait valide, non caché (doctrine : les zéros re-rounent)
+                        return new List<MccFiche>(); // vide = fait valide, non caché (doctrine : les zéros sont relancés)
                     }
 
                     foreach (MccFiche f in list)
@@ -432,16 +383,10 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Concordance d'une fiche MCC avec la fiche TMDB PROPOSÉE (carte
-        /// identify — preuve recalculée côté serveur, doctrine « jamais un
-        /// tmdb_id ni une preuve inventés par le LLM »). UNIQUE axe : la v.o.
-        /// de la fiche MCC vs le titre ORIGINAL de la fiche proposée (±
-        /// titre d'affichage), année compatible ±1 quand les deux sont
-        /// connues. JAMAIS le titre QC seul : un homonyme porte par
-        /// construction le même titre QC que l'item (« Sur la route » =
-        /// Big Drive 2011 ET On the Road 2012 — le titre QC corroborerait
-        /// le mauvais candidat tout seul). v.o. absente (œuvre francophone)
-        /// = pas de concordance (ni ligne, ni alarme).
+        /// Vérifie si une fiche MCC corrobore une fiche TMDB proposée.
+        /// La correspondance se base sur le titre original (v.o.) et une
+        /// année de production compatible (±1 an). Le titre québécois n'est
+        /// pas utilisé pour éviter les faux positifs sur les homonymes.
         /// </summary>
         internal static bool Corroborates(MccFiche fiche, TmdbFicheCheck proposed)
         {
@@ -464,12 +409,10 @@ namespace LLM_AI
             "Versions du film", "Bandes-annonces", "Motifs de classement"
         };
 
-        /// <summary>Corps d'une fiche détagée → genre + synopsis. Terrain
-        /// 368406 : titre / « v.o. : … » / année / genre (« Chronique ») /
-        /// « Synopsis » / texte… / « Classement du film ». Heuristique
-        /// tolérante : genre = première ligne après la ligne-année si ce
-        /// n'est pas « Synopsis » ; synopsis = lignes après « Synopsis »
-        /// jusqu'au premier marqueur de section. Null si illisible.</summary>
+        /// <summary>Extrait le genre et le synopsis du corps d'une fiche MCC.
+        /// Utilise une heuristique basée sur la position relative de l'année,
+        /// du mot-clé "Synopsis" et des marqueurs de section pour extraire
+        /// les informations pertinentes.</summary>
         private static void ParseFicheBody(string text, out string genre, out string synopsis)
         {
             genre = null;
@@ -526,10 +469,10 @@ namespace LLM_AI
 
         private static readonly Regex _yearRegex = new Regex("\\b(19\\d{2}|20\\d{2})\\b", RegexOptions.Compiled);
 
-        /// <summary>Première année plausible (1900-2099) dans l'en-tête de la
-        /// fiche détagée — la zone titre/v.o./année du MCC (386579 : 2013/2014,
-        /// 61554 : 1993/1992). Null si illisible : la v.o. sans année reste
-        /// candidate au filtre (doctrine « année inconnue = pas de garde »).</summary>
+        /// <summary>Extrait la première année plausible (1900-2099) de l'en-tête
+        /// d'une fiche. Retourne null si aucune année n'est trouvée, ce qui
+        /// permet à une fiche sans année d'être quand même considérée lors
+        /// du filtrage.</summary>
         private static int? FicheYear(string text)
         {
             if (string.IsNullOrEmpty(text)) return null;

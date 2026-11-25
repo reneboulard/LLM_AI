@@ -16,19 +16,12 @@ namespace LLM_AI
     /// l'usager maintient dans GenreCleaner (« Comédie », « Drame »…).
     /// </summary>
     /// <remarks>
-    /// La bibliothèque principale est déjà curatée par GenreCleaner lui-même ;
-    /// l'EPG, lui, est une donnée vivante que GenreCleaner ne nettoie pas. Sans
-    /// ce pont, les genres envoyés au LLM viennent de DEUX vocabulaires
-    /// différents : le profil de goût « À regarder ce soir » (bibliothèque,
-    /// français curaté) côte à côte avec les programmes EPG (bruts) — le LLM
-    /// doit lui-même deviner que « Comedy » ≈ « Comédie ». En appliquant les
-    /// mappings GenreCleaner aux genres EPG AVANT de les émettre (outils
-    /// epg_series / epg_movies / epg_tonight), les deux vocabulaires
-    /// s'alignent.
-    /// Détection automatique : si le fichier est absent (plugin non installé)
-    /// ou illisible, le lecteur est neutre — chaque genre ressort tel quel
-    /// (aucune config, aucun flag). Rechargement paresseux si le fichier
-    /// change (mtime, re-stat au plus toutes les 30 s).
+    /// GenreCleaner ne nettoie pas l'EPG : sans ce pont, le LLM reçoit deux
+    /// vocabulaires (bibliothèque curatée vs EPG brut). Les mappings sont donc
+    /// appliqués aux genres EPG AVANT émission (epg_series / epg_movies /
+    /// epg_tonight).
+    /// Détection automatique : fichier absent ou illisible = lecteur neutre
+    /// (genres inchangés). Rechargement paresseux (mtime, re-stat ≤ 30 s).
     /// </remarks>
     internal static class GenreCleanerMap
     {
@@ -71,7 +64,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Charge / recharge les mappings si nécessaire. Ne lève jamais :
-        /// en cas d'absence ou d'erreur, les tables restent vides (genre
+        /// en cas d'absence ou d'erreur, les tables restent vides (genres
         /// renvoyés tels quels — comportement sans GenreCleaner).
         /// </summary>
         private static void EnsureLoaded()
@@ -222,7 +215,7 @@ namespace LLM_AI
         /// pertinence) : pour chaque genre, sa forme BRUTE et sa forme MAPPÉE,
         /// en minuscules. Les entrées de whitelist saisies dans l'UI (peuplée
         /// depuis le vocabulaire EPG brut) continuent donc de matcher après
-        /// activation du mapping — pas de regression silencieuse pour un
+        /// activation du mapping — pas de régression silencieuse pour un
         /// usager qui a coché « Comedy » avant l'installation de GenreCleaner.
         /// </summary>
         internal static HashSet<string> GenreKeys(IEnumerable<string> genres, bool? series)
@@ -418,7 +411,7 @@ namespace LLM_AI
         /// mémoire au démarrage d'Emby et SA page de config re-sérialise
         /// cette copie au prochain enregistrement — effaçant toute écriture
         /// externe postérieure au chargement. C'est pourquoi chaque mappage
-        /// appliqué est aussi recordé dans <c>GenreAliasApplied</c> (config
+        /// appliqué est aussi enregistré dans <c>GenreAliasApplied</c> (config
         /// LLM_AI) : <see cref="HealApplied"/> ré-écrit les entrées
         /// manquantes. Après un redémarrage du serveur, la copie mémoire
         /// inclut nos entrées et les sauvegardes UI les préservent.

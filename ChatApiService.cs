@@ -28,7 +28,7 @@ namespace LLM_AI
     /// <summary>
     /// Endpoint HTTP plugin « Chat interactif » : expose
     /// <c>POST /Plugins/LLMAI/Chat</c> pour que la page de config envoie un
-    /// message à l'LLM et reçoive sa réponse, en conversation multi-tours.
+    /// message au LLM et reçoive sa réponse, en conversation multi-tours.
     /// Couche HTTP fine, calquée sur <see cref="AuditApiService"/> : résout
     /// l'usager appelant (admin uniquement), convertit l'historique JSON du
     /// corps en messages LLM, puis délègue le tour à
@@ -107,7 +107,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Réponse renvoyée au navigateur. <c>Reply</c> : réponse Markdown de
-        /// l'agent (rendue côté config.js via le mini-convertisseur Markdown).
+        /// l'agent (rendue côté chat.js via le mini-convertisseur Markdown).
         /// <c>Date</c> : date/heure (UTC ISO) de production. <c>Session</c> :
         /// identifiant de session de la mémoire de conversation (à rejouer
         /// aux tours suivants). <c>Enabled</c> : false si le chat est
@@ -141,14 +141,10 @@ namespace LLM_AI
             /// carte Approuver/Refuser de l'atelier ; l'écriture passe par les
             /// endpoints I18nKey, jamais par le LLM. Null si aucune.</summary>
             public PendingI18nInfo PendingI18n { get; set; }
-            /// <summary>v2.20.11 : vrai quand la réponse du tour, en mode
-            /// d'édition de prompt, ressemble à une RÉVISION du texte
-            /// actuel (recouvrement lexical suffisant avec le prompt courant)
-            /// sans contenir de bloc clôturé — la page affiche alors le
-            /// bouton de secours « Préparer la sauvegarde » sous la réponse.
-            /// Faux sinon (annonce, question, prose sans rapport) : aucun
-            /// bouton, pour ne pas suggérer une sauvegarde qui n'existe pas.
-            /// Null hors mode d'édition.</summary>
+            /// <summary>En mode d'édition de prompt, vrai si la réponse ressemble
+            /// à une révision du texte actuel (recouvrement lexical suffisant
+            /// sans bloc de code). La page peut alors proposer une action de
+            /// sauvegarde manuelle. Null hors mode d'édition.</summary>
             public bool? LooksLikeRevision { get; set; }
         }
 
@@ -303,15 +299,9 @@ namespace LLM_AI
             // nouvelle conversation (les sessions passées jamais résumées
             // sont condensées paresseusement, en tâche de fond).
             string sessionId = (req?.Session ?? string.Empty).Trim();
-            // v1.13.30.2 : allouer l'id de session DÈS LE DÉBUT du tour quand
-            // la page n'en porte pas (premier tour d'une conversation). Sinon
-            // les dépôts du tour (cartes prompt + action, budget) partent sous
-            // la clé « default » tandis que la page approuve avec l'id généré
-            // par RecordTurn en fin de tour — Consume rejette alors le clic
-            // (« Action introuvable ou expirée ») sans autre symptôme (constat
-            // terrain 2026-09-21 : carte rendue, clic 200, exécution jamais
-            // atteinte). RecordTurn « assure » une session inconnue : l'id
-            // alloué ici est repris tel quel par la mémoire et la réponse.
+            // L'ID de session doit être alloué avant tout dépôt (carte d'action/
+            // de prompt), sinon l'approbation échouera (clé "default" au
+            // lieu de l'ID de session).
             if (sessionId.Length == 0)
                 sessionId = ChatMemoryStore.NewSessionId();
             var existingSession = cfg.ChatMemoryEnabled && sessionId.Length > 0
@@ -334,38 +324,17 @@ namespace LLM_AI
             // exactement comme sur le path d'audit.
             var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager, _liveTv, ApplicationHost);
 
-            // Couche d'action du chat (v1.13) : budget > 0 → outils d'action
-            // (mêmes primitives que le plugin) + bloc de workflow annonçant
-            // budget et étiquette de confirmation. 0 = lecture seule
-            // (strictement le comportement pré-v1.13).
-            // Le tour (un message = un tour) ouvre le compteur de budget.
-            // v2.9.1 : en mode « Éditer — … » (contexte d'édition résolu),
-            // la couche d'action est COUPÉE : aucun outil d'action n'est
-            // enregistré et le bloc « ACTIONS EMBY DISPONIBLES » n'est pas
-            // injecté. La révision d'un prompt ne se valide PAS par une
-            // action Emby — le dépôt est deux phases (carte Approuver/
-            // Refuser, écriture en C# déterministe) et le test du prompt
-            // modifié se fait HORS mode édition (chat normal, ex.
-            // run_tonight_run). Vécu 2026-11-02 07:00 (mode edit_rag,
-            // ministral-3:14b) : voyant record_program & cie., le modèle a
-            // déposé un enregistrement EPG au lieu de livrer le prompt
-            // révisé — les outils d'action visibles en mode édition sont
-            // une invitation à la dérive. La consultation reste : get_emby_info
-            // et l'audit sont fournis par la base du runner (lecture seule).
+            // Budget > 0 → outils d'action + bloc de workflow ; 0 = lecture seule.
+            // Un message = un tour : il ouvre le compteur de budget.
+            // En mode « Éditer — … » la couche d'action est COUPÉE : le dépôt
+            // d'un prompt est deux phases (carte Approuver/Refuser) et ne se
+            // valide pas par une action Emby ; des outils d'action visibles
+            // poussent le modèle à dériver (enregistrer au lieu de livrer le
+            // prompt). La consultation (get_emby_info, audit) reste disponible.
             bool editMode = ChatContexts.Find(contextId) != null;
-            // v2.20.16 : les mécanismes du canal bloc ```text (nudge
-            // d'itération, hint de réparation, filet prose, extraction
-            // serveur-side) ne concernent QUE les modes d'édition À CHAMP
-            // de prompt — le mode atelier de langues (GuideOnly, FieldFor
-            // vide) livre par l'OUTIL i18n_set_key. Vécu prod 2026-11-14
-            // (gemma4:31b cloud) : EditMode englobait l'atelier → le nudge
-            // v2.20.12 exigeait un bloc ```text dans un mode dont ce bloc
-            // n'est PAS le canal de livraison — le modèle lisait l'exigence
-            // comme une demande hors mode et REFUSAIT après un travail
-            // correct (bannière d'entrée, réponse i18n_get, résumé
-            // post-dépôt : 5 rappels tirés, 3 refus confus servis comme
-            // réponse FINALE — l'état complet de chat.mode.selected et le
-            // résumé du dépôt f40568db ont été REMPLACÉS par un refus).
+            // Le canal de livraison par bloc de code (```text) ne s'applique
+            // qu'aux modes d'édition de prompts qui ont un champ de destination
+            // (ex: Audit, pas l'atelier de langues qui a son propre outil).
             bool promptEditMode = editMode && ChatContexts.FieldFor(contextId).Length > 0;
             ChatActions.BeginTurn(sessionId, Logger);
             List<ILlmTool> actionTools = null;
@@ -408,13 +377,10 @@ namespace LLM_AI
             // plugin_prompts (list/get/set two-phase) — l'écriture passe par
             // l'approbation, jamais par le LLM. Indépendant du budget
             // d'actions (une approbation n'est pas une action Emby).
-            // v2.20.12 : le tool est AUSSI enregistré dès qu'un mode
-            // « Éditer — … » est actif, même si ChatPromptsEnabled est
-            // false — la sélection du mode dans le dropdown EST l'opt-in
-            // explicite de ce tour (vécu prod 2026-11-14 : checkbox
-            // décochée, aucun tool, le LLM bouclait sans jamais livrer).
-            // Le dépôt final reste de toute façon deux phases + serveur-side
-            // (bloc ```text extrait côté serveur, voir plus bas).
+            // Le tool est aussi actif si un mode d'édition est choisi dans le
+            // dropdown (opt-in implicite pour ce tour), même si l'option
+            // générale ChatPromptsEnabled est désactivée. Le dépôt reste
+            // sécurisé (deux phases, avec approbation).
             if (cfg.ChatPromptsEnabled || editMode)
             {
                 actionTools ??= new List<ILlmTool>();
@@ -423,17 +389,16 @@ namespace LLM_AI
                     editMode && !cfg.ChatPromptsEnabled ? " (mode actif, opt-in du dropdown)" : "");
             }
 
-            // Atelier de langues (v1.17.0 T1d ; mode déroulant v1.17.0.2) :
+            // Atelier de langues (v1.17.0 ; mode déroulant v1.17.0.2) :
             // revue/correction des langues générées — i18n_search (recherche
             // PAR TEXTE), i18n_get (lecture complète) et i18n_set_key
             // (DÉPÔT deux phases : la carte « Approuver / Refuser » porte
             // l'écriture, les endpoints I18nKey exécutent en C# déterministe).
             // Enregistrés quand le protocole tool-calling est déjà actif
             // (budget/prompts) OU quand le mode « Éditer — Atelier de
-            // langues » est sélectionné (opt-in explicite du dropdown — protocole initié
-            // POUR lui). Hors mode, i18n_set_key refuse le dépôt avec la
-            // consigne : la modification des chaînes est exclue sans le mode
-            // (décision usager 2026-10-04).
+            // langues » est sélectionné (opt-in explicite du dropdown). Hors
+            // mode, i18n_set_key refuse le dépôt : la modification des
+            // chaînes est exclue sans le mode.
             bool i18nMode = string.Equals(contextId, ChatContexts.I18nEditModeId, StringComparison.Ordinal);
             if (actionTools != null || i18nMode)
             {
@@ -454,11 +419,8 @@ namespace LLM_AI
                     editMode: editMode, promptEditMode: promptEditMode).ConfigureAwait(false);
             }
             // Requête avortée (déconnexion client, timeout page) : répondre un
-            // JSON propre au lieu de laisser l'OperationCanceledException
-            // remonter en 500 ServiceStack — vécu 2026-09-05 : l'ajax d'Emby
-            // rejette alors la Response brute et la page affichait
-            // « [object Response] ». (Si le client a vraiment fermé la
-            // connexion, la réponse est perdue — sans conséquence.)
+            // JSON propre pour éviter une erreur 500 et un message d'erreur
+            // brut sur la page.
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 // Annulation DÉPASSANT la requête HTTP (timeout HttpClient LLM) :
@@ -474,20 +436,10 @@ namespace LLM_AI
             }
 
             // ------------------------------------------------------------------
-            //  Filet structurel anti-différence (v1.13.9.11) : en mode d'édition,
-            //  certains modèles (vécu gemma4:26b) répondent en posant une
-            //  question de validation (« Souhaitez-vous que je prépare le
-            //  texte ? ») au lieu de livrer le texte révisé — malgré les
-            //  règles injectées (CommonRules + description du tool). Un rappel
-            //  PONCTUEL suffit (l'instruction ponctuelle est suivie là où la
-            //  règle de fond est ignorée — constaté côté page v1.13.9.8) :
-            //  on le rejoue donc automatiquement ici, une seule fois, pour que
-            //  l'usager n'ait JAMAIS à rappeler le format. Déclencheur :
-            //  réponse sans AUCUNE clôture ET qui se termine par une question
-            //  (le pattern exact de la déférence — une vraie réponse Q&A ou
-            //  une annonce « voici le texte actuel » ne se terminent pas par
-            //  une question posée à l'usager). Un set déjà soumis (proposition
-            //  en attente) ou une réponse d'échec ne déclenchent pas le filet.
+            //  Filet anti-déférence : en mode d'édition, si le modèle répond
+            //  par une question au lieu de livrer le texte, un rappel automatique
+            //  (nudge) est envoyé une fois pour lui demander de fournir le bloc
+            //  de code attendu.
             //  ------------------------------------------------------------------
             if (promptEditMode
                 && cfg.ChatPromptsEnabled
@@ -525,8 +477,8 @@ namespace LLM_AI
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     // Timeout backend LLM sur le nudge : on rend la réponse
-                    // d'origine (déférente) plutôt qu'une erreur — l'usager a
-                    // le bouton de secours de la page en dernier ressort.
+                    // d'origine (la question du modèle) plutôt qu'une erreur,
+                    // pour laisser l'usager réagir manuellement.
                     Logger.Info("[LLM_AI] [CHAT] Filet prose : nudge annulé (délai backend) — réponse d'origine rendue.");
                 }
                 catch (OperationCanceledException) { throw; }
@@ -546,9 +498,8 @@ namespace LLM_AI
             }
 
             // Libellés des actions réussies du tour (succès seulement) :
-            // affichés sous la réponse par la page de chat — le toast Emby
-            // DisplayMessage n'est pas rendu par le client web sur cette
-            // page de configuration (constat 2026-09-06).
+            // affichés sous la réponse par la page de chat (le toast Emby
+            // DisplayMessage n'est pas rendu sur la page de configuration).
             var turnActions = ChatActions.TakeActions(sessionId);
 
             // Proposition de prompt en attente créée pendant le tour
@@ -556,17 +507,10 @@ namespace LLM_AI
             var pendingInfo = (PendingApprovalInfo)null;
             var pending = ChatPromptStore.TakePagePending(sessionId);
 
-            // v2.20.12 — dépôt DÉTERMINISTE côté serveur en mode édition :
-            // un petit LLM local (vécu prod 2026-11-14, gemma4:latest) ne
-            // parvient pas à appeler plugin_prompts set (boucle de
-            // réparations, aucun appel émis). Le serveur extrait donc
-            // LUI-MÊME le bloc clôturé ```text … ``` de la réponse finale
-            // (le SEUL canal de livraison documenté dans CommonRules) et
-            // dépose la proposition dans ChatPromptStore — comme le ferait
-            // le tool set, avec les mêmes validations (liste blanche,
-            // plafond, champ = mode actif, avertissement de divergence).
-            // Aucune écriture : le store n'est consommé que par le clic
-            // « Approuver » (endpoint dédié, C# déterministe).
+            // En mode édition, pour fiabiliser l'interaction avec des modèles
+            // qui omettraient l'appel d'outil, le serveur extrait lui-même le
+            // bloc de code `...` de la réponse et dépose la proposition
+            // d'édition. L'écriture réelle reste soumise à approbation.
             if (pending == null && promptEditMode && !string.IsNullOrWhiteSpace(reply)
                 && reply.IndexOf("```", StringComparison.Ordinal) >= 0)
             {
@@ -578,10 +522,9 @@ namespace LLM_AI
                     string current = ChatContexts.Find(contextId)?.GetPrompt(cfg) ?? "";
                     if (ChatPromptsTool.IsMateriallyIdentical(blockText.Trim(), current))
                     {
-                        // v2.20.15 — pas de diff, pas de carte (question usager
-                        // 2026-11-14) : approuver un texte identique au courant
-                        // serait une écriture no-op. Ligne greppable : un bloc
-                        // livré sans carte doit toujours s'expliquer au log.
+                        // Pas de carte d'approbation si le texte est identique, pour
+                        // éviter une écriture no-op. Le log explique pourquoi
+                        // ce bloc n'a pas produit de carte.
                         Logger.Info("[LLM_AI] [CHAT] Bloc ```text identique au texte courant — aucun dépôt (champ {0}).", field);
                     }
                     else
@@ -600,16 +543,9 @@ namespace LLM_AI
                             blockText.Trim(), ChatPromptsTool.LabelOfLocalized(field, lang), warn, Logger);
                         if (pending != null)
                         {
-                            // v2.20.14 — Create publie aussi la carte au canal page
-                            // (_pageNotified) ; ici on la sert par la valeur de
-                            // retour. Sans consommer le canal dans CE tour, le tour
-                            // SUIVANT relèverait cette carte périmée (jamais
-                            // approuvée) : re-service en doublon ET fermeture
-                            // silencieuse de ce dépôt (pending != null) — le bloc
-                            // ```text du tour suivant serait jeté sans un log
-                            // (vécu prod 2026-11-14 08:17-08:25 : dépôts un tour
-                            // sur deux). Symétrique du chemin tool : le canal est
-                            // relevé dans le tour même où il est posé.
+                            // La proposition est consommée ici pour éviter qu'elle ne
+                            // soit servie à nouveau au tour suivant, ce qui
+                            // créerait un doublon de carte.
                             ChatPromptStore.TakePagePending(sessionId);
                             Logger.Info("[LLM_AI] [CHAT] Bloc ```text extrait serveur-side en mode édition : " +
                                 "proposition déposée (action_id={0}, champ={1}, {2} caractères).",
@@ -666,14 +602,9 @@ namespace LLM_AI
                     Warning = i18nPending.Warn
                 };
 
-            // v2.20.11 : le bouton de secours « Préparer la sauvegarde » (page)
-            // n'a de sens que si la réponse PROPOSE quelque chose : en mode
-            // d'édition, on n'active le flag que si la réponse recouvre
-            // lexicalement le prompt courant (c'est une révision en prose,
-            // pas une annonce/question). Sans bloc clôturé ni ressemblance,
-            // aucun bouton — vécu prod 2026-11-14 (gemma4:latest) : annonce
-            // « Je suis en mode Éditer — Prompt système » + bouton 💾 affiché
-            // sans aucune proposition.
+            // Pour ne pas proposer d'action de sauvegarde "à vide", ce flag
+            // n'est activé que si la réponse du LLM, en mode édition,
+            // ressemble à une révision en prose du prompt actuel.
             bool? looksLikeRevision = null;
             if (editMode && pending == null && !string.IsNullOrWhiteSpace(reply)
                 && reply.IndexOf("```", StringComparison.Ordinal) < 0)
@@ -922,8 +853,9 @@ namespace LLM_AI
                 admin.Id.ToString(), Logger);
             if (action == null)
             {
-                // Branche sinon muette : mismatch session dépôt/clic ou TTL —
-                // loguer le hint (même diagnostic que les cartes d'action).
+                // Un `pending` introuvable peut indiquer un TTL dépassé ou une
+                // différence de session entre le dépôt et l'approbation. Le log
+                // aide au diagnostic.
                 Logger.Info("[LLM_AI] Chat prompt Approve : pending introuvable/expiré " +
                     "(action_id={0}, session={1}, usager={2}).",
                     req?.ActionId, RequestSessionHint(), admin.Name);
@@ -1139,9 +1071,8 @@ namespace LLM_AI
                 admin.Id.ToString());
             if (action == null)
             {
-                // Branche sinon muette (constat v1.13.30.1 : rejet de session
-                // sans aucune trace côté serveur) — loguer le hint pour
-                // diagnostiquer un mismatch dépôt/clic.
+                // Un `pending` introuvable peut indiquer un TTL dépassé ou une
+                // différence de session entre le dépôt et l'approbation.
                 Logger.Info("[LLM_AI] Chat action Approve : pending introuvable/expiré " +
                     "(action_id={0}, session={1}, usager={2}).",
                     req?.ActionId, RequestSessionHint(), admin.Name);
@@ -1304,10 +1235,8 @@ namespace LLM_AI
         /// <summary>Indice de session pour la consommation d'un pending :
         /// la page rejoue son id de session à chaque tour — l'endpoint
         /// d'approbation accepte le même champ optionnel (query
-        /// <c>session</c>) pour lier le clic à la session émettrice (vide =
-        /// indicateur absent, la vérification usager reste). Lecture par
-        /// énumération défensive : l'indexeur de QueryParamCollection sur
-        /// clé absente n'est pas contractuellement null-safe.</summary>
+        /// <c>session</c>) pour lier le clic à la session émettrice. Lecture
+        /// par énumération pour éviter une exception sur clé absente.
         private string RequestSessionHint()
         {
             try
@@ -1328,15 +1257,11 @@ namespace LLM_AI
         /// <summary>
         /// v2.20.12 : extrait le contenu du DERNIER bloc de code d'une
         /// réponse (```text … ``` ou ``` brut) — le canal de livraison
-        /// unique d'une révision de prompt en mode édition (CommonRules).
-        /// v2.20.13 : les lignes de fence ``` (début de ligne, indent
-        /// ≤ 3 espaces toléré) s'alternent ouvrante/clôture ; le DERNIER
-        /// bloc = entre l'avant-dernière et la dernière fence (paire
-        /// complète) ou après la dernière fence seule (bloc non fermé =
-        /// réponse tronquée, accepté). La première version prenait la
-        /// dernière fence comme ouvrante — un bloc CLÔTÉ (le cas normal)
-        /// donnait un corps vide et le dépôt était silently ignoré.
-        /// Null si aucune fence.
+        /// unique d'une révision de prompt en mode édition. Le "dernier bloc"
+        /// est défini comme le contenu entre la dernière paire de délimiteurs
+        /// ```, ou le contenu après le dernier délimiteur s'il est unique
+        /// (cas d'une réponse tronquée).
+        /// Null si aucun délimiteur n'est trouvé.
         /// </summary>
         private static string ExtractLastTextCodeBlock(string text)
         {

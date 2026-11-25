@@ -25,13 +25,13 @@ namespace LLM_AI
     /// </list>
     /// État purement en mémoire (reset au restart Emby — voulu : pas de
     /// persistance d'un compteur de chat), clé = nom d'usager RÉSOLU par la
-    /// gate (pas d'IP : tout l'arrivée du loopback de l'app compagnon).
+    /// gate (pas d'IP : tout arrive par le loopback de l'app compagnon).
     /// Accès sous un lock global — le débit visé est faible (chats de
     /// foyer), le pattern test-puis-écrit sous lock est celui de
     /// <see cref="ActivateFeedback"/> (simple et race-free).
     /// </summary>
     /// <remarks>
-    /// <para><b>Langue des messages (v1.16.0 P1.5)</b> : les messages usager
+    /// <para><b>Langue des messages (v1.16.0)</b> : les messages usager
     /// retournés dans <c>error</c> passent par <see cref="I18n.S"/> (clés
     /// <c>chatext.rate.*</c>, repli EN par clé) selon le
     /// <paramref name="langKey"/> optionnel du bucket interface ; sans
@@ -87,7 +87,7 @@ namespace LLM_AI
         /// <paramref name="maxPerDay"/> &lt;= 0 = fenêtre illimitée.
         /// </summary>
         /// <param name="langKey">Clé de langue optionnelle (bucket interface,
-        /// v1.16.0 P1.5) pour le message usager retourné dans
+        /// v1.16.0) pour le message usager retourné dans
         /// <paramref name="error"/> — les notes SecurityMonitor restent FR.
         /// Null/ vide = FR natif (comportement historique).</param>
         public static bool TryConsumeTurn(string user, int maxPerMinute, int maxPerDay,
@@ -167,7 +167,7 @@ namespace LLM_AI
 
         /// <summary>Fenêtre glissante fixe (30/min/usager) pour la projection.</summary>
         /// <param name="langKey">Clé de langue du bucket interface pour le
-        /// message usager (v1.16.0 P1.5) — notes SecurityMonitor en FR.
+        /// message usager (v1.16.0) — notes SecurityMonitor en FR.
         /// Null/ vide = FR natif.</param>
         public static bool TryConsumeShow(string user, out string error, string langKey = null)
         {

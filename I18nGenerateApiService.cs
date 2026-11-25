@@ -15,16 +15,16 @@ using MediaBrowser.Model.Services;
 namespace LLM_AI
 {
     /// <summary>
-    /// Endpoint HTTP « Atelier de langues » (v1.17.0 T1c) : expose
+    /// Endpoint HTTP « Atelier de langues » (v1.17.0) : expose
     /// <c>GET /Plugins/LLMAI/I18nGenerate</c> au panneau « Langues
-    /// d'interface » de la config (T1a). Gabarit exact du run détaché
+    /// d'interface » de la config. Gabarit exact du run détaché
     /// d'audit (<see cref="AuditApiService"/>, v1.14.2) : la requête démarre
     /// la campagne en tâche de fond (résiliente à la fermeture d'onglet,
     /// single-flight contre les clics en rafale) et répond immédiatement ;
-    /// la page pole <c>?Status=true</c> toutes les 5 s.
+    /// la page interroge <c>?Status=true</c> toutes les 5 s.
     /// </summary>
     /// <remarks>
-    /// <para><b>GET, et non POST</b> : la T1a a câblé le client sur le
+    /// <para><b>GET, et non POST</b> : le client a été câblé sur le
     /// pattern d'audit détaché (GET state-changing, gabarit v1.14.2) — le
     /// gabarit est ce qui fait foi, la spec initiale POST est dépassée.</para>
     /// <para>Couche HTTP fine : l'endpoint résout l'usager (admin), résout
@@ -88,7 +88,7 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Réponse renvoyée au navigateur (contrat T1a — noms de champs
+        /// Réponse renvoyée au navigateur (contrat client — noms de champs
         /// consommés par <c>i18nApplyStatus</c> dans config.js). <c>Report</c>
         /// = dernier rapport RÉUSSI persisté (<see cref="I18nGenReportStore"/>) —
         /// porté par TOUTES les réponses (dont le polling : quand
@@ -140,7 +140,7 @@ namespace LLM_AI
                 return StatusResponse(st, last);
             }
 
-            // ---- Démarrage DETACHÉ d'une génération ----------------------
+            // ---- Démarrage DÉTACHÉ d'une génération ----------------------
             string lang = (req?.Lang ?? string.Empty).Trim().ToLowerInvariant();
             string mode = req?.Mode;
 
@@ -160,9 +160,9 @@ namespace LLM_AI
             // jetées avec le run.
             var cts = new CancellationTokenSource(TimeSpan.FromMinutes(RunTimeoutMinutes));
 
-            // Backends résolus PAR L'APPELANT (T1c) : le moteur reçoit la
+            // Backends résolus PAR L'APPELANT : le moteur reçoit la
             // liste + les clés en ctor — zéro accès config à l'intérieur du
-            // run (découplage testé au harnais, le moteur est un pur moteur).
+            // run (découplage testé, le moteur est un pur moteur).
             var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager, _liveTv, ApplicationHost);
             var backends = runner.ResolveBackends(cfg);
             string ollamaKey = LlmRunner.ResolveKey(cfg.OllamaApiKey, "OLLAMA_API_KEY");
@@ -208,7 +208,7 @@ namespace LLM_AI
             }, CancellationToken.None);
 
             // On n'attend PAS le run : réponse immédiate d'acquittement
-            // (Running=true) — la page pole ?Status=true. Le wrapper attrape
+            // (Running=true) — la page interroge ?Status=true. Le wrapper attrape
             // tout : la tâche ne lève jamais ; run est une référence tenue
             // vivante (comme l'audit).
             _ = run;

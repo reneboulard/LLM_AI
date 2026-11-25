@@ -45,7 +45,7 @@ namespace LLM_AI
     /// (v2.23.1, cas « La dernière séance de Freud » : le titre québécois
     /// n'existe dans aucune base interrogeable ; le dialogue est une liste
     /// à choisir, et le natif MovieDb montre lui-même des matches lâches).
-    /// La pont MCC (titre québécois, via
+    /// Le pont MCC (titre québécois, via
     /// <c>TmdbLookupTool.LookupMetaMultiLangAsync</c>) et la chaîne de
     /// langues <c>TmdbLangPriority</c> s'appliquent comme partout.</para>
     /// <para><b>Mécanique de fusion côté serveur (décompilé 4.10.2.0)</b> :
@@ -55,7 +55,7 @@ namespace LLM_AI
     /// utile : titres québécois), complètent sinon par fusion d'id, ou
     /// s'affichent seuls quand l'utilisateur a saisi un id dans le dialogue.</para>
     /// <para><b>Énumération</b> : <c>GetMetadataProvidersInternal</c> filtre
-    /// d'abord <c>OfType&lt;IMetadataProvider&lt;Movie|Series&gtgt;</c> — un
+    /// d'abord <c>OfType&lt;IMetadataProvider&lt;Movie|Series&gt;&gt;</c> — un
     /// fournisseur « recherche seule » n'y entre pas (shape vérifiée sur
     /// <c>MovieDbProvider</c>, qui porte les deux interfaces) ; la classe
     /// porte donc AUSSI <c>IRemoteMetadataProvider</c> avec un
@@ -83,7 +83,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Injection DI du serveur (pattern <see cref="AiBadgeEnhancer"/>).
-        /// NOTE — ne pas toucher Configuration ici (leçon ctor : un lancé
+        /// NOTE — ne pas toucher Configuration ici (leçon ctor : une exception levée
         /// dans le constructeur casse la création de tout le plugin).
         /// </summary>
         public AiIdentifyMovieSearchProvider(ILogger logger, IJsonSerializer json,
@@ -487,7 +487,7 @@ namespace LLM_AI
         //  web ») commençait. Zéro nouvelle config : le gate est la présence
         //  de SearXngUrl (vide = la phase saute silencieusement, même
         //  sémantique que les outils chat) — le repli Ollama cloud de
-        //  web_search est ainsi JAMAIS déclenché ici (pas de quota cloud sur
+        //  web_search n'est ainsi JAMAIS déclenché ici (pas de quota cloud sur
         //  le chemin du dialogue). Fail-open intégral : SearXNG down →
         //  aucun candidat en plus, aucune erreur remontée au dialogue.
         // ------------------------------------------------------------------

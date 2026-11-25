@@ -9,12 +9,10 @@ namespace LLM_AI
 {
     /// <summary>
     /// Outil LLM <c>mcc_lookup</c> — consultation EXPLICITE du Répertoire des
-    /// films classés du Québec (MCC) par le chat. Décision usager 2026-11-20 :
-    /// « le chat doit faire une validation sur MCC si nécessaire » — les deux
-    /// cas fondateurs (prod « Coup de coeur » item 329735 : la v.o. manquante
-    /// comme CLÉ de recherche ; banc « Sur la route » item 160848 : les
-    /// fiches MCC comme DÉPARTAGEUR contre l'homonyme exact-et-faux Big Drive
-    /// 2011 proposé par le resolver sur l'année contaminée).
+    /// films classés du Québec (MCC) par le chat. Deux usages : la v.o.
+    /// manquante comme CLÉ de recherche, et les fiches MCC comme DÉPARTAGEUR
+    /// contre un homonyme exact-et-faux proposé par le resolver sur une année
+    /// contaminée.
     /// <para>Le tool rend TOUTES les fiches à titre exact (titre QC, v.o.,
     /// année, genre, synopsis FR) — l'équivoque est le BUT : c'est le lecteur
     /// (le LLM, puis l'admin sur la carte) qui tranche, exactement le geste

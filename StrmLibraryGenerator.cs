@@ -35,7 +35,7 @@ namespace LLM_AI
     /// par toast puis fait supprimer la carte par Emby en cas de succès
     /// (voir <see cref="ActivateFeedback"/>).</item>
     /// <item><c>&lt;Title&gt;.nfo</c> : métadonnées <c>&lt;movie&gt;</c>
-    /// (titre, plot = raison LLM, studio = chaine, genre « AI Suggestion »,
+    /// (titre, plot = raison LLM, studio = chaîne, genre « AI Suggestion »,
     /// priority, date) — fonctionne dans une bibliothèque de type « Films » ou
     /// « Contenu mixte ».</item>
     /// <item><c>poster.jpg</c> : poster TMDB (si clé configurée + match).</item>
@@ -120,10 +120,7 @@ namespace LLM_AI
             //     tuile) — PAS FindByPath : le chemin racine porte DEUX items
             //     (VirtualFolder + Folder physique interne au même Path) et
             //     FindByPath (DateCreated DESC, limit 1) retourne le mauvais —
-            //     l'image posée sur le Folder interne n'apparaît pas sur la tuile
-            //     (vécu 2026-09-28 : poster posé sur le Folder interne pendant que
-            //     la tuile gardait l'ancien artwork, puis remplie par le collage
-            //     Emby après effacement).
+            //     une image posée sur le Folder interne n'apparaît pas sur la tuile.
             try
             {
                 var libItem = ResolveVirtualFolderItem(_library, cfg.StrmLibraryName, _logger);
@@ -482,8 +479,7 @@ namespace LLM_AI
         /// bibliothèque porte DEUX items (le VirtualFolder et le Folder
         /// physique interne, même Path) ; FindByPath trie DateCreated DESC et
         /// limite à 1 — résultat instable, souvent le Folder interne, sur
-        /// lequel une image posée n'apparaît jamais sur la tuile (vécu
-        /// 2026-09-28).</para> Comparaison de nom normalisée
+        /// lequel une image posée n'apparaît jamais sur la tuile.</para> Comparaison de nom normalisée
         /// (<see cref="NormLibName"/>, cf. ResolveLibraryRoot). Null si
         /// introuvable.
         /// </summary>
@@ -629,7 +625,7 @@ namespace LLM_AI
         /// <c>&lt;plot&gt;</c> enrichi du synopsis TMDB +
         /// ligne méta (note/genres/année) + raison LLM + info de diffusion +
         /// lien interne vers la fiche EPG (en clair, visible dans l'Overview —
-        /// Emby n'affichant pas <c>&lt;website&gt;</c>), studio = chaine, genres
+        /// Emby n'affichant pas <c>&lt;website&gt;</c>), studio = chaîne, genres
         /// « AI Suggestion » + genres réels TMDB + priority, premiered = date de
         /// diffusion, year = année de PRODUCTION (reco enrichie, sinon TMDB —
         /// jamais dérivée de la date de diffusion), et le même lien EPG dans
@@ -760,10 +756,10 @@ namespace LLM_AI
                 sb.Append("  <genre>priority:").Append(XmlEsc(r.Priority.Trim())).Append("</genre>\n");
             if (!string.IsNullOrWhiteSpace(r.Kind))
                 sb.Append("  <genre>kind:").Append(XmlEsc(r.Kind.Trim())).Append("</genre>\n");
-            // Classification du programme EPG source → <mpaa> (v1.13.18.0) :
+            // Classification du programme EPG source → <mpaa> :
             // sans cote, la carte est « non cotée » et la limite parentale
             // n'a AUCUNE prise (visibles des comptes restreints tant que
-            // BlockUnratedItems ne liste pas le type — constaté 2026-09-12).
+            // BlockUnratedItems ne liste pas le type).
             // On écrit la cote du programme normalisée par le Classification
             // Mapper (brut EPG « 14+ » → « CA-14A », convention du serveur,
             // même pipeline que le gate EPG) — la bibliothèque .strm devient
@@ -994,8 +990,7 @@ namespace LLM_AI
         private async Task<bool> TryWriteProgramPosterAsync(string root, AutoProgrammer.Reco r,
             BaseItem program, CancellationToken ct)
         {
-            // Logue la raison du renoncement puis retourne false — remplace les
-            // return false silencieux d'origine (cartes sans poster indiagnosticables).
+            // Logue la raison du renoncement puis retourne false (cartes sans poster diagnosticables).
             bool Skip(string why)
             {
                 _logger?.Info("[LLM_AI] Strm library : pas de poster EPG pour « {0} » ({1}).", r.Title, why);

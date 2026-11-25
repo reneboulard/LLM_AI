@@ -17,7 +17,7 @@ using Emby.Notifications;
 namespace LLM_AI
 {
     /// <summary>
-    /// Primitives de remédiation serveur (v1.13.30) : arrêt de lecture d'une
+    /// Primitives de remédiation serveur : arrêt de lecture d'une
     /// session, déclenchement d'une tâche planifiée, message Emby à un
     /// usager. Code métier UNIQUE — deux appelants avec deux contrats :
     /// <list type="bullet">
@@ -43,13 +43,13 @@ namespace LLM_AI
         {
             /// <summary>Lecture arrêtée (vérifiée) — ou déjà absente.</summary>
             public bool Stopped;
-            /// <summary>Le client a CONFIRMÉ l'arrêt par ses rapports (v2.6.4) —
+            /// <summary>Le client a CONFIRMÉ l'arrêt par ses rapports —
             /// sinon l'arrêt n'est qu'envoyé, jamais prouvé.</summary>
             public bool Confirmed;
             /// <summary>Chemin de l'arrêt : null = commande directe,
-            /// « gohome » = repli navigation (v2.6.4).</summary>
+            /// « gohome » = repli navigation.</summary>
             public string Via;
-            /// <summary>Id du contrôleur admin inscrit dans la commande (v2.6.3).</summary>
+            /// <summary>Id du contrôleur admin inscrit dans la commande.</summary>
             public string Controller;
             public string SessionId;
             public string UserName;
@@ -91,16 +91,16 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Arrête la lecture d'une session — au standard v2.6.3/v2.6.4 :
-        /// (1) la commande <c>PlaystateCommand.Stop</c> porte
-        /// <c>ControllingUserId</c> = premier admin (patron ComSkipper —
-        /// sans contrôleur, l'app TV native prod ignore la commande) ;
+        /// Arrête la lecture d'une session : (1) la commande
+        /// <c>PlaystateCommand.Stop</c> porte
+        /// <c>ControllingUserId</c> = premier admin (sans contrôleur,
+        /// l'app TV native ignore la commande) ;
         /// (2) l'arrêt est CONFIRMÉ PAR RELECTURE (session close ou plus de
         /// lecture, ~12 s max, sortie anticipée) — un ok d'envoi ne prouve
-        /// rien (constat 2026-10-16/17 : des clients ignorent le stop) ;
+        /// rien (des clients ignorent le stop) ;
         /// (3) repli <c>GoHome</c> si le stop direct n'est pas confirmé —
         /// la navigation FERME le lecteur du client web, qui signale
-        /// l'arrêt lui-même (58 ms au banc 2026-10-17). N'agit pas sur la
+        /// l'arrêt lui-même. N'agit pas sur la
         /// session elle-même (Emby n'expose pas de fermeture de session
         /// propre en in-process) : arrête le transcodage/lecture en cours —
         /// c'est l'action utile (« ce stream consomme trop »). Si le client
@@ -130,22 +130,21 @@ namespace LLM_AI
             if (session.NowPlayingItem == null)
             {
                 // Rien à arrêter : état cible vérifié D'ENTRÉE — les
-                // appelants ont leur branche « idle » dédiée (carte du
-                // chat « rien à arrêter » depuis 2026-09-21).
+                // appelants ont leur branche « idle » dédiée.
                 result.Stopped = true;
                 result.Confirmed = true;
                 result.Note = "aucune lecture en cours";
                 return result;
             }
 
-            // v2.6.3 — contrôleur identifié : premier admin (repli silencieux
+            // Contrôleur identifié : premier admin (repli silencieux
             // sans contrôleur si la liste échoue — jamais l'ancien envoi nu).
             result.Controller = FirstAdminControllerId(users);
             await sessions.SendPlaystateCommand(null, sessionId,
                 new PlaystateRequest { Command = PlaystateCommand.Stop,
                     ControllingUserId = result.Controller }, ct).ConfigureAwait(false);
 
-            // v2.6.2/2.6.4 — CONFIRMATION PAR RELECTURE puis repli GoHome.
+            // CONFIRMATION PAR RELECTURE puis repli GoHome.
             if (await PlaybackGoneAsync(sessions, sessionId, ct).ConfigureAwait(false))
             {
                 result.Stopped = true;
@@ -153,8 +152,8 @@ namespace LLM_AI
                 return result;
             }
 
-            // Repli GoHome (v2.6.4) : ferme le lecteur des clients qui
-            // ignorent PlaystateCommand.Stop (client web — banc 2026-10-17).
+            // Repli GoHome : ferme le lecteur des clients qui
+            // ignorent PlaystateCommand.Stop (client web).
             await sessions.SendGeneralCommand(null, sessionId,
                 new GeneralCommand { Name = "GoHome" }, ct).ConfigureAwait(false);
             if (await PlaybackGoneAsync(sessions, sessionId, ct).ConfigureAwait(false))
@@ -193,8 +192,8 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Id du PREMIER administrateur du serveur (patron ComSkipper,
-        /// v2.6.3) — ou null si la liste échoue / aucun admin. Chemin
+        /// Id du PREMIER administrateur du serveur — ou null si la liste
+        /// échoue / aucun admin. Chemin
         /// partagé avec <c>ClientCommandTool.FirstAdminControllerId</c>,
         /// qui ajoute repli sur l'usager du chat + journalisation.
         /// </summary>
@@ -300,11 +299,11 @@ namespace LLM_AI
                 var live = (sessions?.Sessions ?? Enumerable.Empty<SessionInfo>()).ToList();
                 foreach (var u in resolved)
                 {
-                    // Appariement tolérant (v2.7.4, SessionUserMatch) :
-                    // SessionInfo.UserId est en forme « N » sur 4.10.x —
-                    // la forme « D » seule ne matchait JAMAIS (le mode osd
-                    // rapportait « aucune session active » à un usager
-                    // pourtant connecté).
+                    // Appariement tolérant (SessionUserMatch) : le Guid du
+                    // user est en forme « D », SessionInfo.UserId en forme
+                    // « N » sur 4.10.x — la forme « D » seule ne matchait
+                    // JAMAIS (le mode osd rapportait « aucune session
+                    // active » à un usager pourtant connecté).
                     foreach (var s in live.Where(x => SessionUserMatch.Matches(x, u)))
                     {
                         try
@@ -364,8 +363,7 @@ namespace LLM_AI
         /// <summary>Repère une tâche par Id (worker.Id), Key (ScheduledTask.Key)
         /// — puis, en repli, par NOM affiché : le LLM (et l'humain) pense en
         /// noms (« Scan Media Library ») et l'audit n'expose même pas la Key
-        /// interne (constat terrain 2026-09-21 : nom mis dans task_key →
-        /// refus). Prépondérance Id &gt; Key &gt; nom ; les tâches cachées
+        /// interne. Prépondérance Id &gt; Key &gt; nom ; les tâches cachées
         /// restent exclues sur toutes les passes (fail-closed).</summary>
         public static IScheduledTaskWorker MatchTask(ITaskManager tasks, string taskId, string taskKey, bool excludeHidden)
         {

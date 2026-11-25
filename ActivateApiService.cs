@@ -26,7 +26,7 @@ namespace LLM_AI
     /// Quand l'usager lit la carte, le lecteur média demande cette URL ; le
     /// plugin crée alors le timer Emby (série → SeriesTimer, film → Timer via
     /// <see cref="AutoProgrammer.ProgramOneAsync"/>), notifie le client par toast
-    /// (<see cref="ActivateFeedback"/>, v1.12 — succès/échec/disque plein), fait
+    /// (<see cref="ActivateFeedback"/>, succès/échec/disque plein), fait
     /// supprimer la carte par Emby en cas de succès, puis renvoie un court clip
     /// de confirmation <c>recording_activated.mp4</c> (8 s, sans texte ni audio — universel).</para>
     /// <para><b>Auth</b> : l'URL <c>.strm</c> est demandée par le lecteur média
@@ -85,10 +85,10 @@ namespace LLM_AI
         /// (identité de la carte, écrit par <c>StrmLibraryGenerator</c> — permet
         /// le toast de confirmation et la suppression de la carte par Emby en
         /// cas de succès, voir <see cref="ActivateFeedback"/> ; absent sur les
-        /// cartes d'avant v1.12 → feedback simplement ignoré). <c>T</c> : jeton
+        /// cartes anciennes → feedback simplement ignoré). <c>T</c> : jeton
         /// de capacité (<see cref="PluginConfiguration.StrmSecret"/>) — gate
         /// d'accès, le lecteur média ne transmettant pas l'auth Emby ; complété
-        /// par le gate de permission asynchrone (v1.13.11.0) : le lecteur
+        /// par un gate de permission asynchrone : le lecteur
         /// identifié via sa session sans <c>EnableLiveTvManagement</c> voit les
         /// timers créés par sa lecture annulés et reçoit un toast dédié.
         /// </summary>
@@ -121,15 +121,13 @@ namespace LLM_AI
                 return Array.Empty<byte>();
             }
 
-            // ---- Fraîcheur de l'activation (UNE décision par lecture, v1.13.11.0) ----
+            // ---- Fraîcheur de l'activation (UNE décision par lecture) ----
             // Une même lecture de carte génère plusieurs GET (sonde ffprobe,
             // requêtes Range du lecteur). La fraîcheur est décidée ICI, une fois
             // (TTL 5 min d'ActivateFeedback) : seul le premier GET de la lecture
-            // tente la création de timer et déclenche le gate de permission ; les
-            // suivants servent le clip sans réactivation (idempotence élargie :
-            // la création n'est plus refaite à chaque GET — le dedup la
-            // neutralisait de toute façon, et un timer annulé par le gate ne
-            // serait pas recréé par un GET tardif de la même lecture).
+            // tente la création de timer et déclenche le gate de permission — un
+            // timer annulé par le gate ne serait pas recréé par un GET tardif
+            // de la même lecture.
             string strmPath = TryResolveCardPath(req?.Card);
             string key = strmPath ?? string.Join("|", req?.ProgramId ?? "?", req?.Kind ?? "?");
             if (!ActivateFeedback.TryMarkFresh(key))
@@ -151,7 +149,7 @@ namespace LLM_AI
 
                 // Gate disque (même règle que AutoProgrammer.Program) : volume
                 // de N'IMPORTE QUELLE racine d'enregistrements sous le seuil
-                // (v2.18.0, racines films et séries — un volume plein seul
+                // (racines films et séries — un volume plein seul
                 // suffit à suspendre) → aucun nouveau timer ; la passe de tag
                 // « AI Delete » (opt-in) est déclenchée si activée.
                 if (cfg?.RecordingDiskThresholdGb > 0
@@ -221,16 +219,16 @@ namespace LLM_AI
                 Logger?.Warn("[LLM_AI] Activate : échec création timer (programId={0}) : {1}", req.ProgramId, ex.Message);
             }
 
-            // ---- Gate permission (v1.13.11.0) : contrôle ASYNCHRONE ----
+            // ---- Gate permission : contrôle ASYNCHRONE ----
             // Les requêtes .strm ne portent PAS l'auth Emby, et la session
             // lecteur n'est visible dans ISessionManager qu'APRÈS l'ouverture
-            // du flux (c'est pour cela que le toast v1.12 poll en arrière-plan).
+            // du flux (c'est pour cela que le toast poll en arrière-plan).
             // Un contrôle synchrone dans ce GET ne verrait donc jamais le
             // lecteur : le contrôle est reporté en arrière-plan (même finder que
             // le toast). Usager résolu sans EnableLiveTvManagement → annulation
             // des timers créés par CETTE activation + toast dédié ; la carte
             // reste en bibliothèque. Usager jamais résolu (probe serveur sans
-            // session, api_key, cartes d'avant v1.12 sans chemin) → fail-open :
+            // session, api_key, cartes anciennes sans chemin) → fail-open :
             // comportement inchangé.
             if (strmPath != null && sessions != null && users != null)
             {
@@ -258,7 +256,7 @@ namespace LLM_AI
                             await ActivateFeedback.SendToastAsync(sessions, strmPath, text, logger).ConfigureAwait(false);
                             return;
                         }
-                        // Comportement v1.12 inchangé : toast de statut + suppression
+                        // Comportement inchangé : toast de statut + suppression
                         // carte par Emby en cas de succès.
                         DispatchFeedback(outcomeSnapshot, card);
                     }
@@ -272,7 +270,7 @@ namespace LLM_AI
             }
 
             // Repli historique (carte sans param `card`, session manager ou
-            // gestionnaire d'usagers indisponible) : feedback v1.12 immédiat,
+            // gestionnaire d'usagers indisponible) : feedback immédiat,
             // pas de gate (l'usager n'est pas identifiable par le chemin).
             DispatchFeedback(outcome ?? AutoProgrammer.OneOutcome.Failed, req);
 
@@ -281,7 +279,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Retour visuel : toast + suppression carte (v1.12)
+        //  Retour visuel : toast + suppression carte
         // ------------------------------------------------------------------
 
         /// <summary>
@@ -291,8 +289,8 @@ namespace LLM_AI
         /// <see cref="AutoProgrammer.OneOutcome.Dedup"/>) — suppression de la
         /// carte PAR EMBY (item + fichier .strm, différée ~60 s). La fraîcheur
         /// (anti-doublon des GET répétés d'une même lecture) est désormais
-        /// propriété du handler <see cref="Get"/> (v1.13.11.0) — ce feedback ne
-        /// marque plus rien. Sans carte identifiable (cartes d'avant v1.12,
+        /// propriété du handler <see cref="Get"/> — ce feedback ne
+        /// marque plus rien. Sans carte identifiable (cartes anciennes,
         /// bibliothèque introuvable) → feedback ignoré, logué.
         /// Ne lève jamais vers le handler.
         /// </summary>
@@ -355,7 +353,7 @@ namespace LLM_AI
         /// portent le même nom sane). Validation stricte : un seul segment
         /// (pas de séparateur ni <c>..</c>) et le chemin résolu doit rester sous
         /// la racine de la bibliothèque .strm configurée. Renvoie null si le
-        /// param est absent (cartes d'avant v1.12) ou invalide.
+        /// param est absent (cartes anciennes) ou invalide.
         /// </summary>
         private string TryResolveCardPath(string card)
         {
@@ -413,12 +411,12 @@ namespace LLM_AI
                     {
                         // Suffixe explicite non vide -> end fourni ; sinon
                         // « bytes=N- » = jusqu'à EOF. NB : long.TryParse
-                        // remet le out à 0 même en cas d'échec — il faut donc
-                        // tester le suffixe avant d'appeler TryParse pour ne
-                        // pas écraser end (sinon « bytes=0- » devient
-                        // « bytes=0-0 » et renvoie 1 octet au lieu du clip
-                        // entier, ce que ffprobe/ffmpeg interprètent comme une
-                        // troncature -> « Input/output error »).
+                        // remet le out à 0 même en cas d'échec — tester le
+                        // suffixe avant d'appeler TryParse pour ne pas
+                        // écraser end (sinon « bytes=0- » devient
+                        // « bytes=0-0 » → 1 octet servi au lieu du clip,
+                        // troncature que ffprobe/ffmpeg signalent
+                        // « Input/output error »).
                         if (spec.Length == 2 && !string.IsNullOrEmpty(spec[1]) &&
                             long.TryParse(spec[1], out end))
                         {
@@ -467,7 +465,7 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Comparaison à temps constant (anti-orchestration de timing) entre deux
+        /// Comparaison à temps constant (contre les attaques par mesure du temps de réponse) entre deux
         /// chaînes ; renvoie false si l'une est nulle. Sécurise la gate
         /// <c>StrmSecret</c>.
         /// </summary>

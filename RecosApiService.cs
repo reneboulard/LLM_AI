@@ -257,9 +257,9 @@ namespace LLM_AI
             // dont dispose l'analyse (RecoAnalysisTask). Best-effort — n'affecte
             // jamais le résultat du drop lui-même.
             //
-            // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) : le rejet
+            // Mémoire réflexive (opt-in DecisionLogEnabled) : le rejet
             // est aussi journalisé comme décision kind=drop (sans runId — le
-            // run d'origine n'est pas résolu à ce stade ; la Phase C pourra le
+            // run d'origine n'est pas résolu à ce stade ; la tâche Mémoire pourra le
             // rapprocher par titre).
             if (cfg.DecisionLogEnabled)
             {

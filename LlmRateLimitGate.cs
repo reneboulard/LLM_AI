@@ -49,7 +49,7 @@ namespace LLM_AI
         /// défaut).</summary>
         public TimeSpan? RetryDelay { get; }
 
-        /// <summary>Metric brute du quota violé (diagnostic — ex.
+        /// <summary>Métrique brute du quota violé (diagnostic — ex.
         /// generativelanguage…/generate_content_paid_tier_2_input_token_count).</summary>
         public string QuotaMetric { get; }
 

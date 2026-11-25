@@ -40,12 +40,9 @@ namespace LLM_AI
         private readonly string _formatSection;     // bloc format de sortie à la place du « FORMAT DES RECOMMANDATIONS » ; null = bloc recos par défaut ; "" = supprimé
         private readonly string _responseLang;     // langue de sortie imposée au LLM (ex. « English ») ; vide = pas de directive (comportement historique)
 
-        // v2.12.0 (P2) — la machinerie de réparation « réponse finale sans
-        // tableau JSON » (v2.6.7) était réservée au mode reco
-        // (_formatSection == null) ; elle s'étend aux formats CUSTOM non
-        // vides (LibReview) — mêmes béquilles, même renvoi borné, mais la
-        // clé qui identifie un item valide (« title » en reco, « id » pour
-        // LibReview) et le gabarit du renvoi deviennent paramétrables.
+        // La réparation « réponse finale sans tableau JSON » couvre aussi les formats
+        // CUSTOM non vides (LibReview) : clé d'item valide (« title » en reco, « id »
+        // pour LibReview) et gabarit de renvoi paramétrables.
         private readonly string _finalArrayKey;    // clé présente dans un item valide du tableau final ; null/vide = "title"
         private readonly string _finalRepairHint;  // gabarit embarqué dans la demande de renvoi (mode custom) ; requis si formatSection custom non vide
 
@@ -55,30 +52,19 @@ namespace LLM_AI
         // verrouille le premier qui répond (changement de modèle possible).
         private int _activeIndex = -1;
 
-        /// <summary>v2.20.12 : vrai quand le tour est un mode d'édition
-        /// (contexte « Éditer — … » du chat admin, atelier de langues
-        /// compris). Effet : la garde anti-narration est DÉSACTIVÉE —
-        /// les noms d'outils cités dans le TEXTE ACTUEL injecté dans le
-        /// system prompt provoquaient des faux positifs (vécu prod
-        /// 2026-11-14, gemma4:latest : « new_releases » cité depuis le
-        /// prompt echoed → boucle de réparations sans jamais livrer la
-        /// révision) ; idem en atelier où le guide nomme les outils
-        /// i18n à chaque tour. Les mécanismes du canal bloc ```text
-        /// sont portés par <see cref="PromptEditMode"/> depuis v2.20.16.</summary>
+        /// <summary>Vrai quand le tour est un mode d'édition (contexte « Éditer — … »
+        /// du chat admin, atelier de langues compris). La garde anti-narration est
+        /// alors DÉSACTIVÉE : les noms d'outils cités dans le texte actuel injecté
+        /// dans le system prompt (ou nommés par le guide de l'atelier) donneraient
+        /// des faux positifs en boucle. Les mécanismes du canal bloc ```text
+        /// relèvent de <see cref="PromptEditMode"/>.</summary>
         public bool EditMode { get; set; }
 
-        /// <summary>v2.20.16 : vrai UNIQUEMENT pour les modes d'édition à
-        /// CHAMP de prompt (FieldFor non vide) — le mode atelier de
-        /// langues (GuideOnly) livre par l'OUTIL i18n_set_key, pas par
-        /// un bloc ```text. Porte les mécanismes du canal bloc : le
-        /// nudge de livraison d'itération (v2.20.12) et le hint de
-        /// réparation des appels malformés (v2.20.14). Vécu prod
-        /// 2026-11-14 (gemma4:31b cloud, atelier) : EditMode englobait
-        /// l'atelier → le nudge exigeait un bloc ```text hors canal →
-        /// le modèle lisait l'exigence comme une demande hors mode et
-        /// REFUSAIT après un travail correct (bannière, réponse
-        /// i18n_get, résumé post-dépôt : 5 rappels, 3 refus confus
-        /// servis comme réponse finale).</summary>
+        /// <summary>Vrai UNIQUEMENT pour les modes d'édition à CHAMP de prompt
+        /// (FieldFor non vide) — l'atelier de langues (GuideOnly) livre par l'OUTIL
+        /// i18n_set_key, pas par un bloc ```text. Porte le nudge de livraison du bloc
+        /// et le hint de réparation des appels malformés ; les appliquer à l'atelier
+        /// ferait refuser le modèle (exigence hors canal).</summary>
         public bool PromptEditMode { get; set; }
 
         /// <summary>Plafond d'attente du gate 429 (reprise même-backend) —
@@ -121,7 +107,7 @@ namespace LLM_AI
         /// <summary>
         /// Construit la directive de langue de réponse injectée en fin de system
         /// prompt. Retourne une chaîne vide si <paramref name="lang"/> est vide ou
-        /// blanc (aucune directive = comportement historique : l'LLM suit la langue
+        /// blanc (aucune directive = comportement historique : le LLM suit la langue
         /// du prompt). Partagée par le path recommandation (boucle agent) et le path
         /// synthèse déterministe de l'audit (qui assemble son propre system prompt).
         /// </summary>
@@ -183,10 +169,10 @@ namespace LLM_AI
         /// appels d'outils intermédiaires ne sont PAS conservés, seulement les
         /// textes finaux) entre le system prompt et le nouveau message
         /// <paramref name="userTask"/>, puis relance la même boucle agent
-        /// (l'LLM peut de nouveau appeler des outils). Le system prompt —
+        /// (le LLM peut de nouveau appeler des outils). Le system prompt —
         /// documentation complète des outils + directives RAG — est construit
         /// ici, serveur-side, exactement UNE fois par conversation : le client
-        /// ne stocke/jamais ne renvoie que les tours user/assistant. Retourne
+        /// ne stocke ni ne renvoie que les tours user/assistant. Retourne
         /// la réponse finale (Markdown) de l'agent.
         /// </summary>
         public async Task<string> RunChatAsync(
@@ -226,14 +212,10 @@ namespace LLM_AI
             if (replayed > 0)
                 _logger?.Info("[LLM_AI] [CHAT] {0} tour(s) d'historique rejoué(s).", replayed);
 
-            // v2.6.5 — rappel de protocole en slot USAGER (bizarrerie
-            // gemma4 prouvée : le prompt usager prime sur le prompt
-            // système, et le protocole d'appel d'outils se noie dans un
-            // historique long — prod 2026-10-17 : 12-14 tours rejoués,
-            // le modèle narré au lieu d'appeler). Appended AU tour
-            // courant SEULEMENT : l'historique rejoué reste l'original
-            // (l'appelant stocke son propre message), donc exactement
-            // UN rappel par requête, jamais d'empilement.
+            // Rappel de protocole en slot USAGER : le prompt usager prime sur le system,
+            // et le protocole d'appel d'outils se noie dans un long historique (le modèle
+            // narre au lieu d'appeler). Ajouté au tour courant SEULEMENT : l'historique
+            // rejoué reste l'original, donc un seul rappel par requête, sans empilement.
             string task = userTask ?? string.Empty;
             if (task.Trim().Length > 0)
                 task += "\n\n[Rappel de protocole : pour TOUTE action sur Emby (lecture, saut, "
@@ -261,20 +243,14 @@ namespace LLM_AI
             var byName = tools.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
             var toolResults = new List<(string tool, string result)>();
 
-            // Bornes de la réparation « réponse finale non-JSON » (mode reco) :
-            // sans elle, une réponse invalide part telle quelle en aval —
-            // enrichissement et validation l'ignorent, la page affiche le
-            // markdown brut (vécu 2026-09-01 avec glm-5.3:cloud).
+            // Bornes de la réparation « réponse finale non-JSON » (mode reco) : sans
+            // elle, une réponse invalide part telle quelle et la page affiche le markdown brut.
             const int MaxReplyRepairs = 2;
             int replyRepairs = 0;
 
-            // v2.6.5 — borne de la garde anti-narration : le modèle
-            // « pense à voix haute » (décrit l'appel d'outil à faire
-            // SANS l'émettre en JSON — prod 2026-10-17 15:17, gemma4 :
-            // « I must use the client_command tool with command="seek"…
-            // offset_seconds = 300 ») ; la narration prise pour réponse
-            // finale part telle quelle à l'usager, AUCUNE commande
-            // n'est exécutée.
+            // Borne de la garde anti-narration : le modèle décrit l'appel d'outil à faire
+            // SANS l'émettre en JSON ; la narration prise pour réponse finale part telle
+            // quelle à l'usager et AUCUNE commande n'est exécutée.
             const int MaxNarrationRepairs = 2;
             int narrationRepairs = 0;
 
@@ -306,12 +282,9 @@ namespace LLM_AI
                         // réclame le tableau JSON de recos historique ; en mode sans
                         // format (audit, chat — _formatSection == "") on réclame du
                         // Markdown, cohérent avec le system prompt correspondant.
-                        // v2.12.0 — trois modes, pas deux : formatSection
-                        // null = reco (tableau JSON de recos) ; custom non
-                        // vide = LibReview (tableau JSON [{id,…}]) ; vide =
-                        // audit/chat (Markdown). L'ancienne forme binaire
-                        // envoyait LibReview vers « Markdown SANS tableau » —
-                        // l'inverse exact de son contrat.
+                        // Trois modes : formatSection null = reco (tableau JSON de recos) ;
+                        // custom non vide = LibReview (tableau [{id,…}]) ; vide = audit/chat
+                        // (Markdown).
                         string finalFormatHint = _formatSection == null
                             ? "Si tu as terminé, réponds avec le tableau JSON des recommandations, " +
                               "conforme au schéma exigé par la tâche (sections WORKFLOW/FORMAT du prompt système)."
@@ -319,20 +292,13 @@ namespace LLM_AI
                                 ? "Si tu as terminé, réponds UNIQUEMENT avec le tableau JSON exigé par la " +
                                   "section FORMAT DE SORTIE — sans texte autour, sans balise de code."
                                 : "Si tu as terminé, réponds directement en Markdown (texte normal), sans tableau JSON.");
-                        // v2.20.14 — en mode édition à champ (v2.20.16 :
-                        // PromptEditMode — PAS l'atelier de langues, dont le
-                        // canal de dépôt est l'outil i18n_set_key : un bloc
-                        // ```text y serait relevé nulle part = perte
-                        // silencieuse de la classe v2.20.14), l'appel d'outil
-                        // malformé a une voie de sortie que le modèle maîtrise
-                        // (vécu prod 2026-11-14 08:21-08:23 : plugin_prompts
-                        // set avec ≈2400 car. portant des guillemets droits —
-                        // JSON invalide 10 fois d'affilée, MaxIterations épuisé,
-                        // réponse brute servie à l'usager) : le bloc ```text
-                        // clôturé, relevé par le dépôt serveur-side. Et un champ
-                        // NON actif ne passe ni par l'outil ni par le bloc :
-                        // la seule réponse honnête est le changement de mode
-                        // par l'usager.
+                        // PromptEditMode (PAS l'atelier de langues, dont le canal de dépôt est
+                        // l'outil i18n_set_key : un bloc ```text n'y serait relevé nulle
+                        // part) : un appel d'outil malformé a une voie de sortie que le
+                        // modèle maîtrise, le bloc ```text clôturé relevé par le dépôt
+                        // serveur-side (sinon JSON invalide en boucle jusqu'à MaxIterations).
+                        // Un champ NON actif ne passe ni par l'outil ni par le bloc : la
+                        // seule réponse honnête est le changement de mode par l'usager.
                         string editModeHint = PromptEditMode
                             ? " En mode édition : pour livrer une révision du PROMPT ACTIF, réponds plutôt " +
                               "en Markdown avec le texte COMPLET révisé dans un bloc de code clôturé " +
@@ -355,26 +321,16 @@ namespace LLM_AI
                         continue;
                     }
 
-                    // v2.6.5 — garde anti-narration : la réponse mentionne
-                    // un NOM D'OUTIL ENREGISTRÉ mais n'émet AUCUN appel,
-                    // et aucun outil n'a encore tourné dans ce run (une
-                    // réponse finale légitime qui mentionne l'outil
-                    // arrive APRÈS son exécution — toolResults > 0).
-                    // Signal vécu en prod 2026-10-17 15:17 : la narration
-                    // de l'intention (« I must use the client_command
-                    // tool… ») au lieu du JSON. Ré-injection exigeant
-                    // l'émission (ou une réponse honnête), bornée.
+                    // Garde anti-narration : la réponse mentionne un NOM D'OUTIL ENREGISTRÉ
+                    // sans émettre d'appel, et aucun outil n'a encore tourné dans ce run
+                    // (une réponse finale légitime le cite APRÈS exécution — toolResults > 0).
+                    // Ré-injection bornée exigeant l'émission (ou une réponse honnête).
                     if (narrationRepairs < MaxNarrationRepairs && toolResults.Count == 0
                         && !EditMode)
                     {
-                        // v2.20.12 : garde anti-narration COUPÉE en mode
-                        // d'édition — les noms d'outils présents dans le
-                        // TEXTE ACTUEL du prompt (injecté dans le system
-                        // prompt) sont fréquemment cités en écho par les
-                        // petits modèles (vécu prod 2026-11-14,
-                        // gemma4:latest : « new_releases » cité depuis le
-                        // prompt actuel → faux positif → boucle de
-                        // réparations, aucune livraison de la révision).
+                        // Garde COUPÉE en mode édition : les noms d'outils du texte actuel
+                        // injecté dans le system prompt sont cités en écho (faux positif →
+                        // boucle de réparations, révision jamais livrée).
                         string mentioned = FindMentionedToolName(reply, byName);
                         if (mentioned != null)
                         {
@@ -396,22 +352,13 @@ namespace LLM_AI
                         }
                     }
 
-                    // v2.20.12 — mode édition de prompt : si la réponse finale
-                    // est en prose SANS bloc clôturé ```text (et ne se termine
-                    // pas par une question — le filet question existe déjà
-                    // côté endpoint), un SEUL rappel en slot user exige la
-                    // livraison du bloc clôturé. Vécu prod 2026-11-14
-                    // (gemma4:latest) : sans ce rappel, le modèle répondait
-                    // « J'ai bien reçu votre rappel » en boucle sans jamais
-                    // émettre le bloc. Borné (2 rappels), puis la réponse
-                    // passe telle quelle (le serveur extrait de toute façon
-                    // tout bloc ```text présent — voir ChatApiService).
-                    // v2.20.16 — PromptEditMode, PAS EditMode : l'atelier de
-                    // langues (GuideOnly) livre par l'OUTIL i18n_set_key —
-                    // exiger un bloc ```text y dérape (vécu prod 2026-11-14,
-                    // gemma4:31b cloud : le modèle lisait le rappel comme une
-                    // demande hors mode et REFUSAIT — 5 rappels tirés, 3
-                    // refus confus servis comme réponse finale).
+                    // Mode édition de prompt : si la réponse finale est en prose SANS bloc
+                    // clôturé ```text (et ne se termine pas par une question — filet déjà
+                    // côté endpoint), un rappel en slot user exige la livraison du bloc.
+                    // Borné (2 rappels), puis la réponse passe telle quelle (le serveur
+                    // extrait de toute façon tout bloc ```text — voir ChatApiService).
+                    // PromptEditMode, PAS EditMode : l'atelier de langues livre par l'OUTIL
+                    // i18n_set_key, et y exiger un bloc fait refuser le modèle.
                     if (PromptEditMode && editBlockNudges < 2
                         && reply.IndexOf("```", StringComparison.Ordinal) < 0
                         && !reply.TrimEnd().EndsWith("?", StringComparison.Ordinal))
@@ -428,27 +375,17 @@ namespace LLM_AI
                         continue;
                     }
 
-                    // Mode recommandation OU format custom (v2.12.0) : la réponse
-                    // finale DOIT être un tableau JSON exploitable. Vécu
-                    // 2026-09-01 (glm-5.3:cloud) : prose autour du tableau,
-                    // guillemets internes non échappés (S07E06 "The Truck Stops
-                    // This"), ou écho du format demandé — le parse aval échoue
-                    // silencieusement. Vécu 2026-11-02 (prod, ministral-3:14b,
-                    // LibReview) : « - » / « Aucun. » au lieu du tableau — le run
-                    // partait à 0 proposition SANS qu'aucune réparation ne tire :
-                    // la machinerie v2.6.7 ci-dessous était gated au seul mode reco
-                    // (_formatSection == null) alors que LibReview passe un
-                    // formatSection CUSTOM. Dé-gatée : tout mode à tableau final
-                    // (reco null OU custom non vide) probe/répare/renvoie. Seul
-                    // le mode « rapport Markdown » (formatSection == "" :
-                    // audit/chat) reste hors probe.
+                    // Mode recommandation OU format custom : la réponse finale DOIT être un
+                    // tableau JSON exploitable (prose autour, guillemets non échappés, écho
+                    // du format : le parse aval échoue silencieusement). Tout mode à tableau
+                    // final (reco null OU custom non vide) probe/répare/renvoie ; seul le
+                    // mode « rapport Markdown » (formatSection == "" : audit/chat) reste
+                    // hors probe.
                     if (_formatSection == null || _formatSection.Length > 0)
                     {
-                        // v2.12.0 — gabarit embarqué dans la demande de renvoi :
-                        // reco = gabarit historique inline ; format custom =
-                        // gabarit fourni par l'appelant (_finalRepairHint). Le
-                        // schéma doit être dans le message USER (quirk documenté :
-                        // le modèle suit le schéma du user prompt, pas du system).
+                        // Gabarit embarqué dans la demande de renvoi : reco = inline ; custom =
+                        // fourni par l'appelant (_finalRepairHint). Le schéma doit être dans
+                        // le message USER (le modèle suit le schéma du user prompt).
                         bool recoMode = _formatSection == null;
                         string renvoiCible = recoMode ? "des recommandations" : "exigé par la tâche";
                         string gabarit = recoMode
@@ -459,24 +396,17 @@ namespace LLM_AI
                               "\"channel\":\"nom de chaîne — OBLIGATOIRE\"," +
                               "\"start\":\"date/heure ISO 8601 de diffusion — OBLIGATOIRE\"}]"
                             : _finalRepairHint;
-                        // v2.6.7 (live 2026-10-19, run page ministral-3:14b) : la
-                        // validation et la réparation par béquilles s'appliquent AUSSI à
-                        // la dernière réponse (budget renvois épuisé) — vécu : itération 3
-                        // avec échappements \' illégaux passés BRUTES à l'Enrichissement
-                        // (« payload non parsable » → zéro reco + playlist vidée), alors
-                        // que la béquille existante (vécu 2026-09-09) l'eût réparée.
-                        // Seul le RENVOI au modèle reste borné par MaxReplyRepairs.
+                        // Validation et réparation par béquilles s'appliquent AUSSI à la dernière
+                        // réponse (budget de renvois épuisé) : sinon un JSON malformé part brut
+                        // à l'Enrichissement (zéro reco). Seul le RENVOI au modèle est borné
+                        // par MaxReplyRepairs.
                         var probe = LlmRunner.ExtractJsonPayload(reply);
                         bool validArray = ValidateFinalArrayProbe(probe, out var anyKey, out var itemCount, _finalArrayKey);
                         if (!validArray)
                         {
-                            // v2.6.7 (ministral-3:14b, live 2026-10-19) : le tableau
-                            // final arrive malformé (guillemets français non échappés dans
-                            // « reason », contrôles) — réparer par les MÊMES béquilles que
-                            // les appels d'outils AVANT de retourner au modèle, un
-                            // aller-retour LLM de moins et l'Enrichissement reçoit du JSON
-                            // propre (« payload non parsable … laissé tel quel » = run à
-                            // zéro reco alors que le gabarit était bon à 95 %).
+                            // Tableau final malformé (guillemets non échappés, contrôles) : réparer
+                            // par les MÊMES béquilles que les appels d'outils AVANT de retourner
+                            // au modèle — un aller-retour LLM de moins.
                             var repaired = TryRepairFinalArray(reply);
                             if (repaired != null &&
                                 ValidateFinalArrayProbe(repaired, out anyKey, out itemCount, _finalArrayKey))
@@ -507,17 +437,12 @@ namespace LLM_AI
                             continue;
                         }
 
-                        // Vécu 2026-09-02 03:01 (serveur principal) : LLM local dégradé
-                        // qui émet un APPEL D'OUTIL MALFORMÉ comme réponse finale —
-                        // [{ "action":"epg_movies" }] sans l'enveloppe tool/arguments.
-                        // Le tableau parse donc comme « valide » (garde ci-dessus
-                        // passée), puis la validation aval écarte l'item sans title →
-                        // run « réussi » à ZÉRO reco (et la tâche effaçait les recos
-                        // de la veille). Un tableau NON VIDE dont aucun item ne porte
-                        // la clé obligatoire du format (v2.12.0 : paramétrée —
-                        // « title » en reco, « id » pour LibReview) n'est ni un
-                        // tableau du format ni un appel d'outil bien formé → renvoi.
-                        // Un tableau VIDE ([] = « rien ») reste accepté.
+                        // Un appel d'outil MALFORMÉ émis comme réponse finale (ex.
+                        // [{ "action":"epg_movies" }] sans enveloppe tool/arguments) parse comme
+                        // « valide » puis la validation aval l'écarte : run « réussi » à ZÉRO
+                        // reco qui effaçait celles de la veille. Un tableau NON VIDE dont aucun
+                        // item ne porte la clé obligatoire du format (« title » en reco, « id »
+                        // pour LibReview) → renvoi. Un tableau VIDE ([] = « rien ») reste accepté.
                         if (itemCount > 0 && !anyKey && replyRepairs < MaxReplyRepairs)
                         {
                             replyRepairs++;
@@ -675,7 +600,7 @@ namespace LLM_AI
         /// page restent détectables par le neutraliseur — et pour que le LLM
         /// voie les délimiteurs en clair sur le fil. Résolveur explicite
         /// .NET 8 obligatoire pour sérialiser un JsonElement (même gotcha que
-        /// WebFetchTool, commenté ligne 1021).
+        /// WebFetchTool, qui le commente aussi).
         /// </summary>
         private static readonly System.Text.Json.JsonSerializerOptions RelaxedJsonOpts = new System.Text.Json.JsonSerializerOptions
         {
@@ -748,8 +673,8 @@ namespace LLM_AI
                     + Truncate((sourceUrl ?? "").Replace('\n', ' ').Replace('\r', ' '), 120));
             }
 
-            // 3) Encadrement avec nonce. 8 caractères hex = équivalent
-            //    bin2hex(random_bytes(4)) — VÉRIFIÉ in situ : sur ce runtime
+            // 3) Encadrement avec nonce. 8 caractères hex (4 octets aléatoires)
+            //    — VÉRIFIÉ in situ : sur ce runtime
             //    (8.0.31, idem host Emby) GetHexString(n) renvoie n caractères
             //    hex (et NON 2×n octets) ; GetHexString(8) est donc la forme
             //    8 caractères voulue.
@@ -809,13 +734,10 @@ namespace LLM_AI
         /// (<see cref="_rateLimitWaitCeiling"/>) puis relance du MÊME backend
         /// une fois, avant toute bascule ; RPD et 2ᵉ 429 consécutif basculent
         /// immédiatement.</para>
-        /// Distinction annulation vs délai par appel (gotcha HttpClient.Timeout
-        /// vérifié live 2026-10-19, granite4.2:8b) : le dépassement du délai
-        /// par appel (LlmClient.SendWithTimeoutAsync, défaut 2 min) jette une
-        /// TaskCanceledException dont le token appelant n'est PAS annulé —
-        /// traitée comme un échec backend (repli priorité suivante) ; seule
-        /// l'annulation réelle (token appelant annulé : déconnexion navigateur,
-        /// arrêt de tâche) est propagée telle quelle.
+        /// Annulation vs délai par appel : le dépassement du délai
+        /// (LlmClient.SendWithTimeoutAsync) jette une TaskCanceledException dont
+        /// le token appelant n'est PAS annulé — échec backend (repli suivant) ;
+        /// seule l'annulation réelle (token appelant annulé) est propagée.
         /// </summary>
         private async Task<string> ChatAsync(IReadOnlyList<LlmClient.ChatMessage> messages, CancellationToken ct)
         {
@@ -986,17 +908,11 @@ namespace LLM_AI
                 sb.AppendLine("qui interrogent directement le serveur Emby (en lecture seule).");
             }
             sb.AppendLine();
-            // v2.12.0 (P3) — mode « liste fermée » : AUCUN outil = AUCUN bloc
-            // AVAILABLE TOOLS ni PROTOCOLE DE TOOL-CALLING. Motivation terrain
-            // (prod 2026-11-02, LibReview + ministral-3:14b) : le même modèle
-            // classe correctement les candidats via les scripts emby-delete*.sh
-            // (un appel plat, zéro outil) mais répond « - » / « Aucun. » dans le
-            // plugin — le manifest complet + le protocole (où « un tableau JSON
-            // commençant par [ = appel d'outils » contredit « ta réponse finale
-            // EST un tableau JSON ») déroutent les petits modèles locaux. Sans
-            // outil, il ne reste qu'UN seul contrat de sortie : celui du bloc
-            // FORMAT. Les chemins outillés reco/chat/audit ne passent jamais
-            // une liste vide — comportement inchangé pour eux.
+            // Mode « liste fermée » : AUCUN outil = AUCUN bloc AVAILABLE TOOLS ni
+            // PROTOCOLE DE TOOL-CALLING. Le protocole (« un tableau JSON commençant par [
+            // = appel d'outils ») contredit « ta réponse finale EST un tableau JSON » et
+            // déroute les petits modèles : sans outil, un seul contrat de sortie, celui du
+            // bloc FORMAT. Les chemins outillés ne passent jamais une liste vide.
             bool hasTools = tools != null && tools.Count > 0;
             if (hasTools)
             {
@@ -1006,34 +922,28 @@ namespace LLM_AI
                 sb.Append("- ").Append(t.Name).Append(" : ").AppendLine(t.Description);
                 sb.AppendLine("  schéma des arguments (JSON) :");
                 sb.Append("  ").AppendLine(t.ArgumentsSchema);
-                // v1.13.9.3 : qwen2.5:14b imitait le schéma nu ({"action":...})
-                // en omettant l'emballage — montrer la forme enveloppée avec le
-                // vrai nom de l'outil supprime le seul exemple d'objet nu.
+                // Les petits modèles imitent un schéma nu ({"action":...}) sans l'emballage :
+                // montrer la forme enveloppée avec le vrai nom d'outil supprime le seul
+                // exemple d'objet nu.
                 sb.Append("  formulaire d'appel OBLIGATOIRE : [{\"tool\":\"").Append(t.Name)
                   .AppendLine("\",\"arguments\":{ ...arguments conformes au schéma ci-dessus... }}]");
             }
             sb.AppendLine();
             sb.AppendLine("### PROTOCOLE DE TOOL-CALLING");
-            // v1.13.9.4 : ancrage par crochets + contrat de terminaison,
-            // repris des directives éprouvées de llm_core (agent_directives.md).
+            // Ancrage par crochets + contrat de terminaison.
             sb.AppendLine("Pour demander de la donnée, réponds UNIQUEMENT par un tableau JSON d'appels d'outils : ");
             sb.AppendLine("il doit commencer par [ en tout premier caractère et finir par ] en dernier — ");
             sb.AppendLine("sans texte, sans balises Markdown autour. Exemple :");
             sb.AppendLine("[{\"tool\":\"get_emby_info\",\"arguments\":{\"action\":\"library\",\"type\":\"movie\",\"limit\":5}}]");
-            // v1.13.9.3 : contre-exemple explicite (vécu qwen2.5:14b en chat —
-            // objet nu émis comme réponse finale, jamais exécuté).
+            // Contre-exemple explicite : un objet nu émis comme réponse finale n'est jamais exécuté.
             sb.AppendLine("INTERDIT : un objet JSON nu (ex. {\"action\":\"get\",...}) n'est JAMAIS une réponse ");
             sb.AppendLine("valide — les arguments seuls doivent être enveloppés dans un tableau avec le nom de l'outil.");
             sb.AppendLine("Tu peux mettre plusieurs appels dans le même tableau. Les résultats te seront ");
             sb.AppendLine("renvoyés sous la forme [{\"tool\":\"...\",\"result\":{...}}].");
-            // v2.3.4 : la règle « final = Markdown, aucun tableau JSON » contredit
-            // le contrat des tâches de recommandation (Tonight, enregistrements
-            // séries/films) qui EXIGENT un tableau JSON de recos — le modèle
-            // hésitait entre les deux (prose + clôture ```json + tours de
-            // réparation ; vécu 2026-10-09/10, dont un « id »:null synthétisé
-            // des deux schémes). Exception explicite : la boucle aval reconnaît
-            // déjà un tableau portant « title » comme réponse FINALE (pas comme
-            // un appel d'outil malformé), la mécanique est inchangée.
+            // La règle « final = Markdown, aucun tableau JSON » contredit le contrat des
+            // tâches de recommandation (Tonight, enregistrements), qui EXIGENT un tableau
+            // JSON de recos : exception explicite. La boucle aval reconnaît déjà un
+            // tableau portant « title » comme réponse FINALE (pas un appel malformé).
             sb.AppendLine("L'absence de tableau JSON d'appels d'outils est le signal que tu as terminé : ");
             sb.AppendLine("quand tu as toutes les informations nécessaires pour répondre à la demande, ");
             sb.AppendLine("réponds en Markdown (texte normal) — une réponse finale ne doit contenir ");
@@ -1042,18 +952,13 @@ namespace LLM_AI
             sb.AppendLine("la réponse finale EST ce tableau JSON — renvoie-le UNIQUEMENT, sans texte ");
             sb.AppendLine("autour ni balise de code.");
             sb.AppendLine("Ne retourne que l'information demandée, rien de plus. Sois concis.");
-            // v2.20.2 : règles de fiabilité factuelle — durcissement pour les
-            // modèles locaux (« le dénominateur le plus bas » doit donner un
-            // résultat correct même si le cloud est plus rapide). Motivations
-            // terrain 2026-11-13 (chat externe, gemma4:latest local) : un
-            // argument non documenté (sort_by=date_played ignoré par le
-            // serveur) « confirmé » par le modèle comme un tri par visionnage ;
-            // un résultat epg_series sans rapport avec le titre demandé
-            // présenté comme une diffusion de CE titre. Doctrine
-            // NormalizeDeepLinks : le prompt prévient, le serveur fait
-            // respecter — les filets correspondants (note dans le résultat,
-            // champ date_created, paramètre query sur epg_*) vivent côté
-            // GetEmbyInfoTool ; ces règles apprennent au modèle à les lire.
+            // Règles de fiabilité factuelle (durcissement pour les modèles locaux) : un
+            // argument non documenté ignoré par le serveur ne doit pas être « confirmé »,
+            // un résultat sans rapport avec le titre demandé ne doit pas être présenté
+            // comme une diffusion de CE titre. Doctrine NormalizeDeepLinks : le prompt
+            // prévient, le serveur fait respecter (filets côté GetEmbyInfoTool : note
+            // dans le résultat, champ date_created, paramètre query sur epg_*) ; ces
+            // règles apprennent au modèle à les lire.
             sb.AppendLine("RÈGLES DE FIABILITÉ FACTUELLE :");
             sb.AppendLine("- N'utilise QUE les paramètres documentés dans le schéma d'un outil : un paramètre absent du schéma est ignoré silencieusement par le serveur — ne présume jamais qu'il a été appliqué.");
             sb.AppendLine("- Un champ « note » dans un résultat d'outil est un fait du serveur : transmets-le tel quel à l'usager, ne le contourne jamais.");
@@ -1166,12 +1071,10 @@ namespace LLM_AI
 
             var arr = ExtractJsonArray(reply);
 
-            // Filet de sécurité (v1.13.9.2, vécu 11:20) : si l'extraction du
-            // tableau échoue (ex. guillemets non échappés qui dérèglent le
-            // suivi de chaînes jusqu'au crochet « orphelin ») MAIS que la
-            // réponse contient encore une clé « tool », c'est une tentative
-            // d'appel d'outil malformée — JAMAIS une réponse finale à
-            // afficher telle quelle (le JSON brut était parti dans le chat).
+            // Filet : si l'extraction du tableau échoue (guillemets non échappés qui
+            // dérèglent le suivi de chaînes) MAIS que la réponse contient encore une clé
+            // « tool », c'est une tentative d'appel malformée — JAMAIS une réponse
+            // finale à afficher telle quelle.
             if (string.IsNullOrEmpty(arr) &&
                 reply.IndexOf("\"tool\"", StringComparison.Ordinal) >= 0)
             {
@@ -1185,11 +1088,9 @@ namespace LLM_AI
             // pas : c'est une réponse finale, pas une tentative outil.
             bool hasTool = arr.IndexOf("\"tool\"", StringComparison.Ordinal) >= 0;
 
-            // Les modèles (gemma4…) émettent parfois des caractères de contrôle
-            // non échappés (tabulation…) dans les strings JSON — par ex.
-            // "tmdb\t_lookup". System.Text.Json est strict et rejette alors
-            // TOUT le tableau, qu'on prendrait à tort pour une réponse finale.
-            // On assainit en échappant ces contrôles avant désérialisation.
+            // Les modèles émettent parfois des contrôles non échappés dans les strings JSON
+            // (ex. "tmdb\t_lookup") ; System.Text.Json strict rejetterait TOUT le tableau,
+            // pris à tort pour une réponse finale : on les échappe avant désérialisation.
             // v2.20.3 : texte brut du tableau principal capturé AVANT
             // assainissement — le seul localisable tel quel dans la réponse
             // (cf. MergeFurtherToolCalls).
@@ -1211,11 +1112,8 @@ namespace LLM_AI
                 // déchet à la place des recommandations).
                 if (hasTool)
                 {
-                    // Dernier recours avant le renvoi : réparation des
-                    // guillemets doubles non échappés (vécu 2026-09-09,
-                    // gemma4 : « (kind="series") » dans un texte de prompt
-                    // ferme prématurément la chaîne JSON et fait rejeter
-                    // tout le tableau, 5 renvois identiques d'affilée).
+                    // Dernier recours avant le renvoi : réparation des guillemets doubles
+                    // non échappés (ex. « (kind="series") » ferme prématurément la chaîne).
                     var repaired = RepairUnescapedQuotes(arr);
                     if (!string.Equals(repaired, arr, StringComparison.Ordinal))
                     {
@@ -1256,18 +1154,10 @@ namespace LLM_AI
         /// <summary>
         /// v2.20.3 — réponse MULTI-TABLEAUX : fusionne aux appels du tableau
         /// principal ceux des tableaux SUPPLÉMENTAIRES de la même réponse.
-        /// <para><b>Vécu prod 2026-11-13</b> (gemma4:latest local, chat
-        /// externe, « Aller simple: survivre ») : le modèle a émis DEUX
-        /// tableaux d'appels dans UNE même réponse — find, puis (après une
-        /// auto-correction) un record_program complet et valide.
-        /// <see cref="ExtractJsonArray"/> ne retourne que le PREMIER : le
-        /// second était JETÉ EN SILENCE — aucun « Appel outil », la boucle
-        /// poursuivait sur le seul résultat du find, et le modèle annonçait
-        /// l'action du second comme FAITE (« La réservation est en cours de
-        /// préparation… saisissez le code qui vient d'apparaître à l'écran »)
-        /// alors que RIEN n'avait été déposé : réservation fantôme, code
-        /// jamais affiché, refus de code sur une prémisse fausse au tour
-        /// suivant.</para>
+        /// <para>Un modèle peut émettre DEUX tableaux d'appels dans UNE réponse.
+        /// <see cref="ExtractJsonArray"/> ne retourne que le PREMIER : le second
+        /// serait JETÉ EN SILENCE et le modèle annoncerait son action comme FAITE
+        /// alors que rien n'a été exécuté (réservation fantôme).</para>
         /// <para>Le filet scanne les groupes équilibrés APRÈS le tableau
         /// principal, ne retient que ceux qui portent « tool », les
         /// désérialise avec les MÊMES béquilles
@@ -1378,18 +1268,6 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Échappe les caractères de contrôle (c &lt; 0x20) non échappés qui
-        /// apparaissent à l'intérieur des chaînes JSON. System.Text.Json est
-        /// strict et rejette les contrôles bruts (ex. tabulation 0x09) dans
-        /// les strings ; on les remplace par leur forme échappée (\t, \n, \r,
-        /// \uXXXX) pour tolérer les sorties malformées des LLM. Les contrôles
-        /// hors-string (espaces/retours de formatage entre tokens) sont laissés
-        /// intacts (le reader les ignore).
-        /// <para>internal (v1.17.0 T1b) : le moteur de génération de langues
-        /// (<see cref="I18nGenerator"/>) a le même besoin exact de béquilles
-        /// JSON pour les petits modèles.</para>
-        /// </summary>
-        /// <summary>
         /// v2.6.5 — Nom d'outil enregistré mentionné en MOT-ENTIER
         /// (insensible à la casse) dans une réponse qui n'a émis aucun
         /// appel : signal de narration d'intention plutôt que d'émission.
@@ -1457,8 +1335,7 @@ namespace LLM_AI
         {
             if (string.IsNullOrWhiteSpace(reply)) return null;
 
-            // 1) Contrôles (< 0x20) non échappés dans les chaînes (piège
-            // System.Text.Json strict — vécu sur les sorties gemma4).
+            // 1) Contrôles (< 0x20) non échappés dans les chaînes (System.Text.Json strict).
             string sanitized = SanitizeJsonControlChars(reply);
             if (FinalArrayParses(sanitized)) return sanitized;
 
@@ -1485,6 +1362,18 @@ namespace LLM_AI
             catch { return false; }
         }
 
+        /// <summary>
+        /// Échappe les caractères de contrôle (c &lt; 0x20) non échappés qui
+        /// apparaissent à l'intérieur des chaînes JSON. System.Text.Json est
+        /// strict et rejette les contrôles bruts (ex. tabulation 0x09) dans
+        /// les strings ; on les remplace par leur forme échappée (\t, \n, \r,
+        /// \uXXXX) pour tolérer les sorties malformées des LLM. Les contrôles
+        /// hors-string (espaces/retours de formatage entre tokens) sont laissés
+        /// intacts (le reader les ignore).
+        /// <para>internal (v1.17.0) : le moteur de génération de langues
+        /// (<see cref="I18nGenerator"/>) a le même besoin exact de béquilles
+        /// JSON pour les petits modèles.</para>
+        /// </summary>
         internal static string SanitizeJsonControlChars(string json)
         {
             if (string.IsNullOrEmpty(json)) return json;
@@ -1512,11 +1401,8 @@ namespace LLM_AI
                             esc = false;
                             continue;
                         }
-                        // Échappement invalide en JSON (vécu 2026-09-09, gemma4 :
-                        // \' dans « l'historique » émis avec un anti-slash) — les
-                        // échappements valides sont " \ / b f n r t u ; pour tout
-                        // autre caractère, on tombe le backslash (le caractère
-                        // seul suffit : \' → ', \A → A).
+                        // Échappement invalide en JSON (ex. \') : les valides sont " \ / b f n r t u ;
+                        // pour tout autre caractère on tombe le backslash (\' → ', \A → A).
                         if (c != '"' && c != '\\' && c != '/' && c != 'b' && c != 'f' &&
                             c != 'n' && c != 'r' && c != 't' && c != 'u')
                             sb.Length--;
@@ -1548,9 +1434,8 @@ namespace LLM_AI
 
         /// <summary>
         /// Réparation tolérante des guillemets doubles NON échappés à
-        /// l'intérieur des valeurs string (vécu 2026-09-09, gemma4 :
-        /// « (kind="series") » dans un texte de prompt ferme prématurément
-        /// la chaîne JSON et fait rejeter tout le tableau d'appels). Un « " »
+        /// l'intérieur des valeurs string (ex. « (kind="series") » ferme
+        /// prématurément la chaîne et fait rejeter tout le tableau). Un « " »
         /// rencontré dans une chaîne est traité comme du contenu (réécrit
         /// « \" ») sauf s'il est suivi — blancs optionnels — d'un caractère
         /// structurel (, } ] ou :) auquel cas il ferme la chaîne.
@@ -1558,7 +1443,7 @@ namespace LLM_AI
         /// après un guillemet reste ambiguë — la désérialisation stricte du
         /// résultat tranche ; en cas d'échec on retombe sur le renvoi demandé
         /// au modèle (comportement antérieur, aucune régression).
-        /// <para>internal (v1.17.0 T1b) : réutilisé par <see cref="I18nGenerator"/>.</para>
+        /// <para>internal (v1.17.0) : réutilisé par <see cref="I18nGenerator"/>.</para>
         /// </summary>
         internal static string RepairUnescapedQuotes(string json)
         {
@@ -1609,12 +1494,9 @@ namespace LLM_AI
         {
             // Priorité à un groupe équilibré contenant « tool » (appel
             // d'outils) ; à défaut, premier groupe équilibré (tableau de
-            // recommandations). Vécu 2026-09-14 : réponse MIXTE texte +
-            // tableau d'appels (« Je lance la lecture… » + client_command)
-            // où le lien markdown [Titre](url) forme déjà un [ … ] équilibré
-            // sans « tool » — le scan du premier groupe seul renvoyait le
-            // titre du lien, l'appel n'était jamais exécuté et le JSON brut
-            // partait dans le chat. On scrute donc TOUS les groupes.
+            // recommandations). Réponse MIXTE texte + tableau d'appels : un lien markdown
+            // [Titre](url) forme déjà un [ … ] équilibré sans « tool » ; on scrute donc
+            // TOUS les groupes, sinon l'appel n'est jamais exécuté.
             string firstBalanced = null;
             int start = s.IndexOf('[');
             while (start >= 0)

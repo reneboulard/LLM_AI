@@ -19,8 +19,7 @@ namespace LLM_AI
     /// <summary>
     /// Outil de scraping HTTP générique « nouveautés TV » : liste les
     /// nouvelles séries/saisons annoncées par les sources web configurées
-    /// (héritier du scraper Showbizz.net, porté de
-    /// <c>/var/www/llm_core/tools/showbizz_scraper.php</c>).
+    /// (héritier du scraper Showbizz.net).
     /// <list type="bullet">
     /// <item>Sources = <see cref="PluginConfiguration.NewReleaseSources"/>, une
     /// par ligne : « URL » (flux RSS/Atom auto-détecté), « URL :: @showbizz »
@@ -47,13 +46,13 @@ namespace LLM_AI
             Timeout = TimeSpan.FromSeconds(15)
         };
 
-        // UA Chrome complet (identique au PHP) — certains sites bloquent
+        // UA Chrome complet — certains sites bloquent
         // les UA non-navigateur.
         private const string ChromeUA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-        // Cache 24h en mémoire (équivalent du cache fichier PHP). La clé est
+        // Cache 24h en mémoire. La clé est
         // le hash des sources effectives : un changement de config invalide
         // le cache sans redémarrage.
         private static List<object> s_cacheList;
@@ -66,7 +65,7 @@ namespace LLM_AI
         private readonly List<SourceSpec> _sources;
         private readonly string _description;
 
-        // Sources Showbizz.net historiques (portage de showbizz_scraper.php)
+        // Sources Showbizz.net historiques
         // — utilisées par la migration de PluginConfiguration.NewReleaseSources.
         internal static readonly string[] LegacyDefaultSources = new[]
         {
@@ -289,7 +288,7 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Extraction « emissions » (portage du PHP, extracteur intégré)
+        //  Extraction « emissions » (extracteur intégré)
         // ------------------------------------------------------------------
 
         // Bloc <a href="/emissions/..."> ... </a> (multiline).

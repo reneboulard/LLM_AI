@@ -72,8 +72,8 @@ namespace LLM_AI
         /// <summary>Plafond d'un résumé (caractères) — borne le bloc injecté.</summary>
         internal const int MaxSummaryChars = 1500;
 
-        /// <summary>Après résumé, tours verbatim conservés (vérité terrain de
-        /// la continuité immédiate ; le résumé couvre le reste).</summary>
+        /// <summary>Après résumé, tours verbatim conservés (continuité
+        /// immédiate ; le résumé couvre le reste).</summary>
         internal const int KeepTurnsAfterSummary = 6;
 
         /// <summary>Rétention (jours) — une conversation ancienne n'a plus
@@ -116,8 +116,8 @@ namespace LLM_AI
         // -----------------------------------------------------------------
 
         /// <summary>Générateur d'identifiant de session (« c » + tampon UTC
-        /// + suffixe hex). Exposé pour l'allocation d'office au début du tour
-        /// (v1.13.30.2) : quand la page ne porte pas d'id (premier tour d'une
+        /// + suffixe hex). Exposé pour l'allocation d'office au début du tour :
+        /// quand la page ne porte pas d'id (premier tour d'une
         /// conversation), le serveur alloue l'id AVANT les dépôts — sinon les
         /// cartes déposées partent sous la clé « default » et l'approbation
         /// par clic (envoyée avec l'id généré en fin de tour) est rejetée.</summary>

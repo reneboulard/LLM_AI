@@ -36,7 +36,7 @@ namespace LLM_AI
     /// </list>
     /// Le code circule en clair dans la réponse API (HTTPS/loopback de
     /// l'app compagnon) — c'est un secret d'ergonomie, pas un secret de
-    /// sécurité : il empêche un « oui » ambigü et l'auto-confirmation du
+    /// sécurité : il empêche un « oui » ambigu et l'auto-confirmation du
     /// LLM, pas une attaque réseau (les autres couches s'en chargent).
     /// </summary>
     public static class RecordingPendingStore
@@ -411,8 +411,8 @@ namespace LLM_AI
                 int code = RandomNumberGenerator.GetInt32(0, 10000);
                 string pin = code.ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
                 if (IsNonTrivial(pin)) return pin;
-                // Boucle réelle impossible à boucler (10 000 - ~200 codes
-                // triviaux) — la borne est du filet anti-pathologie.
+                // En pratique la boucle ne boucle jamais (10 000 codes dont ~200
+                // triviaux) — la borne est un filet anti-pathologie.
                 if (attempt >= 20) return pin;
             }
         }
@@ -421,7 +421,7 @@ namespace LLM_AI
         {
             if (pin[0] == pin[1] && pin[1] == pin[2] && pin[2] == pin[3]) return false; // 1111
             if (pin[1] == pin[2] && pin[2] == pin[3]
-                && (pin[0] == pin[1] - 1 || pin[0] == pin[1] + 1)) return false;         // 1123
+                && (pin[0] == pin[1] - 1 || pin[0] == pin[1] + 1)) return false;         // 1222 / 2111
             bool asc = pin[1] == pin[0] + 1 && pin[2] == pin[1] + 1 && pin[3] == pin[2] + 1;
             bool desc = pin[1] == pin[0] - 1 && pin[2] == pin[1] - 1 && pin[3] == pin[2] - 1;
             return !asc && !desc;                                                        // 1234 / 9876

@@ -9,7 +9,7 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  Stores de la mémoire réflexive (Phase A) : décisions, pool de
+    //  Stores de la mémoire réflexive : décisions, pool de
     //  candidats, télémétrie de lecture.
     //
     //  Trois fichiers JSON dans le répertoire de configuration du plugin
@@ -26,7 +26,7 @@ namespace LLM_AI
     //    - playback.json   : une entrée PAR SESSION DE LECTURE terminée
     //      (PlaybackStopped) avec % lu, durée, contexte (app/appareil/chaîne).
     //
-    //  Jointures du tableau hebdo (Phase C) : decisions.item_id /
+    //  Jointures du tableau hebdo : decisions.item_id /
     //  program_id → playback.item_id ; decisions.run_id → run_pool.run_id.
     //
     //  Tout est opt-in (DecisionLogEnabled / PlaybackTelemetryEnabled),
@@ -94,7 +94,7 @@ namespace LLM_AI
         /// <summary>Secondes réellement lues.</summary>
         public int DurSec;
         /// <summary>Fraction lue (0-1) ; null si la durée d'œuvre est inconnue
-        /// (direct : connue seulement via l'EpgSnapshot, Phase B).</summary>
+        /// (direct : connue seulement via l'EpgSnapshot).</summary>
         public double? Pct;
         /// <summary>Durée d'œuvre connue au moment de la lecture (s) ou null.</summary>
         public int? RtSec;
@@ -170,8 +170,8 @@ namespace LLM_AI
     /// <summary>
     /// Stores fichiers de la mémoire réflexive. Statique : le journal est
     /// transverse (écrit par TonightService, LlmScheduledTask, RecosApiService,
-    /// GetEmbyInfoTool, PlaybackWatcher ; lu par la future tâche Mémoire).
-    /// Tous les appelsants passent la config courante ; l'activation est
+    /// GetEmbyInfoTool, PlaybackWatcher ; lu par la tâche Mémoire).
+    /// Tous les appelants passent la config courante ; l'activation est
     /// contrôlée par <see cref="PluginConfiguration.DecisionLogEnabled"/> (et
     /// <see cref="PluginConfiguration.PlaybackTelemetryEnabled"/> pour la
     /// télémétrie). Les lectures tolèrent un JSON invalide (repart de vide).
@@ -383,8 +383,7 @@ namespace LLM_AI
         /// Carry-forward : au premier usage du store (fichier absent), les
         /// entrées du journal RecoLog (config XML, 30 jours) sont converties
         /// en décisions (runId/raison/mv inconnus). RecoLog reste actif en
-        /// double écriture jusqu'à la Phase C (l'analyse hebdo actuelle le
-        /// lit encore).
+        /// double écriture (l'analyse hebdo de rétroaction le lit encore).
         /// </summary>
         private static void EnsureMigrated(PluginConfiguration cfg, List<DecisionEntry> list)
         {
@@ -630,7 +629,7 @@ namespace LLM_AI
         }
 
         // -----------------------------------------------------------------
-        //  Lectures (tâche Mémoire, Phase C)
+        //  Lectures (tâche Mémoire)
         // -----------------------------------------------------------------
 
         /// <summary>Lecture complète du journal de décisions (30 jours).</summary>

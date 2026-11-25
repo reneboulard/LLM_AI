@@ -96,7 +96,7 @@ namespace LLM_AI
 
     // ---------------------------------------------------------------------
     //  I18nGenState : état partagé du run de génération DÉTACHÉ — miroir
-    //  exact d'AuditRunState (les mêmes terrains ont motivé la même forme :
+    //  exact d'AuditRunState (les mêmes exigences motivent la même forme :
     //  single-flight contre les clics en rafale, jalons survivant au
     //  rechargement de page, run détaché de la requête HTTP). Statique
     //  volontairement : l'état vit et meurt avec le process Emby.

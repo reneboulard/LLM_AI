@@ -9,8 +9,8 @@ namespace LLM_AI
     /// fichier temporaire voisin puis renommé par-dessus la cible. Un crash
     /// ou un arrêt serveur en plein write laisse l'ANCIEN fichier intact au
     /// lieu d'un JSON tronqué (qui, relu comme « vide », serait ensuite
-    /// réécrit par-dessus et perdrait tout l'état — cf. contrat « fichiers
-    /// d'état = contrats de nettoyage », AGENTS.md).
+    /// réécrit par-dessus et perdrait tout l'état — contrat « fichiers
+    /// d'état = contrats de nettoyage »).
     /// Les exceptions remontent comme avec <see cref="File.WriteAllText(string,string)"/> :
     /// l'appelant garde sa politique (log Warn, fail-open…).
     /// </summary>

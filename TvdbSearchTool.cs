@@ -14,12 +14,10 @@ namespace LLM_AI
     /// <summary>
     /// Outil d'enrichissement internet via TheTVDB.com (v4) : recherche une
     /// série et renvoie nom, synopsis (français en priorité), statut, année,
-    /// note, etc. Portage C# in-process de l'outil PHP <c>tvdb_search</c>
-    /// (qui fonctionne avec le LLM de l'utilisateur) — remplace la dépendance
-    /// Redis par un cache de token en mémoire statique, et refera le login
-    /// + réessayera sur 401 (le PHP se contentait d'effacer le token).
+    /// note, etc. Le token est mis en cache en mémoire statique ; le login est
+    /// refait puis la requête réessayée sur 401.
     /// Clé API lue dans <see cref="PluginConfiguration.TvdbApiKey"/> avec
-    /// repli sur la variable d'environnement <c>TVDB_API_KEY</c> (comme le PHP).
+    /// repli sur la variable d'environnement <c>TVDB_API_KEY</c>.
     /// <para><b>Anti-spam TVDB :</b> deux caches statiques en mémoire — le
     /// token Bearer (TTL 23h) et les résultats de recherche par requête
     /// normalisée (TTL 23h, seules les réponses utiles sont cachées). Aucun
@@ -28,7 +26,7 @@ namespace LLM_AI
     public class TvdbSearchTool : ILlmTool
     {
         private const string BaseUrl = "https://api4.thetvdb.com/v4";
-        // TVDB : token valide ~24h ; on le cache 23h comme le PHP (82800s).
+        // TVDB : token valide ~24h ; on le cache 23h (82800 s).
         private static readonly TimeSpan TokenTtl = TimeSpan.FromHours(23);
 
         private static readonly HttpClient _http = new HttpClient
@@ -96,7 +94,7 @@ namespace LLM_AI
                 string token = await GetTokenAsync(key, forceRefresh: false, ct).ConfigureAwait(false);
                 string result = await SearchSeriesAsync(key, token, query, allowRetry: true, ct).ConfigureAwait(false);
                 // On ne cache QUE les réponses utiles (les erreurs / « aucune série »
-                // restent non cachées pour permettre une vraie retry au prochain appel).
+                // restent non cachées pour permettre un vrai nouvel essai au prochain appel).
                 if (!result.Contains("\"error\":"))
                     TrySetCached(cacheKey, result);
                 _logger?.Info("[LLM_AI] tvdb_search query={0} -> {1}", query, Truncate(result, 200));
@@ -237,8 +235,7 @@ namespace LLM_AI
         /// Synopsis en français si disponible, sinon anglais, sinon le champ
         /// <c>overview</c> par défaut. TVDB v4 peut renvoyer <c>overviews</c>
         /// soit comme une map {lang: texte}, soit comme un tableau
-        /// [{language, overview}] — on gère les deux formes (le PHP ne couvrait
-        /// que la map).
+        /// [{language, overview}] — on gère les deux formes.
         /// </summary>
         private static string PickOverview(JsonElement best)
         {

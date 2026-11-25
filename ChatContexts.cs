@@ -5,8 +5,7 @@ using MediaBrowser.Controller;
 namespace LLM_AI
 {
     /// <summary>
-    /// Un contexte prédéfini du chat admin (v1.13.8, portage du pattern
-    /// « contextes » de llm_core) : un mode de conversation que l'usager
+    /// Un contexte prédéfini du chat admin (v1.13.8) : un mode de conversation que l'usager
     /// choisit dans une liste déroulante de la page chat. Le contexte est
     /// injecté dans le system prompt <b>à chaque tour</b> (le serveur est
     /// stateless et le reconstruit de toute façon) — le changer n'exige
@@ -84,7 +83,7 @@ namespace LLM_AI
     internal static class ChatContexts
     {
         /// <summary>Conventions de rédaction communes aux cinq modes
-        /// d'édition (règles de la maison, cf. mémoires du projet).</summary>
+        /// d'édition (règles de la maison).</summary>
         private const string CommonRules =
             "### RÈGLES DE RÉVISION (obligatoires)\n" +
             "- CANAL DE LIVRAISON (obligatoire) : vous ne pouvez PAS écrire la configuration du " +

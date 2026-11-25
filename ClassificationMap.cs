@@ -17,14 +17,15 @@ namespace LLM_AI
     /// </summary>
     /// <remarks>
     /// Miroir de <see cref="GenreCleanerMap"/> : la bibliothèque est déjà
-    /// réécrite par Classification Mapper lui-même, mais l'EPG émet des classifications brutes hétérogènes. Sans ce pont, les
+    /// réécrite par Classification Mapper lui-même, mais l'EPG émet des
+    /// classifications brutes hétérogènes. Sans ce pont, les
     /// classifications envoyées au LLM viennent de DEUX vocabulaires
     /// différents et un filtre « 13+ » raterait à la fois « PG-13 » (EPG) et
     /// « CA-14A » (biblio réécrite). En normalisant les deux côtés, un filtre
     /// demandé dans n'importe quelle forme brute matche les deux sources.
     /// Détection automatique : si le fichier est absent (plugin non installé
     /// sur ce serveur) ou illisible, le lecteur est neutre — chaque
-    /// classification ressort normalisée minuscule-accordée (uppercased)
+    /// classification ressort normalisée en majuscules
     /// sans mapping (comportement sans Classification Mapper). Rechargement
     /// paresseux si le fichier change (mtime, re-stat au plus toutes les 30 s).
     /// </remarks>
@@ -47,8 +48,8 @@ namespace LLM_AI
         /// Chemin du fichier de config Classification Mapper (dossier de
         /// configuration du serveur) — c'est le dossier racine du
         /// programdata Emby, PAS <c>PluginConfigurationsPath</c> :
-        /// Classification Mapper y dépose son JSON directement (vérifié :
-        /// <c>/var/lib/emby/config/</c>). Sur cette build la propriété
+        /// Classification Mapper y dépose son JSON directement (dossier
+        /// <c>config</c> du programdata Emby). Sur cette build la propriété
         /// <c>IApplicationPaths</c> s'appelle <c>ConfigurationDirectoryPath</c>
         /// (pas « ConfigurationPath ») ; repli : <c>ProgramDataPath/config</c>.
         /// </summary>

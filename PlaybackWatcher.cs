@@ -16,7 +16,7 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     /// <summary>
-    /// Observateur de télémétrie de lecture (mémoire réflexive, Phase A).
+    /// Observateur de télémétrie de lecture (mémoire réflexive).
     /// Branché sur <see cref="ISessionManager.PlaybackStopped"/> (pattern
     /// <see cref="TonightLoginService"/> : <see cref="IServerEntryPoint"/>
     /// découvert par scan d'assembly, abonnement dans <see cref="Run"/>,
@@ -37,7 +37,7 @@ namespace LLM_AI
     /// <see cref="ISessionManager.PlaybackStart"/>), méthode de lecture,
     /// langues audio/sous-titres, ids de session.</para>
     /// <para>Le % du direct n'est pas calculable ici (pas de durée d'œuvre
-    /// naturelle sur un flux) : Pct reste null pour le direct — la Phase B
+    /// naturelle sur un flux) : Pct reste null pour le direct — le snapshot EPG
     /// (EpgSnapshot, runtime du programme) le dérivera à l'analyse.</para>
     /// <para>Opt-in <see cref="PluginConfiguration.PlaybackTelemetryEnabled"/>
     /// (défaut false) ; vérifié à CHAQUE événement (pas seulement à Run) —
@@ -154,7 +154,7 @@ namespace LLM_AI
 
                 // Fraction lue : position ÷ durée d'œuvre. La durée vient de
                 // l'item (BaseItem.RunTimeTicks) ou du MediaSource de session.
-                // Le direct n'a ni l'un ni l'autre → Pct = null (Phase B).
+                // Le direct n'a ni l'un ni l'autre → Pct = null.
                 long runtimeTicks = item.RunTimeTicks
                     ?? e.MediaInfo?.RunTimeTicks
                     ?? e.MediaSource?.RunTimeTicks

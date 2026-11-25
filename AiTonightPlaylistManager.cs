@@ -19,11 +19,9 @@ namespace LLM_AI
     /// policy parentale) et <b>une publique foyer</b> (<see cref="PlaylistName"/>,
     /// « AI Tonight », remplie par les runs de l'usager « Tonight » avec
     /// l'<b>intersection parentale</b> : seulement ce que tout compte actif
-    /// peut lire). Depuis la v2.2.0, la résolution série→épisode de la
-    /// publique est <b>foyer</b> (« le plus avancé » des comptes actifs,
-    /// <see cref="NextUpResolver.ResolveHouseholdEpisode"/>) : résolue pour
-    /// le seul porteur — souvent un compte technique sans historique —,
-    /// elle pointait l'épisode 1 de chaque série (vécu 2026-10-08, prod).
+    /// peut lire). La résolution série→épisode de la publique est
+    /// <b>foyer</b> (« le plus avancé » des comptes actifs,
+    /// <see cref="NextUpResolver.ResolveHouseholdEpisode"/>), v2.2.0.
     /// Le contenu vient du <b>watch bucket</b> du run
     /// (enregistrements non visionnés + items possédés). Miroir de
     /// <see cref="AiTonightCollectionManager"/> (même workflow : surface au
@@ -32,18 +30,14 @@ namespace LLM_AI
     /// quel client Emby, là où la collection est une simple navigation.
     /// </summary>
     /// <remarks>
-    /// <para>Comportement (v1.13.2) : <b>détruite puis recréée à chaque
+    /// <para>Comportement : <b>détruite puis recréée à chaque
     /// run</b> — elle reflète exactement les recommandations du jour, sans
-    /// accumulation. Deux quirks de l'API playlist Emby 4.9.5.0 rendent
-    /// l'ancien « retirer tout + ré-ajouter » inopérant (vécu 2026-09-06 :
-    /// 403 entrées, 73 titres dupliqués ×6) :
+    /// accumulation. Deux quirks de l'API playlist Emby 4.9.5.0 :
     /// <list type="bullet">
-    /// <item><c>RemoveFromPlaylist</c> ne retire RIEN (no-op silencieux en
-    /// interne ; via REST, <c>DELETE /Playlists/{id}/Items?Ids=…</c> → HTTP
-    /// 500 SQLiteException, <c>EntryIds=…</c> → 204 sans effet).</item>
-    /// <item>Une <b>série</b> ou saison ajoutée à une playlist (création ou
-    /// ajout) est développée en TOUS ses épisodes (vérifié : un id série →
-    /// 52 entrées).</item>
+    /// <item><c>RemoveFromPlaylist</c> ne retire RIEN (no-op silencieux ;
+    /// via REST : HTTP 500 ou 204 sans effet).</item>
+    /// <item>Une <b>série</b> ou saison ajoutée à une playlist est
+    /// développée en TOUS ses épisodes.</item>
     /// </list>
     /// D'où : suppression de la coquille (<c>ILibraryManager.DeleteItem</c> +
     /// <c>DeleteFileLocation</c>, le .m3u aussi) + recréation, et
@@ -68,19 +62,17 @@ namespace LLM_AI
     {
         /// <summary>
         /// Nom de la playlist Emby maintenue pour « À regarder ce soir ».
-        /// Identique au nom de la collection et du genre pour une cohérence
+        /// Identique au nom de la collection et du tag pour une cohérence
         /// d'interface — artefacts distincts.
         /// </summary>
         public const string PlaylistName = "AI Tonight";
 
         /// <summary>
         /// Nom de la playlist PRIVÉE d'un usager : « AI Tonight · {usager} ».
-        /// Le nom EST le discrimineur de propriétaire (v1.13.16.0) — l'entité
+        /// Le nom EST le discrimineur de propriétaire : l'entité
         /// <see cref="Playlist"/> n'expose pas de champ owner in-process et la
-        /// sémantique de visibilité des requêtes in-process n'est pas fiable
-        /// pour les playlists (validé 2026-09-12 : la vue <c>?UserId=</c>+
-        /// clé admin donne des résultats incohérents) ; le suffixe rend le
-        /// find déterministe sans dépendre de l'une ni de l'autre.
+        /// visibilité des requêtes in-process n'est pas fiable pour les
+        /// playlists ; le suffixe rend le find déterministe.
         /// </summary>
         public static string UserPlaylistName(User user)
         {
@@ -94,13 +86,11 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Playlist PRIVÉE du run (v1.13.16.0) : chaque usager a la sienne
+        /// Playlist PRIVÉE du run : chaque usager a la sienne
         /// (« AI Tonight · {usager} », <c>IsPublic=false</c> — invisible des
-        /// autres comptes, comportement par défaut d'une playlist Emby créée
-        /// sans MakePublic, validé 2026-09-12). Détruite puis recréée à
-        /// chaque appel avec les recos fraîches du run de CET usager — un
-        /// run ne touche plus jamais la playlist d'un autre (la course du
-        /// remplissage disparaît). Les ids du watch bucket sont normalisés
+        /// autres comptes). Détruite puis recréée à chaque appel avec les
+        /// recos fraîches du run de CET usager — un run ne touche jamais la
+        /// playlist d'un autre. Les ids du watch bucket sont normalisés
         /// en <b>feuilles</b> via <see cref="ResolveLeafItems"/> (série/saison
         /// → épisode next up), puis re-passés par le <b>filet parental</b>
         /// (<see cref="PermissionGate.FilterParental"/>) : les recos sont
@@ -162,31 +152,26 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Playlist PUBLIQUE foyer (v1.13.16.0) : « AI Tonight »
+        /// Playlist PUBLIQUE foyer : « AI Tonight »
         /// (<c>IsPublic=true</c>, visible de tous), reconstruite par les runs
         /// de l'usager « Tonight » uniquement. Contenu = <b>intersection
         /// parentale</b> : un item est écarté si UN SEUL usager actif
         /// restreint (<paramref name="restrictedUsers"/>) ne peut pas le
         /// lire — verdict <see cref="PermissionGate.IsParentallyAllowed"/>,
-        /// exactement la décision du gate des recos v1.13.15.0. Pourquoi :
-        /// le contrôle parental Emby est LISTING-ONLY (validé 2026-09-12) —
-        /// un item visible dans une playlist publique est LISIBLE par un
-        /// compte restreint, et la playlist publique est une surface foyer ;
-        /// l'intersection la rend incapable d'exposer ce qu'un compte ne
-        /// peut pas déjà voir.
+        /// exactement la décision du gate des recos. Pourquoi :
+        /// le contrôle parental Emby est LISTING-ONLY — un item visible dans
+        /// une playlist publique est LISIBLE par un compte restreint ;
+        /// l'intersection évite d'exposer ce qu'un compte ne peut pas déjà
+        /// voir.
         /// <para><b>Résolution foyer (v2.2.0)</b> : une reco série/saison
         /// y est résolue en <b>l'épisode le plus avancé du foyer</b>
         /// (<see cref="NextUpResolver.ResolveHouseholdEpisode"/> sur
         /// <paramref name="householdUsers"/> — ensemble reçu <b>déjà
         /// constitué et filtré</b> par l'appelant : porteur + comptes
-        /// actifs, <b>moins les comptes ignorés</b>) et non plus en le
-        /// seul next up du porteur. Motif (vécu 2026-10-08, prod) : le
-        /// porteur est souvent un compte technique sans historique (champ
-        /// usager Tonight vide → premier admin) — sa résolution valait
-        /// l'épisode 1 pour chaque série recommandée, quel que soit
-        /// l'avancement réel du foyer. Le « plus avancé » rend les comptes
-        /// sans historique neutres et garde les playlists PRIVÉES par
-        /// usager (v1.13.16.0) inchangées — chacun garde SON next up.</para>
+        /// actifs, <b>moins les comptes ignorés</b>) et non le seul next up
+        /// du porteur, souvent un compte technique sans historique (qui
+        /// donnerait l'épisode 1 de chaque série). Les playlists PRIVÉES
+        /// gardent le next up de chaque usager.</para>
         /// <para>Détruite puis recréée à chaque appel (aucun membre
         /// acceptable = playlist absente, jamais recréée vide). Best-effort :
         /// un échec d'API est logué sans lever.</para>
@@ -262,12 +247,10 @@ namespace LLM_AI
         /// Ajoute des items à la playlist PRIVÉE du compte demandeur
         /// (« <see cref="PlaylistName"/> · {usager} », cf.
         /// <see cref="UserPlaylistName"/>) SANS reset (additif pur).
-        /// <b>v1.13.18.0</b> : le chat (surface admin) n'ajoute PLUS dans la
-        /// publique foyer — un item ajouté au chat n'a pas traversé
-        /// l'intersection parentale du run « Tonight » ; le poser dans la
-        /// playlist privée de l'admin referme ce contournement (la publique
-        /// reste remplie exclusivement par <see cref="EnsurePublicAsync"/>).
-        /// Hygiène (v1.13.2) : les ids sont d'abord normalisés en
+        /// Le chat (surface admin) n'ajoute jamais dans la publique foyer :
+        /// un item ajouté au chat n'a pas traversé l'intersection parentale
+        /// (la publique n'est remplie que par <see cref="EnsurePublicAsync"/>).
+        /// Hygiène : les ids sont d'abord normalisés en
         /// <b>feuilles</b> via <see cref="ResolveLeafItems"/> (série/saison →
         /// épisode next up), puis <b>dédupliqués</b> contre les entrées
         /// courantes (un item déjà présent n'est pas re-ajouté). Crée la
@@ -339,18 +322,15 @@ namespace LLM_AI
             }
             finally
             {
-                // Poster par défaut (400×600) sur une coquille NEUVE seulement
-                // (création chat) — idempotent : une coquille existante avec
-                // une image est épargnée, et le try ci-dessus ne re-pose rien
-                // sur un simple ajout. Sur simple ajout (coquille existante),
-                // HasImage est déjà vrai → no-op immédiat.
+                // Poster par défaut (400×600) : idempotent, no-op si la
+                // coquille a déjà une image (simple ajout).
                 await ApplyDefaultPosterAsync(library, name, false, host, logger, ct).ConfigureAwait(false);
             }
         }
 
         /// <summary>
         /// Retire des items de la playlist PRIVÉE du compte demandeur
-        /// (cf. <see cref="UserPlaylistName"/>, v1.13.18.0 — symétrie avec
+        /// (cf. <see cref="UserPlaylistName"/>, symétrique de
         /// <see cref="AddItemsAsync"/>) — <b>par InternalId d'item</b> : les
         /// ids demandés sont vérifiés contre le listing des entrées courantes
         /// et SEULS les ids présents dans ce listing sont passés à
@@ -467,10 +447,8 @@ namespace LLM_AI
         /// <summary>
         /// Supprime l'item <see cref="Playlist"/> ciblé (et son fichier .m3u
         /// sous-jacent via <c>DeleteOptions.DeleteFileLocation = true</c>) —
-        /// seul reset fiable sur ce build, <c>RemoveFromPlaylist</c> y étant
-        /// inopérant (no-op silencieux en interne, SQLiteException via REST ;
-        /// vécu 2026-09-06 : 403 entrées dupliquées ×6). La coquille change
-        /// d'id à chaque appel : sans importance (retrouvée par nom).
+        /// seul reset fiable, <c>RemoveFromPlaylist</c> étant inopérant. La
+        /// coquille change d'id à chaque appel (retrouvée par nom).
         /// <paramref name="publicOnly"/> : vrai = ne viser que la coquille
         /// PUBLIQUE du nom (la privée d'un usager homonyme est préservée).
         /// </summary>
@@ -496,14 +474,10 @@ namespace LLM_AI
         /// <c>default_poster.jpg</c> via <see cref="DefaultImageApplier"/>) sur
         /// la coquille <see cref="Playlist"/> du nom donné — best-effort,
         /// ne lève jamais. La coquille étant <b>détruite puis recréée</b> à
-        /// chaque run, elle est toujours sans image au moment de l'appel :
-        /// le poster est (re)posé à chaque recréation, une image posée
-        /// manuellement dans « Edit Images » entre deux runs serait elle
-        /// détruite avec la coquille (comportement intrinsèque du reset).
-        /// <para><b>Stabilité face au collage Emby</b> (décompilé
-        /// <c>PlaylistDynamicImageProvider</c> 4.10.0.40, même famille
-        /// <c>BaseCollageImageProvider</c> que le collage des collections) :
-        /// <c>HasChanged</c> ne régénère le collage que sur image <b>absente</b>
+        /// chaque run, elle est toujours sans image au moment de l'appel
+        /// (une image posée à la main serait détruite avec la coquille).
+        /// <para><b>Stabilité face au collage Emby</b> : <c>HasChanged</c>
+        /// ne régénère le collage que sur image <b>absente</b>
         /// ou nommée <c>auto_poster_*</c> — un poster sauvegardé sous un nom
         /// standard (<c>poster.jpg</c>, pas de suffixe
         /// <c>generatedFromItemIds</c>) n'est jamais remplacé par le collage
@@ -535,18 +509,14 @@ namespace LLM_AI
         /// <c>Season</c> devient son épisode « next up » non vu pour l'usager
         /// Tonight, les autres items (film, épisode) passent tels quels.
         /// Déduplique. <b>Pourquoi</b> : Emby développe une série ou saison
-        /// ajoutée à une playlist en TOUS ses épisodes (vérifié 2026-09-06 :
-        /// un id série → 52 entrées) — sans cette normalisation, chaque run
-        /// gonflait la playlist de ~50 entrées par reco série.
-        /// <para><b>Next up + repli (v1.13.10.1)</b> : sur ce build Emby
-        /// (4.10.0.40), <c>GetNextUp</c> retourne VIDE pour une série
-        /// <b>jamais commencée</b> (aucun épisode vu — vérifié aussi via le
-        /// REST natif <c>/Shows/NextUp</c>) et peut renvoyer un épisode DÉJÀ
+        /// ajoutée à une playlist en TOUS ses épisodes — sans cette
+        /// normalisation, chaque reco série gonflerait la playlist.
+        /// <para><b>Next up + repli</b> : <c>GetNextUp</c> retourne VIDE pour
+        /// une série <b>jamais commencée</b> et peut renvoyer un épisode DÉJÀ
         /// VU. Le repli calcule le « prochain » à la main
         /// (<see cref="NextUpResolver.FirstUnwatchedEpisode"/>) : premier épisode non vu en
-        /// ordre saison/épisode — tout vu = série sautée. Depuis v1.13.25,
-        /// la résolution vit dans <see cref="NextUpResolver"/> (partagée
-        /// avec le tool <c>client_command play_item</c> du chat externe).</para>
+        /// ordre saison/épisode — tout vu = série sautée. La résolution vit
+        /// dans <see cref="NextUpResolver"/> (partagée avec le chat externe).</para>
         /// </summary>
         private static List<long> ResolveLeafIds(
             ILibraryManager library, IServerApplicationHost host,
@@ -608,10 +578,8 @@ namespace LLM_AI
         /// <paramref name="resolveSeriesEpisode"/> (par usager pour les
         /// privées, foyer « le plus avancé » pour la publique — v2.2.0), les
         /// autres items (film, épisode) passent tels quels. Dédup par
-        /// InternalId. <b>Pourquoi</b> : Emby développe une série ou saison
-        /// ajoutée à une playlist en TOUS ses épisodes (vérifié 2026-09-06 :
-        /// un id série → 52 entrées) — sans cette normalisation, chaque run
-        /// gonflait la playlist de ~50 entrées par reco série.
+        /// InternalId. <b>Pourquoi</b> : cf. <see cref="ResolveLeafIds"/>
+        /// (Emby développe une série en tous ses épisodes).
         /// </summary>
         private static List<BaseItem> ResolveLeavesCore(
             ILibraryManager library, IServerApplicationHost host,
@@ -696,8 +664,7 @@ namespace LLM_AI
         /// <see cref="IPlaylistManager.RemoveFromPlaylist"/> (entryIds).
         /// Via <see cref="Folder.GetItemList"/> de la playlist elle-même — son
         /// override <c>GetItemsInternal</c> lit les enfants du fichier
-        /// playlist (chemin de l'API REST <c>/Playlists/{id}/Items</c>,
-        /// vérifié sur ce serveur). <b>Note</b> :
+        /// playlist (chemin de l'API REST <c>/Playlists/{id}/Items</c>).
         /// <c>InternalItemsQuery.ParentId</c> n'existe pas sur cette build.
         /// </summary>
         private static long[] GetEntryIds(ILibraryManager library, Playlist playlist)

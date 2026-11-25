@@ -145,7 +145,7 @@ namespace LLM_AI
 
             // Résolution de l'usager : priorité au token (AuthorizationContext),
             // puis au UserId passé en param — en vérifiant qu'un usager non-admin
-            // ne consulted que son propre historique.
+            // ne consulte que son propre historique.
             User user = ResolveUser(req);
             if (user == null)
                 return new TonightResponse { Enabled = true, Error = "Utilisateur non authentifié." };
@@ -264,7 +264,7 @@ namespace LLM_AI
                 if (authUser == null && auth != null && auth.UserId != 0)
                     authUser = UserManager.GetUserById(auth.UserId);
             }
-            catch { /* tolérant : on repli sur UserId */ }
+            catch { /* tolérant : on se replie sur UserId */ }
 
             if (string.IsNullOrWhiteSpace(req.UserId))
             {
@@ -293,7 +293,7 @@ namespace LLM_AI
             if (requested == null) return authUser;
 
             if (authUser == null)
-                return requested; // pas de token : on trust UserId (auth Emby globale couvre)
+                return requested; // pas de token : on fait confiance à UserId (auth Emby globale couvre)
 
             if (requested.Id == authUser.Id)
                 return requested;

@@ -79,7 +79,7 @@ namespace LLM_AI
         public const string TagIdentified = "llmai-identified";
         /// <summary>Tag posé sur un orphelin qu'aucun stage n'a pu résoudre ALORS
         /// QUE des candidats existaient (rejetés par la porte) — à revérifier à
-        /// la main ; retraitable par le passe nocturne si le retry est activé.</summary>
+        /// la main ; retraitable par la passe nocturne si le retry est activé.</summary>
         public const string TagNeedsReview = "llmai-needs-review";
         /// <summary>Tag posé sur un orphelin dont le titre est absent de TOUTES
         /// les banques (aucun candidat vu à S0/S1/S2/S3) — état terminal : rien
@@ -193,7 +193,7 @@ namespace LLM_AI
             // courait sans année ni synopsis (cas réel : documentaire
             // importé en série, fiche film trouvée par S1 ET S3 mais
             // rejetée faute de preuve — l'année de diffusion et le
-            // synopsis EPG de l'épisode auraient corroboraient). Lecture
+            // synopsis EPG de l'épisode auraient corroboré). Lecture
             // UNE fois par passe ; l'entrée la plus récente dont le chemin
             // vit sous le dossier de la série alimente le REPLI FILM
             // UNIQUEMENT (OrphanResolver) : la passe série reste sans

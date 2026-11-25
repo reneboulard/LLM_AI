@@ -20,22 +20,20 @@ namespace LLM_AI
     /// <summary>
     /// Tâche planifiée hebdomadaire de la <b>mémoire réflexive</b> (opt-in
     /// <see cref="PluginConfiguration.MemoryCardEnabled"/>, défaut dimanche
-    /// 4 h 40 — après l'analyse hebdo classique de 4 h 10). C'est la Phase C du
-    /// concept : le LLM gère et met à jour lui-même sa <b>fiche mémoire</b>
+    /// 4 h 40 — après l'analyse hebdo classique de 4 h 10). Le LLM gère et
+    /// met à jour lui-même sa <b>fiche mémoire</b>
     /// persistante (~250 mots, Markdown) — ses réussites, ses échecs, ses
     /// stratégies pour les prochains runs et chats.
     /// <para>
     /// Pour UN foyer (la fiche est globale) :
     /// <list type="bullet">
     /// <item>construit en C# (déterministe, zéro LLM) le tableau d'événements
-    ///   bruts de la semaine : jointure des stores de la Phase A/B —
+    ///   bruts de la semaine : jointure des stores de décisions et de télémétrie —
     ///   <see cref="DecisionStore"/> (décisions avec leur RAISON et la version
     ///   de fiche en vigueur) × <see cref="DecisionStore"/> télémétrie
     ///   (fraction lue : rejet immédiat &lt; 5 %, abandon 5–50 %, validé
-    ///   &gt; 80 % ; v2.7.2 : jointure consommation en CASCADE — id d'item,
-    ///   fenêtre du direct, puis TITRE/SÉRIE figé dans la télémétrie, qui
-    ///   rattrape l'épisode ENREGISTRÉ d'une reco live et l'activation de
-    ///   sa carte .strm) × pools de candidats (ce qui avait été écarté —
+    ///   &gt; 80 % ; jointure en CASCADE : id d'item, fenêtre du direct,
+    ///   puis titre/série figé) × pools de candidats (ce qui avait été écarté —
     ///   distingue une mauvaise reco d'une erreur de classement) ×
     ///   <see cref="EpgSnapshotStore"/> (durée de diffusion → % du direct) ;</item>
     /// <item>fait produire au LLM (un seul appel sans outils,
@@ -195,8 +193,7 @@ namespace LLM_AI
 
                 progress?.Report(40);
 
-                // Règle usager 2026-10-01 : config explicite, sinon langue de
-                // l'interface Emby — la directive est toujours injectée.
+                // Langue : config explicite, sinon interface Emby ; directive toujours injectée.
                 var system = MEMORY_ROLE + "\n\n" + MEMORY_RULES
                     + "\n\n" + LlmAgentService.BuildLanguageDirective(I18n.ResolveProseLangName(cfg, _host));
                 var (reply, ok) = await _runner.RunSynthesisAsync(cfg, "MÉMOIRE", system, table,
@@ -289,17 +286,9 @@ namespace LLM_AI
                 .GroupBy(s => s.ProgramId, StringComparer.Ordinal)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
-            // v2.7.2 — backfill titre/série : les entrées écrites avant le
-            // figage (PlaybackWatcher) n'en portent pas ; résolution
-            // bibliothèque best-effort, une fois par id. Les items
-            // déplacés/supprimés depuis (routine DVR du foyer : dossiers
-            // éphémères, migration quotidienne vers la bibliothèque
-            // permanente) ne résolvent plus — c'est précisément ce que le
-            // figage au moment de la lecture élimine pour l'avenir.
-            // v2.14.0 — le backfill étendu remplit AUSSI genres/classification
-            // normalisés, année, type et numérotation : l'historique 30 j
-            // pré-enrichissement profite de la section « GENRES REGARDÉS »
-            // dès le premier run post-2.14.0 (pour les items survivants).
+            // Backfill best-effort (une fois par id) des entrées écrites avant le figage
+            // titre/série/genres/année par PlaybackWatcher. Les items déplacés ou
+            // supprimés depuis (DVR éphémère) ne résolvent plus : d'où le figage.
             var resolvedIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var p in playback)
             {
@@ -333,11 +322,9 @@ namespace LLM_AI
                 catch { /* best-effort : id non résolvable */ }
             }
 
-            // Index titre/série → lectures (v2.7.2, jointure de repli) :
-            // couvre TOUT le journal (30 j) — la consommation d'une reco
-            // live/record est souvent DIFFÉRÉE (enregistrement regardé des
-            // jours plus tard) et l'item regardé ne porte jamais l'id du
-            // programme EPG pointé par la décision.
+            // Index titre/série → lectures (jointure de repli), sur tout le journal :
+            // un enregistrement est regardé des jours plus tard, avec un autre id que
+            // le programme EPG de la décision.
             var playByTitle = new Dictionary<string, List<PlaybackEntry>>(StringComparer.Ordinal);
             foreach (var p in playback)
             {
@@ -422,17 +409,11 @@ namespace LLM_AI
             }
             if (poolsShown == 0) sb.AppendLine("(aucun pool disponible cette semaine)");
 
-            // 4) Vu sans recommandation (opportunités manquées). Le titre
-            // (et la série, v2.7.2) est figé dans l'entrée — repli
-            // résolution bibliothèque via le backfill ci-dessus — pour
-            // exclure proprement ce qui figure déjà dans une décision :
-            // PAR TITRE (film) OU PAR SÉRIE (l'épisode enregistré d'une
-            // série recommandée n'est PAS une opportunité manquée). Une
-            // carte .strm est l'activation d'une reco — jamais une
-            // « vue sans reco ». Le filtre de substance tolère la
-            // télémétrie sans position (vécu prod : 175/176 entrées à
-            // dur=0 — un client qui ne remonte pas la position n'est pas
-            // un zap).
+            // 4) Vu sans recommandation (opportunités manquées). On exclut ce qui figure
+            // déjà dans une décision, par titre (film) OU par série (l'épisode enregistré
+            // d'une série recommandée n'est pas une opportunité manquée). Une carte .strm
+            // est une activation, jamais une « vue sans reco ». Le filtre de substance
+            // tolère la télémétrie sans position (client muet ≠ zap).
             sb.AppendLine();
             sb.AppendLine("### VU SANS RECOMMANDATION (cette semaine — opportunités manquées)");
             var seenIds = new HashSet<string>(StringComparer.Ordinal);
@@ -453,9 +434,7 @@ namespace LLM_AI
                     && decisionTitles.Contains(LlmRunner.NormTitle(series)))
                     continue; // série recommandée (jointure série, v2.7.2)
                 var slot = (p.StartDate ?? p.Date).ToLocalTime();
-                // v2.14.0 — genres normalisés (+ année) figés dans la
-                // télométrie : l'opportunité manquée porte SA matière
-                // (quoi), pas seulement le titre et le moment (quand).
+                // Genres normalisés (+ année) figés : la matière, pas seulement titre et moment.
                 string taste = "";
                 if (p.Genres != null && p.Genres.Length > 0)
                     taste = string.Join("/", p.Genres.Take(3)) + (p.Year.HasValue ? " " + p.Year.Value : "");
@@ -493,13 +472,9 @@ namespace LLM_AI
                     + (g.Average(p => p.Pct ?? 0) * 100).ToString("0", CultureInfo.InvariantCulture) + " %");
             }
 
-            // 7) Genres réellement regardés (v2.14.0) — le miroir COMPORTEMENTAL
-            // du profil de goût (déclaratif) : ce que le foyer a vraiment
-            // consommé, par genre, genres NORMALISÉS figés dans la télémétrie
-            // (+ backfill best-effort ci-dessus pour les entrées plus
-            // anciennes). Même filtre de substance que « vu sans reco »
-            // (≥ 50 % lu, ou complété, ou ≥ 5 min) ; cartes .strm exclues
-            // (activation d'une reco ≠ visionnage).
+            // 7) Genres réellement regardés : miroir comportemental du profil de goût
+            // déclaratif. Même filtre de substance que « vu sans reco » (≥ 50 % lu,
+            // ou complété, ou ≥ 5 min) ; cartes .strm exclues.
             sb.AppendLine();
             sb.AppendLine("### GENRES RÉELLEMENT REGARDÉS (cette semaine, lectures substantielles)");
             var genreRows = new Dictionary<string, List<PlaybackEntry>>(StringComparer.OrdinalIgnoreCase);
@@ -548,7 +523,7 @@ namespace LLM_AI
         }
 
         /// <summary>Résultat de visionnage d'une décision (texte court).
-        /// Trois jointures en cascade (v2.7.2) :
+        /// Trois jointures en cascade :
         /// <list type="number">
         /// <item><b>id d'item</b> — bibliothèque/enregistrement pointé
         /// directement par la reco (jointure exacte) ;</item>
@@ -562,12 +537,9 @@ namespace LLM_AI
         /// couple (titre, série) figé dans la télémétrie porte la
         /// jointure.</item>
         /// </list>
-        /// Vécu prod (fiche v7, 2026-10-25) : sans la 3e jointure, les
-        /// recos live/record sont mesurées uniquement sur le direct — le
-        /// foyer consomme 88 % de ses lectures en bibliothèque → taux
-        /// apparent 0-2 % → la fiche a conclu « l'usager ignore toutes
-        /// mes suggestions » et a ordonné l'arrêt des suggestions sur une
-        /// leçon de mesure, pas de comportement.</summary>
+        /// Sans la 3e jointure, les recos live/record sont mesurées sur le seul direct :
+        /// le taux apparent s'effondre et la fiche en conclut à tort que l'usager
+        /// ignore tout.</summary>
         private static string OutcomeOf(DecisionEntry d, List<PlaybackEntry> playback,
             Dictionary<string, EpgSnapshotEntry> snapByPid,
             Dictionary<string, List<PlaybackEntry>> playByTitle)
@@ -583,9 +555,8 @@ namespace LLM_AI
 
             // 2) Programme EPG (direct) : jointure via le snapshot (chaîne +
             // fenêtre de diffusion) → % = durée lue ÷ durée de diffusion.
-            // dur=0 (client sans position au stop) : lecture touchée, pas
-            // un « rejet immédiat » (v2.7.2 — un zap et un client muet ne
-            // se distinguent pas au log, l'honnêteté prime).
+            // dur=0 (client sans position au stop) : lecture touchée, pas un « rejet
+            // immédiat » (un zap et un client muet ne se distinguent pas).
             if (!string.IsNullOrEmpty(d.ProgramId)
                 && snapByPid.TryGetValue(d.ProgramId, out var snap)
                 && snap.RuntimeMin.HasValue && snap.RuntimeMin.Value > 0)
@@ -627,9 +598,7 @@ namespace LLM_AI
 
         /// <summary>Libellé d'une lecture jointe par id ou par titre :
         /// catégorie par % lu (ou complétion), texte de durée robuste au
-        /// client qui ne remonte pas la position au stop (vécu prod :
-        /// 175/176 entrées à dur=0 — la lecture a BIEN eu lieu). v2.14.0 :
-        /// position SxxEyy figée quand l'entrée la porte (l'épisode
+        /// client qui ne remonte pas la position au stop. Position SxxEyy figée quand l'entrée la porte (l'épisode
         /// ENREGISTRÉ consommé d'une reco de série).</summary>
         private static string PlayOutcome(PlaybackEntry p, string via)
         {

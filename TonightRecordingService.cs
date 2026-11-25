@@ -29,49 +29,28 @@ namespace LLM_AI
     /// regarder »). Toast sur les sessions actives de l'usager
     /// (<see cref="ISessionManager.SendMessageCommand"/>, capacité
     /// <c>DisplayMessage</c>) + notification cloche persistante
-    /// (<see cref="INotificationManager"/>) — même mécanique que
-    /// <c>TonightLoginService</c>, éprouvée au login.
-    /// <para>Pattern <see cref="IServerEntryPoint"/> découvert par scan
-    /// d'assembly, abonnement dans <see cref="Run"/>, désabonnement dans
-    /// <see cref="Dispose"/> — identique à <c>RecordingWatcher</c>, qui
-    /// partage l'événement <see cref="ILiveTvManager.RecordingEnded"/> sans
-    /// conflit (événements C# multicast).</para>
+    /// (<see cref="INotificationManager"/>).
+    /// <para>Implémente <see cref="IServerEntryPoint"/> pour s'abonner
+    /// aux événements au démarrage du serveur.</para>
     /// </summary>
     /// <remarks>
-    /// <para><b>Appariement</b> (forme des args éprouvée au champ par
-    /// <c>RecordingWatcher</c> sur 4.10.1.0 : l'argument porte
-    /// <c>ActiveRecordingInfo</c> directement — aucune résolution
-    /// <c>GetActiveRecordingInfo</c> nécessaire) : <b>id d'abord</b>
-    /// (v2.4.1) — l'InternalId du programme de l'événement contre l'id EPG
-    /// enrichi de la reco (le titre du payload reste celui du LLM, parfois
-    /// reformulé/faux — vécu 2026-10-10) ; sans id, repli titre normalisé
-    /// (<see cref="LlmRunner.NormTitle"/>) corroboré par l'heure de début
-    /// du guide (±15 min).</para>
-    /// <para><b>Titre d'affichage</b> (v2.7.1) : le toast/cloche d'un
-    /// épisode de série porte la série ET sa position —
-    /// « Série — S02E05 « Titre d'épisode » » via
-    /// <see cref="GetEmbyInfoTool.ProgramDisplayTitle"/> — car le
-    /// <c>Name</c> du programme EPG est le titre d'ÉPISODE seul (vécu prod
-    /// 2026-10-26 : « ▶ « Nelly » commence » pour un épisode d'« Alertes:
-    /// Pelletier », aucune série ni numérotation). Le repli titre de
-    /// l'appariement essaie le nom de série ET le titre d'épisode (le
-    /// payload d'une reco live de série porte la série, pas l'épisode).</para>
-    /// <para><b>Piège évité</b> : les recos <c>source="recording"</c>
-    /// (« regarde l'épisode déjà enregistré ») ne sont JAMAIS appariées —
-    /// sinon le timer quotidien d'une série consommée comme enregistrement
-    /// (ex. 14:57 chaque jour) toasterait « commence » pour une reco qui ne
-    /// parle pas de l'épisode en cours d'enregistrement.</para>
-    /// <para><b>Ciblage des sessions</b> (v2.7.4) : l'appariement
-    /// usager↔session passe par <see cref="SessionUserMatch"/> —
-    /// <see cref="SessionInfo.UserId"/> est en forme « N » sur 4.10.x
-    /// alors que la clé de cache Tonight est la forme « D » : la
-    /// comparaison Ordinal directe de la v2.4.0→v2.7.3 ne matchait
-    /// JAMAIS (« 0 toast(s) » sur chaque annonce, cloche seule, vécu
-    /// prod 2026-10-29→31 alors que l'usager regardait Emby — le toast
-    /// du login, lui, cible par id de session et fonctionnait). La
-    /// ligne « Annonce … N toast(s) » porte désormais la cause du
-    /// zéro (aucune session / sessions sans DisplayMessage / usager
-    /// introuvable).</para>
+    /// <para><b>Appariement</b> : se fait en priorité par l'ID du programme
+    /// EPG, car le titre de la recommandation peut être une reformulation
+    /// du LLM. En l'absence d'ID, un repli sur le titre normalisé,
+    /// corroboré par l'heure de début (±15 min), est utilisé.</para>
+    /// <para><b>Titre d'affichage</b> : pour un épisode de série, le
+    /// titre affiché inclut le nom de la série et la numérotation (ex:
+    /// "Série - S01E01 Titre"), car le nom du programme EPG ne contient
+    /// souvent que le titre de l'épisode. L'appariement par titre essaie
+    /// de correspondre au nom de la série et au titre de l'épisode.</para>
+    /// <para>Les recommandations de type <c>source="recording"</c> (qui
+    /// suggèrent de regarder un contenu déjà enregistré) sont exclues de
+    /// l'appariement pour éviter des notifications erronées sur des
+    /// enregistrements récurrents.</para>
+    /// <para><b>Ciblage des sessions</b> : l'appariement entre
+    /// l'utilisateur et sa session se fait via <see cref="SessionUserMatch"/>
+    /// pour gérer les différents formats d'ID utilisateur et garantir que les
+    /// toasts sont bien envoyés aux sessions actives.</para>
     /// <para><b>Anti-brisage</b> : résultat de plus de 48 h ignoré (une
     /// série quotidienne ne toasterait pas des jours sur une sélection
     /// périmée) ; comptes ignorés
@@ -95,18 +74,14 @@ namespace LLM_AI
         private readonly IServerApplicationHost _host;
         private readonly ILogger _logger;
 
-        /// <summary>Garde de fraîcheur du résultat Tonight apparié : le
-        /// rapprochement ne considère que les résultats de moins de 48 h —
-        /// sans elle, une série quotidienne dont un épisode avait été
-        /// recommandé « live » toasterait des jours sur une sélection
-        /// périmée.</summary>
+        /// <summary>Ne considère que les résultats "Tonight" de moins de 48h
+        /// pour éviter d'envoyer des notifications pour des recommandations
+        /// périmées, en particulier pour les séries quotidiennes.</summary>
         private static readonly TimeSpan s_resultMaxAge = TimeSpan.FromHours(48);
 
-        /// <summary>Tolérance de l'heure de début (corroboration) : les
-        /// timers démarent souvent en avance (« padding », ex. 14:57 pour
-        /// 15:00) et l'EPG bouge de quelques minutes d'un run à l'autre.
-        /// Le titre normalisé reste la clé primaire — l'heure ne fait
-        /// qu'écarter un homonyme concurrent.</summary>
+        /// <summary>Tolérance pour la corroboration par heure de début. Permet de
+        /// gérer les démarrages anticipés des enregistrements ("padding")
+        /// et les légères variations d'horaire de l'EPG.</summary>
         private const int StartToleranceMinutes = 15;
 
         public TonightRecordingService(
@@ -129,10 +104,9 @@ namespace LLM_AI
         {
             _liveTv.RecordingStarted += OnRecordingStarted;
             _liveTv.RecordingEnded += OnRecordingEnded;
-            // Ligne d'observabilité : prouve l'abonnement au démarrage — si
-            // 4.10.x ne TIRE pas ces événements, le service reste inert
-            // (fail-open) et la PREMIÈRE réception (Info, ci-dessous) fait
-            // foi du tirage réel sur ce serveur.
+            // Log de démarrage pour confirmer que le service est bien abonné
+            // aux événements. Si aucun événement n'est reçu par la suite,
+            // cela peut indiquer un problème au niveau du serveur Emby.
             _logger?.Info("[LLM_AI] TonightRecordingService démarré — abonné aux événements d'enregistrement Emby (toasts gated par TonightEnabled + TonightRecordingToast).");
         }
 
@@ -234,26 +208,13 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Apparie le programme enregistré contre les recos
-        /// <c>source="live"</c> du dernier résultat Tonight de chaque usager
-        /// en cache (&lt; 48 h, comptes ignorés exclus). Appariement par
-        /// <b>id d'abord</b> (v2.4.1) : l'enrichissement live rattache l'id
-        /// EPG (InternalId du programme) mais ne réécrit PAS le titre — le
-        /// payload garde le titre du LLM, parfois reformulé ou fautif (vécu
-        /// 2026-10-10 : « Miss Scarlet, détectives privé » vs le titre EPG
-        /// « Miss Scarlet, détective privée », id 774657 rattaché par
-        /// chaîne+heure) ; un appariement par titre seul raterait
-        /// l'enregistrement d'une reco enrichie. Sans id (ou sans match
-        /// d'id), repli titre normalisé + corroboration d'horaire : le
-        /// titre du payload de la reco live d'une SÉRIE est le nom de
-        /// série (convention <c>SeriesName ?: Name</c> de l'enrichissement)
-        /// alors que le programme EPG porte le titre d'ÉPISODE en
-        /// <c>Name</c> — le repli compare donc le payload aux DEUX (nom de
-        /// série et titre d'épisode, v2.7.1 : avant, seule l'id rattrapait
-        /// les épisodes).
-        /// Retourne (userId, raison LLM de la reco appariée) — une reco
-        /// appariée par usager suffit. Best-effort : payload illisible →
-        /// usager sauté.
+        /// Apparie un programme en cours d'enregistrement avec les recommandations
+        /// "live" récentes (moins de 48h) de chaque utilisateur.
+        /// <para>La correspondance est d'abord tentée par ID de programme EPG,
+        /// puis par un repli sur le titre normalisé (titre de l'épisode et/ou
+        /// de la série) corroboré par l'heure de début.</para>
+        /// <para>Retourne une liste de paires (userId, raison) pour chaque
+        /// utilisateur dont une recommandation correspond.</para>
         /// </summary>
         private List<(string UserId, string Reason)> MatchAgainstTonight(
             PluginConfiguration cfg, string title, string seriesName, DateTimeOffset? start, long? programId)
@@ -261,10 +222,8 @@ namespace LLM_AI
             var matches = new List<(string, string)>();
             string norm = LlmRunner.NormTitle(title ?? string.Empty);
             string seriesNorm = LlmRunner.NormTitle(seriesName ?? string.Empty);
-            // NB : pas de retour anticipé sur norm vide (v2.4.1) — un titre
-            // dégénéré (tout-punctuation) normaliserait vide alors que l'id
-            // reste exploitable ; le chemin TITRE est neutralisé dans la
-            // boucle dans ce cas.
+            // Ne pas retourner prématurément si le titre normalisé est vide,
+            // car l'appariement par ID peut encore réussir.
 
             var ignored = TonightService.IgnoredUserKeys(_users, cfg, _logger);
             foreach (var (userId, items) in TonightService.GetRecentResults(s_resultMaxAge))
@@ -364,14 +323,10 @@ namespace LLM_AI
 
             User user = ResolveUser(userId);
 
-            // 1) Toast : toutes les sessions ACTIVES de l'usager capables de
-            //    DisplayMessage. Contrairement au login, pas de sonde
-            //    d'attente : à l'heure d'un enregistrement les sessions sont
-            //    établies depuis longtemps (capacités déjà déclarées).
-            //    Ciblage tolérant (v2.7.4, SessionUserMatch) : UserId de
-            //    session est en forme « N » sur 4.10.x, la clé de cache en
-            //    forme « D » — l'ancienne comparaison Ordinal contre la clé
-            //    ne matchait JAMAIS (toasts morts depuis la v2.4.0).
+            // 1) Toast : envoyé à toutes les sessions actives de l'utilisateur
+            //    qui supportent `DisplayMessage`. Le ciblage par
+            //    `SessionUserMatch` gère les différents formats d'ID
+            //    d'utilisateur.
             int sent = 0;
             int owned = 0; // diagnostic : sessions de l'usager SANS filtre de capacité
             try
@@ -386,7 +341,7 @@ namespace LLM_AI
                     {
                         await _sessions.SendMessageCommand(s.Id, s.Id, new MessageCommand
                         {
-                            Header = string.Empty, // non rendu par les clients (vécu login) — tout dans Text
+                            Header = string.Empty, // non utilisé par les clients
                             Text = "🤖 " + toast,
                             TimeoutMs = TonightLoginService.PopupDurationMs(),
                         }, CancellationToken.None).ConfigureAwait(false);
@@ -402,10 +357,8 @@ namespace LLM_AI
             //    survit à la fermeture (notifiers ex. SMTP).
             SendBell(user, toast, reason);
 
-            // Diagnostic du zéro (v2.7.4) : « 0 toast(s) » sans cause a
-            // masqué le défaut de ciblage pendant des semaines — la ligne
-            // distingue désormais « aucune session », « sessions sans
-            // DisplayMessage » et « usager introuvable ».
+            // Le log de diagnostic explicite la raison d'un envoi de "0 toast(s)"
+            // pour faciliter la détection de problèmes de ciblage de session.
             string zeroNote = string.Empty;
             if (sent == 0)
             {
@@ -450,8 +403,8 @@ namespace LLM_AI
                 if (!string.IsNullOrWhiteSpace(reason))
                     desc += "\n🤖 " + reason.Trim();
                 string url = ResolveEmbyUrl();
-                // Lien aussi en description (v2.4.5 : les canaux de lecture —
-                // webhooks, courriel — ignorent le champ Url d'Emby).
+                // Le lien est inclus dans la description pour les notificateurs
+                // (ex: webhooks) qui ignorent le champ Url.
                 if (!string.IsNullOrWhiteSpace(url))
                     desc += "\n" + url;
                 var req = new NotificationRequest

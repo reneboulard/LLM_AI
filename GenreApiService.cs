@@ -177,8 +177,8 @@ namespace LLM_AI
             if (movieUnmapped.Count == 0 && seriesUnmapped.Count == 0)
             {
                 resp.Message = "Tous les genres EPG sont déjà couverts par GenreCleaner.";
-                // Early-return silencieux = impossible à distinguer d'un clic
-                // n'ayant jamais atteint le serveur : trace systématique.
+                // Log systématique pour distinguer un cas "rien à faire" d'une
+                // erreur de communication client-serveur.
                 Logger?.Info("[LLM_AI] [GENRES] Analyse : 0 genre(s) non mappé(s) — tout est déjà couvert.");
                 return resp;
             }
@@ -375,13 +375,9 @@ namespace LLM_AI
         /// liste vide.
         /// </summary>
         /// <remarks>
-        /// <c>HasAired = false</c> est INDISPENSABLE sur ce build d'Emby :
-        /// sans filtre de date, GetItemsResult retourne un sous-ensemble
-        /// arbitraire (tri par défaut + Limit) du pool de programmes
-        /// (passés + futurs) — vécu 2026-09-01 : l'analyse a annoncé
-        /// « 0 genre non mappé » alors que 23 genres non mappés existaient
-        /// côté séries à venir. Les programmes à venir sont de toute façon
-        /// le bon périmètre : ce sont eux que les recommandations émettent.
+        /// <c>HasAired = false</c> est indispensable : sans ce filtre, la
+        /// requête peut retourner un sous-ensemble partiel des programmes,
+        /// menant à un résultat faussement complet.
         /// </remarks>
         private List<string> CollectUnmapped(bool series)
         {

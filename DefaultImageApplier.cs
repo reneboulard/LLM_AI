@@ -112,8 +112,8 @@ namespace LLM_AI
                 }
 
                 // DirectoryService éphémère (lecture FS cache par opération).
-                // Deux pièges Emby 4.10 (décompilé Emby.Providers/ImageSaver
-                // 4.10.0.40 ; NRE terrain aux runs 09:24/09:28) :
+                // Deux pièges Emby 4.10 de ImageSaver (décompilé), tous deux
+                // des NRE sans garde :
                 // - generatedFromItemIds est déréférencé SANS garde
                 //   (« generatedFromItemIds.Length », ImageSaver.SaveImage) :
                 //   null y est fatal → Array.Empty<long>() (neutre : pas de
@@ -135,9 +135,9 @@ namespace LLM_AI
             }
             catch (Exception ex)
             {
-                // Stack complète (ex.ToString) : le Message seul a coûté une
-                // séance de décompilation pour diagnostiquer la NRE SaveImage
-                // du 2026-09-28 — ne pas régresser là-dessus.
+                // ex.ToString() et non ex.Message : une NRE interne (les pièges
+                // SaveImage ci-dessus) se diagnostique sur la stack, pas sur le
+                // message — ne pas régresser là-dessus.
                 logger?.Warn("[LLM_AI] DefaultImage : échec sur « {0} » : {1}", item?.Name, ex.ToString());
             }
         }

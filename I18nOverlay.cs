@@ -13,8 +13,8 @@ namespace LLM_AI
 {
     /// <summary>
     /// Chargeur du fichier optionnel de <b>traductions communautaires</b>
-    /// <c>LLM_AI_i18n.json</c> (v1.16.0, plan P1 — spécifié 2026-10-02/03,
-    /// voir TODO.md). Ajouter une langue d'interface = déposer ce fichier à
+    /// <c>LLM_AI_i18n.json</c> (v1.16.0).
+    /// Ajouter une langue d'interface = déposer ce fichier à
     /// côté de <c>LLM_AI.xml</c> (PluginConfigurationsPath) — zéro code, zéro
     /// recompile, pas de fork pour le traducteur. Format :
     /// <c>{ "es": { "web": {…}, "server": {…}, "ext": {…} }, "fr": {…} }</c> —
@@ -24,7 +24,7 @@ namespace LLM_AI
     /// (les namespaces se chevauchent : « chat.* » existe des deux côtés)
     /// mais chacune est consommée indépendamment — une section manquante
     /// signifie « pas d'overlay pour ce consommateur », pas une erreur ; la
-    /// section <c>ext</c> (v1.16.0 P2b — chat externe, chrome ext.* +
+    /// section <c>ext</c> (v1.16.0 — chat externe, chrome ext.* +
     /// messages Python srv.*) est OPTIONNELLE, servie par /I18nExt à la
     /// langue résolue.
     /// <list type="bullet">
@@ -41,8 +41,7 @@ namespace LLM_AI
     /// <item><b>Snapshot immuable</b> : construit entier puis échangé par
     /// référence (volatile) — un lookup concurrent ne voit jamais un état
     /// à moitié rempli.</item>
-    /// <item><b>Validation par clé</b> (port C# des règles 4-5 du kit
-    /// <c>validate_i18n.js</c>, regex en miroir exact) : multiset des
+    /// <item><b>Validation par clé</b> (regex en miroir exact) : multiset des
     /// placeholders <c>{n}</c> et multiset des balises HTML comparés à la
     /// base EN native (s_res["en"]). Clé invalide → sautée + ligne de log —
     /// l'UI reste dans la langue pour le reste (repli EN par clé, état de
@@ -51,7 +50,7 @@ namespace LLM_AI
     /// section <c>web</c> n'est PAS validée ici : elle est validée côté
     /// client (JS, au merge — drop + console.warn) car le dictionnaire web
     /// EN natif vit dans i18n.js, pas dans la DLL. La section <c>ext</c>
-    /// (P2b) est validée ici, règle {n}-SEULE contre s_ext["en"] — famille
+    /// est validée ici, règle {n}-SEULE contre s_ext["en"] — famille
     /// texte brut (textContent / str.format), pas de règle balises.</item>
     /// <item><b>Patch fr/en supporté</b> (feature documentée) : l'overlay
     /// est autoritaire par langue — une section "fr" ou "en" remplace la
@@ -107,17 +106,16 @@ namespace LLM_AI
         private static string s_lastReport;             // résumé du dernier chargement (ou dernière erreur)
         private static ILogger s_logger;                // paresseux (SetLogger)
 
-        /// <summary>Hook de harnais/tests : chemin imposé (jamais posé en
+        /// <summary>Hook de tests : chemin imposé (jamais posé en
         /// prod — la résolution passe par Plugin.Paths).</summary>
         internal static string TestPathOverride { get; set; }
 
-        /// <summary>Regex des placeholders {n} — MIROIR EXACT du kit
-        /// (validate_i18n.js), triés puis joints pour former un multiset
+        /// <summary>Regex des placeholders {n}, triés puis joints pour former un multiset
         /// comparable.</summary>
         private static readonly Regex PlaceholderRx =
             new Regex(@"\{\d+\}", RegexOptions.Compiled);
 
-        /// <summary>Regex des balises HTML — miroir exact du kit
+        /// <summary>Regex des balises HTML
         /// (/&lt;/?[a-zA-Z][^&gt;]*&gt;/g).</summary>
         private static readonly Regex HtmlTagRx =
             new Regex(@"</?[a-zA-Z][^>]*>", RegexOptions.Compiled);
@@ -139,7 +137,7 @@ namespace LLM_AI
             /// /I18n (v1.16.0) — PAS validée ici (règle client au merge).</summary>
             internal readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Web;
 
-            /// <summary>Section "ext" (v1.16.0 P2b) : chaînes du chat externe
+            /// <summary>Section "ext" (v1.16.0) : chaînes du chat externe
             /// (chrome ext.* + messages Python srv.*) — servies par l'endpoint
             /// /I18nExt à la langue résolue (cascade UICulture). Validée ICI,
             /// règle {n}-seule (famille texte brut : pas de règle balises —
@@ -239,12 +237,12 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>Chemin de l'overlay : PluginConfigurationsPath (à côté
-        /// de LLM_AI.xml), ou le hook de harnais. Null si l'hôte n'est pas
+        /// de LLM_AI.xml), ou le hook de tests. Null si l'hôte n'est pas
         /// prêt (fail-open : l'overlay est simplement inactif).</summary>
-        /// <remarks>Le hook harnais est testé AVANT tout accès à
+        /// <remarks>Le hook de tests est testé AVANT tout accès à
         /// <see cref="Plugin"/> — l'accès hôte vit dans <see cref="HostPath"/>
-        /// (méthode séparée : elle n'est JITée qu'on l'appelle — le harnais
-        /// réflexion, sans hôte Emby, ne la touchera jamais).</remarks>
+        /// (méthode séparée : elle n'est JITée qu'on l'appelle — les tests,
+        /// sans hôte Emby, ne la toucheront jamais).</remarks>
         internal static string OverlayPath
         {
             get
@@ -255,7 +253,7 @@ namespace LLM_AI
         }
 
         /// <summary>Chemin hôte : Plugin.Paths (IApplicationPaths résolu au
-        /// constructeur du plugin) — jamais touché quand le hook harnais est
+        /// constructeur du plugin) — jamais touché quand le hook de tests est
         /// posé (cf. remarque <see cref="OverlayPath"/>).</summary>
         private static string HostPath()
         {
@@ -346,7 +344,7 @@ namespace LLM_AI
         /// structure incorrecte → snapshot précédent CONSERVÉ + stamp posé
         /// (pas de re-parse à chaque 30 s — le prochain changement de fichier
         /// re-tente) ; erreur IO transitoire (écriture concurrente) → stamp
-        /// ANTÉRIEUR conservé (re-lecté au prochain probe). Fichier absent →
+        /// ANTÉRIEUR conservé (relu au prochain probe). Fichier absent →
         /// overlay désactivé proprement (sans fichier = comportement inchangé).</summary>
         private static void Install(string path, string stamp)
         {
@@ -398,12 +396,12 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Parsage + validation (pur — rejouable au harnais)
+        //  Parsage + validation (pur — rejouable en test)
         // ------------------------------------------------------------------
 
         /// <summary>Résultat unitaire de <see cref="LoadFrom"/> (tout dans
-        /// une struct légère : le purisme out-x4 de la version harnais a été
-        /// raboté — un objet nommé, rejouable tel quel).</summary>
+        /// une struct légère : un objet nommé plutôt
+        /// qu'un tuple de quatre out, rejouable tel quel).</summary>
         internal sealed class LoadResult
         {
             internal Snapshot Snap;               // null si ParseError
@@ -413,11 +411,11 @@ namespace LLM_AI
         }
 
         /// <summary>Charge le fichier et construit le snapshot : section
-        /// "server" validée par clé contre la base EN native (règles 4-5 du
-        /// kit : multiset placeholders + multiset balises HTML), section
+        /// "server" validée par clé contre la base EN native (règles de
+        /// validation : multiset placeholders + multiset balises HTML), section
         /// "web" acceptée sans validation (règle client au merge), section
         /// "ext" validée {n}-seule contre s_ext["en"] (famille texte brut :
-        /// pas de règle balises, v1.16.0 P2b). Les clés fautives sont
+        /// pas de règle balises, v1.16.0). Les clés fautives sont
         /// sautées (jamais d'échec global pour une clé) ; un fichier
         /// structurellement cassé (JSON, racine non-objet, aucune langue
         /// exploitable) → ParseError posé.</summary>
@@ -561,7 +559,7 @@ namespace LLM_AI
                     }
                     else wOk = wBad = -1;                  // section absente
 
-                    // Section "ext" (v1.16.0 P2b) : chat externe — validation
+                    // Section "ext" (v1.16.0) : chat externe — validation
                     // {n}-SEULE contre s_ext["en"] (famille texte brut : le
                     // rendu est textContent côté page et str.format côté
                     // Python — pas de balises, donc pas de règle balises).
@@ -667,7 +665,7 @@ namespace LLM_AI
         /// <summary>Section absente → « — » (le zéro n'y est pas un état).</summary>
         private static string SectionCount(int n) => n < 0 ? "—" : n.ToString(CultureInfo.InvariantCulture);
 
-        /// <summary>Gele les cartes : les entrées vides sont écartées
+        /// <summary>Gèle les cartes : les entrées vides sont écartées
         /// (langue sans section utile = langue absente du snapshot).</summary>
         private static IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> FreezeNonEmpty(
             Dictionary<string, Dictionary<string, string>> src)
@@ -714,7 +712,7 @@ namespace LLM_AI
 
         /// <summary>Repli code libre : minuscule + diacritiques repliés (FormD
         /// — l'accent combiné tombe, la lettre de base reste), filtrage a-z →
-        /// accepté si le résultat est un code de 2-3 lettres; sinon null.
+        /// accepté si le résultat est un code de 2-3 lettres ; sinon null.
         /// « PL » → pl, « Hâwai » → haw, « ΕΛ » (grec) → null. Jamais d'erreur :
         /// le pire cas est un code libre qui ne résoudra pas côté affichage.</summary>
         private static string FreeLangCode(string name, out string note)
@@ -740,14 +738,12 @@ namespace LLM_AI
             return null;
         }
 
-        /// <summary>Multiset des placeholders {n} d'une chaîne — miroir
-        /// exact de la règle 4 du kit (tri ordinal + jointure ',').</summary>
+        /// <summary>Multiset des placeholders {n} d'une chaîne (tri ordinal + jointure ',').</summary>
         internal static string PlaceholderSig(string s)
             => string.Join(",", PlaceholderRx.Matches(s ?? "")
                 .Cast<Match>().Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal));
 
-        /// <summary>Multiset des balises HTML d'une chaîne — miroir exact
-        /// de la règle 5 du kit (tri ordinal + jointure '|').</summary>
+        /// <summary>Multiset des balises HTML d'une chaîne (tri ordinal + jointure '|').</summary>
         internal static string HtmlTagSig(string s)
             => string.Join("|", HtmlTagRx.Matches(s ?? "")
                 .Cast<Match>().Select(m => m.Value).OrderBy(x => x, StringComparer.Ordinal));
@@ -791,7 +787,7 @@ namespace LLM_AI
         /// D'APPARITION (même regex que la porte <see cref="PlaceholderSig"/>)
         /// — le contrat de l'atelier de langues liste à l'identique ce que la
         /// validation exigera au dépôt (miroir de <see cref="HtmlTagsInOrder"/>
-        /// pour la seconde règle du kit).</summary>
+        /// pour la seconde règle).</summary>
         internal static List<string> PlaceholdersInOrder(string s)
             => PlaceholderRx.Matches(s ?? "").Cast<Match>().Select(m => m.Value).ToList();
 

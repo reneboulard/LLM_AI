@@ -12,7 +12,7 @@ namespace LLM_AI
 {
     /// <summary>
     /// Gate de droits usager du plugin : résolution de l'usager appelant et
-    /// lecture de sa policy Emby. Deux étages de personalisation coexistent
+    /// lecture de sa policy Emby. Deux étages de personnalisation coexistent
     /// (décision design 2026-09) : les <b>enregistrements</b> sont une décision
     /// foyer pilotée par le droit d'enregistrement Emby, l'<b>intérêt de
     /// visionnement</b> (Watch Tonight, reco) est par usager.
@@ -264,19 +264,12 @@ namespace LLM_AI
 
         /// <summary>
         /// Policy parentale d'un usager, extraite une fois pour un lot.
-        /// <para><b>Sémantique validée empiriquement 2026-09-12</b> (Emby
-        /// 4.10.0.40 — cf. mémo projet) : <c>BlockedTags</c> est une liste
-        /// noire quand <c>IsTagBlockingModeInclusive</c> est false (les items
-        /// portant un tag listé disparaissent), une liste blanche quand le
-        /// flag est true (« exclure tous sauf le tag » — les tags autorisés
-        /// sont écrits DANS <c>BlockedTags</c>, le champ <c>IncludeTags</c>
-        /// étant un no-op). <c>AllowTagOrRating</c> change la sémantique de
-        /// la liste blanche : true = visible si tag autorisé <b>OU</b> cote
-        /// sous la limite (le tag autorisé contourne la limite) ; false =
-        /// visible seulement si tag autorisé <b>ET</b> cote sous la limite.
-        /// <c>BlockUnratedItems</c> liste les TYPES de contenu dont les items
-        /// non cotés sont bloqués (énum <c>UnratedItem</c> : Movie, Series,
-        /// LiveTvProgram…).</para>
+        /// <para><b>Sémantique</b> : <c>IsTagBlockingModeInclusive</c> false =
+        /// <c>BlockedTags</c> est une liste noire ; true = liste blanche.
+        /// <c>AllowTagOrRating</c> true = visible si tag autorisé OU cote ok
+        /// (le tag autorisé contourne la limite) ; false = ET.
+        /// <c>BlockUnratedItems</c> liste les TYPES dont les items non cotés sont
+        /// bloqués (<c>UnratedItem</c> : Movie, Series, LiveTvProgram…).</para>
         /// </summary>
         private sealed class ParentalPolicy
         {
@@ -436,10 +429,8 @@ namespace LLM_AI
                     return RatingVerdict(pol, score, text, kind);
                 }
 
-                // Liste blanche (« Exclure tous sauf le tag ») — liste vide =
-                // pas de liste blanche effective (le champ IncludeTags est un
-                // no-op sur cette build : un BlockedTags vide ne cache rien,
-                // validé 2026-09-12) → seules les règles de cote s'appliquent.
+                // Liste blanche — liste vide = pas de liste blanche effective (IncludeTags
+                // est un no-op, un BlockedTags vide ne cache rien) → cote seule.
                 if (pol.Tags.Count == 0)
                     return RatingVerdict(pol, score, text, kind);
 
@@ -456,8 +447,8 @@ namespace LLM_AI
         /// score présent → comparaison à <c>MaxParentalRating</c> ;
         /// absent/marqueur NR → règle <c>BlockUnratedItems</c> du type ;
         /// cote textuelle hors table (pas de score natif) → conservé
-        /// (blindage natif reproduit — design 2026-09-11 : jamais une
-        /// décision forcée, l'audit <c>ratings_check</c> signale ces cotes).
+        /// (blindage natif reproduit : jamais de décision forcée, l'audit
+        /// <c>ratings_check</c> signale ces cotes).
         /// </summary>
         private static ParentalVerdict RatingVerdict(ParentalPolicy pol, int? score, string text, string kind)
         {
@@ -485,8 +476,7 @@ namespace LLM_AI
         /// PUIS table parentale du serveur (<c>ILocalizationManager.GetParentalRatings</c>
         /// — la même liste que le menu de limite du dashboard). Null si la
         /// cote est absente ou non reconnue (native-blind : la reco est
-        /// conservée, comptée à part — jamais une décision forcée ;
-        /// cf. census v1.13.14.0 : ~46 % des cotes EPG brutes hors table).
+        /// conservée, comptée à part — jamais une décision forcée).
         /// </summary>
         public static int? EpgRatingScore(MediaBrowser.Model.Globalization.ILocalizationManager loc,
             string officialRating)

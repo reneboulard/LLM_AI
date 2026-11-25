@@ -40,61 +40,29 @@ namespace LLM_AI
     ///     numéros S/E de l'épisode en cours (v1.13.25.1) : « prochain
     ///     épisode » = <c>play_item(series_id)</c> en un seul tool, sans
     ///     recherche intermédiaire.</item>
-    ///     <item><b>seek confirmé (v2.6.1)</b> : le <c>ok:true</c> d'origine
-    ///     ne prouvait que l'ENVOI de <c>PlaystateRequest.Seek</c> — au
-    ///     champ (2026-10-16, « Emby for Android » 3.5.55 en layout TV),
-    ///     8/8 envois ok:true en une soirée, ZÉRO saut appliqué (positions
-    ///     rapportées = lecture naturelle du début à la fin), pendant que
-    ///     le LLM promettait le succès à l'usager. Comme
-    ///     <c>play_next</c>, le seek RELIT maintenant la position
-    ///     rapportée (~12 s max, sortie anticipée dès confirmation) :
-    ///     confirmé → ok:true ; non confirmé → ok:false + consigne de ne
-    ///     pas annoncer le saut ; saut &lt; 15 s — indiscernable de la
-    ///     lecture naturelle dans le retard de remontée — « envoyé, non
-    ///     confirmable », jamais un succès inventé.</item>
-    /// <item><b>pause/unpause/stop confirmés (v2.6.2)</b> : même remède
-    ///     que le seek — <c>PlaystateAsync</c> ne répond plus
-    ///     <c>ok:true</c> sur le seul envoi (constat banc 2026-10-17
-    ///     06:18 : l'app native AndroidTv 2.1.55g ignore Pause, position
-    ///     +16 s en 16 s — l'ancien code promettait une pause fantôme
-    ///     pendant que la lecture poursuivait). RELIT l'état rapporté
-    ///     (~12 s max, sortie anticipée) : pause/unpause via
-    ///     <c>IsPaused</c>, stop via la disparition de la lecture de la
-    ///     session — relue PAR ID (<c>ResolveSession</c> pourrait élire
-    ///     une autre session de l'usager une fois celle-ci idle). Non
-    ///     confirmé → ok:false + consigne de ne pas annoncer l'action.
-    /// </item>
-    /// <item><b>contrôleur identifié (v2.6.3)</b> : toutes les commandes
-    ///     de lecture (<c>PlayRequest</c> play_item/play_next,
-    ///     <c>PlaystateRequest</c> seek/pause/unpause/stop) portent
-    ///     <c>ControllingUserId</c> = le PREMIER ADMIN du serveur, patron
-    ///     ComSkipper (preuve terrain 2026-10-14 prod : l'app native
-    ///     Android TV 2.1.55g a appliqué le seek de ComSkipper — saut
-    ///     de segment HLS à la cible exacte — et ignorait le nôtre au
-    ///     banc, même version d'app, canal prouvé vivant par les toasts
-    ///     « AI Tonight » ; la seule différence restante était le
-    ///     contrôleur, admin chez ComSkipper, non-admin chez nous).
-    ///     Repli silencieux sur l'usager du chat si aucun admin
-    ///     n'existe (voir <see cref="FirstAdminControllerId"/>).</item>
-    /// <item><b>replis confirmés (v2.6.4)</b> : banc 2026-10-17, client
-    ///     web (Emby Web/Chrome) — il déclare honnêtement ses capacités
-    ///     (ni Seek ni Pause ni Stop dans <c>SupportedCommands</c>) et les
-    ///     ignore pareil, même depuis le dashboard officiel Emby avec
-    ///     session admin ; il honore en revanche les <c>PlayRequest</c>,
-    ///     les pistes, le volume, <c>DisplayContent</c> (visible seulement
-    ///     hors lecture) et <c>GoHome</c> (qui FERME son lecteur — le
-    ///     client signale l'arrêt lui-même, 58 ms au banc). Deux replis
-    ///     donc, déclenchés UNIQUEMENT quand la commande directe n'est
-    ///     pas confirmée par relecture : seek → <c>PlayNow</c> MÊME item
-    ///     + <c>StartPositionTicks</c>=cible (validé ×2 : 168→471 s puis
-    ///     532→835 s) ; stop → <c>GoHome</c> (pause/unpause n'y ont PAS
-    ///     droit — GoHome tuerait la lecture au lieu de la suspendre).
-    ///     unpause : sans pause en cours signalée au moment de la
-    ///     commande, plus de « reprise confirmée » creuse — l'état cible
-    ///     <c>IsPaused=false</c> étant déjà atteint, la relecture ne
-    ///     pouvait rien prouver (faux positif constaté au banc).</item>
+    /// <item><b>Confirmation par relecture (seek, pause, unpause, stop)</b> :
+    ///     <c>SendPlaystateCommand</c> est fire-and-forget et certains clients
+    ///     ignorent la commande en silence — <c>ok:true</c> ne prouve donc que
+    ///     l'ENVOI. La position / l'état rapporté est relu (~12 s max, sortie
+    ///     anticipée) : confirmé → ok:true ; sinon ok:false + consigne de ne
+    ///     pas annoncer l'action. Saut &lt; 15 s : indiscernable de la lecture
+    ///     naturelle → « envoyé, non confirmable ». Le stop est relu PAR ID de
+    ///     session (<c>ResolveSession</c> pourrait en élire une autre une fois
+    ///     celle-ci idle). unpause sans pause signalée : rien n'est envoyé (la
+    ///     relecture ne pourrait rien prouver).</item>
+    /// <item><b>Contrôleur identifié</b> : les commandes de lecture portent
+    ///     <c>ControllingUserId</c> = le PREMIER ADMIN du serveur — l'app
+    ///     Android TV native applique les commandes d'un contrôleur admin et
+    ///     ignore celles d'un non-admin. Repli sur l'usager du chat si aucun
+    ///     admin (voir <see cref="FirstAdminControllerId"/>).</item>
+    /// <item><b>Replis confirmés</b> : le client web déclare honnêtement ne pas
+    ///     supporter Seek/Pause/Stop. Deux replis, déclenchés UNIQUEMENT quand
+    ///     la commande directe n'est pas confirmée : seek → <c>PlayNow</c>
+    ///     MÊME item + <c>StartPositionTicks</c>=cible ; stop →
+    ///     <c>GoHome</c> (pause/unpause n'y ont PAS droit : GoHome tuerait la
+    ///     lecture au lieu de la suspendre).</item>
     /// <item><b>Session bornée</b> : seules les sessions DONT l'usager est
-    ///     celui de la requête sont ciblées (même règle que <c>Show</>,
+    ///     celui de la requête sont ciblées (même règle que <c>Show</c>,
     ///     forme « plus récente gagne ») — un usager ne pilote jamais
     ///     l'appareil d'un autre.</item>
     /// <item><b>Parental</b> : <c>display_item</c> et <c>play_item</c>
@@ -118,7 +86,7 @@ namespace LLM_AI
     ///     du (saison, épisode) demandé) et l'annonce — bascule non
     ///     confirmée en ~6 s = erreur explicite. Sans marquer le courant
     ///     comme vu (aucune écriture surprise).</item>
-    /// <item><b>Lecture seule du serveur</b> : aucune écriture métadonnées,
+    /// <item><b>Lecture seule du serveur</b> : aucune écriture de métadonnées,
     ///     aucun tool d'action — une commande ne touche qu'un flux client.</item>
     /// </list>
     /// Ne lève jamais : erreur → JSON <c>{"error":"..."}</c>.
@@ -144,17 +112,9 @@ namespace LLM_AI
         }
 
         /// <summary>Contrôleur à inscrire dans les commandes de lecture
-        /// distantes (v2.6.3). Preuve terrain 2026-10-17 : l'app native
-        /// Android TV 2.1.55g a APPLIQUÉ le seek de ComSkipper en prod
-        /// (2026-10-14, saut de segment HLS 135→168 = la cible exacte)
-        /// et ignore le nôtre au banc, sur la même version d'app et la
-        /// même livraison remux ; le canal lui-même est prouvé vivant
-        /// (les toasts « AI Tonight » s'affichent sur la même app). La
-        /// seule différence restante : le contrôleur — ComSkipper
-        /// inscrit le PREMIER ADMIN, nous inscrivions l'usager du chat
-        /// (non-admin). Patron ComSkipper donc ; repli silencieux sur
-        /// l'usager du chat si la requête échoue ou qu'aucun admin
-        /// n'existe.</summary>
+        /// distantes : le PREMIER ADMIN (l'app Android TV native ignore un
+        /// contrôleur non-admin) ; repli silencieux sur l'usager du chat si la
+        /// requête échoue ou qu'aucun admin n'existe.</summary>
         private string FirstAdminControllerId()
         {
             // Chemin partagé avec ServerRemediation (stop_session de l'audit
@@ -191,19 +151,13 @@ namespace LLM_AI
         private const long TicksPerSecond = 10_000_000;
         private const int MaxSeekOffsetSeconds = 1800;
 
-        // Confirmation du seek par relecture (v2.6.1) : la position ne
-        // remonte qu'au prochain rapport PROGRESS du client (cadence ~5-10 s
-        // selon l'app) — budget 24 sondages de 500 ms = 12 s, sortie
-        // anticipée dès confirmation. Saut < 15 s : indiscernable de la
-        // lecture naturelle dans le bruit de remontée → non vérifiable.
+        // Confirmation du seek par relecture : la position ne remonte qu'au
+        // prochain rapport PROGRESS du client (~5-10 s) — 24 sondages de
+        // 500 ms. Saut < 15 s : indiscernable de la lecture naturelle.
         private const int MinVerifiedJumpSeconds = 15;
-        // v2.6.4 — repli PlayNow du seek : en dessous de ce seuil, la
-        // lecture NATURELLE peut rejoindre la fenêtre de confirmation
-        // pendant les DEUX fenêtres de relecture (24 s cumulées + retard
-        // de remontée ~5 s) — un client qui ignorerait le repli serait
-        // faussement « confirmé ». Au-dessus, la progression naturelle
-        // ne peut pas atteindre la cible dans le budget : discriminant
-        // propre. Les replis testés au banc étaient de +300 s.
+        // Repli PlayNow du seek : en dessous de ce seuil la lecture NATURELLE
+        // peut rejoindre la cible pendant les deux fenêtres de relecture et
+        // produire une fausse confirmation.
         private const int MinFallbackJumpSeconds = 30;
         private const int SeekConfirmToleranceSeconds = 2;
         private const int SeekConfirmWindowSeconds = 12;
@@ -315,17 +269,11 @@ namespace LLM_AI
                     device = session.DeviceName, item = item.Name });
             }
 
-            // play_item — toujours une FEUILLE jouable (v1.13.25) :
-            // un PlayNow portant un id de série/saison est ACCEPTÉ par le
-            // serveur (204) mais IGNORÉ par le client Android TV (vérifié
-            // 2026-09-16 sur BRAVIA, Emby for Android 3.5.55 : un id épisode
-            // joue, un id série reste sans effet — et le LLM, croyant à un
-            // échec, inventait alors une erreur client). Une série/saison
-            // devient donc son prochain épisode non visionné de l'usager
-            // (next up + repli — NextUpResolver, même résolution que les
-            // playlists AI Tonight) ; tout autre conteneur non jouable
-            // (collection, playlist, personne) est refusé explicitement au
-            // lieu d'un no-op silencieux.
+            // play_item — toujours une FEUILLE jouable : un PlayNow sur un id
+            // de série/saison est accepté (204) mais ignoré par le client
+            // Android TV. Une série/saison devient son prochain épisode non
+            // visionné (NextUpResolver) ; tout autre conteneur est refusé
+            // explicitement au lieu d'un no-op silencieux.
             var playTarget = item;
             if (item is MediaBrowser.Controller.Entities.TV.Series
                 || item is MediaBrowser.Controller.Entities.TV.Season)
@@ -361,8 +309,7 @@ namespace LLM_AI
             {
                 ItemIds = new[] { playTarget.InternalId },
                 PlayCommand = PlayCommand.PlayNow,
-                // v2.6.3 — contrôleur identifié (premier admin, patron
-                // ComSkipper — voir FirstAdminControllerId).
+                // Contrôleur : voir FirstAdminControllerId.
                 ControllingUserId = FirstAdminControllerId()
             }, ct).ConfigureAwait(false);
             return Json(new { ok = true, command = "play_item",
@@ -381,15 +328,11 @@ namespace LLM_AI
         /// dédupliqué par (saison, épisode) — la bibliothèque peut compter
         /// deux épisodes DIFFÉRENTS sous le même (saison, épisode), et sans
         /// garde le « suivant » était le jumeau du courant, rejoué).
-        /// <b>Confirmation terrain (anti-menteur)</b> : le client peut
-        /// substituer l'item demandé par le jumeau principal de son
-        /// (saison, épisode) (vérifié 2026-09-16 sur BRAVIA : id 121711
-        /// demandé → 121713 joué) ; après l'envoi, la commande RELIT donc
-        /// ce que le client joue réellement (~6 s) et annonce CET item —
-        /// pas la prédiction du résolveur. Pas de bascule confirmée =
-        /// erreur explicite (le LLM ne peut pas annoncer un succès
-        /// fantôme). Ne MARQUE PAS le courant comme vu (aucune écriture
-        /// surprise).
+        /// <b>Confirmation (anti-menteur)</b> : le client peut substituer le
+        /// jumeau principal du (saison, épisode) demandé ; la commande RELIT
+        /// donc ce que le client joue réellement (~6 s) et annonce CET item.
+        /// Pas de bascule confirmée = erreur explicite. Ne MARQUE PAS le
+        /// courant comme vu (aucune écriture surprise).
         /// </summary>
         private async Task<string> PlayNextAsync(CancellationToken ct)
         {
@@ -538,15 +481,9 @@ namespace LLM_AI
             string sessionId = session.Id;
             bool wasPaused = session.PlayState?.IsPaused ?? false;
 
-            // v2.6.4 — FAUX POSITIF unpause (banc 2026-10-17 : le client
-            // web ignore pause, IsPaused reste false, et la relecture
-            // « confirmait » une reprise que rien n'avait interrompue —
-            // l'état cible était déjà atteint AVANT l'envoi, la relecture
-            // ne pouvait rien prouver). Sans pause signalée au moment de
-            // la commande, une confirmation ne peut pas exister : on
-            // n'envoie rien et on le dit honnêtement (un client peut
-            // rapporter son état avec quelques secondes de retard —
-            // l'usager relancera et la reprise sera alors vérifiable).
+            // unpause sans pause signalée : l'état cible (IsPaused=false) est
+            // déjà atteint, la relecture « confirmerait » à tort. On n'envoie
+            // rien et on le dit (le client peut rapporter son état avec retard).
             if (command == "unpause" && !wasPaused)
             {
                 _logger.Info("[LLM_AI] [CHAT-EXT] client_command unpause : aucune pause en cours signalée — rien à reprendre — usager {0}.",
@@ -569,18 +506,10 @@ namespace LLM_AI
             _logger.Info("[LLM_AI] [CHAT-EXT] client_command {0} envoyé (état rapporté : {1}) — usager {2}.",
                 command, wasPaused ? "en pause" : "en lecture", _user.Name);
 
-            // v2.6.2 — CONFIRMATION PAR RELECTURE (même remède que le seek
-            // v2.6.1). Constat banc 2026-10-17 06:18 : l'app native AndroidTv
-            // 2.1.55g IGNORE Pause (position +16 s en 16 s, jamais IsPaused)
-            // alors que l'ancien code répondait ok:true sur le seul envoi —
-            // pause fantôme promise au LLM pendant que la lecture poursuivait.
-            // On RELIT l'état que le client rapporte : pause/unpause via
-            // IsPaused (le drapeau ne bascule qu'au prochain rapport PROGRESS,
-            // cadence ~5-10 s selon l'app), stop via la disparition de la
-            // lecture de la session. Celle-ci est relue PAR ID —
-            // ResolveSession pourrait élire une autre session de l'usager
-            // une fois celle-ci idle. Budget et sortie anticipée identiques
-            // au seek (SeekConfirmPolls × 500 ms = 12 s max).
+            // Confirmation par relecture : pause/unpause via IsPaused (bascule
+            // au prochain rapport PROGRESS), stop via la disparition de la
+            // lecture. Session relue PAR ID (ResolveSession pourrait en élire
+            // une autre une fois celle-ci idle). Budget identique au seek.
             bool lastPaused = wasPaused;
             bool lastPlaying = session.NowPlayingItem != null;
             SessionInfo lastSeen = session;
@@ -631,15 +560,10 @@ namespace LLM_AI
                 }
             }
 
-            // v2.6.4 — REPLI GoHome (stop). Banc 2026-10-17, client web
-            // Emby Web/Chrome : il IGNORE PlaystateCommand.Stop (absent de
-            // ses SupportedCommands — le dashboard officiel Emby avec
-            // session admin ne l'arrête pas non plus) mais la navigation
-            // GoHome FERME son lecteur — le client signale l'arrêt
-            // LUI-MÊME (Playing/Stopped 58 ms après l'envoi au banc).
-            // Ne se déclenche QUE si le stop direct n'est pas confirmé et
-            // que la lecture est toujours là ; pause/unpause n'y ont PAS
-            // droit (GoHome tuerait la lecture au lieu de la suspendre).
+            // Repli GoHome (stop) : le client web ignore PlaystateCommand.Stop
+            // mais GoHome ferme son lecteur. Uniquement si le stop direct n'est
+            // pas confirmé et que la lecture est toujours là ; pause/unpause
+            // n'y ont PAS droit (GoHome tuerait la lecture).
             if (command == "stop" && lastPlaying)
             {
                 _logger.Info("[LLM_AI] [CHAT-EXT] client_command stop : non confirmé — REPLI GoHome (ferme le lecteur du client) — usager {0}.",
@@ -782,9 +706,8 @@ namespace LLM_AI
             target = Math.Max(0, target);
             if (runtime > 0) target = Math.Min(target, runtime);
 
-            // v2.6.3 — contrôleur identifié : le PREMIER ADMIN, patron
-            // ComSkipper (premier argument null, contrôleur DANS la
-            // requête — voir FirstAdminControllerId).
+            // Premier argument null, contrôleur DANS la requête (voir
+            // FirstAdminControllerId).
             string controllerId = FirstAdminControllerId();
             await _sessions.SendPlaystateCommand(null, session.Id,
                 new PlaystateRequest { Command = PlaystateCommand.Seek,
@@ -795,20 +718,11 @@ namespace LLM_AI
                 absSec != null ? "absolu" : ("relatif " + offsetSec + " s"),
                 target / TicksPerSecond, controllerId, _user.Name);
 
-            // v2.6.1 — CONFIRMATION PAR RELECTURE. SendPlaystateCommand est
-            // fire-and-forger : ok:true ne prouvait que l'envoi (constat
-            // terrain 2026-10-16 : 8/8 seek « ok:true » ignorés par le
-            // client TV, le LLM promettait le succès pendant que la
-            // lecture suivait son cours). Comme play_next, on RELIT ce que
-            // le client rapporte : la position ne saute qu'au prochain
-            // rapport PROGRESS post-saut (cadence ~5-10 s selon l'app) —
-            // budget 12 s, sortie anticipée dès confirmation. Le test est
-            // directionnel : en avant, toute remontée fraîche atteint la
-            // cible ; en arrière, la lecture naturelle ne peut PAS
-            // retomber dans la fenêtre cible (elle n'est jamais
-            // décroissante) — discriminant propre, même en pause (la
-            // position rapportée gèle et vaut alors la cible exacte si le
-            // saut a été appliqué). PAS de toast : l'image est le feedback.
+            // Confirmation par relecture (SendPlaystateCommand est
+            // fire-and-forget), budget 12 s. Test directionnel : en avant,
+            // toute remontée fraîche atteint la cible ; en arrière, la lecture
+            // naturelle ne peut PAS retomber dans la fenêtre cible — propre
+            // même en pause (position gelée = cible exacte). Pas de toast.
             long jump = target - pos;
             string itemId = (np.Id ?? "").Trim();
             if (Math.Abs(jump) < MinVerifiedJumpSeconds * TicksPerSecond)
@@ -858,18 +772,9 @@ namespace LLM_AI
                 SeekConfirmPolls / 2, target / TicksPerSecond,
                 lastPos / TicksPerSecond, _user.Name);
 
-            // v2.6.4 — REPLI PlayNow MÊME ITEM + POSITION CIBLE (banc
-            // 2026-10-17, client web Emby Web/Chrome : IGNORE
-            // PlaystateCommand.Seek — absent de ses SupportedCommands —
-            // mais HONORE les PlayRequest ; un PlayNow sur le même item à
-            // la position cible déplace la lecture exactement, validé ×2 :
-            // 168→471 s puis 532→835 s, progression ensuite linéaire). Ne se
-            // déclenche QUE si le même item joue toujours ET que le saut
-            // est assez grand pour rester discriminant malgré les deux
-            // fenêtres de relecture (voir MinFallbackJumpSeconds) : sur
-            // les clients qui honorent le seek direct (app générique en
-            // DirectPlay, TV native prod) il ne s'exécute jamais ; sur
-            // ceux qui ignorent tout, il échoue honnêtement pareil.
+            // Repli PlayNow MÊME ITEM + position cible : le client web ignore
+            // Seek mais honore les PlayRequest. Uniquement si le même item joue
+            // toujours ET que le saut dépasse MinFallbackJumpSeconds.
             if (Math.Abs(jump) >= MinFallbackJumpSeconds * TicksPerSecond)
             {
                 var s3 = ResolveSession();
@@ -897,7 +802,7 @@ namespace LLM_AI
                             ItemIds = new[] { replayItem.InternalId },
                             PlayCommand = PlayCommand.PlayNow,
                             StartPositionTicks = target,
-                            // v2.6.3 — contrôleur identifié (patron ComSkipper).
+                            // Contrôleur : voir FirstAdminControllerId.
                             ControllingUserId = FirstAdminControllerId()
                         }, ct).ConfigureAwait(false);
 

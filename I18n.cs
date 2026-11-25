@@ -144,7 +144,7 @@ namespace LLM_AI
         };
 
         /// <summary>Mots-outils anglais — aucun n'existe comme mot en français
-        /// (« or », « in »/« is » anglais mais « or » français → exclus).</summary>
+        /// (« or » est exclu : c'est aussi un mot français).</summary>
         private static readonly HashSet<string> s_enStops = new HashSet<string>(StringComparer.Ordinal)
         {
             "the","of","and","to","in","with","for","is","who","that","his","her","its","an","from",
@@ -276,7 +276,7 @@ namespace LLM_AI
         /// Famille (préfixe avant « - », minuscules) d'un code langue TMDB :
         /// « fr-CA »→« fr », « en-US »→« en », « bg »→« bg ». Null si vide.
         /// Sert à ordonner la liste de priorité par famille de langue du
-        /// contenu (fix #6) et à apparier les entrées de la table
+        /// contenu et à apparier les entrées de la table
         /// <c>translations</c> de TMDB.
         /// </summary>
         internal static string TmdbLangFamily(string code)
@@ -372,7 +372,7 @@ namespace LLM_AI
         /// <c>string.Format</c>.
         /// </summary>
         /// <remarks>
-        /// <para><b>Chaîne de rendu (v1.16.0, overlay communautaires)</b> :
+        /// <para><b>Chaîne de rendu (v1.16.0, overlay communautaire)</b> :
         /// overlay du fichier <c>LLM_AI_i18n.json</c> pour <paramref name="langKey"/>
         /// → natif <paramref name="langKey"/> → overlay « en » (le fichier peut
         /// patcher le repli EN — feature documentée) → natif EN → clé brute.
@@ -409,8 +409,8 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>Chaîne EN native du dictionnaire serveur (s_res["en"]) —
-        /// référence de la validation par clé de l'overlay (règles 4-5 du
-        /// kit : placeholders + balises HTML). False si la clé ne fait pas
+        /// référence de la validation par clé de l'overlay (règles de
+        /// validation : placeholders + balises HTML). False si la clé ne fait pas
         /// partie du dictionnaire (→ sautée, log « clé inconnue »).</summary>
         internal static bool TryEnServerString(string key, out string value)
         {
@@ -420,13 +420,13 @@ namespace LLM_AI
 
         /// <summary>Nombre de clés du dictionnaire serveur EN natif — le dénominateur
         /// « attendu » des lignes de log de l'overlay. Dérivé DYNAMIQUEMENT
-        /// (jamais hardcodé — leçon du kit : les chiffres figés se percent) ;
-        /// croît à chaque ajout de chaînes serveur (v1.17.0 T1b/T1c : +27
-        /// clés i18n.gen.* de l'atelier → 178).</summary>
+        /// (jamais hardcodé : les chiffres figés se périment) ;
+        /// croît à chaque ajout de chaînes serveur (ex. v1.17.0 : +27
+        /// clés i18n.gen.* de l'atelier).</summary>
         internal static int EnServerKeyCount
             => s_res.TryGetValue(En, out var en) ? en.Count : 0;
 
-        /// <summary>Dictionnaire serveur EN natif COMPLET (v1.16.0 P2 — la
+        /// <summary>Dictionnaire serveur EN natif COMPLET (v1.16.0 — la
         /// moitié serveur du « ?base » translatable + pivot du « ?missing »).
         /// Lecture seule par convention : la table statique n'est jamais mutée
         /// après l'init.</summary>
@@ -434,7 +434,7 @@ namespace LLM_AI
             => s_res.TryGetValue(En, out var en) ? en : null;
 
         /// <summary>Dictionnaire serveur natif d'une LANGUE donnée (ex. « fr »)
-        /// — v1.17.0 T1b : la moitié FR des paires EN+FR injectées dans chaque
+        /// — v1.17.0 : la moitié FR des paires EN+FR injectées dans chaque
         /// dose de génération (le FR = rédaction auteur = intention). Null si
         /// la langue n'a pas de natif serveur (seules fr et en en ont).</summary>
         internal static IReadOnlyDictionary<string, string> ServerDictFor(string langKey)
@@ -459,7 +459,7 @@ namespace LLM_AI
         internal static int EnExtKeyCount
             => s_ext.TryGetValue(En, out var en) ? en.Count : 0;
 
-        /// <summary>Dictionnaire ext EN natif COMPLET (v1.16.0 P2b — la
+        /// <summary>Dictionnaire ext EN natif COMPLET (v1.16.0 — la
         /// section « ext » du « ?base » + pivot du « ?missing »). Lecture
         /// seule par convention : jamais mutée après l'init.</summary>
         internal static IReadOnlyDictionary<string, string> EnExtDict
@@ -475,10 +475,10 @@ namespace LLM_AI
             => S(key, ResolveDisplayLangKey(host));
 
         /// <summary>Libellé localisé <paramref name="key"/> dans la langue
-        /// d'affichage + substitution des placeholders {n} (boucle du kit :
+        /// d'affichage + substitution des placeholders {n} (boucle de substitution :
         /// <see cref="Convert.ToString(object, IFormatProvider)"/> InvariantCulture
         /// — jamais string.Format, dont les accolades littérales de l'UI
-        /// casserait). Les jalons des runs DETACHÉS publient ainsi du texte
+        /// casseraient). Les jalons des runs DÉTACHÉS publient ainsi du texte
         /// prêt à afficher, localisé par l'appelant (endpoint) et non par le
         /// moteur (qui reste sans opinion de langue d'affichage).</summary>
         internal static string SFormatDisplay(string key, IServerApplicationHost host,
@@ -511,7 +511,7 @@ namespace LLM_AI
                 { "fr", "fr" }, { "en", "en" }, { "es", "es" },
                 { "de", "de" }, { "it", "it" }, { "pt", "pt" },
                 // Élargie (v1.17.0, atelier de langues : code libre supporté)
-                // avec les langues attestées par les chaînes Emby du hôte
+                // avec les langues attestées par les chaînes Emby de l'hôte
                 // (dashboard-ui/strings/*) — une langue hors table ne
                 // résoudrait jamais côté affichage même une fois générée. Le
                 // repli natif reste EN (les dictionnaires fr/en seuls existent).
@@ -804,7 +804,7 @@ namespace LLM_AI
                     // --- v2.7.5 : raison de repli pour reco auto-contradictoire
                     // (filet serveur, la reco est gardée, seule la raison change) ---
                     ["tonight.reason.fallback"] = "Complément pour atteindre le nombre minimum demandé — à voir ce soir si le reste de la sélection ne convient pas.",
-                    // --- Atelier de langues (v1.17.0 T1b) : jalons + rapport
+                    // --- Atelier de langues (v1.17.0) : jalons + rapport
                     // de génération — en langue d'AFFICHAGE, jamais la cible.
                     ["i18n.gen.progress.collect"] = "Collecte de la base native et du glossaire…",
                     ["i18n.gen.progress.dose"] = "Lot {0}/{1} — {2} ({3} clés)",
@@ -1107,7 +1107,7 @@ namespace LLM_AI
                     // --- v2.7.5: fallback reason for a self-contradictory reco
                     // (server-side net, the reco is kept, only the reason changes) ---
                     ["tonight.reason.fallback"] = "Filler to reach the requested minimum — watch tonight if the rest of the selection doesn't suit you.",
-                    // --- Language workshop (v1.17.0 T1b): milestones + report
+                    // --- Language workshop (v1.17.0): milestones + report
                     // — in the DISPLAY language, never the target language ---
                     ["i18n.gen.progress.collect"] = "Gathering the native base and glossary…",
                     ["i18n.gen.progress.dose"] = "Batch {0}/{1} — {2} ({3} keys)",
@@ -1142,7 +1142,7 @@ namespace LLM_AI
 
         // --- ressources EN de la famille "ext" (chat externe) -------------
         //
-        // Natives EN SEULE (pas de FR ici) : le repli FR vit dans
+        // Natives EN seulement (pas de FR ici) : le repli FR vit dans
         // chat_external.py (littéraux embarqués de la page et messages
         // serveur), pivot EN déclaré ici pour le « ?base » des traducteurs
         // (même pattern de maintenance que i18n.js + I18n.cs). Les clés

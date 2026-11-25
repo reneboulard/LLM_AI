@@ -145,7 +145,7 @@ namespace LLM_AI
         /// « plus avancé »). Ensemble vide (foyer entier ignoré) ou tout
         /// vu pour tous = null (l'appelant saute la série). Chaque
         /// résolution individuelle est journalisée au nom de l'usager
-        /// (préfixe « {paramref logPrefix} ({usager}) »), et un résumé
+        /// (préfixe « <paramref name="logPrefix"/> ({usager}) »), et un résumé
         /// une-ligne donne les positions du foyer et l'élu. Best-effort,
         /// ne lève jamais.</para>
         /// </summary>

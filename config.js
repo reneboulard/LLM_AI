@@ -87,7 +87,7 @@ define(["loading"], function (loading) {
         return JSON.stringify(lines);
     }
 
-    // --- Filtres EPG (chaines / genres / flags opt-in) -----------------------
+    // --- Filtres EPG (chaînes / genres / flags opt-in) -----------------------
 
     function parseJsonArray(raw) {
         if (!raw) return [];
@@ -110,7 +110,7 @@ define(["loading"], function (loading) {
     // Le span texte intérieur (.wlText) porte l'ellipsis : le dessin de la
     // case (::before) dépasse volontairement AU-DESSUS de son label
     // (margin-top:-.18em) — un overflow:hidden sur le label ou l'item tranche
-    // son bord supérieur (case « 3 côtés », terrain 2026-10-05).
+    // son bord supérieur.
     function renderChecklist(host, items, selectedSet) {
         if (!host) return;
         if (!items || items.length === 0) {
@@ -166,7 +166,7 @@ define(["loading"], function (loading) {
         return s;
     }
 
-    // Peuple les filtres : flags opt-in par catégorie (fixes) + chaines et genres (fetch API).
+    // Peuple les filtres : flags opt-in par catégorie (fixes) + chaînes et genres (fetch API).
     function populateWhitelists(cfg, view) {
         var chSet = toSet(parseJsonArray(cfg.ChannelWhitelist));
         var geSet = toSet(parseJsonArray(cfg.GenreWhitelist));
@@ -177,7 +177,7 @@ define(["loading"], function (loading) {
         renderChecklist(view.querySelector("#wlSeriesFlags"), flagItems, seSet);
         renderChecklist(view.querySelector("#wlMovieFlags"), flagItems, moSet);
 
-        // Chaines vivantes (LiveTv/Channels).
+        // Chaînes vivantes (LiveTv/Channels).
         // dataType:"json" est OBLIGATOIRE : sans lui, ApiClient.fetch renvoie
         // l'objet Response brut (pas de .json()) et data.Items est undefined.
         ApiClient.ajax({ url: ApiClient.getUrl("LiveTv/Channels", { EnableImages: false }), type: "GET", dataType: "json" })
@@ -196,12 +196,9 @@ define(["loading"], function (loading) {
         // pas l'endpoint /Genres de la bibliothèque — car le filtre C#
         // (GetEmbyInfoTool) s'applique aux genres des programmes EPG (p.Genres).
         // On scanne les programmes et on collecte les genres distincts.
-        // REQUÊTE calquée sur le script de référence /usr/local/bin/emby-absent-
-        // series.sh (ligne 28) qui fonctionne : LiveTv/Programs?Fields=Genres.
         // NB: l'endpoint REST n'inclut Genres QUE si Fields=Genres est demandé
         // (l'outil C# in-process lit le DTO directement, sans cette contrainte).
-        // On n'utilise PAS HasAired/fenêtre de temps : on veut juste le
-        // vocabulaire des genres EPG (passé ou futur = même liste).
+        // Pas de fenêtre de temps : on veut juste le vocabulaire des genres.
         ApiClient.ajax({ url: ApiClient.getUrl("LiveTv/Programs", {
             UserId: ApiClient.getCurrentUserId(),
             Fields: "Genres",
@@ -321,7 +318,7 @@ define(["loading"], function (loading) {
 
     // Mini-rendu Markdown -> HTML sûr pour le rapport d'audit. On échappe
     // d'abord tout le texte, puis on convertit les constructions supportées
-    // (titres #/##/###, listes -/*, gras **…`, `code` inline, paragraphes,
+    // (titres #/##/###, listes -/*, gras **…**, `code` inline, paragraphes,
     // lignes de code séparées). Pas de dépendance externe ; volontairement
     // minimal — le rapport est produit par notre propre agent.
     function renderMarkdown(md) {
@@ -464,17 +461,17 @@ define(["loading"], function (loading) {
     // Le ViewManager du dashboard CACHE les vues : chaque retour sur la page
     // re-tire « viewshow » sur le MÊME élément DOM (tryRestoreView). Tout le
     // câblage vivant dans le handler viewshow, chaque ré-affichage ajoutait
-    // un listener de plus par élément — constat terrain : la sauvegarde
-    // affichait ses confirmations ×2/×4/×6 (N listeners submit × 2
-    // notifications : le toast « Settings saved » d'Emby +
-    // processPluginConfigurationUpdateResult ET l'alerte du plugin) et
-    // POSTait la configuration N fois ; même famille pour chaque bouton
-    // (ajout backend ×N lignes, fiche mémoire ×N POST, analyses genres
-    // ×N, dialogues cross-kind ×N POST…). once() branche UN listener par
+    // Le ViewManager du dashboard cache les vues : chaque retour sur la page
+    // ré-exécute le handler `viewshow` sur le même élément DOM.
+    // Sans la garde `once()`, chaque ré-affichage ajouterait
+    // un listener de plus par élément (confirmations et POST ×N à chaque
+    // sauvegarde ou clic de bouton). `once()` branche UN listener par
     // élément+événement pour la durée de vie de l'élément (WeakMap : zéro
-    // fuite, un dialogue recréé repart propre). Les chargements (fill,
-    // bandeau, statut audit, file cross-kind…) restent exécutés à CHAQUE
-    // viewshow, inchangés — seul le branchement devient unique.
+    // fuite, un dialogue recréé repart propre).
+    //
+    // Les chargements (données, états) restent exécutés à chaque `viewshow`
+    // pour que la vue soit fraîche. Seul le branchement d'événements
+    // devient unique.
     var onceMap = new WeakMap();
     function once(el, ev, fn) {
         if (!el) return;
@@ -543,7 +540,7 @@ define(["loading"], function (loading) {
     // Tests de connexion TMDB / TVDB / SearXNG : même modèle que le test
     // d'un serveur LLM — POST du service correspondant, résultat inline
     // sous le champ (OK + latence et résumé, ou l'erreur exacte). Les clés
-    // ne sont pas postées : le serveur teste la clé ENREGISTRÉE ; Seule
+    // ne sont pas postées : le serveur teste la clé ENREGISTRÉE ; seule
     // l'URL SearXNG part telle qu'éditée (testable avant enregistrement).
     function testExternalService(btn, resultEl, endpoint, payload) {
         btn.disabled = true;
@@ -639,9 +636,7 @@ define(["loading"], function (loading) {
     // PAS de cache : le tableau de bord Emby est une SPA — config.js survit aux
     // redémarrages du serveur (déploiement d'une nouvelle version), et une
     // réponse mise en cache servirait l'ANCIEN prompt après un déploy au lieu
-    // du nouveau (vu en production : « Réinitialiser » a réinstallé le prompt
-    // d'avant la mise à jour). Le fetch n'a lieu qu'au clic, un aller-retour
-    // par clic est négligeable.
+    // du nouveau. Le fetch n'a lieu qu'au clic : coût négligeable.
     function fetchDefaultPrompts() {
         return ApiClient.ajax({
             url: ApiClient.getUrl("Plugins/LLMAI/DefaultPrompts"),
@@ -1039,10 +1034,6 @@ define(["loading"], function (loading) {
         };
     }
 
-    // ANCIEN mécanisme (sections repliables h3 cliquables) SUPPRIMÉ au
-    // passage aux onglets : makeSectionsCollapsible / wireToggleAllButton /
-    // SECTION_KEY_PREFIX ont été retirés ; le lien profond
-    // « &section=crosskind » est repris par makeTabs (→ onglet tab-media).
 
     // ----------------------------------------------------------------
     //  Aperçu de planification (v2.15.0)
@@ -1205,7 +1196,7 @@ define(["loading"], function (loading) {
         // Boucle de rétroaction (opt-in) — directive éditable par l'admin.
         view.querySelector("#chkRecoFeedbackEnabled").checked = !!cfg.RecoFeedbackEnabled;
         view.querySelector("#txtPromptDirectives").value = cfg.PromptDirectives || "";
-        // Mémoire réflexive (Phase A, opt-in) : décisions + télémétrie.
+        // Mémoire réflexive (opt-in) : décisions + télémétrie.
         view.querySelector("#chkDecisionLogEnabled").checked = !!cfg.DecisionLogEnabled;
         view.querySelector("#chkPlaybackTelemetryEnabled").checked = !!cfg.PlaybackTelemetryEnabled;
         view.querySelector("#chkMemoryCardEnabled").checked = !!cfg.MemoryCardEnabled;
@@ -1366,7 +1357,7 @@ define(["loading"], function (loading) {
             RecoFeedbackEnabled: view.querySelector("#chkRecoFeedbackEnabled").checked,
             PromptDirectives: view.querySelector("#txtPromptDirectives").value || "",
             RecoLog: (loadedCfg && loadedCfg.RecoLog) || "",
-            // Mémoire réflexive (Phase A, opt-in) : les stores vivent dans des
+            // Mémoire réflexive (opt-in) : les stores vivent dans des
             // fichiers JSON du répertoire de config du plugin (decisions.json,
             // run_pool.json, playback.json) maintenus côté serveur — aucun
             // champ de config à porter ici (le carry-forward s'applique aux
@@ -1570,8 +1561,7 @@ define(["loading"], function (loading) {
                 });
             });
 
-            // Navigation par onglets (remplace les anciennes sections
-            // repliables) + boutons « Réinitialiser » des prompts.
+            // Navigation par onglets + boutons « Réinitialiser » des prompts.
             // Indépendants de la config chargée — branchés dès le viewshow
             // (idempotents).
             makeTabs(view);
@@ -1603,7 +1593,7 @@ define(["loading"], function (loading) {
                 });
             });
 
-            // Filtre de recherche de la liste des chaines.
+            // Filtre de recherche de la liste des chaînes.
             var chFilter = view.querySelector("#wlChannelsFilter");
             if (chFilter) {
                 once(chFilter, "input", function () {
@@ -1619,12 +1609,11 @@ define(["loading"], function (loading) {
 
             // Audit santé (v1.14.2 — run DÉTACHÉ) : le GET sans paramètre
             // démarre l'audit en tâche de fond et répond immédiatement
-            // (Running=true). La page pole ?Status=true toutes les 5 s et
+            // (Running=true). La page interroge ?Status=true toutes les 5 s et
             // affiche la progression (« Dose 3/7 — … ») ; quand le run
             // termine, la réponse Status porte le rapport frais (Outcome=ok)
             // ou l'erreur (Outcome=error). Fermer ou quitter la page
-            // n'annule PLUS le run (terrain 01/10/2026 : « Audit annulé » ×9,
-            // rapport perdu à la dose 7/7) ; le single-flight côté serveur
+            // n'annule PLUS le run ; le single-flight côté serveur
             // absorbe les clics en rafale (un clic pendant un run renvoie
             // l'état en cours — la page reprend simplement le polling).
             var fmtAuditDate = function (iso) {
@@ -1703,7 +1692,7 @@ define(["loading"], function (loading) {
                         auditApplyStatus(st);
                     }, function () {
                         // Tolérance réseau : le run continue côté serveur ;
-                        // après 5 échecs consécutifs on arrête de poler (le
+                        // après 5 échecs consécutifs on arrête l'interrogation (le
                         // rapport sera quand même persisté — rechargement de
                         // page pour le voir).
                         if (++view._llmaiAuditFails >= 5) auditStopPolling();
@@ -1752,10 +1741,9 @@ define(["loading"], function (loading) {
                     });
                 });
 
-                // Dernier rapport persisté (v1.13.10) : affiché PAR DÉFAUT au
-                // chargement de la page — lecture seule GET ?Last=true, zéro
-                // LLM. Relire un audit ne coûte plus une exécution ; le
-                // bouton ci-dessus régénère et écrase. La réponse porte
+                // Dernier rapport persisté : affiché PAR DÉFAUT au chargement
+                // (GET ?Last=true, zéro LLM) ; le bouton ci-dessus
+                // régénère et écrase. La réponse porte
                 // AUSSI l'état du run détaché : un rechargement pendant un
                 // audit reprend le fil (bouton occupé + polling). Best-effort :
                 // échec réseau ou rapport absent = la zone reste masquée.
@@ -1837,7 +1825,7 @@ define(["loading"], function (loading) {
                     secGo[secOf(it)] += (it.SizeGb || 0);
                 });
                 if (empty) empty.style.display = items.length ? "none" : "block";
-                // v2.13.0 — en-têtes de section à la emby-delete.sh : titre
+                // v2.13.0 — en-têtes de section : titre
                 // numéroté + compteur + total Go (le « gain de place » réel de
                 // chaque verdict) + règle en sous-texte grisé. Insérés au
                 // changement de section (items déjà triés par secOf).
@@ -1871,7 +1859,7 @@ define(["loading"], function (loading) {
                         else if (it.LastPlayed) meta2 += " · " + i18n.t("cfg.libreview.card.playedOn", it.LastPlayed);
                     }
                     if (it.Series) meta2 = it.Series + " · " + meta2;
-                    // v2.10.6 — motifs façon emby-delete-series.sh (rating, année,
+                    // v2.10.6 — motifs (rating, année,
                     // statut, genres) sous la ligne méta.
                     var motifs = [];
                     if (it.CommunityRating != null) motifs.push("⭐ " + Number(it.CommunityRating).toFixed(1));
@@ -2245,8 +2233,7 @@ define(["loading"], function (loading) {
             // (?Lang=es&Mode=full|missing|skipped — mêmes conventions que
             // l'audit : single-flight, clics absorbés, polling ?Status=true
             // toutes les 5 s ; quitter la page coupe le polling, pas le run ;
-            // endpoint 404 → message « mise à jour requise », tant que le
-            // moteur T1c n'est pas déployé). La couverture lit la base chaude
+            // endpoint 404 → message « mise à jour requise », sur un serveur plus ancien). La couverture lit la base chaude
             // (?base=1) et la diff usager (?missing=1&lang=xx) — deux GET
             // existants dès v1.16.0.
             var i18nGenStopPolling = function () {
@@ -2358,7 +2345,7 @@ define(["loading"], function (loading) {
                         i18nApplyStatus(st);
                     }, function () {
                         // Tolérance réseau : le run continue côté serveur ;
-                        // après 5 échecs consécutifs on arrête de poler.
+                        // après 5 échecs consécutifs on arrête l'interrogation.
                         if (++view._llmaiI18nFails >= 5) i18nGenStopPolling();
                     });
                 }, 5000);
@@ -2401,7 +2388,7 @@ define(["loading"], function (loading) {
 
                 // Reprise du fil (rechargement pendant un run) : l'état du
                 // run détaché se relit sans effet de bord (?Status=true) —
-                // endpoint absent tant que T1c n'est pas déployé → silence.
+                // endpoint absent sur un serveur plus ancien → silence.
                 ApiClient.ajax({
                     url: ApiClient.getUrl("Plugins/LLMAI/I18nGenerate", { Status: "true" }),
                     type: "GET"
@@ -2412,7 +2399,7 @@ define(["loading"], function (loading) {
                         i18nApplyStatus(st);
                         i18nGenStartPolling();
                     }
-                }, function () { /* endpoint absent (< T1c) : silence */ });
+                }, function () { /* endpoint absent (serveur plus ancien) : silence */ });
 
                 // Couverture immédiate si un code est déjà mémorisé.
                 if (i18nLangValue()) i18nCoverageRefresh();
@@ -3035,12 +3022,9 @@ define(["loading"], function (loading) {
 
             // Soumission du formulaire = sauvegarde. Branché UNE fois (once) :
             // la vue est cachée par le dashboard et viewshow re-tire à chaque
-            // retour sur la page — sans la garde, chaque ré-affichage
-            // multipliait les POST et les confirmations (terrain : popups
-            // ×2/×4/×6). Notification de succès : le SEUL toast « Settings
-            // saved » d'Emby via processPluginConfigurationUpdateResult —
-            // l'alerte du plugin était un doublon (chaque sauvegarde
-            // affichait DEUX confirmations dès le premier affichage).
+            // retour sur la page — sans la garde, POST et confirmations
+            // seraient multipliés. Notification de succès : le SEUL toast
+            // « Settings saved » d'Emby (processPluginConfigurationUpdateResult).
             once(view.querySelector("form.LLMAIConfigForm"), "submit", function (e) {
                 e.preventDefault();
                 var cfg = collect(view);

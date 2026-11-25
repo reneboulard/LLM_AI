@@ -101,7 +101,7 @@ namespace LLM_AI
         /// du serveur.</para>
         /// <para><c>Running</c>/<c>Progress</c>/<c>StartedAt</c> : état du run
         /// <b>détaché</b> (v1.14.2) — le POST de départ répond immédiatement
-        /// avec Running=true, la page pole <c>?Status=true</c>.
+        /// avec Running=true, la page interroge <c>?Status=true</c>.
         /// <c>FinishedAt</c>/<c>Outcome</c> : le run détaché terminé (« ok » =
         /// un rapport vient d'être persisté → relire LastReport ; « error » =
         /// échec, <c>Error</c> porte le message).</para>
@@ -172,13 +172,13 @@ namespace LLM_AI
                 return respL;
             }
 
-            // ---- Démarrage DETACHÉ d'un nouvel audit (v1.14.2) -----------
+            // ---- Démarrage DÉTACHÉ d'un nouvel audit (v1.14.2) -----------
             // Terrain 2026-10-01 : le run historique était attaché à la
             // requête HTTP — fermer/rafraîchir l'onglet annulait tout (« Audit
             // annulé » ×9, rapport perdu à la dose 7/7), et des clics en
             // rafale lançaient N audits concurrents. Nouveau contrat : la
             // requête démarre le run en tâche de fond et répond IMMÉDIATEMENT
-            // (Running=true) ; la page pole ?Status=true ; le rapport se
+            // (Running=true) ; la page interroge ?Status=true ; le rapport se
             // persiste à la fin comme avant. TryStart = single-flight : un
             // clic pendant un run renvoie l'état en cours au lieu d'en
             // relancer un neuf.

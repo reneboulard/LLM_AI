@@ -39,7 +39,7 @@ namespace LLM_AI
     //  - le titre de l'item est la forme EPG canonique : on ne le compare
     //    JAMAIS pour le corriger, on le compare pour CORROBORER ou réfuter ;
     //  - la contenance de clé (« de souche » ⊂ « immigrants de souche »,
-    //    faux positif historique 155980 du 2026-11-16) sans AUCUN id
+    //    faux positif historique du 2026-11-16) sans AUCUN id
     //    indépendant = à réviser (bruit fort), jamais une variante ;
     //  - les numéros de suite divergents (« Tuer Bill Vol. 2 » fiché
     //    « Vol. 1 », ids copiés ensemble) = à réviser, jamais une variante ;
@@ -57,7 +57,7 @@ namespace LLM_AI
     //    le croisé external_ids.tvdb_id (zéro clé TVDB requise).
     //
     //  Périmètre : films/séries (épisodes et dossiers exclus — l'épisode
-    //  n'est pas un champ d'arbitrage d'ids, voir note 2026-11-19). Zéro
+    //  n'est pas un champ d'arbitrage d'ids). Zéro
     //  écriture sur les items : aucun tag, aucun verrou, jamais de
     //  suppression/renommage d'id.
     // ---------------------------------------------------------------------
@@ -86,7 +86,7 @@ namespace LLM_AI
     }
 
     /// <summary>Entrées pures du classifieur — les DEUX côtés de la
-    /// comparaison, sans aucune dépendance HTTP (testable par réflexion).</summary>
+    /// comparaison, sans aucune dépendance HTTP (testable unitairement).</summary>
     internal sealed class LinkFacts
     {
         /// <summary>Titre de l'item Emby (forme EPG canonique).</summary>
@@ -145,7 +145,7 @@ namespace LLM_AI
         internal string FicheTitle;
         internal int? FicheYear;
         internal bool CrossKind;
-        /// <summary>Lien profond Emby (forme relative, construit serveur).</summary>
+        /// <summary>Lien profond Emby (forme relative, construit côté serveur).</summary>
         internal string DeepLink;
         /// <summary>DateCreated.Ticks de l'item (avance du curseur d'audit).</summary>
         internal long DateCreatedTicks;
@@ -354,7 +354,7 @@ namespace LLM_AI
 
         /// <summary>Compare un axe d'id : présent des deux côtés →
         /// corroboration (égalité, insensible à la casse) ou conflit
-        /// (différence). Un seul côté → rien (règle 3 : l'absence ne
+        /// (différence). Un seul côté → rien (l'absence ne
         /// prouve jamais rien).</summary>
         private static void CompareAxis(string axis, string itemVal, string ficheVal,
             ref int corroborations, ref int conflicts, StringBuilder conflictSb)
@@ -720,7 +720,7 @@ namespace LLM_AI
 
         /// <summary>Valide un lot complet. Le cap est appliqué par
         /// l'APPELANT (le lot transmis est déjà borné). Ne lève pas
-        /// (l'annulation réelle propège — discipline commune).</summary>
+        /// (l'annulation réelle se propage — discipline commune).</summary>
         internal async Task<LinkBatchResult> CheckItemsAsync(IReadOnlyList<BaseItem> lot, string lang, string serverId, CancellationToken ct)
         {
             var b = new LinkBatchResult();
@@ -765,7 +765,7 @@ namespace LLM_AI
             return b;
         }
 
-        /// <summary>Valide UN item : fetch de la fiche (throté), croisement,
+        /// <summary>Valide UN item : fetch de la fiche (avec throttle), croisement,
         /// verdict. Ne lève jamais (annulation réelle exceptée).</summary>
         internal async Task<LinkCheckResult> CheckItemAsync(BaseItem item, string lang, CancellationToken ct)
         {
@@ -847,7 +847,7 @@ namespace LLM_AI
                 ItemTvdb = tvdb,
                 FicheFound = true,
                 CrossKind = crossKind,
-                // Tautologie tantée : une fiche trouvée via l'id tmdb de
+                // Tautologie : une fiche trouvée via l'id tmdb de
                 // l'item « concorde » par construction sur cet axe — il ne
                 // devient une preuve QUE via /find (imdb/tvdb).
                 TmdbAxisIndependent = !viaTmdb,
@@ -970,7 +970,7 @@ namespace LLM_AI
 
         /// <summary>Bilan textuel multi-lignes : entête + notables (tous
         /// divergents/à réviser, variante/non-vérifiable plafonnés) —
-        /// construit serveur pour rester indépendant du modèle (les liens
+        /// construit côté serveur pour rester indépendant du modèle (les liens
         /// profonds sont déjà portés par les résultats).</summary>
         internal static string BuildReportText(LinkBatchResult b, string langKey, int maxLines = 20)
         {

@@ -15,11 +15,10 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     // ---------------------------------------------------------------------
-    //  validate_links (v2.22.0) : outil CHAT ADMIN de validation des liens
+    //  validate_links : outil CHAT ADMIN de validation des liens
     //  de fiches — lecture seule, verdict rendu côté serveur (le LLM
-    //  rapporte, il n'arbitre jamais — banc 2026-11-19 : les modèles
-    //  échouent seuls sur « l'id qui a servi à trouver la fiche n'est
-    //  jamais une preuve »). Voir <see cref="LinkValidator"/> pour la
+    //  rapporte, il n'arbitre jamais : l'id qui a servi à TROUVER la fiche
+    //  n'est jamais une preuve de sa validité). Voir <see cref="LinkValidator"/> pour la
     //  doctrine du croisement.
     //
     //  Sélection libre : items (ids explicites — le LLM les obtient par

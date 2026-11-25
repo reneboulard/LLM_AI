@@ -4,10 +4,10 @@
 // Recommendations / RecommendationsDate de la config, servis sans exiger
 // ManageServer) et l'affiche sous forme de **grille de cartes** actionnables
 // (poster, badge priorité, ⭐, date/chaîne, raison, boutons
-// Programmer / Oublier). Réplique de la section IA de absent_series.php.
+// Programmer / Oublier).
 //
 // Programmer : POST /LiveTv/SeriesTimers {ProgramId, RecordNewOnly, SkipEpisodesInLibrary, ChannelId}
-//   via ApiClient.ajax (gère le token admin) — réplique de record_series.php.
+//   via ApiClient.ajax (gère le token admin).
 // Lecture des recos : GET /Plugins/LLMAI/Recos (endpoint plugin authentifié
 //   standard). PAS getPluginConfiguration : l'endpoint hôte
 //   /Plugins/{id}/Configuration est réservé ManageServer (admin) et renvoyait
@@ -98,7 +98,7 @@ define([], function () {
         if (!iso) return "";
         var d = new Date(iso);
         if (isNaN(d.getTime())) return esc(iso);
-        // Date/heure locale lisible : 26/08 21:00 (comme ai_section.php).
+        // Date/heure locale lisible : 26/08 21:00.
         var p = function (n) { return (n < 10 ? "0" : "") + n; };
         return p(d.getDate()) + "/" + p(d.getMonth() + 1) + " " +
                p(d.getHours()) + ":" + p(d.getMinutes());
@@ -313,7 +313,7 @@ define([], function () {
     }
 
     // Les boutons de lecture s'affichent si l'AMD require est disponible (le
-    // playbackManager du dashboard s'y charge). Vérifié au rendre, pas au define
+    // playbackManager du dashboard s'y charge). Vérifié au rendu, pas au define
     // (ApiClient / require sont peuplés par le dashboard au runtime).
     function canWatch() {
         try { return typeof require === "function" && !!ApiClient; }
@@ -673,7 +673,7 @@ define([], function () {
         raw.textContent = payload || "";
 
         if (!payload) {
-            // Conteneur tonight en tête (rempli asynchronement par loadTonight)
+            // Conteneur tonight en tête (rempli de façon asynchrone par loadTonight)
             // + message « aucune recommandation » pour la partie planifiée.
             content.innerHTML = '<div id="recTonight" class="recSection"></div>' +
                 '<div class="recEmpty">' + i18n.t("rec.empty") + '</div>';

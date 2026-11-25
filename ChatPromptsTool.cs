@@ -9,7 +9,7 @@ namespace LLM_AI
 {
     /// <summary>
     /// Tool de chat <c>plugin_prompts</c> (v1.13.8) : le LLM du chat peut
-    /// LIRE et (sur approbation) ÉCRIRE les cinq prompts/directives
+    /// LIRE et (sur approbation) ÉCRIRE les sept prompts/directives
     /// éditables de la configuration — le cas d'usage visé est « ajoute la
     /// règle X à ma directive films » en mode d'édition (contexte déroulant
     /// de la page chat, <see cref="ChatContexts"/>).
@@ -275,7 +275,7 @@ namespace LLM_AI
         }
 
         /// <summary>Lecteur du texte courant (liste blanche stricte —
-        /// reflexion interdite, un champ inconnu retourne null).</summary>
+        /// réflexion interdite, un champ inconnu retourne null).</summary>
         internal static string GetPrompt(PluginConfiguration cfg, string field)
         {
             if (cfg == null || !IsKnownField(field)) return null;

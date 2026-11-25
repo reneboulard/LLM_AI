@@ -73,8 +73,8 @@ namespace LLM_AI
     /// garde-fous métier inchangés (owned-guard, watched-guard, drop list,
     /// dedup — déjà dans les primitives réutilisées).</para>
     /// <para><b>Budget</b> : consommation AU SUCCÈS seulement — une action
-    /// refusée par un garde-fou ne consomme rien (réservation puis rembourse-
-    /// ment du différentiel). Un lot dont le budget ne peut pas tout couvrir
+    /// refusée par un garde-fou ne consomme rien (réservation puis remboursement
+    /// du différentiel). Un lot dont le budget ne peut pas tout couvrir
     /// est refusé en bloc (all-or-nothing : pas d'exécution partielle
     /// gratuite).</para>
     /// <para><b>État en mémoire serveur</b> (compteurs de budget, gate de
@@ -113,7 +113,7 @@ namespace LLM_AI
             /// (même libellé que le toast) — renvoyés à la page de chat
             /// (<c>ChatResponse.Actions</c>) pour l'affichage sous la réponse,
             /// le toast Emby n'étant pas rendu sur la page de config (constat
-            /// 2026-09-06). Revidé à chaque <c>BeginTurn</c>.</summary>
+            /// 2026-09-06). Vidée à chaque <c>BeginTurn</c>.</summary>
             public readonly List<string> TurnActions = new List<string>();
         }
 
@@ -137,7 +137,7 @@ namespace LLM_AI
 
         /// <summary>
         /// Ouvre un tour de chat : remet le compteur de tour à zéro (une
-        /// question = un tour) et élage les sessions inactives. Appelé par
+        /// question = un tour) et élague les sessions inactives. Appelé par
         /// l'endpoint de chat AVANT le run LLM.
         /// </summary>
         public static void BeginTurn(string sessionId, ILogger logger)
@@ -194,8 +194,6 @@ namespace LLM_AI
             st.ConvUsed = Math.Max(0, st.ConvUsed - n);
         }
 
-        /// <summary>Refus typé renvoyé au modèle quand le budget est
-        /// épuisé (tour ou conversation) — le tool s'arrête proprement.</summary>
         /// <summary>Refus typé renvoyé au modèle quand le budget est
         /// épuisé (tour ou conversation) — le tool s'arrête proprement.
         /// Localisé (v1.15.0.2) : ce refus n'est émis qu'à l'exécution
@@ -480,18 +478,8 @@ namespace LLM_AI
         internal static string LF(string key, params object[] args)
             => string.Format(CultureInfo.InvariantCulture, I18n.S(key, s_lang), args);
 
-        /// <summary>
-        /// Toast « traçage d'action » : quand une action du chat réussit
-        /// (timer, carte, tag, collection, playlist, run), le libellé est
-        /// (1) enregistré pour la page de chat (<c>ChatResponse.Actions</c> —
-        /// le client web Emby ne rend PAS les DisplayMessage sur la page de
-        /// config, constat 2026-09-06) puis (2) envoyé en DisplayMessage
-        /// discret (préfixe 🤖, timeout 8 s) vers TOUTES les sessions admin —
-        /// l'admin voit la preuve de l'action, même si la réponse du LLM
-        /// n'évoque pas le détail. Succès seulement : rien pour les refus de
-        /// garde-fous (le texte du chat les explique). Best-effort, ne lève
-        /// jamais.
-        /// </summary>
+        /// <summary>Enregistre le libellé d'une action réussie pour la page de
+        /// chat (<c>ChatResponse.Actions</c>).</summary>
         internal static void RecordAction(string sessionId, string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
@@ -508,6 +496,18 @@ namespace LLM_AI
             lock (st) return new List<string>(st.TurnActions);
         }
 
+        /// <summary>
+        /// Toast « traçage d'action » : quand une action du chat réussit
+        /// (timer, carte, tag, collection, playlist, run), le libellé est
+        /// (1) enregistré pour la page de chat (<c>ChatResponse.Actions</c> —
+        /// le client web Emby ne rend PAS les DisplayMessage sur la page de
+        /// config, constat 2026-09-06) puis (2) envoyé en DisplayMessage
+        /// discret (préfixe 🤖, timeout 8 s) vers TOUTES les sessions admin —
+        /// l'admin voit la preuve de l'action, même si la réponse du LLM
+        /// n'évoque pas le détail. Succès seulement : rien pour les refus de
+        /// garde-fous (le texte du chat les explique). Best-effort, ne lève
+        /// jamais.
+        /// </summary>
         internal static async Task ToastActionAsync(string sessionId, string text, ILogger logger)
         {
             RecordAction(sessionId, text);
@@ -579,7 +579,7 @@ namespace LLM_AI
             catch { return "{\"status\":\"failed\",\"detail\":\"sérialisation\"}"; }
         }
 
-        /// <summary>Résolve un id (InternalId ou Guid — cf. ItemIdResolver)
+        /// <summary>Résout un id (InternalId ou Guid — cf. ItemIdResolver)
         /// vers la chaîne InternalId normalisée (clé de tracking).</summary>
         private static string NormId(ILibraryManager library, string raw)
         {
@@ -1293,7 +1293,7 @@ namespace LLM_AI
             public string Name => "run_tonight_run";
             public string Description =>
                 "Déclenche le run « À regarder ce soir » (même code path que la tâche planifiée et le login : " +
-                "cache, profil, EPG, surfaces configurées — genre/collection/playlist). Les directives de session " +
+                "cache, profil, EPG, surfaces configurées — tag/collection/playlist). Les directives de session " +
                 "(optionnelles, 500 caractères max) ne valent QUE pour ce run. Un seul run à la fois, 2 maximum " +
                 "par conversation. DEUX PHASES : l'appel DÉPOSE une proposition (status \"awaiting_approval\") " +
                 "sans exécuter — l'admin approuve en cliquant la carte « Approuver » de la page, le résultat " +

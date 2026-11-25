@@ -152,10 +152,9 @@ namespace LLM_AI
 
             progress?.Report(10);
 
-            // Auto-réparation des mappages de genres IA : la page de config de
-            // GenreCleaner sérialise sa copie mémoire au prochain enregistrement
-            // — toute écriture externe postérieure au chargement (et antérieure
-            // à un redémarrage) est perdue ; on ré-écrit les entrées manquantes.
+            // Auto-réparation des mappages de genres : une sauvegarde depuis la
+            // page de config de GenreCleaner peut écraser les mappages ajoutés
+            // par l'IA. On les ré-applique pour garantir la persistance.
             GenreCleanerMap.HealApplied(cfg.GenreAliasApplied, _logger);
 
             // Deux prompts : séries (ScheduleTask) et films (ScheduleTaskMovies).
@@ -174,7 +173,7 @@ namespace LLM_AI
             // directives de TOUS les usagers (la reco d'enregistrement est
             // globale au foyer, pas par usager). Vide si désactivée/jamais
             // analysée — prompts inchangés (fail-open).
-            // Mémoire réflexive (Phase C) : la fiche mémoire a priorité sur
+            // Mémoire réflexive : la fiche mémoire a priorité sur
             // la directive de la boucle classique (repli fail-open sur celle-ci).
             string memory = MemoryCard.BuildInjectionBlock(cfg);
             if (memory.Length > 0)
@@ -210,7 +209,7 @@ namespace LLM_AI
                 string p1 = "", p2 = "";
                 bool ok1 = false, ok2 = false;
 
-                // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) :
+                // Mémoire réflexive (opt-in DecisionLogEnabled) :
                 // runId des runs d'enregistrement — relie les décisions
                 // journalisées aux candidats EPG capturés (epg_series /
                 // epg_movies par le tool get_emby_info).
@@ -242,30 +241,21 @@ namespace LLM_AI
                 }
 
                 // Fusionne les deux tableaux JSON en un payload unique. La page
-                // Recommandations split par kind (series/movie) en deux sections.
+                // Recommandations réparties par kind (series/movie) en deux sections.
                 var merged = LlmRunner.MergeJsonArrays(p1, p2);
 
                 // Owned-guard déterministe : rapproche les recos de la
                 // bibliothèque (titre, puis id IMDb si le LLM l'a établi via
                 // ses outils). Une reco possédée reçoit library_id → exclue du
                 // record bucket (.strm/Auto-program/badges) et affichée avec
-                // le bouton « Regarder (bibli.) ». Sans ce rapprochement, la
-                // détection du « déjà possédé » repose uniquement sur la
-                // classification source du LLM (cas vécu : reco d'enregistrer
-                // « Comment tuer son mari en 10 leçons » alors que le film,
-                // même titre ET même id IMDb, était déjà en bibliothèque).
+                // le bouton « Regarder (bibli.) ». Sans lui, le « déjà possédé »
+                // dépend de la seule classification du LLM.
                 merged = _runner.EnrichWithLibrary(merged);
 
-                // Garde anti-effacement (vécu 2026-09-02 03:01 sur le serveur
-                // principal : LLM local étouffé — SÉRIES a répondu [], FILMS un
-                // appel d'outil malformé [{ "action":"epg_movies" }] passé comme
-                // réponse finale). Les deux runs étaient « ok », donc la fusion
-                // donnait un tableau vide qui, persisté tel quel, EFFAÇAIT les
-                // recommandations de la veille et déclenchait les consommateurs
-                // en sémantique « tout remplacer » (badges, bibliothèque .strm :
-                // CleanPrevious balayerait toutes les cartes). Un run vide n'est
-                // pas un signal utile : on CONSERVE le payload précédent, on
-                // saute tous les consommateurs aval, et on notifie l'échec.
+                // Garde anti-effacement : si le LLM produit une réponse vide
+                // (ex: backend dégradé), on conserve les recommandations du
+                // run précédent pour ne pas vider la liste et déclencher des
+                // nettoyages non désirés (badges, fichiers .strm).
                 int newCount = LlmRunner.CountRecommendations(merged);
                 int oldCount = LlmRunner.CountRecommendations(cfg.Recommendations);
                 if (newCount == 0 && oldCount > 0)
@@ -279,11 +269,9 @@ namespace LLM_AI
                 }
 
                 PersistRecommendations(cfg, merged);
-                // Opt-out (v2.5.0) : cloche « N nouvelles recos » — la seule
-                // notification générale du plugin. Emby ne peut pas la filtrer
-                // par usager côté livraison (external.externalnotification =
-                // un type unique, tout-ou-rien par usager), la granularité
-                // vit donc côté plugin.
+                // Opt-out pour la notification "N nouvelles recommandations".
+                // Le filtrage par utilisateur n'étant pas possible côté Emby
+                // pour ce type de notification, il est géré ici.
                 if (cfg.NotifyRecommendationsEnabled)
                     SendRecommendationNotification(merged);
 
@@ -318,11 +306,10 @@ namespace LLM_AI
                     }
                 }
 
-                // Mémoire réflexive (Phase A, opt-in DecisionLogEnabled) :
-                // décisions kind=record avec raison + priorité, et pool des
-                // candidats EPG capturés pendant les deux runs. En PLUS du
-                // journal RecoLog (double écriture transitoire ; la Phase C
-                // retire RecoLog). Best-effort.
+                // Mémoire réflexive (opt-in) : journalise les décisions
+                // (kind=record) et le pool de candidats EPG du run.
+                // Redondant avec RecoLog pour assurer la compatibilité avec
+                // l'ancienne boucle de rétroaction. Best-effort.
                 if (cfg.DecisionLogEnabled)
                 {
                     try
@@ -344,7 +331,7 @@ namespace LLM_AI
                                 Source = r.Kind ?? "",
                                 Reason = r.Reason ?? "",
                                 Priority = r.Priority ?? "",
-                                Mv = 0 // fiche mémoire : Phase C
+                                Mv = 0 // version de fiche mémoire : non renseignée ici
                             });
                         }
                         if (decisions.Count > 0)
@@ -434,10 +421,9 @@ namespace LLM_AI
             catch (Exception ex)
             {
                 _logger.ErrorException("[LLM_AI] Échec de l'agent LLM : {0}", ex, ex.Message);
-                // Notifie aussi l'échec dur (ex. les DEUX runs agent ont jeté une
-                // exception — tous backends épuisés) : sans cela, la tâche « a
-                // échoué » seulement dans le journal, et l'usager croit à tort
-                // que les recos de la veille ont été rafraîchies.
+                // Notifie l'échec pour que l'utilisateur sache que les
+                // recommandations n'ont pas été mises à jour, au lieu de
+                // le découvrir en consultant le journal.
                 SendFailureNotification("Échec de la tâche recommandations : " + ex.Message);
                 throw;
             }
@@ -488,17 +474,11 @@ namespace LLM_AI
                 yield return t;
         }
 
-        /// <summary>Parseur de planification partagé (aussi utilisé par
-        /// LibReviewTask — v2.10.0). Forme canonique depuis v2.15.0 :
-        /// crontab restreint en 5 champs (« MM HH * * J »). L'ancienne
-        /// syntaxe par mots-clés anglais (Daily/Weekly/Hourly/Interval)
-        /// reste acceptée pour toujours — les configs existantes et les
-        /// packs de langues antérieurs la portent. Terrain 2026-11-06 :
-        /// ces mots-clés étaient la seule partie traduisible du champ et
-        /// la doc générée enseignait des mots que le parseur ignorait
-        /// (« Diario 03:00 » es) → repli silencieux à minuit ; le cron est
-        /// agnostique par construction (nombres et astérisques), et tout
-        /// échec est désormais signalé au lieu d'être avalé.</summary>
+        /// <summary>Parseur de planification partagé. Supporte un format
+        /// crontab restreint (« MM HH * * J ») et conserve la
+        /// compatibilité avec l'ancienne syntaxe par mots-clés
+        /// (Daily, Weekly...). Le crontab est agnostique de la langue,
+        /// contrairement aux mots-clés qui doivent être en anglais.</summary>
         internal static IEnumerable<TaskTriggerInfo> ParseTriggers(string schedule, ILogger logger = null)
         {
             if (string.IsNullOrWhiteSpace(schedule))
@@ -562,14 +542,10 @@ namespace LLM_AI
 
                 case "WEEKLY":
                     {
-                        // « Weekly Jour HH:MM » (ancienne syntaxe) — le jour
-                        // DOIT être un nom anglais reconnu ET l'heure
-                        // présente : un WeeklyTrigger au jour nul (jour
-                        // traduit par l'atelier ou faute de frappe — terrain
-                        // es « Semanal Domingo », terrain FR « Weekly
-                        // dimanche ») est un comportement serveur indéfini,
-                        // pas une planification. Refus bruyant plutôt que
-                        // trigger muet (v2.15.0 ; l'ancien code l'acceptait).
+                        // « Weekly Jour HH:MM » (ancienne syntaxe) : le jour doit
+                        // être un nom anglais valide et l'heure présente, sinon le
+                        // trigger pourrait être invalide ou ignoré silencieusement
+                        // par le serveur. On force un repli explicite.
                         var day = ParseDayOfWeek(parts, 1);
                         int wh = 0, wm = 0;
                         var hasTime = parts.Length >= 3 && TryParseTime(parts[2], out wh, out wm);
@@ -606,11 +582,8 @@ namespace LLM_AI
                     }
                     else
                     {
-                        // Terrain 2026-11-06 : ce repli silencieux à minuit
-                        // masquait des têtes de planification invalides
-                        // pendant des semaines (mots-clés « traduits » par
-                        // l'atelier, frappes fautives) — il est désormais
-                        // journalisé, l'admin peut corriger.
+                        // Le repli est journalisé pour rendre visible une éventuelle
+                        // planification invalide.
                         logger?.Warn(
                             "[LLM_AI] Planification « {0} » non reconnue — repli : tous les jours à 00:00. " +
                             "Syntaxe : « MM HH * * * » (tous les jours), « MM HH * * J » (J : 0=dimanche…6=samedi), " +
@@ -624,10 +597,9 @@ namespace LLM_AI
 
         /// <summary>Crontab restreint : « MM HH * * * » (quotidien),
         /// « MM HH * * J » (hebdomadaire, J = 0..6, 0 = dimanche) et
-        /// « 0 */N * * * » (toutes les N heures). Tout autre assemblage
-        /// 5 champs (plages, listes, pas aux minutes, jour du mois, mois,
-        /// noms de jours) est refusé : Emby ne sait représenter que ces
-        /// trois triggers — un cron complet serait une promesse creuse.</summary>
+        /// « 0 */N * * * » (toutes les N heures). Les autres syntaxes cron
+        /// (plages, listes, etc.) ne sont pas supportées car non
+        /// représentables par les types de triggers d'Emby.</summary>
         private static bool TryParseCron(string[] f, out TaskTriggerInfo trigger, out string reason)
         {
             trigger = null;
@@ -775,15 +747,11 @@ namespace LLM_AI
         /// Envoie une notification Emby (cloche) à tous les utilisateurs :
         /// « N nouvelles recommandations ». Pointe vers la racine Emby
         /// (la page « Recommandations LLM AI » est atteignable via le menu).
-        /// <para>v2.20.0 (format A, décision usager 2026-11-12) : la
-        /// description liste désormais chaque recommandation (titre, année,
-        /// date, chaîne, disponibilité, raison LLM tronquée) au lieu d'un
-        /// compteur seul — voir
-        /// <see cref="BuildRecommendationBellDescription"/>.</para>
-        /// <para>l'API <c>INotificationManager.SendNotification</c> attend un
-        /// <c>Emby.Notifications.NotificationRequest</c> qui porte un SEUL
-        /// <c>User</c> — on boucle donc sur les utilisateurs pour notifier tout
-        /// le monde. <c>Severity = LogSeverity.Info</c> (niveau information).</para>
+        /// <para>La description liste chaque recommandation au lieu d'un
+        /// simple compteur (voir <see cref="BuildRecommendationBellDescription"/>).</para>
+        /// <para>L'API de notification ne prenant qu'un utilisateur à la
+        /// fois, on boucle sur la liste des utilisateurs pour notifier
+        /// tout le monde.</para>
         /// </summary>
         private void SendRecommendationNotification(string reply)
         {
@@ -802,14 +770,11 @@ namespace LLM_AI
             if (users.Count == 0) return;
 
             string desc = BuildRecommendationBellDescription(reply);
-            // URL absolue pour le click-through de la notification : dérivée de
-            // la config réseau d'Emby (IServerApplicationHost.GetLocalHostApiUrl
-            // — lit les ports/schéma de system.xml + l'hôte local détecté), pas
-            // d'une IP codée. Repli sur EmbyPublicUrl si la détection échoue ou
-            // si l'utilisateur a renseigné un domaine public explicite.
+            // URL absolue pour le click-through de la notification, résolue via
+            // la configuration du serveur pour éviter toute IP codée en dur.
             string url = ResolveEmbyUrl();
-            // Lien aussi en description (v2.4.5 : les canaux de lecture —
-            // webhooks, courriel — ignorent le champ Url d'Emby).
+            // Lien aussi en description (les canaux de lecture comme webhooks/
+            // courriel ignorent le champ Url d'Emby).
             if (!string.IsNullOrWhiteSpace(url))
                 desc = desc + "\n" + url;
             var now = DateTimeOffset.UtcNow;
@@ -844,39 +809,24 @@ namespace LLM_AI
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// Description détaillée de la cloche « recommandations » (v2.20.0,
-        /// format A — décision usager 2026-11-12) : le payload persisté porte
-        /// déjà tous les champs que la page « Recommandations LLM AI » affiche
-        /// (title, kind, reason, channel, start, year, source…) — la cloche les
-        /// met en forme au lieu d'un compteur seul, au style de la cloche
-        /// « Enregistrement recommandé » (TonightRecordingService : la raison
-        /// LLM vit dans la cloche multi-lignes, jamais dans un toast).
-        /// <para>Structure : « N nouvelles recommandations (X séries, Y
-        /// films). » puis une section « 📺 Séries » et une section « 🎬 Films »
-        /// — un item = une ligne de détails « ▶ Titre (année) — 13/11 21:00 ·
-        /// CBFT-DT » (date/chaîne au format de la page ; source recording /
-        /// library → « 📼 déjà enregistré » / « 📚 déjà en bibliothèque »)
-        /// suivie de la raison LLM « 🤖 … » tronquée. Plafond
-        /// <see cref="BellDetailCap"/> items détaillés — le surplus devient
-        /// « … et N autres, sur la page ».</para>
-        /// <para>Fail-open : payload non-tableau (prose Markdown — compte 0),
-        /// illisible en cours de construction ou items sans titre → formes
-        /// raccourcies historiques ; jamais d'exception au-delà de cette
-        /// méthode.</para>
+        /// Construit la description détaillée de la notification de
+        /// recommandations. Le payload JSON des recommandations est mis en
+        /// forme pour présenter une liste lisible des nouveaux items, au lieu
+        /// d'un simple compteur.
         /// </summary>
         private string BuildRecommendationBellDescription(string reply)
         {
             int count = LlmRunner.CountRecommendations(reply);
             if (count <= 0)
             {
-                // Payload non-tableau (prose Markdown) ou vide : le libellé
-                // générique historique reste le plus honnête.
+                // Payload non-tableau (prose) ou vide : le libellé générique
+                // historique reste le plus honnête.
                 return "Recommandations mises à jour — voir la page « Recommandations LLM AI ».";
             }
 
-            // Un seul passage : total PAR TYPE sur tout le tableau (l'en-tête
-            // reste juste même au-delà du plafond), lignes détaillées
-            // plafonnées à BellDetailCap.
+             // Un seul passage : total PAR TYPE sur tout le tableau (l'en-tête
+             // reste juste même au-delà du plafond), lignes détaillées
+             // plafonnées à BellDetailCap.
             int totalSeries = 0, totalMovies = 0, listed = 0;
             var series = new List<string>();
             var movies = new List<string>();
@@ -930,8 +880,8 @@ namespace LLM_AI
         /// <summary>Un item de la cloche : « ▶ Titre (année) — 13/11 21:00 ·
         /// CBFT-DT » puis, si le LLM en a produit une, la raison « 🤖 … »
         /// (tronquée à <see cref="BellReasonMax"/>). Null si l'item n'a pas de
-        /// titre (il reste compté dans l'en-tête — la page gère de son côté ce
-        /// qu'elle veut de son payload).</summary>
+        /// titre ; il reste compté dans le total mais n'apparaît pas dans
+        /// le détail de la notification.</summary>
         private static string BellItemLines(JsonElement el)
         {
             if (!el.TryGetProperty("title", out var t) || t.ValueKind != JsonValueKind.String)
@@ -941,8 +891,7 @@ namespace LLM_AI
 
             var sb = new StringBuilder("▶ ").Append(title);
 
-            // Année de production (champ enrichi côté tâche) : tolère nombre et
-            // "2024", ignore le bruit — mêmes bornes que la page (1900-2100).
+            // Année de production : tolère les formats nombre et chaîne.
             if (TryBellYear(el, out int year))
                 sb.Append(" (").Append(year.ToString(CultureInfo.InvariantCulture)).Append(')');
 
@@ -1017,8 +966,8 @@ namespace LLM_AI
         }
 
         /// <summary>Section « 📺 Séries » / « 🎬 Films » de la cloche : titre de
-        /// section puis une ligne d'items par item. LF uniquement (v2.4.5 :
-        /// les payloads webhook/courriel ne portent jamais de CR).</summary>
+        /// section puis une ligne d'items par item. Utilise LF uniquement
+        /// pour la compatibilité avec les webhooks.</summary>
         private static void AppendBellSection(StringBuilder sb, string heading, List<string> lines)
         {
             if (lines == null || lines.Count == 0) return;
@@ -1041,9 +990,9 @@ namespace LLM_AI
         private static string FrCount(int n, string sing, string plur) =>
             n.ToString(CultureInfo.InvariantCulture) + " " + (n == 1 ? sing : plur);
 
-        /// <summary>Cloche = LF uniquement : un CR/LF parasite dans un champ
-        /// LLM (titre, chaîne, raison) est aplati en espace (les payloads
-        /// webhook/courriel ne portent jamais de CR — v2.4.5).</summary>
+        /// <summary>Supprime les sauts de ligne d'une chaîne pour garantir que
+        /// la description de la notification reste compacte et compatible avec
+        /// les webhooks, qui ne gèrent pas toujours les CR/LF.</summary>
         private static string Oneline(string s) =>
             string.IsNullOrWhiteSpace(s) ? s : s.Replace("\r", " ").Replace("\n", " ").Trim();
 
@@ -1080,8 +1029,8 @@ namespace LLM_AI
             }
 
             string url = ResolveEmbyUrl();
-            // Lien aussi en description (v2.4.5 : les canaux de lecture —
-            // webhooks, courriel — ignorent le champ Url d'Emby).
+            // Lien aussi en description (les canaux de lecture comme webhooks/
+            // courriel ignorent le champ Url d'Emby).
             if (!string.IsNullOrWhiteSpace(url))
                 reason = reason + "\n" + url;
             var now = DateTimeOffset.UtcNow;
@@ -1114,12 +1063,10 @@ namespace LLM_AI
         /// <summary>
         /// Résout l'URL de base d'Emby pour les liens absolus (notifications,
         /// cartes <c>.strm</c>). On ne code aucune IP.
-        /// <para><b>Priorité</b> : si <see cref="PluginConfiguration.EmbyPublicUrl"/>
-        /// est renseigné, on l'utilise en priorité — l'usager l'a défini exprès
-        /// pour que les liens soient joignables depuis les clients externes
-        /// (TV, téléphone) ; <c>GetLocalHostApiUrl</c> renvoie souvent
-        /// <c>localhost</c>, injouable par un client distant qui lit un
-        /// <c>.strm</c>.</para>
+        /// <para><b>Priorité</b> : <see cref="PluginConfiguration.EmbyPublicUrl"/>,
+        /// si défini, est utilisé en priorité pour garantir que les liens
+        /// sont accessibles depuis des clients externes.
+        /// <c>GetLocalHostApiUrl</c> est utilisé en repli.</para>
         /// <para>Sinon, on interroge la config réseau du serveur via
         /// <see cref="IServerApplicationHost.GetLocalHostApiUrl"/> (ports
         /// HTTP/HTTPS + schéma de <c>system.xml</c> + hôte local détecté).
@@ -1127,10 +1074,7 @@ namespace LLM_AI
         /// </summary>
         private string ResolveEmbyUrl()
         {
-            // 1) EmbyPublicUrl explicite -> prioritaire : l'usager l'a défini
-            //    exprès pour que les liens soient joignables depuis les clients
-            //    externes (TV, téléphone). GetLocalHostApiUrl renvoie souvent
-            //    "localhost", injouable par un client distant qui lit un .strm.
+            // 1) EmbyPublicUrl explicite : prioritaire (voir le résumé de la méthode).
             string publicUrl = (Plugin.Instance?.Configuration?.EmbyPublicUrl ?? string.Empty).Trim();
             if (!string.IsNullOrWhiteSpace(publicUrl))
                 return publicUrl;

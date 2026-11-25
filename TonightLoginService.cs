@@ -275,17 +275,6 @@ namespace LLM_AI
         //  Toast (SendMessageCommand) + cloche (notification)
         // ------------------------------------------------------------------
 
-        /// <summary>
-        /// Envoie le toast au client qui vient de se connecter (gated
-        /// <c>DisplayMessage</c> dans <see cref="SessionInfo.SupportedCommands"/>),
-        /// PUIS une notification cloche persistante (deep-link) en repli — elle
-        /// reste même si la session a fermé avant la fin du run et fonctionne
-        /// sur tous les clients. Le toast est texte seul (pas de bouton), d'où
-        /// la cloche en complément.
-        /// </summary>
-        /// <param name="programmed">Nombre de timers créés par AutoProgrammer.
-        /// -1 = cache frais (auto-programmation déjà faite au premier run : ne
-        /// pas mentionner « N programmé(s) » dans le toast).</param>
         // Délai de « plongée » après détection de la capacité DisplayMessage :
         // au moment de SessionStarted, le client vient à peine de s'authentifier
         // et n'a pas fini sa navigation post-login (le dashboard met ~1–3 s à se
@@ -297,6 +286,17 @@ namespace LLM_AI
         // que SessionStarted — avant même le POST /Sessions/Capabilities/Full.
         private const int DisplaySettleMs = 3000;
 
+        /// <summary>
+        /// Envoie le toast au client qui vient de se connecter (gated
+        /// <c>DisplayMessage</c> dans <see cref="SessionInfo.SupportedCommands"/>),
+        /// PUIS une notification cloche persistante (deep-link) en repli — elle
+        /// reste même si la session a fermé avant la fin du run et fonctionne
+        /// sur tous les clients. Le toast est texte seul (pas de bouton), d'où
+        /// la cloche en complément.
+        /// </summary>
+        /// <param name="programmed">Nombre de timers créés par AutoProgrammer.
+        /// -1 = cache frais (auto-programmation déjà faite au premier run : ne
+        /// pas mentionner « N programmé(s) » dans le toast).</param>
         private async Task SendToastAsync(User user, string sessionId, string payload, int programmed, CancellationToken ct)
         {
             string toast = BuildToastText(payload, programmed);
@@ -455,11 +455,10 @@ namespace LLM_AI
             }
         }
 
-        /// <summary>Durée (ms) de CHAQUE popup de la séquence (et du toast
-        /// unique) : <see cref="PluginConfiguration.LoginPopupSeconds"/>,
-        /// plancher 4 s (en dessous, pas le temps de lire titre + méta ;
         /// <summary>
-        /// Durée (ms) demandée pour une popup de toast. Internal (v2.4.0) :
+        /// Durée (ms) de CHAQUE popup de la séquence (et du toast unique) :
+        /// <see cref="PluginConfiguration.LoginPopupSeconds"/>, plancher 4 s
+        /// (en dessous, pas le temps de lire titre + méta). Internal (v2.4.0) :
         /// partagée avec <see cref="TonightRecordingService"/> — un seul
         /// réglage de durée pour tous les toasts du plugin.
         /// </summary>

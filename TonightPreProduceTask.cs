@@ -25,43 +25,37 @@ namespace LLM_AI
     /// le planificateur Emby). Le résultat atterrit dans le cache par usager de
     /// <see cref="TonightService"/> ; au login suivant, le déclencheur
     /// <see cref="TonightLoginService"/> sert ce cache frais d'un toast
-    /// <b>immédiat</b> (chemin existant « cache frais → toast immédiat ») — le
-    /// run LLM (30-60 s, voire plusieurs minutes sur un backend lent) devient
-    /// invisible pour l'usager.
+    /// <b>immédiat</b> — le run LLM devient invisible pour l'usager.
     /// <para>Raison d'être du toast instantané : le popup « À regarder ce soir »
     /// a le plus d'impact juste après le login, AVANT que l'usager n'explore
-    /// les sections de l'interface Emby — c'est là qu'il oriente sa soirée.</para>
+    /// les sections de l'interface Emby.</para>
     /// <para>Complétude des données anticipées : à l'heure du pré-run, la grille
     /// EPG du soir est complète (jours de grille en avance) et les
     /// enregistrements du soir sont représentés par leurs timers déjà
-    /// programmés — le bloc « ENREGISTREMENTS À VENIR CE SOIR »
-    /// (<see cref="TonightService"/> / <see
-    /// cref="TonightService.BuildUpcomingRecordings"/>... bloc injecté dans
-    /// le même prompt) donne au LLM l'équivalent de ce qu'un run au moment du
-    /// login verrait. Les enregistrements complétés entre le pré-run et le
-    /// login restent la seule classe manquante — couverte par leurs timers.</para>
-    /// <para><b>Lead-time d'auto-programmation</b> : la tâche crée les timers
-    /// du record bucket 2-3 h plus tôt qu'un run à 19 h 30 — les recos des
-    /// diffusions 17 h 45-19 h 30 deviennent enregistrables (un run au login
-    /// ne peut plus capter ce qui a déjà commencé).</para>
-    /// <para>Symétrie exacte avec le chemin login (piège vérifié dans
-    /// <see cref="TonightLoginService"/> : le chemin « cache frais au login »
-    /// <b>saute</b> l'auto-programmation ET la cloche par conception — il les
-    /// assume déjà faites au premier run) : la tâche DOIT donc exécuter
-    /// elle-même (1) l'auto-programmation (gated
+    /// programmés (bloc <see cref="TonightService.BuildUpcomingRecordings"/>
+    /// du même prompt) — équivalent de ce qu'un run au login verrait. Les
+    /// enregistrements complétés entre pré-run et login restent la seule
+    /// classe manquante — couverte par leurs timers.</para>
+    /// <para><b>Lead-time d'auto-programmation</b> : les timers du record
+    /// bucket sont créés bien avant la soirée (ex. un run à 17 h rend
+    /// enregistrables les diffusions 17 h 45-19 h 30 qu'un run au login ne
+    /// peut plus capter).</para>
+    /// <para>Symétrie exacte avec le chemin login : le chemin « cache frais
+    /// au login » <b>saute</b> l'auto-programmation ET la cloche par
+    /// conception — il les assume déjà faites au premier run ; la tâche DOIT
+    /// donc exécuter elle-même (1) l'auto-programmation (gated
     /// <see cref="PluginConfiguration.AutoProgram"/>, même
-    /// <see cref="AutoProgrammer"/> que le login — 4e surface après
-    /// Activate/planifié/chat de la v2.6.6) et (2) la cloche persistante à
-    /// l'heure du pré-run (le toast reste au login — chaque canal à son
-    /// meilleur moment : le courriel/notifier AVANT la soirée, le rappel
-    /// éphémère à l'arrivée sur le client).</para>
+    /// <see cref="AutoProgrammer"/> que le login) et (2) la cloche
+    /// persistante à l'heure du pré-run (le toast reste au login — chaque
+    /// canal à son meilleur moment : le courriel/notifier AVANT la soirée,
+    /// le rappel éphémère à l'arrivée sur le client).</para>
     /// <para>Gates et garde-fous :
     /// <list type="bullet">
     /// <item>No-op si <see cref="PluginConfiguration.TonightEnabled"/> est
     /// décoché (la tâche reste visible/planifiée, comme
     /// <see cref="AiTonightCleanupTask"/>).</item>
     /// <item>Comptes ignorés (<see cref="TonightService.IgnoredUserKeys"/>)
-    /// sautés — même liste que le déclencheur login (v2.2.0).</item>
+    /// sautés — même liste que le déclencheur login.</item>
     /// <item>Cache frais (produit aujourd'hui) → SAUTÉ sans re-run ni cloche
     /// (un run login/chat a déjà produit ; pas de double coût LLM).</item>
     /// <item>Garde-fou in-flight partagé
@@ -160,9 +154,8 @@ namespace LLM_AI
                 return;
             }
 
-            // Même liste d'ignorés que le déclencheur login (v2.2.0) : les
-            // comptes techniques/admins ignorés ne consomment ni run LLM ni
-            // cloche.
+            // Même liste d'ignorés que le déclencheur login : les comptes
+            // ignorés ne consomment ni run LLM ni cloche.
             var ignored = TonightService.IgnoredUserKeys(_users, cfg, _logger);
 
             int produced = 0, cachedSkip = 0, failed = 0, skipped = 0;
@@ -221,9 +214,7 @@ namespace LLM_AI
                     //    SYMÉTRIE avec le login : le chemin « cache frais au
                     //    login » saute la programmation PAR CONCEPTION (il
                     //    l'assume faite au premier run) — si la tâche ne
-                    //    programmait pas, personne ne le ferait. C'est le
-                    //    lead-time de la v2.7.0 : les recos des diffusions
-                    //    17 h 45-19 h 30 deviennent enregistrables.
+                    //    programmait pas, personne ne le ferait.
                     int programmed = -1;
                     if (cfg.AutoProgram)
                     {
@@ -239,12 +230,12 @@ namespace LLM_AI
                         }
                     }
 
-                    // 2) Cloche persistante à l'heure du pré-run (décision
-                    //    usager v2.7.0) : le digest complet (une ligne par reco
-                    //    + raison) part AVANT la soirée via les notifiers
-                    //    configurés ; le toast éphémère, lui, partira du login
-                    //    (cache frais → toast immédiat). Même forme de texte
-                    //    que la cloche du chemin login.
+                    // 2) Cloche persistante à l'heure du pré-run : le digest
+                    //    complet (une ligne par reco + raison) part AVANT la
+                    //    soirée via les notifiers configurés ; le toast
+                    //    éphémère, lui, partira du login (cache frais → toast
+                    //    immédiat). Même forme de texte que la cloche du
+                    //    chemin login.
                     SendBell(user, TonightLoginService.BuildBellText(res.Payload, programmed));
 
                     produced++;
@@ -305,17 +296,15 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Cloche persistante (notification Emby — repli du pattern
-        //  TonightLoginService.SendBellNotification, v2.4.5/2.4.7)
+        //  Cloche persistante (notification Emby)
         // ------------------------------------------------------------------
 
         /// <summary>
         /// Envoie la notification persistante « À regarder ce soir » à
         /// l'usager produit — même construction que
-        /// <c>TonightLoginService.SendBellNotification</c> (8e site
-        /// SendNotification du plugin, audit v2.4.7) : deep-link
+        /// <c>TonightLoginService.SendBellNotification</c> : deep-link
         /// <see cref="NotificationRequest.Url"/> ET URL nue ajoutée à la fin
-        /// de la description (v2.4.5 : les canaux de lecture — webhooks,
+        /// de la description (les canaux de lecture — webhooks,
         /// courriel — ignorent le champ Url), LF uniquement. Livrée par les
         /// notifiers configurés de l'usager (ex. SMTP).
         /// </summary>
@@ -329,8 +318,7 @@ namespace LLM_AI
                     text = text + "\n" + url;
                 var req = new NotificationRequest
                 {
-                    // 🤖 en préfixe du titre : même marque que les popups et
-                    // la cloche du chemin login.
+                    // 🤖 en préfixe du titre : même marque que les popups.
                     Title = "🤖 LLM AI — À regarder ce soir",
                     Description = text,
                     Url = url,
@@ -376,19 +364,19 @@ namespace LLM_AI
 
         /// <summary>
         /// Trigger par défaut : quotidien à 17 h — assez tôt pour le lead-time
-        /// d'auto-programmation (diffusions 17 h 45+ enregistrables) et assez
-        /// tard pour un profil de goût encore frais, AVANT la fenêtre de grande
-        /// écoute usuelle (le pré-run est une demande explicite du serveur —
-        /// hors fenêtre par conception, comme l'outil chat). Réglable dans le
-        /// planificateur Emby sans toucher au plugin.
+        /// d'auto-programmation et assez tard pour un profil de goût encore
+        /// frais, AVANT la fenêtre de grande écoute usuelle (le pré-run est
+        /// une demande explicite du serveur — hors fenêtre par conception,
+        /// comme l'outil chat). Réglable dans le planificateur Emby sans
+        /// toucher au plugin.
         /// </summary>
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
             yield return new TaskTriggerInfo
             {
                 Type = "DailyTrigger",
-                // 17 h — le run LLM de chaque usager (30-60 s et plus) est
-                // absorbé ici ; le toast du login devient immédiat.
+                // 17 h — le run LLM de chaque usager est absorbé ici ; le
+                // toast du login devient immédiat.
                 TimeOfDayTicks = new TimeSpan(17, 0, 0).Ticks
             };
         }

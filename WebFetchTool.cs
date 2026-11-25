@@ -25,10 +25,7 @@ namespace LLM_AI
     ///   schema.org</b>, texte du contenu principal — Readability-lite,
     ///   boilerplate nav/aside/form retiré, repli body sans header/footer —
     ///   titres h1–h6 en markdown, tableaux en markdown). Aucune clé
-    ///   requise — fonctionne pour la communauté dès l'installation. Portage C#
-    ///   de la logique d'extraction de
-    ///   <c>/var/www/llm_core/tools/fetch_web_page.php</c> (sans ses dépendances
-    ///   curl-impersonate / Redis, non portables).</item>
+    ///   requise — fonctionne pour la communauté dès l'installation.</item>
     /// <item><b>Ollama Cloud</b> (<c>https://ollama.com/api/web_fetch</c>) en
     ///   repli si la récupération directe échoue (anti-bot, 403, page trop
     ///   courte) et qu'une clé est présente (<see cref="PluginConfiguration.OllamaApiKey"/>
@@ -38,8 +35,8 @@ namespace LLM_AI
     /// <see cref="WebSearchTool"/> ou un lien fourni.
     /// </summary>
     /// <remarks>
-    /// <b>SSRF</b> : l'URL provient du LLM, on valide donc côté client (comme le
-    /// PHP) avant tout fetch — refus des hôtes IP littéraux et des noms qui
+    /// <b>SSRF</b> : l'URL provient du LLM, on valide donc côté client avant
+    /// tout fetch — refus des hôtes IP littéraux et des noms qui
     /// résolvent vers une adresse privée/réservée/boucle locale. La garde
     /// s'applique aux deux backends (direct et cloud), ET est revalidée au
     /// moment de CHAQUE connexion via <see cref="GuardedConnectAsync"/>
@@ -53,14 +50,14 @@ namespace LLM_AI
     {
         // Client dédié au fetch direct : User-Agent de navigateur pour limiter
         // les blocages anti-bot basiques (beaucoup de sites refusent le UA par
-        // défaut de HttpClient). Le PHP utilise curl-impersonate (fingerprint
-        // TLS Chrome) — non portable en .NET ; ce UA est le meilleur équivalent
-        // zéro-dépendance. Repli Ollama cloud sur les sites qui bloquent quand
+        // défaut de HttpClient). Une empreinte TLS de navigateur
+        // (curl-impersonate) n'est pas disponible en .NET ; ce UA est le meilleur
+        // équivalent zéro-dépendance. Repli Ollama cloud sur les sites qui bloquent quand
         // même.
         // Lazy : la création du handler (ConnectCallback) doit rester HORS du
         // constructeur statique — une API absente sur un hôte ancien ne doit
         // jamais tuer la classe entière à l'init (TypeInitializationException
-        // rendrait tout run LLM mort, gotcha AGENTS.md).
+        // rendrait tout run LLM mort).
         private static readonly Lazy<HttpClient> _direct =
             new Lazy<HttpClient>(CreateDirectClient);
 
@@ -261,7 +258,7 @@ namespace LLM_AI
                 throw;
             }
             // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
-            // PAS annulé (gotcha AGENTS.md) : message clair, pas l'erreur .NET brute.
+            // PAS annulé : message clair, pas l'erreur .NET brute.
             catch (OperationCanceledException ex)
             {
                 SecurityMonitor.Record("WEB_FETCH_ERREUR", "délai dépassé");
@@ -306,7 +303,7 @@ namespace LLM_AI
                 }
             }
             // HttpClient.Timeout lève TaskCanceledException alors que ct n'est
-            // PAS annulé (gotcha AGENTS.md) : ne PAS rethrow, sinon l'erreur
+            // PAS annulé : ne PAS rethrow, sinon l'erreur
             // brute .NET part au LLM et le repli cloud ne s'exécute jamais.
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -335,12 +332,11 @@ namespace LLM_AI
         }
 
         /// <summary>
-        /// Construit le JSON structuré à partir du HTML, fidèle à la sortie de
-        /// fetch_web_page.php : {url, backend, title, meta (+ canonical),
+        /// Construit le JSON structuré à partir du HTML, de forme {url, backend, title, meta (+ canonical),
         /// json_ld (≤5), content_source, detail_level,
         /// content|content_preview, headings (≤100), tables}. Le texte vient
         /// du conteneur principal détecté (Readability-lite) ou, à défaut, du
-        /// body amputé de header/footer ; links et images du PHP sont omis
+        /// body amputé de header/footer ; les liens et images sont omis
         /// (bruit pour le LLM ; économie de tokens). <paramref
         /// name="finalUrl"/> (redirections suivies, non null si différente) est
         /// exposé en <c>final_url</c>.
@@ -356,8 +352,8 @@ namespace LLM_AI
                 title = ogTitle;
 
             // Préparation structurelle : contenus morts (script/style/noscript)
-            // puis boilerplate nav/aside/form retirés du document entier — le
-            // PHP fait de même avant la détection du conteneur principal.
+            // puis boilerplate nav/aside/form retirés du document entier, avant la détection
+            // du conteneur principal.
             string prepared = StripDeadTags(html);
             prepared = RemoveTagContainers(prepared, "nav");
             prepared = RemoveTagContainers(prepared, "aside");
@@ -469,7 +465,7 @@ namespace LLM_AI
             }
 
             // URL canonique (link rel="canonical") — adresse officielle de la
-            // page, utile au LLM pour croiser une fiche (parité PHP).
+            // page, utile au LLM pour croiser une fiche.
             foreach (Match lm in s_rxLink.Matches(html))
             {
                 string rel = GetAttr(lm.Value, "rel");
@@ -491,7 +487,7 @@ namespace LLM_AI
             var arr = new JsonArray();
             foreach (Match m in s_rxJsonLd.Matches(html))
             {
-                if (arr.Count >= 5) break; // parité PHP : au plus 5 blocs
+                if (arr.Count >= 5) break; // au plus 5 blocs
                 string inner = m.Groups[1].Value;
                 if (string.IsNullOrWhiteSpace(inner)) continue;
                 try
@@ -509,7 +505,7 @@ namespace LLM_AI
             var arr = new JsonArray();
             foreach (Match m in s_rxHeadings.Matches(html))
             {
-                if (arr.Count >= 100) break; // parité PHP : au plus 100 titres
+                if (arr.Count >= 100) break; // au plus 100 titres
                 int level = int.Parse(m.Groups[1].Value);
                 string text = CleanText(m.Groups[2].Value);
                 if (!string.IsNullOrEmpty(text))
@@ -581,9 +577,9 @@ namespace LLM_AI
         }
 
         // ------------------------------------------------------------------
-        //  Readability-lite (parité fetch_web_page.php) : détection du
+        //  Readability-lite : détection du
         //  conteneur principal et retrait structurel par scan équilibré.
-        //  Les regex ne sachent pas compter les imbrications (<div id=…>
+        //  Les regex ne savent pas compter les imbrications (<div id=…>
         //  contient d'autres <div>), d'où un petit scanner par nom de balise.
         // ------------------------------------------------------------------
 
@@ -680,7 +676,7 @@ namespace LLM_AI
                            : prepared.Substring(om.Index, end - om.Index);
         }
 
-        // Familles de conteneurs candidats, dans l'ordre de priorité du PHP
+        // Familles de conteneurs candidats, dans l'ordre de priorité
         // (article, main, [role=main], #content, #main, .entry-content,
         // .post-content, .article-content). Le premier sélecteur qui donne un
         // conteneur de texte > 200 caractères gagne (le plus long de sa
@@ -710,11 +706,11 @@ namespace LLM_AI
         /// Readability-lite : retourne le fragment HTML du conteneur principal
         /// (article, main, [role=main], #content, #main, .entry-content, …) —
         /// le plus long de la première famille de sélecteurs qui en produit un
-        /// de plus de 200 caractères — sinon le body amputé de header/footer
-        /// (parité PHP). <paramref name="source"/> vaut "main" ou "body" ;
+        /// de plus de 200 caractères — sinon le body amputé de header/footer.
+        /// <paramref name="source"/> vaut "main" ou "body" ;
         /// <paramref name="headingsSource"/> est le HTML d'où extraire titres
         /// et tableaux (document préparé entier en mode main, body nettoyé en
-        /// repli — même sélectivité que le DOM du PHP).
+        /// repli).
         /// </summary>
         private static string PickMainFragment(string prepared, out string source, out string headingsSource)
         {
@@ -889,7 +885,7 @@ namespace LLM_AI
         /// référence compilée : sur un hôte antérieur à .NET 5 l'API absente
         /// lèverait une <c>MissingMethodException</c> AU JIT de la méthode qui
         /// la référence, tuant toute la chaîne web_fetch (le repli, dans la
-        /// même méthode, ne s'exécuterait jamais — gotcha AGENTS.md). Ici le
+        /// même méthode, ne s'exécuterait jamais). Ici le
         /// seul accès JIT est dans <see cref="TrySetConnectCallback"/>, dont
         /// l'échec est catché : on dégrade à l'ancien comportement (garde au
         /// premier saut uniquement) plutôt qu'à un crash.
@@ -918,7 +914,7 @@ namespace LLM_AI
         /// socket à une IP VALIDÉE. SocketsHttpHandler ne résout pas le DNS
         /// lui-même quand ConnectCallback est posé — la résolution n'a donc
         /// lieu qu'ICI, une seule fois par connexion. Lève
-        /// <see cref="HttpRequestException"/> avec un message clair (surfacer
+        /// <see cref="HttpRequestException"/> avec un message clair (remonté
         /// par FetchDirect vers le LLM / le repli cloud).
         /// </summary>
         private static async ValueTask<Stream> GuardedConnectAsync(
