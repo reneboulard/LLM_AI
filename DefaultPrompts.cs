@@ -116,9 +116,12 @@ namespace LLM_AI
                 "des urgences), duplicates_check (constat « Doublons » natif d'Emby : groupes " +
                 "d'items partageant la même PresentationUniqueKey — même œuvre fichée en " +
                 "plusieurs dossiers, typiquement un dossier d'enregistrement doublant un " +
-                "dossier identifié ; rapporte les groupes et leurs chemins tels quels en " +
-                "⚠️ attention : une GESTION MANUELLE de l'usager est requise — fusionner ou " +
-                "supprimer le dossier redondant via l'éditeur de métadonnées Emby ; le plugin " +
+                "dossier identifié, mais parfois deux œuvres DIFFÉRENTES dont l'une porte la " +
+                "fiche de l'autre par erreur ; rapporte les groupes et leurs chemins tels quels " +
+                "en ⚠️ attention, et compare les titres des dossiers AVANT toute " +
+                "recommandation — même œuvre : l'usager garde la meilleure copie (gestion " +
+                "MANUELLE) ; œuvres différentes : ne propose JAMAIS de supprimer ni de " +
+                "fusionner, recommande de réidentifier le dossier fautif ; le plugin " +
                 "ne fusionne ni ne supprime JAMAIS : ce constat relaye l'information " +
                 "d'Emby, pas critique et pas une alerte de sécurité), security_check " +
                 "(validation de sécurité : mots de passe " +
@@ -135,8 +138,10 @@ namespace LLM_AI
                 "plugin_out_of_scope est du CONTEXTE (bibliothèque régulière, aucune alerte). " +
                 "Les doublons de bibliothèque (duplicates_check) sont des constats ⚠️ à part " +
                 "— hygiène de la bibliothèque, pas la couverture d'identification ci-dessus : " +
-                "liste les groupes et leurs chemins, et place la fusion/suppression MANUELLE " +
-                "des dossiers redondants dans « Actions recommandées ». " +
+                "liste les groupes et leurs chemins, et place dans « Actions recommandées » la " +
+                "vérification des titres puis, si c'est la même œuvre, le choix MANUEL de la " +
+                "copie à garder (si ce sont des œuvres différentes : réidentification, jamais " +
+                "suppression). " +
                 "Produis un RAPPORT Markdown concis : une liste de constats tagués par " +
                 "gravité (🔴 critique / ⚠️ attention / ✅ ok) + une section « Actions recommandées ». " +
                 "La sonde UPnP (action upnp_check) figure TOUJOURS dans les constats : aucun mapping " +
@@ -265,11 +270,14 @@ namespace LLM_AI
                 "needs-review items are expected residuals of the orphan pass, not urgent), " +
                 "duplicates_check (Emby's NATIVE « Duplicates » finding: groups of items " +
                 "sharing the same PresentationUniqueKey — the same work filed under several " +
-                "folders, typically a recording folder duplicating an identified folder; " +
-                "copy the groups and their paths verbatim as ⚠️ warnings: MANUAL management " +
-                "by the user is required — merge or delete the redundant folder via " +
-                "Emby's metadata editor; the plugin NEVER merges or deletes: this finding " +
-                "relays Emby's own information, not critical and not a security alert), " +
+                "folders, typically a recording folder duplicating an identified folder, but " +
+                "sometimes two DIFFERENT works where one carries the other's card by mistake; " +
+                "copy the groups and their paths verbatim as ⚠️ warnings, and compare the " +
+                "folder titles BEFORE any recommendation — same work: the user keeps the best " +
+                "copy (MANUAL management); different works: NEVER suggest deleting or merging, " +
+                "recommend re-identifying the faulty folder; the plugin NEVER merges or " +
+                "deletes: this finding relays Emby's own information, not critical and not a " +
+                "security alert), " +
                 "security_check (security validation: account passwords " +
                 "— admins above all —, remote access/HTTPS, UPnP, proxy headers; copy its graded " +
                 "findings and fixes verbatim), list_logs (and inspect_log if a log looks relevant). " +
@@ -282,8 +290,9 @@ namespace LLM_AI
                 "action); plugin_out_of_scope is CONTEXT (regular library, no warnings). " +
                 "Library duplicates (duplicates_check) are separate ⚠️ findings — library " +
                 "hygiene, not the identification coverage above: list the groups and their " +
-                "paths, and place the MANUAL merge/deletion of the redundant folders in " +
-                "« Recommended actions ». Produce a concise " +
+                "paths, and place in « Recommended actions » the title check and then, if " +
+                "it is the same work, the MANUAL choice of the copy to keep (different works: " +
+                "re-identification, never deletion). Produce a concise " +
                 "Markdown REPORT: a list of findings tagged by severity (🔴 critical / ⚠️ warning / " +
                 "✅ ok) + a « Recommended actions » section. The UPnP probe (upnp_check action) " +
                 "ALWAYS appears in the findings: no mapping found = explicit ✅ finding (\"UPnP " +

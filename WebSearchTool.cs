@@ -12,14 +12,18 @@ using MediaBrowser.Model.Logging;
 namespace LLM_AI
 {
     /// <summary>
-    /// Outil de recherche web. Backend configurable :
+    /// Outil de recherche web. Le backend est CHOISI par la configuration ; il n'y a
+    /// aucun repli automatique de l'un vers l'autre :
     /// <list type="bullet">
     /// <item><b>SearXNG</b> (auto-hébergé) si <see cref="PluginConfiguration.SearXngUrl"/>
-    ///   est renseigné — privilégié (gratuit, sans quota, réponse JSON native).
+    ///   est renseigné — gratuit, sans quota, réponse JSON native. Utilisé SEUL : une
+    ///   panne ou une réponse vide est renvoyée telle quelle à l'appelant, sans bascule
+    ///   vers Ollama Cloud.
     ///   Requête <c>{url}/search?q=…&amp;format=json</c>, avec
     ///   <c>&amp;engines=…</c> si <see cref="PluginConfiguration.SearXngEngines"/>
     ///   est renseigné (moteurs imposés à l'instance).</item>
-    /// <item><b>Ollama Cloud</b> (<c>https://ollama.com/api/web_search</c>) en repli,
+    /// <item><b>Ollama Cloud</b> (<c>https://ollama.com/api/web_search</c>) quand
+    ///   <see cref="PluginConfiguration.SearXngUrl"/> est vide,
     ///   authentifié par bearer (<see cref="PluginConfiguration.OllamaApiKey"/> ou
     ///   variable <c>OLLAMA_API_KEY</c>).</item>
     /// </list>

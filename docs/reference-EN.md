@@ -1628,9 +1628,14 @@ same id carried in two libraries or under two languages does not show up — the
 native filter has the same). This is the *report* counterpart of the
 [source-side prevention](#library-anchoring-sb-and-the-card-already-carried-gate-v21):
 prevention blocks future cases at write time, the finding warns the user that
-**manual management** is required on the duplicates already present (merge or
-delete the redundant folder via the metadata editor) — the plugin never merges
-or deletes. `.strm` cards and episodes are excluded (cards deliberately share
+**manual management** is required on the duplicates already present. A shared
+key does not prove the same work: two neighbouring works (a series and its
+spin-off) can carry each other's card by an identification error, and automatic
+series grouping then merges them in the interface. The finding therefore asks
+to compare the folder titles before any action: same work, the user keeps the
+best copy; different works, they re-identify the faulty folder instead of
+deleting or merging it — the plugin never merges or deletes. `.strm` cards and
+episodes are excluded (cards deliberately share
 their source's card; episodes derive from their series). The `deterministic`
 mode includes it in the « Library and metadata » dose, the `single` mode calls
 it through the default audit prompt.

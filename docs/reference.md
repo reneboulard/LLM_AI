@@ -1672,9 +1672,14 @@ documentés dans la sortie (un même id porté dans deux bibliothèques ou sous 
 langues n'apparaît pas — le filtre natif a les mêmes). C'est le complément
 *rapport* de la [prévention à la source](#ancrage-bibliothèque-sb-et-garde--fiche-déjà-portée--v21) :
 celle-ci empêche les futurs cas à l'écriture, le constat prévient l'usager qu'une
-**gestion manuelle** est requise sur les doublons déjà présents (fusionner ou
-supprimer le dossier redondant via l'éditeur de métadonnées) — le plugin ne
-fusionne ni ne supprime jamais. Cartes `.strm` et épisodes exclus (les cartes
+**gestion manuelle** est requise sur les doublons déjà présents. Une clé
+partagée ne prouve pas la même œuvre : deux œuvres voisines (une série et sa
+dérivée) peuvent porter la fiche l'une de l'autre par erreur d'identification, et
+le regroupement automatique des séries les amalgame alors dans l'interface. Le
+constat demande donc de comparer les titres des dossiers avant toute action :
+même œuvre, l'usager garde la meilleure copie ; œuvres différentes, il
+réidentifie le dossier fautif au lieu de le supprimer ou de le fusionner — le
+plugin ne fusionne ni ne supprime jamais. Cartes `.strm` et épisodes exclus (les cartes
 partagent volontairement la fiche de leur source ; les épisodes dérivent de la
 série). Le mode `deterministic` l'intègre à la dose « Bibliothèque et
 métadonnées », le mode `single` l'appelle via le prompt d'audit par défaut.

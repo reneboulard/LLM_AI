@@ -124,8 +124,10 @@ namespace LLM_AI
                     "duplicates_check (constat « Doublons » NATIF d'Emby : groupes de films/séries partageant " +
                     "la même PresentationUniqueKey — même œuvre fichée en plusieurs dossiers, typiquement " +
                     "un dossier d'enregistrement « Titre (année) » doublant un dossier identifié ; cartes .strm " +
-                    "et épisodes exclus ; UNE GESTION MANUELLE de l'usager est requise (fusionner ou supprimer " +
-                    "le dossier redondant) ; le plugin ne fusionne ni ne supprime JAMAIS et ne détecte RIEN " +
+                    "et épisodes exclus ; UNE GESTION MANUELLE de l'usager est requise : comparer d'abord " +
+                    "les titres des dossiers — même œuvre, garder la meilleure copie ; œuvres différentes " +
+                    "(une fiche portée par erreur), réidentifier au lieu de supprimer ; le plugin ne fusionne " +
+                    "ni ne supprime JAMAIS et ne détecte RIEN " +
                     "par lui-même — il relaye l'information d'Emby, le critère EXACT du filtre « Doublons » " +
                     "du dashboard), " +
                     "ratings_check (hygiène des cotes : OfficialRating des films/séries et de l'EPG comparés à la " +
@@ -2321,9 +2323,13 @@ namespace LLM_AI
         /// en plusieurs dossiers — Emby type l'import DVR d'après le titre
         /// EPG, chaque variation de titre enfante un NOUVEAU dossier — et Emby marque le
         /// doublon sans JAMAIS fusionner : son identité est le dossier. Le
-        /// constat prévient l'usager qu'une GESTION MANUELLE est requise
-        /// (fusionner ou supprimer le dossier redondant) — invariant de
-        /// design : le plugin ne fusionne ni ne supprime jamais.
+        /// constat prévient l'usager qu'une GESTION MANUELLE est requise —
+        /// invariant de design : le plugin ne fusionne ni ne supprime jamais.
+        /// Une clé partagée ne prouve PAS la même œuvre : deux œuvres voisines (série et
+        /// dérivée) peuvent porter la fiche l'une de l'autre par erreur
+        /// d'identification, et le regroupement automatique les amalgame alors dans
+        /// l'interface. Le texte du constat impose donc de vérifier les titres avant
+        /// toute fusion ou suppression, et de réidentifier au lieu de supprimer.
         /// <para>Cartes .strm exclues (<see cref="OrphanResolver.IsStrmCard"/>) :
         /// les suggestions du plugin partagent VOLONTAIREMENT la fiche de
         /// leur source. Épisodes exclus : leurs métadonnées dérivent de la
@@ -2463,8 +2469,8 @@ namespace LLM_AI
                         {
                             severity = "avertissement",
                             title = dup.Count + " groupe(s) de doublons (" + memberCount + " items) — gestion manuelle requise",
-                            detail = "Même œuvre fichée en plusieurs dossiers (même PresentationUniqueKey — Emby marque ces items « Doublons » mais ne fusionne JAMAIS : son identité est le dossier). Typiquement un dossier d'enregistrement doublant un dossier déjà identifié. Reprends les groupes et leurs chemins ci-dessus tels quels.",
-                            fix = "Gestion MANUELLE de l'usager : fusionner (identifier au même id via l'éditeur de métadonnées Emby) ou supprimer le dossier redondant, puis relancer un scan. Le plugin ne fusionne ni ne supprime JAMAIS — ce constat relaye l'information d'Emby, il ne détecte rien par lui-même."
+                            detail = "Plusieurs dossiers portent la même clé d'identité (PresentationUniqueKey) — Emby marque ces items « Doublons » mais ne fusionne JAMAIS : son identité est le dossier. Deux cas possibles : (1) une vraie copie de la même œuvre (typiquement un dossier d'enregistrement doublant un dossier déjà identifié) ; (2) deux œuvres DIFFÉRENTES (par exemple une série et sa dérivée) dont l'une porte la fiche de l'autre par erreur d'identification — avec le regroupement automatique des séries, Emby les affiche alors comme une seule série. Reprends les groupes et leurs chemins ci-dessus tels quels et compare les titres des dossiers d'un même groupe.",
+                            fix = "Vérifie d'abord que les dossiers d'un groupe sont bien la MÊME œuvre (titres, épisodes, affiche). Même œuvre : gestion MANUELLE de l'usager — garder la meilleure copie (fusion ou suppression à son initiative via Emby), puis relancer un scan. Œuvres différentes : ne supprime rien — réidentifier le dossier fautif sur la bonne fiche (dialogue Identifier d'Emby, ou identify_resolve du chat). Le plugin ne fusionne ni ne supprime JAMAIS — ce constat relaye l'information d'Emby, il ne détecte rien par lui-même."
                         }
                     }
             }, s_json);
