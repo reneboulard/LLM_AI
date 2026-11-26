@@ -402,6 +402,7 @@
             .LLMAIConfigPage .chatPane .chatContextRow {
                 display: flex;
                 align-items: center;
+                flex-wrap: wrap;
                 gap: 0.6em;
                 margin: 0 0 0.8em 0;
             }
@@ -2423,6 +2424,9 @@
                     <div class="chatContextRow">
                         <select is="emby-select" id="selChatContext" data-i18n-label="chat.context" aria-label="Mode de conversation">
                             <option value="" data-i18n="chat.context.none">Aucun (assistant général)</option>
+                        </select>
+                        <select is="emby-select" id="selChatBackend" data-i18n-label="chat.backend" aria-label="LLM utilisé">
+                            <option value="" data-i18n="chat.backend.default">Défaut (ordre de la configuration)</option>
                         </select>
                     </div>
                     <details id="chatContextCurrent" class="chatContextCurrent" hidden>

@@ -462,6 +462,8 @@ define([], function () {
             "cfg.chat.prompts.desc": "Le chat peut lire les cinq prompts de la configuration et proposer leur réécriture. L'écriture se fait en deux temps : la proposition attend le clic « Approuver » de l'admin sur la page chat (expiration 10 min, une par conversation) — le LLM n'a aucun chemin d'écriture direct. Les modes d'édition du menu déroulant de la page chat restent disponibles sans cette case.",
             "chat.context": "Mode de conversation",
             "chat.context.none": "Aucun (assistant général)",
+            "chat.backend": "IA utilisée pour ce chat",
+            "chat.backend.default": "Défaut (ordre de la configuration)",
             // Libellés des modes d'édition (menu déroulant du chat) : le
             // registre serveur (ChatContexts.All) sert le libellé FR de
             // référence ; la page traduit par clé d'id — la langue suit
@@ -1068,6 +1070,8 @@ define([], function () {
             "cfg.chat.prompts.desc": "The chat can read the five configuration prompts and propose rewrites. Writing happens in two steps: the proposal waits for the admin's \"Approve\" click on the chat page (expires in 10 min, one per conversation) — the LLM has no direct write path. The chat page's dropdown editing modes remain available without this option.",
             "chat.context": "Conversation mode",
             "chat.context.none": "None (general assistant)",
+            "chat.backend": "AI used for this chat",
+            "chat.backend.default": "Default (configuration order)",
             // Edit-mode labels (chat dropdown): the server registry
             // (ChatContexts.All) serves the FR reference label; the page
             // translates by id key — the language follows the client's

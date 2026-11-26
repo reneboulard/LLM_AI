@@ -227,6 +227,7 @@ define([], function () {
             var chatSendBtn = pane.querySelector("#btnSendChat");
             var chatClearBtn = pane.querySelector("#btnClearChat");
             var chatContextSel = pane.querySelector("#selChatContext");
+            var chatBackendSel = pane.querySelector("#selChatBackend");
             var chatContextCurrent = pane.querySelector("#chatContextCurrent");
             var chatContextCurrentText = pane.querySelector("#chatContextCurrentText");
 
@@ -351,6 +352,27 @@ define([], function () {
                     }, function () { /* indisponible : chat sans modes (fail-open) */ });
                 }
 
+                // LLM du tour : modèles des backends activés. La sélection
+                // n'est jamais mémorisée (rechargement = « Défaut », la
+                // règle reste l'ordre de la config) ; liste indisponible =
+                // le menu garde son seul choix « Défaut ».
+                if (chatBackendSel) {
+                    ApiClient.ajax({
+                        url: ApiClient.getUrl("Plugins/LLMAI/ChatBackends"),
+                        type: "GET",
+                        dataType: "json"
+                    }).then(function (data) {
+                        data = data || {};
+                        if (data.Error || data.Enabled === false || !data.Models) return;
+                        data.Models.forEach(function (m) {
+                            var opt = document.createElement("option");
+                            opt.value = m;
+                            opt.textContent = m;
+                            chatBackendSel.appendChild(opt);
+                        });
+                    }, function () { /* indisponible : pas de choix de LLM (fail-open) */ });
+                }
+
                 function chatTurnHtml(role, bodyHtml) {
                     var who = i18n.t(role === "user" ? "cfg.chat.you" : "cfg.chat.assistant");
                     return '<div class="chatTurn ' + (role === "user" ? "user" : "bot") + '">' +
@@ -439,7 +461,9 @@ define([], function () {
                         Session: chatSessionId,
                         // Mode de conversation (contexte déroulant) : envoyé à
                         // CHAQUE tour ; vide = assistant général.
-                        Context: chatContextSel ? (chatContextSel.value || "") : ""
+                        Context: chatContextSel ? (chatContextSel.value || "") : "",
+                        // LLM passé en priorité 1 pour CE tour ; vide = ordre de la config.
+                        Backend: chatBackendSel ? (chatBackendSel.value || "") : ""
                     };
 
                     ApiClient.ajax({

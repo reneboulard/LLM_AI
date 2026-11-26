@@ -95,6 +95,8 @@ namespace LLM_AI
         /// réponse puis rejoué ; vide = nouvelle conversation). <c>Context</c>
         /// : identifiant du contexte déroulant choisi dans la page (v1.13.8,
         /// liste blanche <see cref="ChatContexts"/> ; vide = aucun).
+        /// <c>Backend</c> : nom de modèle (tel que saisi en config) à passer
+        /// en priorité 1 pour ce tour seulement ; vide = ordre de la config.
         /// </summary>
         [Route("/Plugins/LLMAI/Chat", "POST")]
         public class ChatRequest : IReturn<object>
@@ -103,6 +105,7 @@ namespace LLM_AI
             public List<ChatTurn> History { get; set; }
             public string Session { get; set; }
             public string Context { get; set; }
+            public string Backend { get; set; }
         }
 
         /// <summary>
@@ -416,7 +419,8 @@ namespace LLM_AI
                 reply = await runner.RunChatAsync(cfg, "CHAT", history, message,
                     _sessions, _tasks, _notifications, ct, memoryBlock,
                     actionTools, actionsWorkflow, contextBlock,
-                    editMode: editMode, promptEditMode: promptEditMode).ConfigureAwait(false);
+                    editMode: editMode, promptEditMode: promptEditMode,
+                    preferredModel: req?.Backend).ConfigureAwait(false);
             }
             // Requête avortée (déconnexion client, timeout page) : répondre un
             // JSON propre pour éviter une erreur 500 et un message d'erreur
@@ -466,7 +470,8 @@ namespace LLM_AI
                     string nudged = await runner.RunChatAsync(cfg, "CHAT-NUDGE", nudgedHistory,
                         nudge, _sessions, _tasks, _notifications, ct, memoryBlock,
                         actionTools, actionsWorkflow, contextBlock,
-                        editMode: editMode, promptEditMode: promptEditMode).ConfigureAwait(false);
+                        editMode: editMode, promptEditMode: promptEditMode,
+                        preferredModel: req?.Backend).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(nudged)
                         && !nudged.StartsWith(I18n.S("err.chatfail", lang), StringComparison.Ordinal))
                     {
@@ -806,6 +811,43 @@ namespace LLM_AI
                     CurrentText = c.GuideOnly ? null : (c.GetPrompt(cfg) ?? "")
                 });
             return new ChatContextsResponse { Enabled = true, Contexts = list };
+        }
+
+        /// <summary>
+        /// <c>GET /Plugins/LLMAI/ChatBackends</c> — modèles des backends LLM
+        /// activés, dans l'ordre de la config, pour la liste déroulante de la
+        /// page chat. Réservé aux administrateurs ; ni URL ni clé n'est servie.
+        /// </summary>
+        [Route("/Plugins/LLMAI/ChatBackends", "GET")]
+        public class ChatBackendsRequest : IReturn<object>
+        {
+        }
+
+        public class ChatBackendsResponse
+        {
+            public bool Enabled { get; set; }
+            public string Error { get; set; }
+            public List<string> Models { get; set; }
+        }
+
+        public object Get(ChatBackendsRequest req)
+        {
+            var cfg = Plugin.Instance?.Configuration;
+            if (cfg == null)
+                return new ChatBackendsResponse { Enabled = false };
+
+            var admin = ResolveAdmin();
+            bool isAdmin = admin?.Policy?.IsAdministrator ?? false;
+            if (!isAdmin)
+                return new ChatBackendsResponse { Enabled = true, Error = I18n.SDisplay("err.admin", ApplicationHost) };
+
+            var runner = new LlmRunner(Logger, _json, LibraryManager, UserManager, _liveTv, ApplicationHost);
+            var models = runner.ResolveBackends(cfg)
+                .Select(b => (b.Model ?? "").Trim())
+                .Where(m => m.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            return new ChatBackendsResponse { Enabled = true, Models = models };
         }
 
         /// <summary>

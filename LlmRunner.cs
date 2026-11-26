@@ -845,7 +845,9 @@ namespace LLM_AI
 
         /// <summary>
         /// Exécute un tour de chat interactif : résout les backends (priorités
-        /// LLM configurées par l'usager — aucun changement pour le chat),
+        /// LLM configurées par l'usager ; <paramref name="preferredModel"/>
+        /// non vide = ce modèle passe en tête pour ce seul tour, repli
+        /// inchangé — voir <see cref="BackendOrder"/>),
         /// construit <b>tous</b> les outils déjà disponibles (recommandation
         /// via <see cref="BuildTools"/> + audit santé via
         /// <see cref="BuildAuditTools"/> — aucun outil nouveau), puis délègue
@@ -869,11 +871,22 @@ namespace LLM_AI
             User toolUser = null,
             bool includeAuditTools = true,
             bool editMode = false,
-            bool promptEditMode = false)
+            bool promptEditMode = false,
+            string preferredModel = null)
         {
             try
             {
                 var backends = ResolveBackends(cfg);
+                if (!string.IsNullOrWhiteSpace(preferredModel) && backends.Count > 0)
+                {
+                    backends = BackendOrder.MoveToFront(backends, preferredModel, out bool found);
+                    if (found)
+                        _logger.Info("[LLM_AI] [{0}] LLM demandé pour ce tour : {1} passé en priorité 1 (repli inchangé).",
+                            label, preferredModel.Trim());
+                    else
+                        _logger.Warn("[LLM_AI] [{0}] LLM demandé « {1} » absent des backends activés — ordre de la config conservé.",
+                            label, preferredModel.Trim());
+                }
                 if (backends.Count == 0)
                 {
                     _logger.Warn("[LLM_AI] [{0}] Aucun LLM configuré/activé — chat ignoré.", label);

@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 2.23.3 · **Compatible with:** Emby Server 4.9 and 4.10
+**Version:** 2.24.0 · **Compatible with:** Emby Server 4.9 and 4.10
 
 > Version française : voir [README.md](README.md).
 
@@ -202,7 +202,8 @@ call the AI and simply shows the last selection. Leave it empty to keep it alway
 ### The chat
 The **Live chat** tab of the configuration page (administrators only) lets you talk with
 the assistant: explore the library, plan an evening, ask why it suggested a title. For
-any action that changes something, it shows you a card to approve.
+any action that changes something, it shows you a card to approve. A menu lets you try one specific AI from your configuration first,
+for the length of the conversation; otherwise the configuration order applies.
 
 An optional **companion app** gives the same chat to other household members, by keyboard
 or by voice, on the local network (see [`chat-external/`](chat-external/README-EN.md)).

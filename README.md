@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 2.23.3 · **Compatible :** Emby Server 4.9 et 4.10
+**Version :** 2.24.0 · **Compatible :** Emby Server 4.9 et 4.10
 
 > English version: see [README-EN.md](README-EN.md).
 
@@ -214,7 +214,9 @@ soit toujours actif.
 L'onglet **Chat en direct** de la page de configuration (réservé aux administrateurs)
 permet de discuter avec l'assistant : explorer la bibliothèque, préparer une soirée,
 demander pourquoi il a suggéré un titre. Pour toute action qui modifie quelque chose, il
-vous montre une carte à approuver.
+vous montre une carte à approuver. Un menu permet d'essayer en premier une IA précise
+parmi celles de votre configuration, le temps de la conversation ; sinon l'ordre de la
+configuration s'applique.
 
 Une **application compagnon** optionnelle offre le même chat aux autres membres du foyer,
 au clavier ou à la voix, sur le réseau local (voir
