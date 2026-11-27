@@ -162,9 +162,10 @@ enabled backend is the **primary**. Each backend:
 
 | Field | Role |
 |---|---|
-| `Provider` | `OllamaLocal`, `OllamaCloud`, or `Gemini` |
+| `Provider` | `OllamaLocal`, `OllamaCloud`, `Gemini`, or `OpenAiCompat` (`openai_compat` in the config: llama.cpp, LM Studio, vLLM…) |
 | `Url` | API URL (e.g. `http://localhost:11434` for local [Ollama](https://ollama.com)) |
 | `Model` | Model name (e.g. `llama3.1`, `gemini-1.5-flash`) |
+| `ApiKey` | Optional Bearer key specific to this server (`OpenAiCompat` only; empty = no `Authorization` header) |
 | `Enabled` | Enable this backend |
 | `Priority` | Preference order (higher = primary) |
 
@@ -173,6 +174,30 @@ enabled backend is the **primary**. Each backend:
 > ~16 GB VRAM — or **gemma4:latest** (fast, ~8 GB VRAM) on a smaller GPU. Both handle
 > the plugin's JSON tool protocol; the agent loop ships self-repair nets for modest
 > models (schema-bearing retry request, JSON repair crutches).
+
+**OpenAI-compatible server** (`OpenAiCompat`: llama.cpp, LM Studio, vLLM…):
+
+- **URL**: server root (`http://host:8080`); a URL already ending in `/v1` or
+  `/v1/chat/completions` is accepted as-is. The plugin calls
+  `POST {url}/v1/chat/completions`, without streaming.
+- **Key**: `ApiKey` is sent as `Authorization: Bearer` when set; empty = no header
+  (open LAN server).
+- **Context**: set at **server launch** (`--ctx-size` for llama.cpp), not per request.
+  Provide at least **32,768** tokens, like the Ollama threshold: the audit and heavy runs
+  approach 29,000 tokens, and a full context truncates the answer.
+- **Reasoning**: a "thinking" model returns its reasoning in `reasoning_content`, which the
+  plugin ignores — only `content` is read. It lengthens the response time (roughly half of
+  the generated tokens) but does not disturb the format.
+- **Budget**: same adaptive timeout as a local Ollama (3 min + 1 s per 100 characters,
+  capped at 9 min), logged on the call line. No 429 gate: a 429 is an ordinary HTTP error
+  and the plugin falls back to the next backend.
+- **Parallelism**: capacity depends on the server's slots; adjust
+  `LlmMaxConcurrentTasks` accordingly (see below).
+- **Tool-call format**: the plugin expects a JSON array. Some models (the Gemma family
+  served by llama.cpp, seen in the field) sometimes write their native syntax
+  `<|tool_call>call:tool{…}<tool_call|>` instead. The anti-narration guard then asks again
+  for the right format (one extra iteration, logged as a warning); the final result is
+  unaffected.
 
 Legacy fields `LlmUrl` / `ModelName` are still supported (legacy fallback: a non-empty
 `LlmUrl` is treated as a local backend).
@@ -1113,7 +1138,7 @@ you rely on it.
 | `LlmRunner.cs` | `LlmRunner` (internal class) | **Shared orchestration**: `ResolveBackends`, `RunAsync` (agent loop + tool-calling), `EnrichRecommendations` (title match → id/channel/poster/rating), `EnrichWithLibrary` (library matching: exact/fuzzy title, **IMDb-id fallback** via `AnyProviderIdEquals` — owned reco → `library_id`, excluded from the record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (shared accent folding `FoldAscii`: "leçons" ≡ "lecons"), env-based key resolution. Dedicated audit path: `BuildAuditTools`, `RunAuditAsync` (agent loop or deterministic mode), `ChatWithFallbackAsync` (tool-free synthesis). `SanitizeReport` formatting filter (LaTeX arrows → "→", HTML tags unwrapped) applied to audit and chat outputs. Chat path: `RunChatAsync` (multi-turn, all existing tools, user-configured LLM priorities). One-shot calls: `TranslateTextAsync` (TMDB cascade tier-3), `ResolveIdsAsync` (id proposal for the orphan task — always validated by TMDB). Used by `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService`, **and** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (internal static) | Bilingual Emby id resolution: longs (InternalId — the plugin's canonical form, the only one Emby's REST/UI layer accepts) **and** legacy Guids (input only, never emitted). Fixes the id-currency mismatch that failed every Tonight validation. |
 | `LlmAgentService.cs` | `LlmAgentService` | Agent loop: sends the prompt to the LLM, executes tool-calls, loops until the final answer. Two optional params (`roleIntro`, `formatSection`) override the role intro and the output-format block for the audit and chat paths (recommendation call sites unchanged). `RunChatAsync`: multi-turn entry that replays history (user/assistant, capped) between the system prompt and the new message — same shared loop (`RunLoopAsync`). Reliability crutches for small models: malformed-call repair, anti-narration guard (a reply that mentions a tool without emitting the call is re-injected with a demand to emit it, v2.6.5), and, in chat, a compact protocol reminder riding each current user turn (any action = a tool call, never a narrative announcement). |
-| `LlmClient.cs` | `LlmClient` (static) | Raw HTTP calls to Ollama / Gemini (no keys logged in the clear). **Loaded-instance-first num_ctx** (v1.14.0.9): before every local Ollama call, `GET /api/ps` checks the loaded model — loaded ctx ≥ threshold 32768 → reused as-is (zero instance reload); too short or absent → call with the required threshold; `/api/ps` unavailable → legacy per-model dict/default fallback. The threshold comes from real measurements (replayed `/api/chat`, gemma4:latest 2026-09-30: Tonight 3.2k tok, heavy loop 13.9k, worst 18 msgs ≈ 25k, KV slope 9,216 B/token); every call logs actual usage (`[LLM_AI] Ollama usage: prompt=N tok…`). **Adaptive per-call local budget** (v2.7.0): flat 2-min timeout for cloud (ollama_cloud, Gemini) and lightweight calls; a **local** Ollama backend gets 3 min + 1 s per 100 characters of payload, capped at 9 min — a local backend's wall is the prompt prefill, proportional to prompt size, so the budget follows the load **with no new configuration option**, and the applied budget is logged on the call line (`budget=N s`). **Free-tier 429 gate** (v2.19.0, via `LlmRateLimitGate`): TPM/RPM/RPD motif classified from the HTTP body, pre-check before every call, capped wait (90 s tasks / 20 s interactive) then same-backend resume — an individual call above the window cannot be remedied and switches to the next backend; in-memory state, fail-open. See the "Gemini free tier" note in the configuration section. |
+| `LlmClient.cs` | `LlmClient` (static) | Raw HTTP calls to Ollama / Gemini / OpenAI-compatible servers (`POST {url}/v1/chat/completions`, no 429 gate) (no keys logged in the clear). **Loaded-instance-first num_ctx** (v1.14.0.9): before every local Ollama call, `GET /api/ps` checks the loaded model — loaded ctx ≥ threshold 32768 → reused as-is (zero instance reload); too short or absent → call with the required threshold; `/api/ps` unavailable → legacy per-model dict/default fallback. The threshold comes from real measurements (replayed `/api/chat`, gemma4:latest 2026-09-30: Tonight 3.2k tok, heavy loop 13.9k, worst 18 msgs ≈ 25k, KV slope 9,216 B/token); every call logs actual usage (`[LLM_AI] Ollama usage: prompt=N tok…`). **Adaptive per-call local budget** (v2.7.0): flat 2-min timeout for cloud (ollama_cloud, Gemini) and lightweight calls; a **local** Ollama backend gets 3 min + 1 s per 100 characters of payload, capped at 9 min — a local backend's wall is the prompt prefill, proportional to prompt size, so the budget follows the load **with no new configuration option**, and the applied budget is logged on the call line (`budget=N s`). **Free-tier 429 gate** (v2.19.0, via `LlmRateLimitGate`): TPM/RPM/RPD motif classified from the HTTP body, pre-check before every call, capped wait (90 s tasks / 20 s interactive) then same-backend resume — an individual call above the window cannot be remedied and switches to the next backend; in-memory state, fail-open. See the "Gemini free tier" note in the configuration section. |
 | `GetEmbyInfoTool.cs` | `GetEmbyInfoTool` | The `get_emby_info` tool (see [LLM tools](#llm-tools)). Also exposes the shared accent folding `FoldAscii` (FormD + combining marks + manual map œ/æ/ø/đ/ł/ß/ð/þ — "leçons" ≡ "lecons"), used by `Norm` (library exclusion of `epg_series`/`epg_movies`, drop list) and `LlmRunner.NormTitle`. |
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Specialized LLM tools (see [LLM tools](#llm-tools)). `TmdbLookupTool` additionally exposes `LookupMetaAsync`/`LookupMetaMultiLangAsync` (search, S1), `FindByExternalIdAsync` (`/find`, validates a proposed id), `LookupMetaByIdAsync` (detail by id), `CleanEpgTitle` — reused by `StrmLibraryGenerator` and `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Configuration page (entry of the fields above). |

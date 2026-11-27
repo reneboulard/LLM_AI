@@ -84,16 +84,16 @@ namespace LLM_AI
                     if (b == null || !b.Enabled)
                         continue;
                     // URL vide acceptée pour cloud/gemini (valeur par défaut
-                    // appliquée côté LlmClient). Pour ollama_local, on exige
-                    // une URL explicite.
+                    // appliquée côté LlmClient). Serveurs locaux : URL explicite.
                     if (string.IsNullOrWhiteSpace(b.Url) &&
-                        b.ProviderType == LlmProvider.OllamaLocal)
+                        LlmProviderHelper.RequiresUrl(b.ProviderType))
                         continue;
                     list.Add(new LlmBackend
                     {
                         Provider = b.Provider,
                         Url = (b.Url ?? string.Empty).Trim(),
                         Model = b.Model ?? string.Empty,
+                        ApiKey = b.ApiKey,
                         Enabled = true,
                         Priority = b.Priority
                     });

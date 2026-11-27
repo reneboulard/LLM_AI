@@ -18,8 +18,10 @@ namespace LLM_AI
         /// <see cref="Url"/> = hôte:port), <c>"ollama_cloud"</c> (Ollama cloud
         /// ollama.com, clé <see cref="PluginConfiguration.OllamaApiKey"/>) ou
         /// <c>"gemini"</c> (Google Gemini, clé
-        /// <see cref="PluginConfiguration.GeminiApiKey"/>). Défaut
-        /// <c>"ollama_local"</c>. Trois providers, routage par type.
+        /// <see cref="PluginConfiguration.GeminiApiKey"/>) ou
+        /// <c>"openai_compat"</c> (tout serveur compatible OpenAI :
+        /// llama.cpp, LM Studio, vLLM… ; clé optionnelle =
+        /// <see cref="ApiKey"/>). Défaut <c>"ollama_local"</c>.
         /// </summary>
         public string Provider { get; set; } = "ollama_local";
 
@@ -36,6 +38,14 @@ namespace LLM_AI
         /// Pour gemini : ex. gemini-2.0-flash.
         /// </summary>
         public string Model { get; set; } = "";
+
+        /// <summary>
+        /// Clé Bearer propre à ce backend — utilisée seulement par
+        /// <c>openai_compat</c> (la plupart des serveurs LAN n'en exigent pas :
+        /// vide = pas d'en-tête Authorization). Les autres providers gardent
+        /// leur clé globale de <see cref="PluginConfiguration"/>.
+        /// </summary>
+        public string ApiKey { get; set; } = "";
 
         /// <summary>
         /// true = ce backend participe au repli. false = ignoré (serveur
@@ -58,9 +68,9 @@ namespace LLM_AI
     }
 
     /// <summary>
-    /// Type de backend LLM (3 providers).
+    /// Type de backend LLM (4 providers).
     /// </summary>
-    public enum LlmProvider { OllamaLocal, OllamaCloud, Gemini }
+    public enum LlmProvider { OllamaLocal, OllamaCloud, Gemini, OpenAiCompat }
 
     public static class LlmProviderHelper
     {
@@ -74,10 +84,18 @@ namespace LLM_AI
                     return LlmProvider.OllamaCloud;
                 case "gemini":
                     return LlmProvider.Gemini;
+                case "openai_compat":
+                case "openai":
+                    return LlmProvider.OpenAiCompat;
                 default:
                     return LlmProvider.OllamaLocal;
             }
         }
+
+        /// <summary>true = pas de serveur « officiel » : l'URL doit être saisie
+        /// (Ollama local, serveur OpenAI-compatible du LAN).</summary>
+        public static bool RequiresUrl(LlmProvider p) =>
+            p == LlmProvider.OllamaLocal || p == LlmProvider.OpenAiCompat;
 
         /// <summary>URL de base par défaut selon le provider.</summary>
         public static string DefaultUrl(LlmProvider p)
@@ -86,6 +104,7 @@ namespace LLM_AI
             {
                 case LlmProvider.OllamaCloud: return "https://ollama.com";
                 case LlmProvider.Gemini:       return "https://generativelanguage.googleapis.com/v1beta";
+                case LlmProvider.OpenAiCompat: return "http://localhost:8080"; // llama.cpp ; LM Studio = :1234
                 default:                       return "http://localhost:11434";
             }
         }

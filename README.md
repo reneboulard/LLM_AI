@@ -5,7 +5,7 @@
      jour en cas de renommage). -->
 # LLM_AI — Plugin Emby de recommandations par LLM
 
-**Version :** 2.24.0 · **Compatible :** Emby Server 4.9 et 4.10
+**Version :** 2.25.0 · **Compatible :** Emby Server 4.9 et 4.10
 
 > English version: see [README-EN.md](README-EN.md).
 
@@ -93,7 +93,7 @@ On imagine souvent que l'IA exige une grosse machine. Pas nécessairement :
   8 Go de mémoire**. En dessous, le modèle tourne mais répond très lentement.
 - **Les deux à la fois** : le plugin accepte plusieurs services, choisit lui-même et
   **bascule automatiquement** si l'un est indisponible. Google Gemini est aussi pris en
-  charge.
+  charge, ainsi que les serveurs compatibles OpenAI de votre réseau (llama.cpp, LM Studio, vLLM).
 
 Le coût peut donc être **zéro dollar**.
 

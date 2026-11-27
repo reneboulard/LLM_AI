@@ -163,9 +163,10 @@ activé de plus haute priorité est le serveur **primaire**. Chaque serveur :
 
 | Champ | Rôle |
 |---|---|
-| `Provider` | `OllamaLocal`, `OllamaCloud` ou `Gemini` |
+| `Provider` | `OllamaLocal`, `OllamaCloud`, `Gemini` ou `OpenAiCompat` (`openai_compat` dans la config : llama.cpp, LM Studio, vLLM…) |
 | `Url` | URL de l'API (ex. `http://localhost:11434` pour [Ollama](https://ollama.com) local) |
 | `Model` | Nom du modèle (ex. `llama3.1`, `gemini-1.5-flash`) |
+| `ApiKey` | Clé Bearer facultative, propre à ce serveur (`OpenAiCompat` seulement ; vide = aucun en-tête `Authorization`) |
 | `Enabled` | Activer ce serveur |
 | `Priority` | Ordre de préférence (plus haut = primaire) |
 
@@ -175,6 +176,30 @@ activé de plus haute priorité est le serveur **primaire**. Chaque serveur :
 > plus petite. Les deux jouent le protocole d'outils JSON du plugin ; la boucle intègre
 > des filets de réparation pour les modèles modestes (demande de renvoi avec gabarit,
 > béquilles de réparation JSON).
+
+**Serveur OpenAI-compatible** (`OpenAiCompat` : llama.cpp, LM Studio, vLLM…) :
+
+- **URL** : racine du serveur (`http://hôte:8080`) ; une URL déjà terminée par `/v1` ou
+  `/v1/chat/completions` est acceptée telle quelle. Le plugin appelle
+  `POST {url}/v1/chat/completions`, sans streaming.
+- **Clé** : `ApiKey` est envoyée en `Authorization: Bearer` si renseignée ; vide = aucun
+  en-tête (serveur LAN ouvert).
+- **Contexte** : il se règle au **lancement du serveur** (`--ctx-size` pour llama.cpp), pas
+  par requête. Prévoir au moins **32 768** tokens, comme le seuil Ollama : l'audit et les
+  gros runs approchent 29 000 tokens, et un contexte plein tronque la réponse.
+- **Raisonnement** : un modèle « thinking » renvoie son raisonnement dans
+  `reasoning_content`, que le plugin ignore — seul `content` est lu. Il allonge le temps de
+  réponse (comptez environ la moitié des tokens générés) mais ne perturbe pas le format.
+- **Budget** : même délai adaptatif qu'un Ollama local (3 min + 1 s par 100 caractères,
+  plafonné à 9 min), loggué sur la ligne d'appel. Pas de gate 429 : un 429 est une erreur
+  HTTP ordinaire et le plugin bascule sur le serveur suivant.
+- **Parallélisme** : la capacité dépend des slots du serveur ; ajustez
+  `LlmMaxConcurrentTasks` en conséquence (voir ci-dessous).
+- **Format d'appel d'outil** : le plugin attend un tableau JSON. Certains modèles
+  (famille Gemma servie par llama.cpp, observé en champ) écrivent parfois leur syntaxe
+  native `<|tool_call>call:outil{…}<tool_call|>` à la place. La garde anti-narration
+  redemande alors le bon format (une itération de plus, journalisée en avertissement) ; le
+  résultat final n'est pas affecté.
 
 Champs hérités `LlmUrl` / `ModelName` restent supportés (repli legacy : un `LlmUrl` non
 vide est traité comme un serveur local).
@@ -1144,7 +1169,7 @@ configuration valide chacun avant de compter dessus.
 | `LlmRunner.cs` | `LlmRunner` (classe interne) | **Orchestration partagée** : `ResolveBackends`, `RunAsync` (boucle d'agent + tool-calling), `EnrichRecommendations` (match titre → id/chaîne/poster/note), `EnrichWithLibrary` (rapprochement bibliothèque : titre exact/flou, **repli par id IMDb** via `AnyProviderIdEquals` — reco possédée → `library_id`, exclue du record bucket), `FindLibraryItem`, `MergeJsonArrays`, `ExtractJsonPayload`, `NormTitle` (pliage d'accents partagé `FoldAscii` : « leçons » ≡ « lecons »), résolution des clés via env. Path d'audit dédié : `BuildAuditTools`, `RunAuditAsync` (boucle agent ou mode déterministe), `ChatWithFallbackAsync` (synthèse sans outils). Filet de formatage `SanitizeReport` (flèches LaTeX → « → », balises HTML dénudées) appliqué aux sorties audit et chat. Path chat : `RunChatAsync` (multi-tours, tous les outils existants, priorités LLM usager). Appels one-shot : `TranslateTextAsync` (tier-3 cascade TMDB), `ResolveIdsAsync` (proposition d'ids pour la tâche orphelins — toujours validée par TMDB). Utilisé par `LlmScheduledTask`, `TonightApiService`, `AuditApiService`, `ChatApiService` **et** `OrphanIdentifyTask`. |
 | `ItemIdResolver.cs` | `ItemIdResolver` (statique interne) | Résolution bilingue des ids Emby : longs (InternalId — forme canonique du plugin, la seule que la couche REST/UI accepte) **et** Guids historiques (input legacy seulement, jamais émis). Corriger la devise d'ids qui faisait échouer toutes les validations Tonight. |
 | `LlmAgentService.cs` | `LlmAgentService` | Boucle d'agent : envoie le prompt au LLM, exécute les tool-calls, reboucle jusqu'à la réponse finale. Deux paramètres optionnels (`roleIntro`, `formatSection`) permettent de surcharger l'intro du rôle et le bloc de format de sortie pour les paths audit et chat (sans toucher aux appelants recommandation). `RunChatAsync` : entrée multi-tours qui rejoue l'historique (user/assistant, borné) entre le system prompt et le nouveau message — même boucle partagée (`RunLoopAsync`). Béquilles de fiabilité pour petits modèles : réparation des appels malformés, garde anti-narration (une réponse qui mentionne un outil sans émettre l'appel est réinjectée avec demande d'émission, v2.6.5) et, en chat, rappel de protocole compact dans le slot du tour usager courant (toute action = appel d'outil, jamais une annonce narrative). |
-| `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini (sans clé en clair dans les journaux). **num_ctx « instance chargée d'abord »** (v1.14.0.9) : avant chaque appel Ollama local, `GET /api/ps` vérifie le modèle chargé — ctx chargé ≥ seuil 32768 → réutilisé tel quel (zéro rechargement de l'instance) ; insuffisant ou absent → appel au seuil requis ; `/api/ps` indisponible → repli dict/défaut historique. Le seuil vient de mesures réelles (replay `/api/chat`, gemma4:latest 2026-09-30 : Tonight 3,2k tok, boucle lourde 13,9k, pic 18 msgs ≈ 25k, pente KV 9 216 o/token) ; chaque appel logge l'usage réel (`[LLM_AI] Ollama usage : prompt=N tok…`). **Budget par appel adaptatif local** (v2.7.0) : délai plat 2 min pour le cloud (ollama_cloud, Gemini) et les appels légers ; un backend Ollama **local** reçoit 3 min + 1 s par 100 caractères de charge utile, plafonné à 9 min — le mur d'un backend local est le pré-remplissage, proportionnel à la taille du prompt, le budget suit donc la charge **sans nouvelle option de configuration**, et le budget appliqué est loggué sur la ligne d'appel (`budget=N s`). **Gate 429 free tier** (v2.19.0, via `LlmRateLimitGate`) : motif TPM/RPM/RPD classifié depuis le corps HTTP, pré-contrôle avant chaque appel, attente plafonnée (90 s tâches / 20 s interactif) puis reprise même-backend — un appel individuel au-delà de la fenêtre, non remédiable, bascule vers le backend suivant ; état in-memory, fail-open. Voir la note « Free tier Gemini » dans la configuration. |
+| `LlmClient.cs` | `LlmClient` (statique) | Appels HTTP bruts vers Ollama / Gemini / serveurs OpenAI-compatibles (`POST {url}/v1/chat/completions`, sans gate 429) (sans clé en clair dans les journaux). **num_ctx « instance chargée d'abord »** (v1.14.0.9) : avant chaque appel Ollama local, `GET /api/ps` vérifie le modèle chargé — ctx chargé ≥ seuil 32768 → réutilisé tel quel (zéro rechargement de l'instance) ; insuffisant ou absent → appel au seuil requis ; `/api/ps` indisponible → repli dict/défaut historique. Le seuil vient de mesures réelles (replay `/api/chat`, gemma4:latest 2026-09-30 : Tonight 3,2k tok, boucle lourde 13,9k, pic 18 msgs ≈ 25k, pente KV 9 216 o/token) ; chaque appel logge l'usage réel (`[LLM_AI] Ollama usage : prompt=N tok…`). **Budget par appel adaptatif local** (v2.7.0) : délai plat 2 min pour le cloud (ollama_cloud, Gemini) et les appels légers ; un backend Ollama **local** reçoit 3 min + 1 s par 100 caractères de charge utile, plafonné à 9 min — le mur d'un backend local est le pré-remplissage, proportionnel à la taille du prompt, le budget suit donc la charge **sans nouvelle option de configuration**, et le budget appliqué est loggué sur la ligne d'appel (`budget=N s`). **Gate 429 free tier** (v2.19.0, via `LlmRateLimitGate`) : motif TPM/RPM/RPD classifié depuis le corps HTTP, pré-contrôle avant chaque appel, attente plafonnée (90 s tâches / 20 s interactif) puis reprise même-backend — un appel individuel au-delà de la fenêtre, non remédiable, bascule vers le backend suivant ; état in-memory, fail-open. Voir la note « Free tier Gemini » dans la configuration. |
 | `GetEmbyInfoTool.cs` | `GetEmbyInfoTool` | Outil `get_emby_info` (voir [Outils](#outils-llm)). Expose en outre le pliage d'accents partagé `FoldAscii` (FormD + marques combinantes + map manuel œ/æ/ø/đ/ł/ß/ð/þ → « leçons » ≡ « lecons »), utilisé par `Norm` (exclusion biblio `epg_series`/`epg_movies`, drop list) et `LlmRunner.NormTitle`. |
 | `TmdbLookupTool.cs` / `TvdbSearchTool.cs` / `WebSearchTool.cs` / `WebFetchTool.cs` / `NewReleasesTool.cs` | … | Outils LLM spécialisés (voir [Outils](#outils-llm)). `TmdbLookupTool` expose en outre `LookupMetaAsync`/`LookupMetaMultiLangAsync` (recherche, S1), `FindByExternalIdAsync` (`/find`, valide un id proposé), `LookupMetaByIdAsync` (détail par id), `CleanEpgTitle` — réutilisés par `StrmLibraryGenerator` et `OrphanIdentifyTask`. |
 | `config.html` / `config.js` | — | Page de configuration (saisie des champs ci-dessus). |

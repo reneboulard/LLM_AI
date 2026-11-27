@@ -299,6 +299,9 @@ namespace LLM_AI
                     return await ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall, gateKey).ConfigureAwait(false);
                 case LlmProvider.Gemini:
                     return await ChatGeminiAsync(url, backend.Model, apiKey, messages, logger, ct, perCall, gateKey).ConfigureAwait(false);
+                case LlmProvider.OpenAiCompat:
+                    // Clé propre au backend (serveurs LAN : le plus souvent aucune).
+                    return await ChatOpenAiCompatAsync(url, backend.Model, backend.ApiKey, messages, logger, ct, perCall).ConfigureAwait(false);
                 default:
                     return await ChatOllamaAsync(url, backend.Model, apiKey, messages, json, logger, ct, perCall, gateKey).ConfigureAwait(false);
             }
@@ -491,6 +494,124 @@ namespace LLM_AI
 
                     return ExtractGeminiContent(respText, logger);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Appelle POST {url}/v1/chat/completions (llama.cpp, LM Studio, vLLM
+        /// et tout serveur OpenAI-compatible) et renvoie
+        /// <c>choices[0].message.content</c>. Une URL de base déjà terminée par
+        /// <c>/v1</c> est acceptée. Pas de gate 429 : serveur auto-hébergé, pas
+        /// un quota — un 429 est une erreur HTTP ordinaire (bascule du
+        /// caller). Budget adaptatif comme Ollama local (préfill proportionnel
+        /// à la charge) ; <paramref name="perCall"/> explicite prioritaire.
+        /// </summary>
+        private static async Task<string> ChatOpenAiCompatAsync(
+            string url,
+            string model,
+            string apiKey,
+            IReadOnlyList<ChatMessage> messages,
+            ILogger logger,
+            CancellationToken ct,
+            TimeSpan? perCall = null)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                throw new ArgumentException("URL du serveur OpenAI-compatible non configurée.", nameof(url));
+            if (string.IsNullOrWhiteSpace(model))
+                throw new ArgumentException("Modèle non configuré.", nameof(model));
+
+            var endpoint = OpenAiCompatEndpoint(url);
+            var body = BuildOpenAiCompatBody(model, messages);
+            var budget = perCall ?? ResolveCallTimeout(true, body.Length);
+
+            logger?.Info("[LLM_AI] Appel OpenAI-compat : {0} (modèle={1}, messages={2}, auth={3}, budget={4} s)",
+                endpoint, model, messages.Count, string.IsNullOrEmpty(apiKey) ? "non" : "Bearer", (int)budget.TotalSeconds);
+
+            using (var req = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                req.Content = new StringContent(body, Encoding.UTF8);
+                req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                if (!string.IsNullOrEmpty(apiKey))
+                    req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+                using (var resp = await SendWithTimeoutAsync(req, budget, ct).ConfigureAwait(false))
+                {
+                    var respText = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    if (!resp.IsSuccessStatusCode)
+                        throw new HttpRequestException(
+                            $"Le serveur OpenAI-compatible a répondu HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(respText, 500)}");
+
+                    var promptTok = ExtractIntField(respText, "prompt_tokens");
+                    if (promptTok > 0)
+                        logger?.Info("[LLM_AI] OpenAI-compat usage : prompt={0} tok, généré={1} tok (modèle={2})",
+                            promptTok, ExtractIntField(respText, "completion_tokens"), model);
+
+                    return ExtractOpenAiContent(respText, logger);
+                }
+            }
+        }
+
+        /// <summary>{url}/v1/chat/completions, sans doubler un <c>/v1</c> déjà saisi.</summary>
+        internal static string OpenAiCompatEndpoint(string url)
+        {
+            var u = (url ?? string.Empty).Trim().TrimEnd('/');
+            if (u.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) return u;
+            if (u.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)) return u + "/chat/completions";
+            return u + "/v1/chat/completions";
+        }
+
+        internal static string BuildOpenAiCompatBody(string model, IReadOnlyList<ChatMessage> messages)
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"model\":\"").Append(JsonEscape(model)).Append("\",\"messages\":[");
+            for (int i = 0; i < messages.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"role\":\"").Append(JsonEscape(messages[i].Role)).Append("\",");
+                sb.Append("\"content\":\"").Append(JsonEscape(messages[i].Content ?? string.Empty)).Append("\"}");
+            }
+            sb.Append("],\"stream\":false}");
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// <c>choices[0].message.content</c> ; chaîne vide/absente →
+        /// « (réponse vide du LLM) » (même sentinelle que les autres
+        /// providers). <c>reasoning_content</c> (modèles raisonneurs) est
+        /// ignoré : le protocole JSON attend la réponse finale seule. Un objet
+        /// <c>error</c> lève <see cref="InvalidOperationException"/>.
+        /// </summary>
+        internal static string ExtractOpenAiContent(string respText, ILogger logger)
+        {
+            try
+            {
+                using (var doc = JsonDocument.Parse(respText))
+                {
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("error", out var err))
+                    {
+                        string msg = err.ValueKind == JsonValueKind.Object &&
+                                     err.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String
+                            ? m.GetString()
+                            : err.ValueKind == JsonValueKind.String ? err.GetString() : "erreur inconnue";
+                        throw new InvalidOperationException("Le serveur OpenAI-compatible a renvoyé une erreur : " + msg);
+                    }
+
+                    string text = null;
+                    if (root.TryGetProperty("choices", out var choices) &&
+                        choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0 &&
+                        choices[0].TryGetProperty("message", out var message) &&
+                        message.ValueKind == JsonValueKind.Object &&
+                        message.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
+                        text = c.GetString();
+
+                    return string.IsNullOrWhiteSpace(text) ? "(réponse vide du LLM)" : text;
+                }
+            }
+            catch (Exception ex) when (!(ex is InvalidOperationException))
+            {
+                logger?.Warn("[LLM_AI] Désérialisation OpenAI-compat échouée : {0}", ex.Message);
+                return "(réponse OpenAI-compat illisible)";
             }
         }
 

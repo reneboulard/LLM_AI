@@ -4,7 +4,7 @@
      "Full documentation" link on the plugin config page (config.html). -->
 # LLM_AI — Emby LLM recommendations plugin
 
-**Version:** 2.24.0 · **Compatible with:** Emby Server 4.9 and 4.10
+**Version:** 2.25.0 · **Compatible with:** Emby Server 4.9 and 4.10
 
 > Version française : voir [README.md](README.md).
 
@@ -87,7 +87,8 @@ People often assume AI needs a big machine. Not necessarily:
   but it needs **a computer with a graphics card of at least 8 GB of memory**. Below
   that, the model runs but answers very slowly.
 - **Both at once**: the plugin accepts several services, picks by itself and **switches
-  automatically** if one is unavailable. Google Gemini is also supported.
+  automatically** if one is unavailable. Google Gemini is also supported, as are OpenAI-compatible servers on your network
+  (llama.cpp, LM Studio, vLLM).
 
 The cost can therefore be **zero dollars**.
 

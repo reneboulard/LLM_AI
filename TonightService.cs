@@ -1711,7 +1711,7 @@ namespace LLM_AI
                     return !string.IsNullOrWhiteSpace(cfg.LlmUrl); // legacy = local
                 var best = cfg.LlmBackends
                     .Where(b => b != null && b.Enabled)
-                    .Where(b => !string.IsNullOrWhiteSpace(b.Url) || b.ProviderType != LlmProvider.OllamaLocal)
+                    .Where(b => !string.IsNullOrWhiteSpace(b.Url) || !LlmProviderHelper.RequiresUrl(b.ProviderType))
                     .OrderBy(b => b.Priority)
                     .FirstOrDefault();
                 return best != null && best.ProviderType == LlmProvider.OllamaLocal;

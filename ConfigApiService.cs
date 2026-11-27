@@ -54,11 +54,13 @@ namespace LLM_AI
         /// <summary>
         /// Requête POST <c>/Plugins/LLMAI/TestLlm</c>. Le backend est posté
         /// tel qu'édité dans la page (donc non encore enregistré) :
-        /// <c>Provider</c> (<c>ollama_local</c>/<c>ollama_cloud</c>/<c>gemini</c>),
-        /// <c>Url</c> (vide = défaut du provider), <c>Model</c>. Les clés API
-        /// ne sont PAS postées : elles sont relues côté serveur depuis la
-        /// config enregistrée (avec repli variable d'environnement) — le
-        /// navigateur ne reçoit jamais une clé en retour.
+        /// <c>Provider</c> (<c>ollama_local</c>/<c>ollama_cloud</c>/<c>gemini</c>/<c>openai_compat</c>),
+        /// <c>Url</c> (vide = défaut du provider), <c>Model</c>. Les clés globales
+        /// (Ollama cloud, Gemini) ne sont PAS postées : relues côté serveur
+        /// depuis la config enregistrée (repli variable d'environnement).
+        /// Seule exception : <c>ApiKey</c>, clé propre à la ligne
+        /// <c>openai_compat</c> (elle vit dans le backend, pas dans la config
+        /// globale). Le navigateur ne reçoit jamais une clé en retour.
         /// </summary>
         [Route("/Plugins/LLMAI/TestLlm", "POST")]
         public class TestLlmRequest : IReturn<object>
@@ -66,6 +68,8 @@ namespace LLM_AI
             public string Provider { get; set; }
             public string Url { get; set; }
             public string Model { get; set; }
+            /// <summary>Clé Bearer de la ligne éditée (openai_compat seulement).</summary>
+            public string ApiKey { get; set; }
         }
 
         /// <summary>
@@ -101,6 +105,7 @@ namespace LLM_AI
                 Provider = req?.Provider,
                 Url = (req?.Url ?? string.Empty).Trim(),
                 Model = (req?.Model ?? string.Empty).Trim(),
+                ApiKey = (req?.ApiKey ?? string.Empty).Trim(),
                 Enabled = true,
                 Priority = 1
             };
@@ -109,9 +114,9 @@ namespace LLM_AI
             // pour la page plutôt qu'une exception HTTP brute).
             if (string.IsNullOrWhiteSpace(backend.Model))
                 return new TestLlmResponse { Ok = false, Error = "Modèle non renseigné." };
-            if (backend.ProviderType == LlmProvider.OllamaLocal &&
+            if (LlmProviderHelper.RequiresUrl(backend.ProviderType) &&
                 string.IsNullOrWhiteSpace(backend.Url))
-                return new TestLlmResponse { Ok = false, Error = "URL non renseignée (exigée pour Ollama local)." };
+                return new TestLlmResponse { Ok = false, Error = "URL non renseignée (exigée pour un serveur local)." };
 
             // Clé API : relue depuis la config enregistrée + repli variable
             // d'environnement (même résolution que les runs : LlmRunner.ResolveKey).

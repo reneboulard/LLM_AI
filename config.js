@@ -362,14 +362,16 @@ define(["loading"], function (loading) {
     var PROVIDER_DEFAULTS = {
         "ollama_local": { url: "http://localhost:11434", model: "gemma4:26b" },
         "ollama_cloud": { url: "https://ollama.com",         model: "gemma4:31b" },
-        "gemini":       { url: "",                           model: "gemini-2.5-flash" }
+        "gemini":       { url: "",                           model: "gemini-2.5-flash" },
+        "openai_compat": { url: "http://localhost:1234",     model: "" }
     };
 
     function providerOptions(selected) {
         var opts = [
             { v: "ollama_local", l: i18n.t("cfg.backend.provider.local") },
             { v: "ollama_cloud", l: i18n.t("cfg.backend.provider.cloud") },
-            { v: "gemini",       l: i18n.t("cfg.backend.provider.gemini") }
+            { v: "gemini",       l: i18n.t("cfg.backend.provider.gemini") },
+            { v: "openai_compat", l: i18n.t("cfg.backend.provider.openai") }
         ];
         return opts.map(function (o) {
             var sel = o.v === selected ? "selected" : "";
@@ -381,6 +383,7 @@ define(["loading"], function (loading) {
         var provider = (b && b.Provider) || "ollama_local";
         var url = esc(b && b.Url);
         var model = esc(b && b.Model);
+        var apiKey = esc(b && b.ApiKey);
         var prio = parseInt(b && b.Priority, 10);
         if (isNaN(prio)) prio = "";
         var enabled = b && b.Enabled !== false; // true par défaut
@@ -408,6 +411,10 @@ define(["loading"], function (loading) {
             +     '<div class="inputContainer">'
             +       '<input is="emby-input" type="text" class="beModel" '
             +             'label="' + esc(i18n.t("cfg.backend.model.label")) + '" placeholder="gemma4:26b" value="' + model + '" />'
+            +     '</div>'
+            +     '<div class="inputContainer beKeyField"' + (provider === "openai_compat" ? '' : ' hidden') + '>'
+            +       '<input is="emby-input" type="password" class="beApiKey" autocomplete="off" '
+            +             'label="' + esc(i18n.t("cfg.backend.apikey.label")) + '" value="' + apiKey + '" />'
             +     '</div>'
             +     '<div class="inputContainer priorityField">'
             +       '<input is="emby-input" type="number" class="bePriority" '
@@ -439,14 +446,17 @@ define(["loading"], function (loading) {
             var prio = parseInt(prioRaw, 10);
             if (isNaN(prio) || prio < 1) prio = 1;
             var enabled = !!(row.querySelector(".beEnabled") || {}).checked;
-            // ollama_local exige une URL ; cloud/gemini l'acceptent vide
-            // (défaut appliqué côté serveur).
-            if (provider === "ollama_local" && url.trim() === "") return;
-            if (provider !== "ollama_local" && url.trim() === "" && model.trim() === "") return;
+            var apiKey = (row.querySelector(".beApiKey") || {}).value || "";
+            // Serveurs locaux (ollama_local, openai_compat) : URL exigée ;
+            // cloud/gemini l'acceptent vide (défaut appliqué côté serveur).
+            var needsUrl = provider === "ollama_local" || provider === "openai_compat";
+            if (needsUrl && url.trim() === "") return;
+            if (!needsUrl && url.trim() === "" && model.trim() === "") return;
             out.push({
                 Provider: provider,
                 Url: url.trim(),
                 Model: model.trim(),
+                ApiKey: provider === "openai_compat" ? apiKey.trim() : "",
                 Enabled: enabled,
                 Priority: prio
             });
@@ -495,17 +505,21 @@ define(["loading"], function (loading) {
             var modelInput = row.querySelector(".beModel");
             if (urlInput && urlInput.value.trim() === "") urlInput.value = d.url;
             if (modelInput && modelInput.value.trim() === "") modelInput.value = d.model;
+            var keyField = row.querySelector(".beKeyField");
+            if (keyField) keyField.hidden = sel.value !== "openai_compat";
         });
     }
 
     // Test d'un backend : POST /Plugins/LLMAI/TestLlm avec les valeurs
-    // ÉDITÉES de la ligne (testable avant enregistrement — les clés API ne
-    // sont pas postées, le serveur les relit depuis la config enregistrée).
+    // ÉDITÉES de la ligne (testable avant enregistrement — les clés globales
+    // ne sont pas postées, le serveur les relit depuis la config enregistrée ;
+    // seule la clé propre à la ligne openai_compat part avec la requête).
     // Résultat inline sous l'en-tête de la ligne : OK + latence ou échec.
     function testBackend(row, btn) {
         var provider = ((row.querySelector(".beProvider") || {}).value) || "ollama_local";
         var url = ((row.querySelector(".beUrl") || {}).value) || "";
         var model = ((row.querySelector(".beModel") || {}).value) || "";
+        var apiKey = provider === "openai_compat" ? (((row.querySelector(".beApiKey") || {}).value) || "") : "";
         var resultEl = row.querySelector(".backendTestResult");
 
         btn.disabled = true;
@@ -516,7 +530,7 @@ define(["loading"], function (loading) {
         ApiClient.ajax({
             url: ApiClient.getUrl("Plugins/LLMAI/TestLlm"),
             type: "POST",
-            data: JSON.stringify({ Provider: provider, Url: url, Model: model }),
+            data: JSON.stringify({ Provider: provider, Url: url, Model: model, ApiKey: apiKey }),
             contentType: "application/json",
             dataType: "json"
         }).then(function (data) {
